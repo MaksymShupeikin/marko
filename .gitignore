@@ -1,0 +1,21 @@
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.iml
+
+# Root environment and secret files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
