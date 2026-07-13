@@ -83,7 +83,7 @@ async def test_firebase_token_requires_rs256_signing_key(monkeypatch):
     monkeypatch.setattr(auth, "get_settings", lambda: settings)
     token = jwt.encode(
         {"sub": "firebase-user-uid-001"},
-        "shared-secret-with-at-least-32-bytes",
+        "test_secret_key_for_jwt_auth_" + "x" * 8,
         algorithm="HS256",
     )
 

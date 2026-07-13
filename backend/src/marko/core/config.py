@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = False
     api_prefix: str = "/api/v1"
-    database_url: str = "postgresql+asyncpg://marko:marko@localhost:5432/marko"
+    database_url: str = "postgresql+asyncpg://marko@localhost:5432/marko"
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     cors_origins: str = "http://localhost:8080,http://localhost:3000"
