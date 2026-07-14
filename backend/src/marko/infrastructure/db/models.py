@@ -151,6 +151,19 @@ class Listing(TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    @property
+    def image_url(self) -> str | None:
+        raw_data = self.raw_data
+        if not isinstance(raw_data, dict):
+            return None
+        value = raw_data.get("image")
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if not normalized.startswith(("https://", "http://")):
+            return None
+        return normalized
+
 
 class PriceObservation(Base):
     __tablename__ = "price_observations"

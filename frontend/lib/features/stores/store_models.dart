@@ -109,6 +109,7 @@ class StoreProduct {
     required this.price,
     required this.currency,
     required this.isAvailable,
+    required this.imageUrl,
   });
 
   factory StoreProduct.fromJson(Map<String, dynamic> json) {
@@ -122,6 +123,7 @@ class StoreProduct {
       price: rawPrice == null ? null : double.tryParse(rawPrice.toString()),
       currency: json['currency'] as String,
       isAvailable: json['is_available'] as bool?,
+      imageUrl: json['image_url'] as String?,
     );
   }
 
@@ -133,6 +135,7 @@ class StoreProduct {
   final double? price;
   final String currency;
   final bool? isAvailable;
+  final String? imageUrl;
 
   String get details => [
     ?brand,

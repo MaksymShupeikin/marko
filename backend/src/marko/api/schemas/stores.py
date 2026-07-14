@@ -51,6 +51,7 @@ class ProductResponse(BaseModel):
     currency: str
     current_price: Decimal | None
     is_available: bool | None
+    image_url: str | None
     last_seen_at: datetime
 
 

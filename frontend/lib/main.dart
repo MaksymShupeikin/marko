@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/app_router.dart';
 import 'core/app_theme.dart';
 import 'core/environment.dart';
+import 'core/marko_ui.dart';
 import 'features/auth/auth_controller.dart';
 
 Future<void> main() async {
@@ -39,12 +40,26 @@ class _ConfigurationErrorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Marko',
       debugShowCheckedModeBanner: false,
+      theme: AppTheme.light,
       home: Scaffold(
         body: Center(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
-            child: Text(message, textAlign: TextAlign.center),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                children: [
+                  const MarkoWordmark(),
+                  const SizedBox(height: 24),
+                  MarkoInlineMessage(
+                    message: message,
+                    tone: MarkoMessageTone.error,
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -63,7 +78,7 @@ class MarkoApp extends ConsumerWidget {
         title: 'Marko',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
-        home: const Scaffold(body: Center(child: CircularProgressIndicator())),
+        home: const Scaffold(body: _AppLoading()),
       );
     }
     return MaterialApp.router(
@@ -71,6 +86,27 @@ class MarkoApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       routerConfig: ref.watch(appRouterProvider),
+    );
+  }
+}
+
+class _AppLoading extends StatelessWidget {
+  const _AppLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MarkoWordmark(),
+          SizedBox(height: 24),
+          SizedBox.square(
+            dimension: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ],
+      ),
     );
   }
 }

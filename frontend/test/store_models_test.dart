@@ -22,6 +22,7 @@ void main() {
       'current_price': '123.45',
       'currency': 'UAH',
       'is_available': true,
+      'image_url': 'https://images.prom.ua/product.jpg',
     });
 
     expect(store.productCount, 12);
@@ -29,6 +30,7 @@ void main() {
     expect(store.displayName, 'kemp');
     expect(product.price, 123.45);
     expect(product.isAvailable, isTrue);
+    expect(product.imageUrl, 'https://images.prom.ua/product.jpg');
     expect(product.priceLabel, '123.45 UAH');
     expect(product.details, 'Brand · SKU SKU-1 · В наличии');
   });

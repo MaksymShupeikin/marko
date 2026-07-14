@@ -115,7 +115,9 @@ services:
     build:
       context: ./backend
       target: test
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      FIREBASE_PROJECT_ID: ""
     command: ["pytest", "-q"]
 
   frontend:

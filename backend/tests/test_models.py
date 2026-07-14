@@ -1,5 +1,10 @@
+from datetime import UTC, datetime
+from uuid import uuid4
+
 import pytest
 
+from marko.api.schemas.stores import ProductResponse
+from marko.infrastructure.db.models import Listing
 from marko.services.parser_models import Product, Seller, get_nested
 
 from factories import product, raw_product
@@ -36,6 +41,35 @@ def test_from_raw_uses_fallback_keys():
 
 def test_field_names_end_with_url():
     assert Product.field_names()[-1] == "url"
+
+
+def test_listing_exposes_image_url_from_raw_product_data():
+    listing = Listing(raw_data={"image": " https://images.prom.ua/product.jpg "})
+
+    assert listing.image_url == "https://images.prom.ua/product.jpg"
+
+
+def test_listing_rejects_non_http_image_url():
+    listing = Listing(raw_data={"image": "javascript:alert(1)"})
+
+    assert listing.image_url is None
+
+
+def test_product_response_includes_listing_image_url():
+    listing = Listing(
+        id=uuid4(),
+        store_id=uuid4(),
+        external_id="product-1",
+        name="Product",
+        url="https://prom.ua/ua/p1-product.html",
+        currency="UAH",
+        raw_data={"image": "https://images.prom.ua/product.jpg"},
+        last_seen_at=datetime.now(UTC),
+    )
+
+    response = ProductResponse.model_validate(listing)
+
+    assert response.image_url == "https://images.prom.ua/product.jpg"
 
 
 # Seller.from_url

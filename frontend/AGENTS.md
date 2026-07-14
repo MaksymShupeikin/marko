@@ -21,7 +21,11 @@ lib/
 │   ├── app_router.dart
 │   ├── app_theme.dart
 │   ├── environment.dart
-│   └── firebase_auth_client.dart
+│   ├── firebase_auth_client.dart
+│   ├── marko_ui.dart
+│   └── widgets/
+│       ├── marko_button.dart
+│       └── marko_cached_image.dart
 └── features/
     ├── auth/
     │   ├── auth_models.dart
@@ -33,7 +37,9 @@ lib/
         ├── stores_api.dart
         ├── stores_controller.dart
         ├── stores_page.dart
-        └── store_products_page.dart
+        ├── store_products_page.dart
+        └── widgets/
+            └── product_card.dart
 ```
 
 Keep one flat directory per feature. Create a `widgets/` subdirectory only when
@@ -87,6 +93,14 @@ have fewer files when it is small.
 
 ## UI
 
+- Keep colors, typography, radii, and component styles in `app_theme.dart`.
+  Read semantic product colors through `MarkoTheme.of(context)` instead of
+  putting hex values in pages.
+- Reusable product-wide surfaces and messages live in `core/marko_ui.dart`.
+  Standalone interactive components live in `core/widgets/`. Feature-specific
+  presentation widgets stay private in their page file.
+- Network images use `MarkoCachedImage` so cache hashing, loading shimmer,
+  fallbacks, and preload behavior remain consistent across features.
 - Prefer straightforward private widget classes in the same page file.
 - Split a file when it approaches roughly 300–400 lines or contains a genuinely
   reusable unit; do not split every button into its own file.
