@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -54,6 +55,32 @@ class ApiClient {
     return _request('POST', path, body: body, authenticated: authenticated);
   }
 
+  Future<dynamic> postMultipart(
+    String path, {
+    required String filename,
+    required Uint8List bytes,
+    Map<String, String>? fields,
+    bool authenticated = true,
+  }) async {
+    var response = await _sendMultipart(
+      path,
+      filename: filename,
+      bytes: bytes,
+      fields: fields,
+      authenticated: authenticated,
+    );
+    if (response.statusCode == 401 && authenticated && await _refreshOnce()) {
+      response = await _sendMultipart(
+        path,
+        filename: filename,
+        bytes: bytes,
+        fields: fields,
+        authenticated: true,
+      );
+    }
+    return _decode(response);
+  }
+
   Future<dynamic> _request(
     String method,
     String path, {
@@ -100,6 +127,28 @@ class ApiClient {
         ? client.post(uri, headers: headers, body: encodedBody)
         : client.get(uri, headers: headers);
     return request.timeout(const Duration(seconds: 15));
+  }
+
+  Future<http.Response> _sendMultipart(
+    String path, {
+    required String filename,
+    required Uint8List bytes,
+    Map<String, String>? fields,
+    required bool authenticated,
+  }) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$path'));
+    request.fields.addAll(fields ?? const {});
+    request.files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: filename),
+    );
+    final accessToken = await _accessToken();
+    if (authenticated && accessToken != null) {
+      request.headers['Authorization'] = 'Bearer $accessToken';
+    }
+    final streamed = await client
+        .send(request)
+        .timeout(const Duration(minutes: 2));
+    return http.Response.fromStream(streamed);
   }
 
   Future<bool> _refreshOnce() async {

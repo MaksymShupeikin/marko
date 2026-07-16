@@ -5,6 +5,8 @@ import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
 import '../auth/auth_controller.dart';
+import '../catalog/catalog_page.dart';
+import '../pricing/recommendations_page.dart';
 import '../stores/stores_controller.dart';
 import '../stores/stores_page.dart';
 
@@ -19,18 +21,20 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   int _selectedIndex = 0;
 
   static const _destinations = <_Destination>[
-    _Destination(Icons.grid_view_rounded, 'Обзор'),
+    _Destination(Icons.price_check_rounded, 'Рекомендации'),
+    _Destination(Icons.inventory_2_outlined, 'Каталог'),
     _Destination(Icons.storefront_outlined, 'Магазины'),
-    _Destination(Icons.inventory_2_outlined, 'Товары'),
+    _Destination(Icons.grid_view_rounded, 'Обзор'),
   ];
 
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).value?.user;
     final content = switch (_selectedIndex) {
-      1 => const StoresPage(),
-      2 => _ProductsStart(onOpenStores: () => _select(1)),
-      _ => _Overview(onOpenStores: () => _select(1)),
+      1 => const CatalogPage(),
+      2 => const StoresPage(),
+      3 => _Overview(onOpenStores: () => _select(2)),
+      _ => RecommendationsPage(onOpenCatalog: () => _select(1)),
     };
 
     return Scaffold(
@@ -630,59 +634,6 @@ class _WorkflowStep extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ProductsStart extends StatelessWidget {
-  const _ProductsStart({required this.onOpenStores});
-
-  final VoidCallback onOpenStores;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: MarkoPanel(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: colors.brandSoft,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(Icons.inventory_2_outlined, color: colors.brand),
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  'Выберите магазин',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Откройте подключённый магазин, чтобы посмотреть его каталог.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-                ),
-                const SizedBox(height: 22),
-                MarkoButton(
-                  label: 'Перейти к магазинам',
-                  onPressed: onOpenStores,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

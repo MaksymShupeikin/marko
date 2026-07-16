@@ -11,7 +11,7 @@ Flutter ── Firebase ID token ──► FastAPI ──► PostgreSQL
    │                                │
    ├── Firebase Authentication      └──► Redis ──► Celery worker ──► prom.ua
    └── web / Android / desktop                         │
-                                                     matching
+                                          pricing workers + matching
 ```
 
 Firebase is used only for authentication. Marko's users, workspaces, stores,
@@ -29,6 +29,7 @@ database and are accessed only through FastAPI.
 │   │   ├── core/                   application configuration
 │   │   ├── infrastructure/db/      SQLAlchemy models and sessions
 │   │   ├── parsers/prom/           prom.ua integration
+│   │   ├── pricing/                deterministic KEMP-normalized engine
 │   │   ├── repositories/           database queries
 │   │   ├── services/               import, matching, and authentication logic
 │   │   └── worker/                 Celery tasks and scheduler
@@ -41,6 +42,30 @@ database and are accessed only through FastAPI.
 ├── compose.yaml
 └── .env.example
 ```
+
+## Scraper scaling and evidence
+
+The existing Prom parser is wrapped, not redesigned. Store sync and comparison
+jobs persist separate logical-item, logical-request, physical-attempt,
+task-execution, raw-evidence, and structured-output boundaries. Redis
+coordinates every physical request start globally; HTTP and task retry budgets
+are finite; redelivery replays content-addressed raw HTML and cannot duplicate
+one immutable product snapshot or `PriceObservation` inside the same sync run.
+Dedicated `store-sync` and `pricing` workers keep long scraper jobs away from
+general orchestration and calculation queues.
+
+Metrics and capacity models:
+
+```text
+GET /api/v1/jobs/{id}/scrape-metrics
+GET /api/v1/jobs/{id}/scrape-metrics/prometheus
+GET /api/v1/pricing/runs/{id}/collection-metrics
+GET /api/v1/pricing/runs/{id}/collection-metrics/prometheus
+```
+
+See [`docs/scraper_scaling.md`](docs/scraper_scaling.md) for the mathematical,
+storage, reconciliation, and controlled benchmark contracts. Production
+concurrency is not inferred from Compose defaults.
 
 ## Authentication design
 
@@ -282,6 +307,7 @@ This starts:
 | `db` | PostgreSQL 17 | `localhost:5432` |
 | `broker` | Redis for Celery | `localhost:6379` |
 | `worker` | background imports and matching | internal |
+| `pricing-worker` | rate-limited competitor collection | internal |
 | `scheduler` | periodic Celery jobs | internal |
 | `migrate` | one-shot Alembic upgrade | internal |
 
@@ -289,7 +315,7 @@ Check status and logs:
 
 ```bash
 docker compose ps --all
-docker compose logs --no-color --tail=100 api frontend worker
+docker compose logs --no-color --tail=100 api frontend worker pricing-worker
 curl http://localhost:8000/api/v1/health/live
 curl http://localhost:8000/api/v1/health/ready
 ```
@@ -315,7 +341,7 @@ without a token correctly returns `401 Unauthorized`.
 Start the backend services first:
 
 ```bash
-docker compose up -d db broker migrate api worker scheduler
+docker compose up -d db broker migrate api worker pricing-worker scheduler
 ```
 
 Then run Flutter:
@@ -368,6 +394,11 @@ reach each other. Production clients must use HTTPS.
 | `REDIS_PORT` | `6379` | host port mapping |
 | `API_PORT` | `8000` | FastAPI host port |
 | `WEB_PORT` | `8080` | Flutter web host port |
+| `PRICING_WORKER_CONCURRENCY` | `1` | Prom collection worker processes |
+| `PRICING_COLLECTION_MIN_INTERVAL_SECONDS` | `2` | shared Redis pacing between collection starts |
+| `PRICING_CIRCUIT_FAILURE_THRESHOLD` | `5` | failures before collection circuit opens |
+| `PRICING_CIRCUIT_OPEN_SECONDS` | `300` | circuit cooldown |
+| `PRICING_DISPATCH_BATCH_SIZE` | `100` | item task fan-out batch size |
 | `FIREBASE_PROJECT_ID` | required | backend and Flutter |
 | `FIREBASE_API_KEY` | required for web | Flutter web |
 | `FIREBASE_AUTH_DOMAIN` | required for web | Flutter web |
@@ -390,12 +421,71 @@ GET  /api/v1/stores
 POST /api/v1/stores
 GET  /api/v1/stores/{store_id}/products
 GET  /api/v1/jobs/{job_id}
+POST /api/v1/catalog/imports
+GET  /api/v1/catalog/imports
+POST /api/v1/pricing/evaluate
+POST /api/v1/pricing/runs
+GET  /api/v1/pricing/runs
+GET  /api/v1/pricing/runs/{run_id}
+POST /api/v1/pricing/runs/{run_id}/cancel
+POST /api/v1/pricing/catalog-items/{catalog_item_id}/overrides
+GET  /api/v1/pricing/recommendations
+GET  /api/v1/pricing/recommendations/{recommendation_id}
+GET  /api/v1/pricing/recommendations/{recommendation_id}/evidence
+POST /api/v1/pricing/recommendations/{recommendation_id}/decisions
+POST /api/v1/pricing/coefficients/calibrate
+GET  /api/v1/pricing/coefficients
+POST /api/v1/pricing/observations/{observation_id}/tier-overrides
 ```
 
 `POST /api/v1/stores` validates and stores the requested prom.ua shop, creates a
 sync run, queues a Celery task, and returns without blocking for the catalog
 import. The client polls the job endpoint and refreshes the catalog after it
 finishes.
+
+## Pricing workflow
+
+The operator-facing workflow is implemented in the Flutter **Catalog** and
+**Recommendations** screens:
+
+1. Upload a Prom XLSX export. The importer auto-detects common Russian,
+   Ukrainian, and English headers; the API also accepts an explicit JSON column
+   mapping. Invalid rows are rejected individually with their row number and
+   reason.
+2. Start a pricing run. Marko fans the immutable catalog snapshot out into
+   idempotent SKU tasks. A dedicated rate-limited queue wraps the existing Prom
+   parser; the parser implementation itself is unchanged.
+3. After all SKU collections finish, a run-level barrier freezes independent
+   paired-OE calibration units and fits both coefficient models. Simple robust
+   category median remains the explainable MVP benchmark; production policy
+   selects hierarchical log-space shrinkage with a leave-one-category-out
+   prior. A target OE is removed from its own applied coefficient.
+4. Calculation tasks filter invalid offers, normalize tiers to KEMP level,
+   apply MAD/IQR cleaning and winsor sensitivity, compute weighted effective
+   sample size and decomposed confidence, and either recommend
+   `RAISE`/`LOWER`/`HOLD` or abstain with `MANUAL_REVIEW`.
+5. Recommendations are split into unit-safe raise, clearance, manual-review and
+   hold queues, then sorted by economic priority within each queue. Expanding a row loads the
+   timestamped competitor evidence, shows each raw price, the applied tier
+   multiplier and its KEMP-equivalent price, and opens the original listing
+   URL. The operator can version stock status, cost, quantity, age, expected
+   sales, liquidity target, urgency, and manual priority from the same card.
+6. The operator can accept, reject, or override a recommended price. Marko
+   records the decision append-only but never publishes a Prom.ua price
+automatically. A below-cost decision requires a second explicit warning
+acknowledgement and cannot cross the approved floor.
+
+The formulas, defaults, reason codes, state machine, trace contract and semantic
+scenario matrix are documented in
+[`docs/kemp_pricing_engine.md`](docs/kemp_pricing_engine.md).
+
+Raw parser output, market observations, tier classifications,
+recommendations, manual item context, and recommendation decisions are stored
+append-only. Every recommendation stores its effective item-context snapshot
+and normalization/calculation trace. Manual cost/status inputs do not rewrite
+the imported XLSX row. Below-cost clearance is available only for `dead_stock`,
+requires an explicit floor, and is recorded again when the operator accepts or
+overrides a recommendation.
 
 ## Database and migrations
 
@@ -410,6 +500,14 @@ Migration `20260713_0004_firebase_auth.py` replaces the former external auth
 subject with `users.firebase_uid`. It does not delete local users, workspaces,
 stores, or products. Existing local users are linked to Firebase on their first
 request with the same verified email.
+
+Migration `20260716_0005_pricing_intelligence.py` adds immutable catalog
+snapshots, operator overrides, run checkpoints, parser-output captures, market
+observations, tier calibration, robust recommendations, and decision history.
+Migration `20260716_0006_kemp_pricing_engine.py` completes run-scoped paired-OE
+calibration, coefficient snapshots, leakage metadata, sales fallbacks,
+outlier/sensitivity fields, action gates, below-cost audit context and database
+constraints. Both upgrade and downgrade SQL can be generated offline.
 
 For a disposable local reset only:
 
@@ -427,6 +525,15 @@ Backend tests run in Docker:
 
 ```bash
 docker compose --profile test run --rm --build backend-test
+```
+
+The repository-local virtual environment can run the same suite directly:
+
+```bash
+cd backend
+PYTHONPATH=src .venv/bin/python -m pytest -q
+.venv/bin/alembic upgrade head --sql
+.venv/bin/alembic downgrade 20260716_0006:base --sql
 ```
 
 Flutter checks run from `frontend/`:

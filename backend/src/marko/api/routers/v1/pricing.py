@@ -1,0 +1,596 @@
+"""Authenticated pricing engine, run, calibration, and audit endpoints."""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+from decimal import Decimal
+from typing import Annotated, Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from marko.api.dependencies import CurrentUser, get_session
+from marko.api.schemas.pricing import (
+    CalibrationRequest,
+    CatalogItemOverrideRequest,
+    CatalogItemOverrideResponse,
+    PricingEvaluateRequest,
+    PricingEvaluateResponse,
+    PricingRunCreateRequest,
+    PricingRunPageResponse,
+    PricingRunResponse,
+    ScraperMetricsResponse,
+    ObservationTierOverrideRequest,
+    ObservationTierOverrideResponse,
+    RecommendationDecisionRequest,
+    RecommendationDecisionResponse,
+    RecommendationEvidenceResponse,
+    RecommendationPageResponse,
+    RecommendationResponse,
+    TierCoefficientResponse,
+    TierCoefficientPageResponse,
+)
+from marko.pricing import CalibrationPair, CoefficientModel, recommend_price
+from marko.services.pricing_runs import (
+    CatalogItemNotFoundError,
+    PricingRunError,
+    PricingRunNotFoundError,
+    PricingTaskDispatchError,
+    RecommendationNotFoundError,
+    add_catalog_item_override,
+    add_recommendation_decision,
+    calibrate_tier_coefficients,
+    cancel_pricing_run,
+    create_pricing_run,
+    get_pricing_run,
+    get_recommendation,
+    get_recommendation_evidence,
+    list_pricing_runs,
+    list_recommendations,
+    list_tier_coefficients,
+    policy_from_dict,
+    override_observation_tier,
+)
+from marko.worker.celery_app import celery_app
+from marko.services.scraper_metrics import (
+    get_pricing_run_scraper_metrics,
+    render_prometheus,
+)
+
+router = APIRouter()
+
+
+@router.post("/evaluate", response_model=PricingEvaluateResponse)
+async def evaluate_price(
+    payload: PricingEvaluateRequest,
+    _current: CurrentUser,
+) -> PricingEvaluateResponse:
+    """Deterministic, side-effect-free evaluation useful for preview and QA."""
+    try:
+        policy = policy_from_dict(payload.policy)
+    except PricingRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    coefficients = {
+        (coefficient.category, coefficient.tier): coefficient.to_domain()
+        for coefficient in payload.coefficients
+    }
+    result = recommend_price(
+        payload.context.to_domain(),
+        [offer.to_domain() for offer in payload.offers],
+        coefficients,
+        policy=policy,
+    )
+    return PricingEvaluateResponse(
+        sku=result.sku,
+        action=result.action.value,
+        current_price=result.current_price,
+        fair_price=result.fair_price,
+        recommended_price=result.recommended_price,
+        lower_bound=result.lower_bound,
+        upper_bound=result.upper_bound,
+        confidence=result.confidence,
+        confidence_grade=result.confidence_grade,
+        weakest_factor=result.weakest_factor,
+        factor_scores=dict(result.factor_scores),
+        competitor_count=result.competitor_count,
+        raw_competitor_count=result.raw_competitor_count,
+        unique_seller_count=result.unique_seller_count,
+        clean_competitor_count=result.clean_competitor_count,
+        effective_competitor_count=result.effective_competitor_count,
+        dispersion=result.dispersion,
+        outlier_method=result.outlier_method,
+        outlier_count=result.outlier_count,
+        sensitivity=result.sensitivity,
+        action_gates_passed=result.action_gates_passed,
+        cost_floor=result.cost_floor,
+        cost_basis_inventory_value=result.cost_basis_inventory_value,
+        priority_score=result.priority_score,
+        priority_score_type=result.priority_score_type.value,
+        review_priority=result.review_priority,
+        reasons=list(result.reasons),
+        evidence=[asdict(item) for item in result.evidence],
+        excluded=[asdict(item) for item in result.excluded],
+        policy_version=result.policy_version,
+    )
+
+
+@router.post(
+    "/runs", response_model=PricingRunResponse, status_code=status.HTTP_202_ACCEPTED
+)
+async def start_pricing_run(
+    payload: PricingRunCreateRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingRunResponse:
+    try:
+        run = await create_pricing_run(
+            session,
+            workspace_id=current.workspace_id,
+            import_batch_id=payload.import_batch_id,
+            celery_app=celery_app,
+            policy_config=payload.policy,
+        )
+    except PricingTaskDispatchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PricingRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PricingRunResponse.model_validate(run)
+
+
+@router.get("/runs", response_model=PricingRunPageResponse)
+async def get_pricing_runs(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PricingRunPageResponse:
+    runs, total = await list_pricing_runs(
+        session, workspace_id=current.workspace_id, limit=limit, offset=offset
+    )
+    return PricingRunPageResponse(
+        items=[PricingRunResponse.model_validate(run) for run in runs],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/runs/{run_id}", response_model=PricingRunResponse)
+async def get_pricing_run_details(
+    run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingRunResponse:
+    try:
+        run = await get_pricing_run(
+            session, workspace_id=current.workspace_id, run_id=run_id
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    return PricingRunResponse.model_validate(run)
+
+
+@router.get(
+    "/runs/{run_id}/collection-metrics",
+    response_model=ScraperMetricsResponse,
+)
+async def get_pricing_run_collection_metrics(
+    run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    arrival_rate_items_per_second: Annotated[float, Query(ge=0)] = 0.0,
+    parallel_efficiency: Annotated[float, Query(gt=0, le=1)] = 1.0,
+    database_write_capacity_per_second: Annotated[
+        float | None,
+        Query(gt=0),
+    ] = None,
+    queue_capacity_items_per_second: Annotated[
+        float | None,
+        Query(gt=0),
+    ] = None,
+) -> ScraperMetricsResponse:
+    try:
+        snapshot = await get_pricing_run_scraper_metrics(
+            session,
+            workspace_id=current.workspace_id,
+            run_id=run_id,
+            arrival_rate_items_per_second=arrival_rate_items_per_second,
+            parallel_efficiency=parallel_efficiency,
+            database_write_capacity_per_second=(
+                database_write_capacity_per_second
+            ),
+            queue_capacity_items_per_second=queue_capacity_items_per_second,
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    return ScraperMetricsResponse.model_validate(snapshot)
+
+
+@router.get(
+    "/runs/{run_id}/collection-metrics/prometheus",
+    response_class=PlainTextResponse,
+)
+async def get_pricing_run_collection_metrics_prometheus(
+    run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PlainTextResponse:
+    try:
+        snapshot = await get_pricing_run_scraper_metrics(
+            session,
+            workspace_id=current.workspace_id,
+            run_id=run_id,
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    return PlainTextResponse(
+        render_prometheus(snapshot),
+        media_type="text/plain; version=0.0.4",
+    )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=PricingRunResponse)
+async def request_run_cancellation(
+    run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingRunResponse:
+    try:
+        run = await cancel_pricing_run(
+            session, workspace_id=current.workspace_id, run_id=run_id
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    return PricingRunResponse.model_validate(run)
+
+
+@router.post(
+    "/coefficients/calibrate",
+    response_model=list[TierCoefficientResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def calibrate_coefficients(
+    payload: CalibrationRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[TierCoefficientResponse]:
+    pairs = [
+        CalibrationPair(
+            oe_norm=pair.oe_norm,
+            category=pair.category,
+            tier=pair.tier,
+            tier_price=pair.tier_price,
+            reference_price=pair.reference_price,
+            quality_weight=pair.quality_weight,
+            tier_observation_ids=pair.tier_observation_ids,
+            reference_observation_ids=pair.reference_observation_ids,
+        )
+        for pair in payload.pairs
+    ]
+    records = await calibrate_tier_coefficients(
+        session,
+        workspace_id=current.workspace_id,
+        pairs=pairs,
+        model=payload.model,
+        shrinkage_k=payload.shrinkage_k,
+        min_category_pairs=payload.min_category_pairs,
+        min_global_pairs=payload.min_global_pairs,
+        min_effective_pairs=payload.min_effective_pairs,
+        max_interval_ratio=payload.max_interval_ratio,
+    )
+    return [TierCoefficientResponse.model_validate(record) for record in records]
+
+
+@router.get("/coefficients", response_model=TierCoefficientPageResponse)
+async def get_coefficients(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    pricing_run_id: UUID | None = None,
+    category: str | None = None,
+    model: Literal["simple_median", "shrinkage"] | None = None,
+    validated: bool | None = None,
+    limit: Annotated[int, Query(ge=1, le=250)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TierCoefficientPageResponse:
+    records, total = await list_tier_coefficients(
+        session,
+        workspace_id=current.workspace_id,
+        pricing_run_id=pricing_run_id,
+        category=category,
+        model=CoefficientModel(model) if model else None,
+        validated=validated,
+        limit=limit,
+        offset=offset,
+    )
+    return TierCoefficientPageResponse(
+        items=[TierCoefficientResponse.model_validate(record) for record in records],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/catalog-items/{catalog_item_id}/overrides",
+    response_model=CatalogItemOverrideResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_catalog_override(
+    catalog_item_id: UUID,
+    payload: CatalogItemOverrideRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogItemOverrideResponse:
+    try:
+        override = await add_catalog_item_override(
+            session,
+            workspace_id=current.workspace_id,
+            user_id=current.user.id,
+            catalog_item_id=catalog_item_id,
+            values=payload.model_dump(exclude_unset=True),
+        )
+    except CatalogItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Catalog item not found") from exc
+    except PricingRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return CatalogItemOverrideResponse.model_validate(override)
+
+
+@router.get("/recommendations", response_model=RecommendationPageResponse)
+async def get_recommendations(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    run_id: UUID | None = None,
+    action: Literal["RAISE", "HOLD", "LOWER", "MANUAL_REVIEW", "INSUFFICIENT_DATA"]
+    | None = None,
+    confidence_grade: str | None = None,
+    category: str | None = None,
+    queue: Literal["raise", "clearance", "review", "hold", "all"] = "raise",
+    priority_score_type: str | None = None,
+    confidence_min: Annotated[Decimal | None, Query(ge=0, le=1)] = None,
+    confidence_max: Annotated[Decimal | None, Query(ge=0, le=1)] = None,
+    sort: Literal["priority", "review_priority", "newest"] = "priority",
+    limit: Annotated[int, Query(ge=1, le=250)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> RecommendationPageResponse:
+    if (
+        confidence_min is not None
+        and confidence_max is not None
+        and confidence_min > confidence_max
+    ):
+        raise HTTPException(
+            status_code=422, detail="confidence_min cannot exceed confidence_max"
+        )
+    try:
+        rows, total, resolved_run_id = await list_recommendations(
+            session,
+            workspace_id=current.workspace_id,
+            run_id=run_id,
+            action=action,
+            confidence_grade=confidence_grade,
+            category=category,
+            queue=queue,
+            priority_score_type=priority_score_type,
+            confidence_min=confidence_min,
+            confidence_max=confidence_max,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    return RecommendationPageResponse(
+        items=[
+            _recommendation_response(recommendation, item)
+            for recommendation, item in rows
+        ],
+        total=total,
+        run_id=resolved_run_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/recommendations/{recommendation_id}", response_model=RecommendationResponse
+)
+async def get_recommendation_details(
+    recommendation_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RecommendationResponse:
+    try:
+        recommendation, item = await get_recommendation(
+            session,
+            workspace_id=current.workspace_id,
+            recommendation_id=recommendation_id,
+        )
+    except RecommendationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Recommendation not found") from exc
+    return _recommendation_response(recommendation, item)
+
+
+@router.get(
+    "/recommendations/{recommendation_id}/evidence",
+    response_model=list[RecommendationEvidenceResponse],
+)
+async def get_recommendation_market_evidence(
+    recommendation_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[RecommendationEvidenceResponse]:
+    try:
+        recommendation, _ = await get_recommendation(
+            session,
+            workspace_id=current.workspace_id,
+            recommendation_id=recommendation_id,
+        )
+        rows = await get_recommendation_evidence(
+            session,
+            workspace_id=current.workspace_id,
+            recommendation_id=recommendation_id,
+        )
+    except RecommendationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Recommendation not found") from exc
+    normalized_by_id = {
+        str(value.get("observation_id")): value
+        for value in recommendation.calculation_trace.get("normalized_offers", [])
+        if isinstance(value, dict) and value.get("observation_id")
+    }
+    response: list[RecommendationEvidenceResponse] = []
+    for observation, classification in rows:
+        normalized = normalized_by_id.get(str(observation.id), {})
+        response.append(
+            RecommendationEvidenceResponse(
+                observation_id=observation.id,
+                seller_id=observation.seller_id,
+                seller_name=observation.seller_name,
+                title=observation.title,
+                brand=observation.brand_raw,
+                url=observation.url,
+                price=observation.price,
+                currency=observation.currency,
+                is_available=observation.is_available,
+                match_confidence=observation.match_confidence,
+                source_confidence=observation.source_confidence,
+                age_hours=Decimal(str(normalized.get("age_hours", "0"))),
+                tier=classification.tier,
+                tier_confidence=classification.tier_confidence,
+                is_used=classification.is_used,
+                is_kemp=classification.is_kemp,
+                is_owned=classification.is_owned,
+                is_dumping=classification.is_dumping,
+                exclusion_reason=classification.exclusion_reason,
+                normalized_price=Decimal(
+                    str(normalized.get("normalized_price", observation.price))
+                ),
+                multiplier=Decimal(
+                    str(
+                        normalized.get("multiplier", normalized.get("coefficient", "1"))
+                    )
+                ),
+                coefficient_model=str(normalized.get("coefficient_model", "reference")),
+                coefficient_version=str(
+                    normalized.get("coefficient_version", "reference-tier-v1")
+                ),
+                coefficient_confidence=Decimal(
+                    str(normalized.get("coefficient_confidence", "1"))
+                ),
+                observed_at=observation.observed_at,
+            )
+        )
+    return response
+
+
+@router.post(
+    "/observations/{observation_id}/tier-overrides",
+    response_model=ObservationTierOverrideResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def override_market_observation_tier(
+    observation_id: UUID,
+    payload: ObservationTierOverrideRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ObservationTierOverrideResponse:
+    try:
+        record = await override_observation_tier(
+            session,
+            workspace_id=current.workspace_id,
+            user_id=current.user.id,
+            observation_id=observation_id,
+            tier=payload.tier,
+            reason=payload.reason,
+        )
+    except RecommendationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Observation not found") from exc
+    except PricingRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ObservationTierOverrideResponse.model_validate(record)
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/decisions",
+    response_model=RecommendationDecisionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def decide_recommendation(
+    recommendation_id: UUID,
+    payload: RecommendationDecisionRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RecommendationDecisionResponse:
+    try:
+        decision = await add_recommendation_decision(
+            session,
+            workspace_id=current.workspace_id,
+            recommendation_id=recommendation_id,
+            user_id=current.user.id,
+            decision=payload.decision,
+            new_price=payload.new_price,
+            allow_below_cost=payload.allow_below_cost,
+            warning_confirmed=payload.warning_confirmed,
+            reason=payload.reason,
+        )
+    except RecommendationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Recommendation not found") from exc
+    except PricingRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RecommendationDecisionResponse.model_validate(decision)
+
+
+def _recommendation_response(recommendation, item) -> RecommendationResponse:
+    return RecommendationResponse(
+        id=recommendation.id,
+        pricing_run_id=recommendation.pricing_run_id,
+        catalog_snapshot_id=recommendation.catalog_snapshot_id,
+        catalog_item_id=item.id,
+        sku=item.sku,
+        oe_norm=item.oe_norm,
+        name=item.name,
+        category=item.category,
+        stock_status=recommendation.context_snapshot.get(
+            "stock_status", item.stock_status
+        ),
+        context_snapshot=recommendation.context_snapshot,
+        calculation_trace=recommendation.calculation_trace,
+        action=recommendation.action,
+        current_price=recommendation.current_price,
+        fair_price=recommendation.fair_price,
+        recommended_price=recommendation.recommended_price,
+        lower_bound=recommendation.lower_bound,
+        upper_bound=recommendation.upper_bound,
+        confidence=recommendation.confidence,
+        confidence_grade=recommendation.confidence_grade,
+        weakest_factor=recommendation.weakest_factor,
+        factor_scores=recommendation.factor_scores,
+        competitor_count=recommendation.competitor_count,
+        raw_competitor_count=recommendation.raw_competitor_count,
+        unique_seller_count=recommendation.unique_seller_count,
+        clean_competitor_count=recommendation.clean_competitor_count,
+        effective_competitor_count=recommendation.effective_competitor_count,
+        dispersion=recommendation.dispersion,
+        outlier_method=recommendation.outlier_method,
+        outlier_count=recommendation.outlier_count,
+        sensitivity=recommendation.sensitivity,
+        action_gates_passed=recommendation.action_gates_passed,
+        cost_floor=recommendation.cost_floor,
+        cost_basis_inventory_value=recommendation.cost_basis_inventory_value,
+        priority_score=recommendation.priority_score,
+        priority_score_type=recommendation.priority_score_type,
+        review_priority=recommendation.review_priority,
+        reason_codes=recommendation.reason_codes,
+        evidence_observation_ids=recommendation.evidence_observation_ids,
+        excluded_observations=recommendation.excluded_observations,
+        policy_version=recommendation.policy_version,
+        parser_version=recommendation.parser_version,
+        classifier_version=recommendation.classifier_version,
+        coefficient_version=recommendation.coefficient_version,
+        calibration_dataset_hash=recommendation.calibration_dataset_hash,
+        currency=recommendation.currency,
+        price_tick=recommendation.price_tick,
+        price_tick_version=recommendation.price_tick_version,
+        computed_at=recommendation.computed_at,
+    )

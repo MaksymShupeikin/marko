@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import hashlib
 from uuid import UUID
 
 from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.infrastructure.db.models import Listing, SyncRun, StoreKind, SyncStatus
+from marko.infrastructure.db.models import (
+    Listing,
+    MarketplaceStore,
+    SyncRun,
+    StoreKind,
+    SyncStatus,
+    WorkspaceStore,
+)
+from marko.core.config import get_settings
 from marko.services.parser_models import Seller
 
 import marko.repositories.users as users_repo
@@ -101,11 +110,21 @@ async def queue_store_sync(
 async def _get_or_create_sync_run(
     session: AsyncSession, *, store_id: UUID, workspace_id: UUID
 ) -> tuple[SyncRun, bool]:
+    await stores_repo.lock_store_sync_scope(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+    )
     active = await stores_repo.get_active_sync_run(session, store_id, workspace_id)
     if active is not None:
+        active.scrape_deduplicated_submissions += 1
         await session.commit()
         return active, False
 
+    store = await session.get(MarketplaceStore, store_id)
+    if store is None:
+        raise StoreNotFoundError(str(store_id))
+    settings = get_settings()
     sync_run = await stores_repo.create_sync_run(
         session,
         workspace_id=workspace_id,
@@ -113,6 +132,24 @@ async def _get_or_create_sync_run(
         kind="catalog_import",
         status=SyncStatus.queued,
     )
+    sync_run.scrape_item_version = "store-sync-v1"
+    sync_run.scrape_input_fingerprint = hashlib.sha256(
+        f"store-sync-v1|{store.canonical_url}".encode()
+    ).hexdigest()
+    sync_run.scrape_state = "queued"
+    sync_run.scrape_max_task_executions = max(
+        1,
+        settings.store_sync_max_task_executions,
+    )
+    sync_run.scrape_deadline_at = datetime.now(UTC) + timedelta(
+        seconds=max(1, settings.store_sync_item_deadline_seconds)
+    )
+    sync_run.scrape_checkpoint = {
+        "stage": "queued",
+        "item_kind": "store_sync",
+        "item_version": sync_run.scrape_item_version,
+        "at": datetime.now(UTC).isoformat(),
+    }
     await session.commit()
     await session.refresh(sync_run)
     return sync_run, True
@@ -129,6 +166,7 @@ async def _dispatch_sync_run(
         )
     except Exception as exc:
         sync_run.status = SyncStatus.failed
+        sync_run.scrape_state = "failed"
         sync_run.error = f"Could not enqueue catalog import: {exc}"[:4000]
         sync_run.finished_at = datetime.now(UTC)
         await session.commit()

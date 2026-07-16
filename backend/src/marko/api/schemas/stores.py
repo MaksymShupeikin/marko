@@ -70,6 +70,24 @@ class SyncRunResponse(BaseModel):
     store_id: UUID | None
     kind: str
     status: str
+    scrape_item_version: str
+    scrape_state: str
+    scrape_deduplicated_submissions: int
+    scrape_task_executions: int
+    scrape_task_redeliveries: int
+    scrape_max_task_executions: int
+    scrape_deadline_at: datetime | None
+    scrape_owner_task_id: str | None
+    scrape_lease_expires_at: datetime | None
+    scrape_checkpoint: dict | None
+    scrape_catalog_pages: int
+    scrape_products_extracted: int
+    scrape_products_persisted: int
+    scrape_duplicate_products: int
+    scrape_database_writes: int
+    scrape_raw_evidence_bytes: int
+    scrape_structured_completeness: Decimal | None
+    scrape_evidence_coverage: Decimal | None
     progress_current: int
     progress_total: int | None
     error: str | None

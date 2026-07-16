@@ -7,7 +7,7 @@ down:
 	docker compose down
 
 logs:
-	docker compose logs -f api worker frontend
+	docker compose logs -f api worker pricing-worker frontend
 
 test:
 	docker compose --profile test run --rm --build backend-test

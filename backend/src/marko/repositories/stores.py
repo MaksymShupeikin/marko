@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert
@@ -129,11 +130,34 @@ async def get_active_sync_run(
         .where(
             SyncRun.store_id == store_id,
             SyncRun.workspace_id == workspace_id,
-            SyncRun.status.in_([SyncStatus.queued, SyncStatus.running]),
+            SyncRun.kind == "catalog_import",
+            SyncRun.scrape_state.in_(("queued", "running", "retry_wait")),
         )
         .order_by(SyncRun.created_at.desc())
         .limit(1)
     )
+
+
+async def lock_store_sync_scope(
+    session: AsyncSession,
+    *,
+    store_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> None:
+    """Serialize active-run creation for one workspace/store pair.
+
+    The partial unique index remains the final DB invariant. The transaction
+    advisory lock makes the normal get-or-create path deterministic and avoids
+    using an exception as concurrency control.
+    """
+
+    digest = hashlib.blake2b(
+        workspace_id.bytes + store_id.bytes,
+        digest_size=8,
+        person=b"markosyn",
+    ).digest()
+    lock_key = int.from_bytes(digest, byteorder="big", signed=True)
+    await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
 
 
 async def create_sync_run(

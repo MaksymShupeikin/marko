@@ -37,21 +37,36 @@ class PromGateway:
         log.info("Продавець: company_id=%s slug=%s lang=%s",
                  seller.company_id, seller.slug, seller.lang)
 
-        seen_ids: set[int] = set()
+        seen_products: set[tuple[str, str]] = set()
         with HttpClient(self._config) as client:
             for page in self._iter_pages(client, seller, strict=strict):
                 new_on_page = 0
                 for product in page.products:
-                    if product.id in seen_ids:
+                    identity = (
+                        ("id", str(product.id))
+                        if product.id is not None
+                        else (
+                            "fallback",
+                            product.url
+                            or "|".join(
+                                (
+                                    product.name or "",
+                                    product.sku or "",
+                                    product.seller_name or "",
+                                )
+                            ),
+                        )
+                    )
+                    if identity in seen_products:
                         continue
-                    seen_ids.add(product.id)
+                    seen_products.add(identity)
                     new_on_page += 1
                     yield product
                 if page.products and new_on_page == 0:
                     log.info("Нових товарів немає — зупиняюсь (кінець каталогу).")
                     break
 
-        log.info("Готово. Унікальних товарів: %d", len(seen_ids))
+        log.info("Готово. Унікальних товарів: %d", len(seen_products))
 
     def _iter_pages(
         self, client: HttpClient, seller: Seller, *, strict: bool = False
@@ -101,7 +116,13 @@ class PromGateway:
 
     # -- Cross-seller price comparison --
 
-    def compare(self, seed_url: str, query: str | None = None) -> PriceComparison:
+    def compare(
+        self,
+        seed_url: str,
+        query: str | None = None,
+        *,
+        strict: bool = False,
+    ) -> PriceComparison:
         """Compare a seed product against similar offers from other sellers."""
         match = _PRODUCT_URL_RE.search(seed_url)
         if not match:
@@ -119,7 +140,12 @@ class PromGateway:
                      seed.seller_count, seed.min_price, seed.max_price)
             log.info("Пошуковий запит: %r", search_query)
 
-            candidates = self._collect_candidates(client, search_query, lang)
+            candidates = self._collect_candidates(
+                client,
+                search_query,
+                lang,
+                strict=strict,
+            )
             comparison = build_comparison(
                 seed,
                 candidates,
@@ -139,7 +165,12 @@ class PromGateway:
         return parse_product_page(html, lang)
 
     def _collect_candidates(
-        self, client: HttpClient, query: str, lang: str
+        self,
+        client: HttpClient,
+        query: str,
+        lang: str,
+        *,
+        strict: bool = False,
     ) -> Iterator[Product]:
         """Yield search-result products across up to max_search_pages pages."""
         search_url = f"{BASE_URL}/{lang}/search"
@@ -152,9 +183,13 @@ class PromGateway:
                 page = parse_search(html, lang)
             except RequestFailed as exc:
                 log.error("Пошукову сторінку %d не завантажено: %s", page_num, exc)
+                if strict:
+                    raise
                 return
             except ParseError as exc:
                 log.error("Пошукову сторінку %d не розібрано: %s", page_num, exc)
+                if strict:
+                    raise
                 return
             if page.is_empty:
                 log.info("Пошукова сторінка %d порожня — кінець.", page_num)

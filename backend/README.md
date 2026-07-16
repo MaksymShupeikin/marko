@@ -12,6 +12,35 @@ service-account JSON, OAuth client secret, or API key is needed by FastAPI.
 The backend is developed and tested through Docker; no host `.venv` is needed:
 
 ```bash
-docker compose up -d --build db broker migrate api worker scheduler
+docker compose up -d --build db broker migrate api worker pricing-worker scheduler
 docker compose --profile test run --rm --build backend-test
+```
+
+The production pricing path is:
+
+```text
+XLSX snapshot -> pricing run -> rate-limited collection queue
+              -> frozen paired-OE dataset + both coefficient models
+              -> selected run-level calibration -> calculation queue
+              -> append-only recommendations and operator decisions
+```
+
+The Prom extraction parser is consumed as a black box. Scaling,
+physical-attempt Redis pacing, separate HTTP/task retry budgets, raw HTML
+evidence, replay, checkpoints, persistence, reconciliation, and metrics live
+around it. See
+[`../docs/scraper_scaling.md`](../docs/scraper_scaling.md).
+
+The pure domain under `src/marko/pricing/` implements Decimal KEMP
+normalization, simple-median and hierarchical-shrinkage calibration,
+leave-one-category/leave-one-OE leakage protection, MAD/IQR fair price,
+half-life confidence, stock modes and typed economic priority. See
+[`../docs/kemp_pricing_engine.md`](../docs/kemp_pricing_engine.md).
+
+Host verification when `.venv` is present:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m pytest -q
+.venv/bin/alembic upgrade head --sql
+.venv/bin/alembic downgrade 20260716_0009:base --sql
 ```

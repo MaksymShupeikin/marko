@@ -4,10 +4,14 @@ from uuid import uuid4
 import pytest
 
 from marko.api.schemas.stores import ProductResponse
-from marko.infrastructure.db.models import Listing
+from marko.infrastructure.db.models import (
+    Listing,
+    StoreSyncProductSnapshot,
+    SyncRun,
+)
 from marko.services.parser_models import Product, Seller, get_nested
 
-from factories import product, raw_product
+from factories import product
 
 
 # get_nested
@@ -70,6 +74,26 @@ def test_product_response_includes_listing_image_url():
     response = ProductResponse.model_validate(listing)
 
     assert response.image_url == "https://images.prom.ua/product.jpg"
+
+
+def test_store_sync_has_active_run_guard_and_immutable_snapshot_model():
+    index_names = {index.name for index in SyncRun.__table__.indexes}
+    constraints = {
+        constraint.name
+        for constraint in StoreSyncProductSnapshot.__table__.constraints
+    }
+
+    assert "uq_sync_run_active_store_sync" in index_names
+    assert "uq_store_sync_product_snapshot_external" in constraints
+    assert StoreSyncProductSnapshot.__table__.c.content_sha256 is not None
+    snapshot_indexes = {
+        index.name for index in StoreSyncProductSnapshot.__table__.indexes
+    }
+    assert snapshot_indexes == {
+        "ix_store_sync_product_snapshot_run",
+        "ix_store_sync_product_snapshots_listing_id",
+        "ix_store_sync_product_snapshots_content_sha256",
+    }
 
 
 # Seller.from_url

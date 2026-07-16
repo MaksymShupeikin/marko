@@ -29,7 +29,10 @@ class ScrapeConfig:
     delay: float = 1.0          # base delay between requests in seconds
     delay_jitter: float = 0.5   # random jitter in seconds
     timeout: float = 30.0       # HTTP request timeout in seconds
-    max_retries: int = 4        # maximum retries per request
+    # Maximum physical attempts total for one logical HTTP request.  The old
+    # name ``max_retries`` was ambiguous because 4 meant 4 attempts, not
+    # 1 initial attempt + 4 retries.
+    max_attempts: int = 4
     backoff_factor: float = 1.5 # exponential backoff factor
     max_pages: int = 0
     start_page: int = 1

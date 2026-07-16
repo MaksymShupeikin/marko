@@ -14,6 +14,14 @@ Android. Apple Sign-In is not part of the application.
 is in `lib/core/`; each feature keeps a flat set of model, API, controller, and
 page files. There are no `lib/app/` or `lib/shared/` directories.
 
+The pricing feature is action-first: separate raise, clearance, manual-review
+and hold queues show the recommended action/economic effect before model
+details. Expanded rows expose confidence, weakest factor, evidence health, raw
+and KEMP-normalized competitor prices, multiplier/coefficient metadata and the
+listing link. Stock/sales/cost context, tier corrections and decisions are
+append-only API operations. Below-cost decisions require an explicit checkbox
+confirmation and approved floor.
+
 ## Local web run
 
 Configure Firebase first by following the root [setup guide](../README.md#firebase-and-google-authentication).

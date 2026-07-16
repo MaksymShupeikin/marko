@@ -8,9 +8,10 @@ Flutter ──login/session──> Firebase Auth
    │
    └──REST + JWT──> FastAPI ─────────> PostgreSQL
                        │                   ▲
-                       └──> Redis ──> Worker ──> Prom
+                       └──> Redis ──> collection worker ──> Prom
                                      │
-                                     └──> matching engine
+                                     ├──> run-level tier calibration
+                                     └──> pricing calculation worker
 ```
 
 ## Границы модулей
@@ -22,6 +23,49 @@ Flutter ──login/session──> Firebase Auth
 - `repositories` содержит SQL-запросы, а `infrastructure/db` — ORM-модели и
   создание сессий.
 - `worker` выполняет медленные сетевые операции вне HTTP-запросов.
+- `pricing` содержит чистое детерминированное ядро: tier coefficients,
+  paired-OE calibration, KEMP normalization, MAD/IQR, confidence,
+  режимы fresh/stale/dead_stock, priority и invariant enforcement.
+
+## Pricing run
+
+```text
+XLSX import
+   └─> PricingRun + 1 PricingRunItem на SKU
+         └─> queue pricing (existing PromGateway, Redis pacing/circuit)
+               └─> append raw capture + observation + tier classification
+                     └─> barrier: все SKU собраны
+                           ├─> freeze paired-OE dataset + SHA-256
+                           ├─> simple median benchmark
+                           └─> selected category shrinkage coefficients
+                                 └─> queue pricing-calculation
+                                       └─> target leave-one-OE-out coefficient
+                                             └─> recommendation + priority
+                                             + immutable calculation trace
+```
+
+Сетевой парсер `parsers/prom` не масштабируется путём модификации его
+внутренностей. Масштабирование находится вокруг него: versioned logical items,
+отдельные task/HTTP retry budgets, глобальный Redis pacing каждого physical
+attempt, raw HTML journal, replay, checkpoints и идемпотентные DB-ограничения.
+`store_sync`, `comparison_job`, logical request и physical attempt не
+смешиваются в одной единице capacity. Расчёт не начинается до run-level barrier,
+поэтому коэффициент
+категории не оценивается по одной позиции. Global prior для shrinkage исключает
+target category, а applied coefficient исключает target OE, если тот находился
+в run calibration dataset.
+
+Recommendations не смешиваются в одну очередь по несопоставимым raw units:
+
+- raise — UAH/month opportunity или явно маркированный proxy;
+- clearance — UAH locked inventory;
+- review — capital at risk under weak evidence;
+- hold — newest-first operational list.
+
+Подробные формулы и policy contract находятся в
+[`kemp_pricing_engine.md`](kemp_pricing_engine.md).
+Scraper capacity, reconciliation, storage и benchmark contract находятся в
+[`scraper_scaling.md`](scraper_scaling.md).
 
 FastAPI не обходит каталог синхронно. `POST /api/v1/stores` создаёт `sync_run`,
 ставит задачу в очередь и возвращает `202 Accepted`; Flutter опрашивает job,

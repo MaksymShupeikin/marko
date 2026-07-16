@@ -11,7 +11,11 @@ celery_app = Celery(
     "marko",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["marko.worker.tasks.import_store", "marko.worker.tasks.system"],
+    include=[
+        "marko.worker.tasks.import_store",
+        "marko.worker.tasks.pricing",
+        "marko.worker.tasks.system",
+    ],
 )
 celery_app.conf.update(
     task_acks_late=True,
@@ -20,4 +24,18 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
     timezone="UTC",
+    task_routes={
+        "marko.worker.import_store_catalog": {"queue": "store-sync"},
+        "marko.worker.process_pricing_item": {"queue": "pricing"},
+        "marko.worker.calculate_pricing_item": {"queue": "pricing-calculation"},
+        "marko.worker.finalize_pricing_collection": {"queue": "celery"},
+        "marko.worker.start_pricing_run": {"queue": "celery"},
+        "marko.worker.cleanup_scrape_evidence": {"queue": "celery"},
+    },
+    beat_schedule={
+        "cleanup-orphaned-scrape-evidence": {
+            "task": "marko.worker.cleanup_scrape_evidence",
+            "schedule": max(60, settings.scrape_evidence_gc_interval_seconds),
+        },
+    },
 )
