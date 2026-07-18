@@ -1,0 +1,619 @@
+claim_ledger:
+  ledger_id: "hsr-stage0-claims-20260717"
+  target_report: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/docs/METIS_MATCHING_GOLD_SET_STAGE_0_AUDIT_2026-07-17.md"
+  repository_id: "task-pinned-marko-copy-20260717"
+  evidence_scale: "E0-E5 from Hostile Self-Review master prompt"
+  counts:
+    material_claims: 44
+    traced_claims: 44
+    supported_without_repair: 35
+    corrected_and_supported: 8
+    contradicted_after_repair: 0
+    blocked: 1
+    unsupported_after_repair: 0
+
+  claims:
+    - claim_id: "CLM-001"
+      claim_type: "REPOSITORY_FACT"
+      claim: "The reviewed input is the task-pinned nested checkout; it has no Git metadata, while other physical copies were not substituted."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+      artifact_version: "source-tree-fingerprint:777d4e0620571556af2400685a6133798b321a49c295a669baca3d84e8977a90"
+      location: "filesystem identity check; .git absent; current workspace and target-report path agree"
+      observed_value: "input_path equals physical path; commit/branch/remote NOT_AVAILABLE"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The report named only the nested copy and did not disclose other located copies or the selection basis."
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-002"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Catalog ingestion exposes normalized OE, SKU, name, category, brand, and product URL to the pricing-run path."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/xlsx_catalog.py"
+      artifact_version: "sha256:a5ba3d7ac74bb92f7a311bcb7feed8e44a5aa20515053d059ba69f8b517d14c7"
+      location: "ParsedCatalogItem and _parse_row, lines 167-176 and 459-517"
+      observed_value: "oe_norm, sku, name, category, brand, product_url"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-003"
+      claim_type: "REPOSITORY_FACT"
+      claim: "The implemented retrieval uses catalog OE as the query and defaults to at most three search pages."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/pricing_runs.py"
+      artifact_version: "sha256:6b11d8bc70e4ee0ed77407489768329b30ea468c54318d31fc7aaed94955aabb"
+      location: "pricing target construction, lines 288-315; config.py line 48"
+      observed_value: "raw_query = catalog_item.oe_norm; pricing_scraper_max_search_pages = 3"
+      supporting_artifacts:
+        - path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/core/config.py"
+          version: "sha256:14879bb4d30098d190d2a1e0a58d808b4287c3135a7ac232417d6068f9d06485"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-004"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Prom retrieval yields search products in page iteration order and contains no learned ranker or explicit top-K relevance contract."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/parsers/prom/gateway.py"
+      artifact_version: "sha256:3c480c044701a189deb184324ccb59fbb7e0492997061cfe7def223e31ba88cb"
+      location: "PromGateway._search_products, lines 175-199"
+      observed_value: "sequential page loop with search_term query; no ranking score"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-005"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Structured comparison retains accepted positive-price matches, cheapest per seller, price order, a seller cap, and candidates_scanned."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/matching.py"
+      artifact_version: "sha256:037f828e20eedd0a2e1edb0b89068a0ac19fdcba043aa28b10c7cb75e8cf858e"
+      location: "PriceComparison.as_dict and build_comparison, lines 120-257"
+      observed_value: "accepted offers only; candidates_scanned; price sort and max_sellers cap"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-006"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Scraper outputs are content-hashed, but exact matching-candidate retrieval replay is not validated by a benchmark adapter."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/scraper_contract.py"
+      artifact_version: "sha256:248a90894580e0b38f2d5a6fe189202dca3ff082eeea878f20a7a21e5e370265"
+      location: "ScraperOutput and content_sha256 construction, lines 199-317"
+      observed_value: "canonical payload SHA-256 exists; no matching benchmark reconstruction interface found"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The report implied future controlled replay capability without separating content addressing from demonstrated reconstruction."
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-007"
+      claim_type: "REPOSITORY_FACT"
+      claim: "The pairwise matcher returns Match(kind, score) or None and has no explicit uncertain/manual-review label."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/matching.py"
+      artifact_version: "sha256:037f828e20eedd0a2e1edb0b89068a0ac19fdcba043aa28b10c7cb75e8cf858e"
+      location: "Match and match_offer, lines 90-114"
+      observed_value: "Match | None"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-008"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Exact model_id and SKU equality return score 1.0 before brand and laterality checks."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/matching.py"
+      artifact_version: "sha256:037f828e20eedd0a2e1edb0b89068a0ac19fdcba043aa28b10c7cb75e8cf858e"
+      location: "match_offer, lines 96-107"
+      observed_value: "early returns for model and sku precede fuzzy safety checks"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-009"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Fuzzy matching blends token Jaccard and containment, requires compatible/unknown brand, and checks left/right, front/rear, and upper/lower title conflicts."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/matching.py"
+      artifact_version: "sha256:037f828e20eedd0a2e1edb0b89068a0ac19fdcba043aa28b10c7cb75e8cf858e"
+      location: "_token_similarity, _ANTONYM_GROUPS, brands_compatible, match_offer, lines 30-114"
+      observed_value: "0.5 Jaccard + 0.5 containment; three antonym groups"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-010"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Missing brand is compatible and one-sided missing laterality is not treated as a conflict."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/matching.py"
+      artifact_version: "sha256:037f828e20eedd0a2e1edb0b89068a0ac19fdcba043aa28b10c7cb75e8cf858e"
+      location: "laterality_conflict and brands_compatible, lines 60-84"
+      observed_value: "unknown brand passes; conflict requires both sides present and different"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-011"
+      claim_type: "REPOSITORY_FACT"
+      claim: "The parsed Product contract lacks OE arrays, description, structured fitment/vehicle/year/engine/side/position/condition/package quantity fields."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/parser_models.py"
+      artifact_version: "sha256:759903519eeb0ef5f11ef7b159c239fcc06bcbb39ca7f11ee90f8b3f1ed41196"
+      location: "Product dataclass, lines 56-81"
+      observed_value: "none of the listed structured automotive fields exists"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-012"
+      claim_type: "REPOSITORY_FACT"
+      claim: "The default fuzzy threshold is 0.55 and no compliant local gold artifact supports a calibrated threshold claim."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/parsers/prom/config.py"
+      artifact_version: "sha256:78acbbd4e62bdc8a392265f688761e8aed51931e6d0a9290346a51377ecc3fcc"
+      location: "PromConfig.similarity_threshold, line 41; repository artifact scan"
+      observed_value: "0.55; no matching gold/benchmark artifact found outside excluded caches"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-013"
+      claim_type: "REPOSITORY_FACT"
+      claim: "No separately persisted comparability label or comparability-decision service was located in the active checkout."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src"
+      artifact_version: "source-tree-fingerprint:777d4e0620571556af2400685a6133798b321a49c295a669baca3d84e8977a90"
+      location: "source-symbol and schema search for comparability_label/decision"
+      observed_value: "no implementation or schema symbol found"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-014"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Accepted matches become MarketObservation records and matched_oe_norm is copied from the catalog item rather than independently extracted from the candidate."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/market_collection.py"
+      artifact_version: "sha256:2785272020efac1ebff1813b24e3479c47d49dd4a13bcd5af5f6cb4cc65ab59b"
+      location: "observation construction, lines 1210-1285 and 1460-1525"
+      observed_value: "matched_oe_norm=catalog_item.oe_norm or item.oe_norm"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-015"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Pricing hard-rejects invalid price/currency/availability/freshness, used/owned/conflicted offers, low match/tier/source confidence, and unknown tier."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis/pricing/engine.py"
+      artifact_version: "sha256:4dacb53a0451b950826f85edc55e9c897199e9967a913a0b1cf791b704b1697e"
+      location: "_hard_rejection, lines 360-388"
+      observed_value: "explicit rejection taxonomy"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-016"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Default pricing match confidence is 0.70, while exact matcher outputs are 1.0."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis/pricing/types.py"
+      artifact_version: "sha256:0aa590e7247358374a850af144bb9189d199185130683e515df31732f9557470"
+      location: "PricingPolicy.match_confidence_min, line 228; matching.py lines 99-102"
+      observed_value: "0.70 versus exact score 1.0"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-017"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Pricing MANUAL_REVIEW and INSUFFICIENT_DATA are recommendation outcomes, not pairwise matching labels."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis/pricing/types.py"
+      artifact_version: "sha256:0aa590e7247358374a850af144bb9189d199185130683e515df31732f9557470"
+      location: "RecommendationAction enum, lines 35-41; matching.py Match contract"
+      observed_value: "recommendation-level enum is separate from Match | None"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-018"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Legacy ProductMatch references Listing rows and stores candidate/approved/rejected, manual/automatic, nullable confidence, and matcher_version."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/infrastructure/db/models.py"
+      artifact_version: "sha256:b3a746971debde1dc35b31ed5580840985b44531f9fd23ea9f0dfb440df01a38"
+      location: "MatchSource, MatchStatus, ProductMatch, lines 46-55 and 206-236"
+      observed_value: "legacy relational model with mutable listing foreign keys"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-019"
+      claim_type: "REPOSITORY_FACT"
+      claim: "ProductMatch has no located service/API/worker/test/frontend read or write path in the active checkout."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src"
+      artifact_version: "source-tree-fingerprint:777d4e0620571556af2400685a6133798b321a49c295a669baca3d84e8977a90"
+      location: "repository-wide exact-symbol search for ProductMatch"
+      observed_value: "only ORM model and initial migration references"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-020"
+      claim_type: "REPOSITORY_FACT"
+      claim: "The located API surface has no route dedicated to matching, annotation, gold-set, or benchmark operations."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/api"
+      artifact_version: "source-tree-fingerprint:777d4e0620571556af2400685a6133798b321a49c295a669baca3d84e8977a90"
+      location: "router source scan and generated OpenAPI path probe"
+      observed_value: "no path containing match, annotation, gold, or benchmark"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-021"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Snapshot/evidence models contain hashes and application-managed persistence paths, but schema-level immutability and gold-grade replay are not established."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/infrastructure/db/models.py"
+      artifact_version: "sha256:b3a746971debde1dc35b31ed5580840985b44531f9fd23ea9f0dfb440df01a38"
+      location: "StoreSyncProductSnapshot, ScrapeEvidenceBlob, ScrapeTarget, RawMarketCapture, lines 456-527, 923-1001, 1116-1153"
+      observed_value: "content_sha256 fields and uniqueness constraints; ScrapeTarget payload remains mutable; no update-prevention constraint"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The report treated immutable/replayable wording in docstrings and planned usage as a proved database contract."
+      counterevidence:
+        - "market_collection.py lines 858-859 assign ScrapeTarget.payload and content_sha256"
+      correction_required: false
+
+    - claim_id: "CLM-022"
+      claim_type: "REPOSITORY_FACT"
+      claim: "No compliant gold/benchmark artifact was found in the audited checkout; the uninspected live-database record count is unknown."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+      artifact_version: "source-tree-fingerprint:777d4e0620571556af2400685a6133798b321a49c295a669baca3d84e8977a90"
+      location: "repository file/schema/symbol scan excluding .venv and cache paths"
+      observed_value: "no compliant artifact; no live DB inspection"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The report converted artifact absence into exact zero pair/split counts."
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-023"
+      claim_type: "REPOSITORY_FACT"
+      claim: "Pricing implementation is in metis.pricing and marko.pricing re-exports it while declaring a compatibility-facade role."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/pricing/__init__.py"
+      artifact_version: "sha256:a755bf972b49c46e9e1a2afeb0f55533b8a9017ad1d645ef52f493a630fdbb6a"
+      location: "module docstring and re-export, lines 1-8; metis/pricing/__init__.py lines 1-70"
+      observed_value: "compatibility facade imports public Metis pricing API"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "A repository fact directly asserted organizational ownership instead of separating source location from the ownership inference."
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-024"
+      claim_type: "REPOSITORY_FACT"
+      claim: "A missing raw currency value is normalized to UAH before pricing."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/market_collection.py"
+      artifact_version: "sha256:2785272020efac1ebff1813b24e3479c47d49dd4a13bcd5af5f6cb4cc65ab59b"
+      location: "_currency_code, lines 2668-2672"
+      observed_value: "_currency_code(None) == UAH"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-025"
+      claim_type: "REPOSITORY_FACT"
+      claim: "A network-free recommendation replay service reconstructs context/cohort from persisted records and compares stored versus replayed outputs."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/recommendation_replay.py"
+      artifact_version: "sha256:be77f3a43f8ee464907319a719253b6b1804eeb2b2bdd049ea416936dec3c82d"
+      location: "replay_recommendation and compare_replayed_result, lines 58-280"
+      observed_value: "component replay contract v1/v2 exists; full production manifest fields do not"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence:
+        - "selected checkout has no code commit and no saved environment fingerprint"
+      correction_required: false
+
+    - claim_id: "CLM-026"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "Stage 0 audit completion is PASS as a documentation/audit objective only."
+      premise_claim_ids: ["CLM-001", "CLM-002", "CLM-007", "CLM-013", "CLM-018", "CLM-022", "CLM-039", "CLM-042"]
+      derivation: "The required active-checkout architecture, test, gap, and blocker inventory was completed without advancing to implementation."
+      uncertainty: "PASS does not measure matcher quality or production readiness."
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-027"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "The current matching/comparability approach is NO_GO for production use in its present form."
+      premise_claim_ids: ["CLM-008", "CLM-011", "CLM-014", "CLM-015", "CLM-016", "CLM-039", "CLM-040"]
+      derivation: "Exact conflicts can auto-match and automatic pricing can pass without structured comparability/provenance fields, violating mandatory Metis invariants."
+      uncertainty: "Production prevalence and benchmark precision remain unmeasured."
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The report used BLOCKED only, which hid deterministic invariant violations behind missing benchmark data."
+      counterevidence:
+        - "implemented sample-count/freshness/tier gates do fail closed for their own fields"
+      correction_required: false
+
+    - claim_id: "CLM-028"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "The benchmark production gate is BLOCKED independently of the current implementation NO_GO."
+      premise_claim_ids: ["CLM-012", "CLM-013", "CLM-020", "CLM-022", "CLM-044"]
+      derivation: "No approved local label contract, dataset, split, threshold, or benchmark runner permits precision/recall release evaluation."
+      uncertainty: "External approved decisions or datasets may exist but were not supplied."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-029"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "The active architecture lacks independent retrieval, pairwise-decision, and comparability evaluation contracts."
+      premise_claim_ids: ["CLM-004", "CLM-005", "CLM-007", "CLM-013", "CLM-014"]
+      derivation: "Retrieval ranks/rejections are not persisted, pairwise uncertainty is collapsed, and accepted matches feed pricing without a separate comparability decision."
+      uncertainty: "This conclusion is limited to the audited physical copy."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-030"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "Recall@K, matching precision/recall, unseen precision, and release confidence bounds are not reportable from current evidence."
+      premise_claim_ids: ["CLM-004", "CLM-005", "CLM-012", "CLM-022"]
+      derivation: "Required verified candidate sets, resolved pair labels, splits, and denominators are absent from the audited evidence."
+      uncertainty: "No claim is made about an uninspected external dataset."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-031"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "Metis should retain pricing-semantics ownership and Marko should remain an application/facade/reuse boundary."
+      premise_claim_ids: ["CLM-023", "CLM-025"]
+      derivation: "The implementation and public API are located under metis.pricing, while marko.pricing is explicitly a compatibility facade."
+      uncertainty: "Organizational authority is not encoded solely by module names; this is an engineering boundary inference."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-032"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "Exact identifier matches bypass the downstream low-match-confidence gate."
+      premise_claim_ids: ["CLM-008", "CLM-015", "CLM-016"]
+      derivation: "Exact matches emit 1.0, which exceeds the default 0.70 pricing minimum despite untested hard conflicts."
+      uncertainty: "Other pricing gates may still reject an offer for unrelated reasons."
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-033"
+      claim_type: "ENGINEERING_INFERENCE"
+      claim: "Production readiness is not proven by the reviewed Stage 0 evidence."
+      premise_claim_ids: ["CLM-027", "CLM-028", "CLM-041", "CLM-042", "CLM-044"]
+      derivation: "System NO_GO findings, benchmark blockers, no live E2E, and incomplete lineage prevent a production-readiness conclusion."
+      uncertainty: "A later E4/E5 evidence package could change this conclusion."
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-034"
+      claim_type: "ENGINEERING_ASSUMPTION"
+      claim: "Content-hashed snapshots/captures may be reusable as inputs to a future gold/benchmark adapter, subject to immutability and replay proof."
+      assumption: "Existing hashes and timestamps could anchor future evidence records."
+      reason: "Avoid replacing the existing bounded extraction component while creating a separate evaluation layer."
+      risk: "Hashes alone do not prove snapshot immutability, complete candidate capture, or deterministic reconstruction."
+      required_client_decision: "Approve the future evidence schema and authority model before implementation."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The original candidate-integration wording promoted plausible reuse to immutable/replayable capability."
+      counterevidence: ["CLM-021"]
+      correction_required: false
+
+    - claim_id: "CLM-035"
+      claim_type: "ENGINEERING_ASSUMPTION"
+      claim: "A separate append-only gold schema and versioned matcher adapter are plausible later-stage designs and are not implemented."
+      assumption: "Separating legacy ProductMatch from gold evidence would preserve label lineage and matcher isolation."
+      reason: "The existing legacy schema lacks annotation provenance and uncertainty."
+      risk: "Schema semantics cannot be finalized before D1-D8 authority decisions."
+      required_client_decision: "Approve identity, comparability, annotator, adjudication, and workspace-pooling semantics."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-036"
+      claim_type: "ENGINEERING_ASSUMPTION"
+      claim: "Existing authorization, job, and review-UI patterns may be reused only through explicit adapters and domain approval."
+      assumption: "Infrastructure patterns can reduce later implementation duplication without transferring pricing semantics to Marko."
+      reason: "Located patterns exist, but matching annotation has different blindness and provenance requirements."
+      risk: "Mechanical reuse could expose matcher scores, cross tenants, or bypass Metis abstention."
+      required_client_decision: "Approve D19 and annotation-workflow authority before cross-workspace pooling or UI implementation."
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-037"
+      claim_type: "SOURCE_AUTHORITY_BLOCKER"
+      claim: "Live public Prom marketplace collection is fail-closed under the active default NOT_PERMITTED state."
+      authority: "Configured source-access policy boundary; external legal/business authority not supplied"
+      verdict: "NOT_PERMITTED"
+      reference: "missing"
+      allowed_actions:
+        - "Use client-supplied exports within their documented scope."
+        - "Replay already persisted evidence without crossing the live-request gate."
+      prohibited_actions:
+        - "Issue live public marketplace requests without a permitted verdict and reference."
+        - "Treat technical reachability as source authorization."
+      required_next_step: "Obtain and record an authoritative permitted source reference or use permitted supplied evidence."
+      artifact_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko/services/source_access.py"
+      artifact_version: "sha256:801b6db203c85780ae57b7d6c43630ed216246724d920b56a2f1eb0e6e5d6aab"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-038"
+      claim_type: "EXTERNAL_RESEARCH_FACT"
+      claim: "WDC Products evaluates entity matching across corner-case amount, unseen-entity generalization, and development-set size."
+      source: "https://arxiv.org/abs/2301.09521"
+      verified_fact: "The primary paper describes those experimental dimensions for product matching."
+      applicability: "Useful as benchmark-design inspiration for matching variation."
+      non_applicability: "It does not establish Metis automotive labels, thresholds, or production readiness."
+      checked_at: "2026-07-17"
+      evidence_level: "E2"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-039"
+      claim_type: "MEASURED_RESULT"
+      claim: "Exact model_id and SKU fixtures with explicit brand/laterality conflicts auto-match at score 1.0."
+      test_definition: "Call match_offer at threshold 0.55 on one same-model/opposite-side/different-brand pair and one same-SKU/front-rear/different-brand pair."
+      input_snapshot: "MODEL-42 Audi-left vs BMW-right; SKU-99 KEMP-front vs Other-rear"
+      procedure: "PYTHONPATH=backend/src backend/.venv/bin/python inline deterministic probe"
+      observed_result: "model -> Match(model,1.0); sku -> Match(sku,1.0)"
+      time_window: "2026-07-17"
+      environment: "local macOS; Python 3.13.9; task-pinned checkout"
+      reproducibility: "2 of 2 independent processes produced identical results"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-040"
+      claim_type: "MEASURED_RESULT"
+      claim: "The pricing engine can return an automatic price without structured automotive comparability fields or verified source identity."
+      test_definition: "Run recommend_price with five fresh independent KEMP offers at prices 999/1000/1000/1001/1000 and current price 800; inspect input dataclass fields."
+      input_snapshot: "Five seller-deduplicated offers, match/tier/source confidence 1, source unknown; Product and ProductPricingContext lack OE/fitment/vehicle/year/engine/side/position/condition/package quantity."
+      procedure: "PYTHONPATH=backend/src backend/.venv/bin/python inline missing-data mutation probe"
+      observed_result: "RAISE; recommended_price=920; action_gates_passed=true"
+      time_window: "2026-07-17"
+      environment: "local macOS; Python 3.13.9; task-pinned checkout"
+      reproducibility: "2 of 2 independent processes produced byte-identical JSON"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "corrected"
+      original_defect: "The original report listed missing gates but left the current system gate at BLOCKED, without testing whether missing evidence could still create a price."
+      counterevidence:
+        - "empty/single/stale/unavailable/unknown-tier/low-source-confidence/severe-conflict cohorts returned null price"
+      correction_required: false
+
+    - claim_id: "CLM-041"
+      claim_type: "MEASURED_RESULT"
+      claim: "The hostile probe suite is deterministic for the tested matching and pricing inputs."
+      test_definition: "Execute the full inline JSON probe in two independent Python processes."
+      input_snapshot: "Identical fixed strings, Decimal values, offer order, and threshold in both processes."
+      procedure: "Parallel independent process execution and exact output comparison."
+      observed_result: "Byte-identical sorted JSON outputs."
+      time_window: "2026-07-17"
+      environment: "local macOS; Python 3.13.9"
+      reproducibility: "2/2"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence: []
+      correction_required: false
+
+    - claim_id: "CLM-042"
+      claim_type: "MEASURED_RESULT"
+      claim: "The rerun local verification completed with 323 backend tests and 21 Flutter tests passing; Ruff and compileall passed; Flutter analyze failed before diagnostics."
+      test_definition: "Rerun declared local regression/static commands against the corrected report state."
+      input_snapshot: "Task-pinned checkout after report-only corrections."
+      procedure: "pytest -q; ruff check; compileall; flutter test; flutter analyze --no-pub"
+      observed_result: "323 passed in 1.74s; Ruff PASS; compileall PASS; 21 Flutter tests passed; analyzer exit 255 FormatException before code diagnostics"
+      time_window: "2026-07-17"
+      environment: "local macOS; backend venv; installed Flutter/Dart toolchain"
+      reproducibility: "backend/test/static checks rerun once in repair pass; analyzer failure repeated from baseline"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence:
+        - "No live PostgreSQL/Redis/Celery cross-boundary execution occurred."
+      correction_required: false
+
+    - claim_id: "CLM-043"
+      claim_type: "MEASURED_RESULT"
+      claim: "The hostile review changed only documentation/review artifacts and did not change implementation, parser, pricing, schema, config, or test files."
+      test_definition: "Freeze allowed review paths, record implementation fingerprint/checks, and inspect every apply_patch target."
+      input_snapshot: "Allowed writes limited to docs/METIS_MATCHING... and docs/HOSTILE_SELF_REVIEW_* artifacts."
+      procedure: "Review operation log plus deterministic 170-file implementation tree manifest; no source-target patch was issued."
+      observed_result: "All mutations are under docs/; implementation tree fingerprint is 777d4e0620571556af2400685a6133798b321a49c295a669baca3d84e8977a90."
+      time_window: "2026-07-17"
+      environment: "task-pinned checkout without Git metadata"
+      reproducibility: "file-set algorithm recorded as sha256(sorted(relative_path NUL file_sha256 LF))"
+      evidence_level: "E3"
+      status: "supported"
+      disposition: "supported"
+      counterevidence:
+        - "Original Stage 0 fingerprint 7e944... cannot be independently reconstructed because its input manifest was not retained."
+      correction_required: false
+
+    - claim_id: "CLM-044"
+      claim_type: "BUSINESS_DECISION"
+      claim: "The external approval state of D1-D20 is unknown; no local artifact authorizes the reviewer to decide those semantics."
+      decision: "Identity/comparability ontology, annotation authority, benchmark thresholds, pooling, and release policy remain outside reviewer authority."
+      deciding_party: "product/risk owner plus automotive domain authority"
+      authority_reference: "missing from supplied inputs and audited checkout"
+      decision_state: "unknown"
+      evidence_level: "E0"
+      status: "blocked"
+      disposition: "blocked"
+      counterevidence: []
+      correction_required: false

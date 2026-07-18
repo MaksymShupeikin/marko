@@ -1,7 +1,6 @@
 """Store registration, catalog job dispatch, and read models."""
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -20,6 +19,8 @@ from marko.infrastructure.db.models import (
 )
 from marko.core.config import get_settings
 from marko.services.parser_models import Seller
+from marko.services.source_access import require_live_prom_marketplace_collection
+from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
 
 import marko.repositories.users as users_repo
 import marko.repositories.stores as stores_repo
@@ -65,6 +66,7 @@ async def register_store(
     workspace_id: UUID,
     celery_app: Celery,
 ) -> tuple[UUID, SyncRun]:
+    require_live_prom_marketplace_collection()
     seller = Seller.from_url(url)
     await users_repo.ensure_default_workspace(session, workspace_id)
 
@@ -83,11 +85,11 @@ async def register_store(
         kind=StoreKind.owned,
     )
 
-    sync_run, created = await _get_or_create_sync_run(
+    sync_run, created, dispatch_id = await _get_or_create_sync_run(
         session, store_id=store_id, workspace_id=workspace_id
     )
-    if created:
-        await _dispatch_sync_run(session, sync_run, celery_app)
+    if created and dispatch_id is not None:
+        await _dispatch_sync_run(session, dispatch_id, celery_app)
     return store_id, sync_run
 
 
@@ -98,18 +100,19 @@ async def queue_store_sync(
     workspace_id: UUID,
     celery_app: Celery,
 ) -> SyncRun:
+    require_live_prom_marketplace_collection()
     await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
-    sync_run, created = await _get_or_create_sync_run(
+    sync_run, created, dispatch_id = await _get_or_create_sync_run(
         session, store_id=store_id, workspace_id=workspace_id
     )
-    if created:
-        await _dispatch_sync_run(session, sync_run, celery_app)
+    if created and dispatch_id is not None:
+        await _dispatch_sync_run(session, dispatch_id, celery_app)
     return sync_run
 
 
 async def _get_or_create_sync_run(
     session: AsyncSession, *, store_id: UUID, workspace_id: UUID
-) -> tuple[SyncRun, bool]:
+) -> tuple[SyncRun, bool, UUID | None]:
     await stores_repo.lock_store_sync_scope(
         session,
         store_id=store_id,
@@ -119,7 +122,7 @@ async def _get_or_create_sync_run(
     if active is not None:
         active.scrape_deduplicated_submissions += 1
         await session.commit()
-        return active, False
+        return active, False, None
 
     store = await session.get(MarketplaceStore, store_id)
     if store is None:
@@ -150,30 +153,30 @@ async def _get_or_create_sync_run(
         "item_version": sync_run.scrape_item_version,
         "at": datetime.now(UTC).isoformat(),
     }
+    dispatch = await enqueue_dispatch(
+        session,
+        event_key=f"store-sync:{sync_run.id}:start:v1",
+        aggregate_type="sync_run",
+        aggregate_id=sync_run.id,
+        workspace_id=workspace_id,
+        task_name="marko.worker.import_store_catalog",
+        task_args=[str(sync_run.id)],
+        queue="store-sync",
+    )
+    sync_run.task_id = dispatch.task_id
     await session.commit()
     await session.refresh(sync_run)
-    return sync_run, True
+    return sync_run, True, dispatch.id
 
 
 async def _dispatch_sync_run(
-    session: AsyncSession, sync_run: SyncRun, celery_app: Celery
+    session: AsyncSession, dispatch_id: UUID, celery_app: Celery
 ) -> None:
-    try:
-        result = await asyncio.to_thread(
-            celery_app.send_task,
-            "marko.worker.import_store_catalog",
-            args=[str(sync_run.id)],
-        )
-    except Exception as exc:
-        sync_run.status = SyncStatus.failed
-        sync_run.scrape_state = "failed"
-        sync_run.error = f"Could not enqueue catalog import: {exc}"[:4000]
-        sync_run.finished_at = datetime.now(UTC)
-        await session.commit()
-        raise TaskDispatchError(sync_run.error) from exc
-
-    sync_run.task_id = result.id
-    await session.commit()
+    await publish_dispatch(
+        session,
+        event_id=dispatch_id,
+        celery_app=celery_app,
+    )
 
 
 async def list_stores(session: AsyncSession, workspace_id: UUID) -> list[StoreView]:

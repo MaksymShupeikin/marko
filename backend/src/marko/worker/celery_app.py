@@ -31,11 +31,16 @@ celery_app.conf.update(
         "marko.worker.finalize_pricing_collection": {"queue": "celery"},
         "marko.worker.start_pricing_run": {"queue": "celery"},
         "marko.worker.cleanup_scrape_evidence": {"queue": "celery"},
+        "marko.worker.reconcile_scrape_outbox": {"queue": "celery"},
     },
     beat_schedule={
         "cleanup-orphaned-scrape-evidence": {
             "task": "marko.worker.cleanup_scrape_evidence",
             "schedule": max(60, settings.scrape_evidence_gc_interval_seconds),
+        },
+        "reconcile-scrape-dispatch-outbox": {
+            "task": "marko.worker.reconcile_scrape_outbox",
+            "schedule": max(5, settings.scrape_outbox_reconcile_interval_seconds),
         },
     },
 )

@@ -54,6 +54,13 @@ class PricingApi {
         .toList(growable: false);
   }
 
+  Future<RecommendationReplay> verifyReplay(String recommendationId) async {
+    final payload = await _client.getJson(
+      '/api/v1/pricing/recommendations/$recommendationId/replay',
+    );
+    return RecommendationReplay.fromJson(payload as Map<String, dynamic>);
+  }
+
   Future<void> saveCatalogContext(
     String catalogItemId,
     Map<String, dynamic> values,

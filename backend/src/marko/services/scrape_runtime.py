@@ -7,7 +7,7 @@ global source pacing, and deterministic network-free replay.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -91,6 +91,7 @@ class ScrapeExecutionTrace:
         execution_no: int,
         replay_cache: Mapping[str, ReplayEvidence] | None = None,
         guard: DistributedCollectionGuard | None = None,
+        live_request_gate: Callable[[], None] | None = None,
     ) -> None:
         if execution_no < 1:
             raise ValueError("execution_no must be at least one")
@@ -99,6 +100,7 @@ class ScrapeExecutionTrace:
         self.execution_no = execution_no
         self.trace_version = HTTP_TRACE_CONTRACT_VERSION
         self._guard = guard
+        self._live_request_gate = live_request_gate
         self._replay_cache = dict(replay_cache or {})
         self._sequence = 0
         self._completed: list[LogicalRequestTrace] = []
@@ -159,6 +161,8 @@ class ScrapeExecutionTrace:
         return response
 
     def acquire_global_attempt_slot(self) -> int:
+        if self._live_request_gate is not None:
+            self._live_request_gate()
         if self._guard is None:
             return 0
         return round(self._guard.wait_for_slot() * 1000)

@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from marko.pricing import ProductTier, classify_tier, normalize_brand
+from metis.pricing import ProductTier, classify_tier, normalize_brand
 
 
 def test_brand_normalization_is_exact_and_punctuation_insensitive() -> None:
@@ -53,4 +53,3 @@ def test_unknown_brand_abstains_instead_of_guessing_budget() -> None:
 
     assert result.tier == ProductTier.UNKNOWN
     assert result.confidence == Decimal("0")
-

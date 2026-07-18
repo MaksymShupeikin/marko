@@ -6,11 +6,13 @@ import asyncio
 from uuid import UUID
 
 from marko.core.config import get_settings
+from marko.infrastructure.db.session import async_session_factory
 from marko.services.market_collection import (
     PermanentCollectionError,
     calculate_pricing_item,
     calibrate_run_and_prepare_calculations,
     claim_collection_finalization,
+    enqueue_collection_finalizer_dispatch,
     fail_collection_finalization,
     fail_pricing_item,
     fail_pricing_run_dispatch,
@@ -22,6 +24,7 @@ from marko.services.market_collection import (
     reset_pricing_calculation_for_retry,
     reset_pricing_item_for_retry,
 )
+from marko.services.scraper_outbox import publish_dispatch
 from marko.worker.celery_app import celery_app
 
 settings = get_settings()
@@ -35,23 +38,21 @@ settings = get_settings()
 def start_pricing_run_task(self, run_id: str) -> int:
     parsed_run_id = UUID(run_id)
     try:
-        item_ids = asyncio.run(prepare_run_dispatch(parsed_run_id))
+        event_ids = asyncio.run(prepare_run_dispatch(parsed_run_id))
         batch_size = max(1, get_settings().pricing_dispatch_batch_size)
         dispatched = 0
-        for start in range(0, len(item_ids), batch_size):
-            for item_id in item_ids[start : start + batch_size]:
-                celery_app.send_task(
-                    "marko.worker.process_pricing_item",
-                    args=[str(item_id)],
-                    queue="pricing",
-                )
-                dispatched += 1
-        if not item_ids:
-            celery_app.send_task(
-                "marko.worker.finalize_pricing_collection",
-                args=[run_id],
-                queue="celery",
+        for start in range(0, len(event_ids), batch_size):
+            dispatched += asyncio.run(
+                _publish_dispatch_events(event_ids[start : start + batch_size])
             )
+        if not event_ids:
+            event_id = asyncio.run(
+                enqueue_collection_finalizer_dispatch(
+                    parsed_run_id,
+                    trigger_key="empty-start",
+                )
+            )
+            dispatched += asyncio.run(_publish_dispatch_events([event_id]))
         return dispatched
     except Exception as exc:
         if self.request.retries >= self.max_retries:
@@ -87,20 +88,20 @@ def process_pricing_item_task(self, run_item_id: str) -> str:
             )
         )
         if run_id is not None:
-            _enqueue_collection_finalizer(run_id)
+            _enqueue_collection_finalizer(run_id, trigger_id=item_id)
         return "skipped" if run_id is None else str(run_id)
     except PermanentCollectionError as exc:
         run_id = asyncio.run(get_pricing_item_run_id(item_id))
         asyncio.run(fail_pricing_item(item_id, exc))
         if run_id is not None:
-            _enqueue_collection_finalizer(run_id)
+            _enqueue_collection_finalizer(run_id, trigger_id=item_id)
         raise
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             run_id = asyncio.run(get_pricing_item_run_id(item_id))
             asyncio.run(fail_pricing_item(item_id, exc))
             if run_id is not None:
-                _enqueue_collection_finalizer(run_id)
+                _enqueue_collection_finalizer(run_id, trigger_id=item_id)
             raise
         asyncio.run(reset_pricing_item_for_retry(item_id, exc))
         raise self.retry(exc=exc, countdown=min(300, 10 * (2**self.request.retries)))
@@ -119,17 +120,14 @@ def finalize_pricing_collection_task(self, run_id: str) -> int:
         )
         if not claimed:
             return 0
-        item_ids = asyncio.run(calibrate_run_and_prepare_calculations(parsed_run_id))
+        event_ids = asyncio.run(
+            calibrate_run_and_prepare_calculations(parsed_run_id)
+        )
         asyncio.run(mark_run_calculating(parsed_run_id, task_id=self.request.id))
-        for item_id in item_ids:
-            celery_app.send_task(
-                "marko.worker.calculate_pricing_item",
-                args=[str(item_id)],
-                queue="pricing-calculation",
-            )
-        if not item_ids:
+        asyncio.run(_publish_dispatch_events(event_ids))
+        if not event_ids:
             asyncio.run(finalize_pricing_run(parsed_run_id))
-        return len(item_ids)
+        return len(event_ids)
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             asyncio.run(
@@ -161,9 +159,24 @@ def calculate_pricing_item_task(self, run_item_id: str) -> str:
         raise self.retry(exc=exc, countdown=min(120, 5 * (2**self.request.retries)))
 
 
-def _enqueue_collection_finalizer(run_id: UUID) -> None:
-    celery_app.send_task(
-        "marko.worker.finalize_pricing_collection",
-        args=[str(run_id)],
-        queue="celery",
+def _enqueue_collection_finalizer(run_id: UUID, *, trigger_id: UUID) -> None:
+    event_id = asyncio.run(
+        enqueue_collection_finalizer_dispatch(
+            run_id,
+            trigger_key=str(trigger_id),
+        )
     )
+    asyncio.run(_publish_dispatch_events([event_id]))
+
+
+async def _publish_dispatch_events(event_ids: list[UUID]) -> int:
+    published = 0
+    async with async_session_factory() as session:
+        for event_id in event_ids:
+            outcome = await publish_dispatch(
+                session,
+                event_id=event_id,
+                celery_app=celery_app,
+            )
+            published += int(outcome.published)
+    return published

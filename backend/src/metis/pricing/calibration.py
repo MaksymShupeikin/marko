@@ -1,4 +1,4 @@
-"""Independent-OE robust and hierarchical tier-coefficient calibration."""
+"""Metis independent-OE robust and hierarchical tier calibration."""
 
 from __future__ import annotations
 

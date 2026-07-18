@@ -1,4 +1,4 @@
-"""Deterministic robust KEMP-normalized pricing decision engine."""
+"""Deterministic Metis KEMP-normalized pricing decision engine."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from .statistics import (
     mad,
     median,
     percentile,
+    robust_price_dispersion,
     round_down_to_tick,
     round_to_tick,
     round_up_to_tick,
@@ -33,6 +34,8 @@ from .types import (
     ProductPricingContext,
     ProductTier,
     RecommendationAction,
+    RobustDispersionProfile,
+    RobustScaleMethod,
     StockStatus,
     TierCoefficient,
 )
@@ -150,6 +153,31 @@ def recommend_price(
             unique_seller_count=unique_count,
         )
 
+    selected_dispersion_method = (
+        policy.dispersion_method or RobustScaleMethod.LEGACY_MAD
+    )
+    if unique_count > policy.robust_scale_max_cohort_size:
+        return _result_without_market_action(
+            context,
+            policy,
+            evidence=deduplicated,
+            excluded=excluded,
+            action=RecommendationAction.MANUAL_REVIEW,
+            reason="ROBUST_SCALE_CAPACITY_EXCEEDED",
+            raw_competitor_count=len(collected_offers),
+            unique_seller_count=unique_count,
+            dispersion_method=selected_dispersion_method,
+        )
+
+    pre_clean_profile = robust_price_dispersion(
+        [offer.normalized_price for offer in deduplicated],
+        selected_method=selected_dispersion_method,
+        sample_stage="pre_clean",
+        finite_sample_correction=policy.finite_sample_scale_correction,
+        profile_version=policy.robust_dispersion_profile_version,
+        correction_profile_version=(policy.robust_scale_correction_profile_version),
+    )
+
     cleaned, outliers, outlier_method = _clean_outliers(deduplicated, policy)
     excluded.extend(outliers)
     if len(cleaned) < 3:
@@ -164,13 +192,23 @@ def recommend_price(
             unique_seller_count=unique_count,
             outlier_method=outlier_method,
             outlier_count=len(outliers),
+            dispersion_method=selected_dispersion_method,
+            pre_clean_dispersion_profile=pre_clean_profile,
         )
 
     prices = [offer.normalized_price for offer in cleaned]
-    fair_price = median(prices)
+    post_clean_profile = robust_price_dispersion(
+        prices,
+        selected_method=selected_dispersion_method,
+        sample_stage="post_clean",
+        finite_sample_correction=policy.finite_sample_scale_correction,
+        profile_version=policy.robust_dispersion_profile_version,
+        correction_profile_version=(policy.robust_scale_correction_profile_version),
+    )
+    fair_price = post_clean_profile.center
     lower_bound = percentile(prices, Decimal("0.25"))
     upper_bound = percentile(prices, Decimal("0.75"))
-    dispersion = _dispersion(prices, fair_price)
+    dispersion = post_clean_profile.robust_cv
     winsorized_prices = winsorize(
         [offer.normalized_price for offer in deduplicated],
         lower=policy.winsor_lower_quantile,
@@ -194,6 +232,12 @@ def recommend_price(
         data_health_issues.append("INVALID_FAIR_PRICE")
     if sensitivity > policy.sensitivity_tolerance:
         reasons.append("ESTIMATOR_SENSITIVITY")
+    robust_scale_gate_blocked = (
+        selected_dispersion_method != RobustScaleMethod.LEGACY_MAD
+        and post_clean_profile.partial_scale_degeneracy
+    )
+    if robust_scale_gate_blocked:
+        reasons.append("ROBUST_SCALE_PARTIAL_DEGENERACY")
     if len(cleaned) < policy.min_competitors:
         reasons.append("TOO_FEW_COMPETITORS_FOR_ACTION")
     if n_effective < policy.min_effective_competitors:
@@ -216,6 +260,7 @@ def recommend_price(
         and confidence >= policy.confidence_min
         and not failed_factors
         and sensitivity <= policy.sensitivity_tolerance
+        and not robust_scale_gate_blocked
     )
     common = {
         "context": context,
@@ -238,6 +283,9 @@ def recommend_price(
         "sensitivity": sensitivity,
         "winsorized_fair_price": winsorized_fair_price,
         "data_health_issues": tuple(data_health_issues),
+        "dispersion_method": selected_dispersion_method,
+        "pre_clean_dispersion_profile": pre_clean_profile,
+        "dispersion_profile": post_clean_profile,
     }
     if unique_count < policy.manual_review_below or not action_gates_pass:
         reasons.append("MANUAL_REVIEW_REQUIRED")
@@ -476,12 +524,6 @@ def _clean_outliers(
         if offer.observation_id not in retained
     ]
     return cleaned, excluded, method
-
-
-def _dispersion(prices: list[Decimal], center: Decimal) -> Decimal:
-    if center <= ZERO:
-        return Decimal("Infinity")
-    return Decimal("1.4826") * mad(prices) / center
 
 
 def _confidence_factors(
@@ -864,6 +906,9 @@ def _priced_result(
     action_gates_passed: bool,
     cost_floor: Decimal | None,
     data_health_issues: tuple[str, ...],
+    dispersion_method: RobustScaleMethod,
+    pre_clean_dispersion_profile: RobustDispersionProfile,
+    dispersion_profile: RobustDispersionProfile,
 ) -> PricingResult:
     priority, score_type, review_priority, cost_basis, priority_inputs = _priorities(
         context,
@@ -907,6 +952,14 @@ def _priced_result(
         cost_basis_inventory_value=cost_basis,
         priority_inputs=priority_inputs,
         data_health_issues=data_health_issues,
+        dispersion_method=dispersion_method,
+        pre_clean_dispersion_profile=pre_clean_dispersion_profile,
+        dispersion_profile=dispersion_profile,
+        robust_dispersion_profile_version=policy.robust_dispersion_profile_version,
+        robust_scale_correction_profile_version=(
+            policy.robust_scale_correction_profile_version
+        ),
+        finite_sample_scale_correction=policy.finite_sample_scale_correction,
     )
 
 
@@ -922,6 +975,9 @@ def _result_without_market_action(
     unique_seller_count: int,
     outlier_method: str = "none",
     outlier_count: int = 0,
+    dispersion_method: RobustScaleMethod | None = None,
+    pre_clean_dispersion_profile: RobustDispersionProfile | None = None,
+    dispersion_profile: RobustDispersionProfile | None = None,
 ) -> PricingResult:
     priority, score_type, review_priority, cost_basis, priority_inputs = _priorities(
         context, action, context.current_price, None, ZERO, policy
@@ -956,6 +1012,18 @@ def _result_without_market_action(
         action_gates_passed=False,
         cost_basis_inventory_value=cost_basis,
         priority_inputs=priority_inputs,
+        dispersion_method=(
+            dispersion_method
+            or policy.dispersion_method
+            or RobustScaleMethod.LEGACY_MAD
+        ),
+        pre_clean_dispersion_profile=pre_clean_dispersion_profile,
+        dispersion_profile=dispersion_profile,
+        robust_dispersion_profile_version=policy.robust_dispersion_profile_version,
+        robust_scale_correction_profile_version=(
+            policy.robust_scale_correction_profile_version
+        ),
+        finite_sample_scale_correction=policy.finite_sample_scale_correction,
     )
     return _enforce_invariants(result, context)
 

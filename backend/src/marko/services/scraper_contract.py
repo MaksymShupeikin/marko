@@ -24,12 +24,13 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 
 from marko.parsers.prom.config import ScrapeConfig
-from marko.parsers.prom.exceptions import ParseError, RequestFailed
+from marko.parsers.prom.exceptions import ParseError, RequestFailed, UnsafeResponse
 from marko.parsers.prom.gateway import PromGateway
 from marko.services.collection_guard import CollectionCircuitOpen
 from marko.services.matching import PriceComparison
 from marko.services.scrape_journal import EvidenceIntegrityError
 from marko.services.scrape_runtime import ReplayIntegrityError
+from marko.services.source_access import SourceAccessBlocked
 
 
 PROM_ADAPTER_VERSION = "prom-parser-adapter-v2"
@@ -54,8 +55,10 @@ class ScraperErrorCode(StrEnum):
     SERIALIZATION = "serialization"
     CIRCUIT_OPEN = "circuit_open"
     TARGET_BUSY = "target_busy"
+    SOURCE_ACCESS_BLOCKED = "source_access_blocked"
     RETRY_EXHAUSTED = "retry_exhausted"
     EVIDENCE_PERSISTENCE = "evidence_persistence"
+    UNSAFE_RESPONSE = "unsafe_response"
     UNEXPECTED = "unexpected"
 
 
@@ -121,6 +124,12 @@ class ScrapeInput:
 
         parsed = urlsplit(raw_url)
         hostname = (parsed.hostname or "").casefold()
+        if parsed.username is not None or parsed.password is not None:
+            raise ScraperBoundaryError(
+                ScraperErrorCode.INVALID_INPUT,
+                "Credentials embedded in a scraper URL are forbidden",
+                retryable=False,
+            )
         if parsed.scheme.casefold() not in {"http", "https"} or hostname not in {
             "prom.ua",
             "www.prom.ua",
@@ -377,6 +386,12 @@ def classify_scraper_exception(exc: Exception) -> ScraperBoundaryError:
         return ScraperBoundaryError(
             ScraperErrorCode.CIRCUIT_OPEN, str(exc), retryable=True
         )
+    if isinstance(exc, SourceAccessBlocked):
+        return ScraperBoundaryError(
+            ScraperErrorCode.SOURCE_ACCESS_BLOCKED,
+            str(exc),
+            retryable=False,
+        )
     if isinstance(exc, (EvidenceIntegrityError, ReplayIntegrityError)):
         return ScraperBoundaryError(
             ScraperErrorCode.EVIDENCE_PERSISTENCE,
@@ -390,6 +405,12 @@ def classify_scraper_exception(exc: Exception) -> ScraperBoundaryError:
     if isinstance(exc, requests.RequestException):
         return ScraperBoundaryError(
             ScraperErrorCode.NETWORK, str(exc), retryable=True
+        )
+    if isinstance(exc, UnsafeResponse):
+        return ScraperBoundaryError(
+            ScraperErrorCode.UNSAFE_RESPONSE,
+            str(exc),
+            retryable=False,
         )
     if isinstance(exc, ParseError):
         return ScraperBoundaryError(

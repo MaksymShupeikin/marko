@@ -5,6 +5,7 @@ class AuthUser {
     required this.displayName,
     required this.avatarUrl,
     required this.workspaceId,
+    required this.workspaceRole,
   });
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
@@ -14,6 +15,7 @@ class AuthUser {
       displayName: json['display_name'] as String?,
       avatarUrl: json['avatar_url'] as String?,
       workspaceId: json['workspace_id'] as String,
+      workspaceRole: json['workspace_role'] as String,
     );
   }
 
@@ -22,6 +24,10 @@ class AuthUser {
   final String? displayName;
   final String? avatarUrl;
   final String workspaceId;
+  final String workspaceRole;
+
+  bool get canAdministerWorkspace =>
+      workspaceRole == 'owner' || workspaceRole == 'admin';
 }
 
 class MarkoAuthState {

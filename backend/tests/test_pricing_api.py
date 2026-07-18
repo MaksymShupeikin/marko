@@ -7,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from marko.api.dependencies import get_current_user
 from marko.api.main import app
-from marko.infrastructure.db.models import User
+from marko.infrastructure.db.models import User, WorkspaceRole
 from marko.services.auth import AuthContext
 from marko.services.pricing_runs import (
     PricingRunError,
@@ -15,6 +15,7 @@ from marko.services.pricing_runs import (
     _validate_decision_price,
     policy_from_dict,
     policy_to_dict,
+    require_activated_run_policy,
 )
 
 
@@ -32,6 +33,34 @@ def test_policy_round_trip_preserves_decimal_and_enum_types():
     assert policy.min_competitors == 6
     assert policy.confidence_aggregation.value == "minimum"
     assert policy_to_dict(policy)["confidence_min"] == "0.61"
+    assert policy_to_dict(policy)["dispersion_method"] == "legacy_mad"
+
+
+def test_policy_versions_select_explicit_backward_compatible_dispersion() -> None:
+    legacy = policy_from_dict({"version": "pricing-v2"})
+    robust = policy_from_dict({"version": "pricing-v3-robust-dispersion"})
+    robust_round_trip = policy_from_dict(policy_to_dict(robust))
+
+    assert legacy.dispersion_method.value == "legacy_mad"
+    assert robust.dispersion_method.value == "qn"
+    assert robust_round_trip == robust
+
+
+def test_policy_rejects_silent_v2_redefinition_and_unknown_profile() -> None:
+    with pytest.raises(PricingRunError, match="pricing-v2 requires"):
+        policy_from_dict({"version": "pricing-v2", "dispersion_method": "qn"})
+    with pytest.raises(PricingRunError, match="profile_version"):
+        policy_from_dict({"robust_dispersion_profile_version": "unversioned"})
+    with pytest.raises(PricingRunError, match="at least 2"):
+        policy_from_dict({"robust_scale_max_cohort_size": 1})
+
+
+def test_v3_persisted_run_activation_is_fail_closed_by_default() -> None:
+    policy = policy_from_dict({"version": "pricing-v3-robust-dispersion"})
+
+    with pytest.raises(PricingRunError, match="activation is NO_GO"):
+        require_activated_run_policy(policy, robust_v3_enabled=False)
+    require_activated_run_policy(policy, robust_v3_enabled=True)
 
 
 def test_policy_rejects_unknown_and_out_of_range_values():
@@ -132,7 +161,11 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     user = User(id=uuid4(), email="seller@example.com", is_active=True)
 
     async def current_user_override():
-        return AuthContext(user=user, workspace_id=uuid4())
+        return AuthContext(
+            user=user,
+            workspace_id=uuid4(),
+            workspace_role=WorkspaceRole.member,
+        )
 
     app.dependency_overrides[get_current_user] = current_user_override
     try:
@@ -174,6 +207,21 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     assert body["unique_seller_count"] == 5
     assert body["clean_competitor_count"] == 5
     assert body["outlier_method"] == "mad"
+    assert body["dispersion_method"] == "legacy_mad"
+    assert body["dispersion_profile"]["profile_version"] == "rc-scale-v1"
+    assert body["dispersion_profile"]["sample_stage"] == "post_clean"
+    assert body["dispersion_profile"]["gaussian_scales"]["qn"]
     assert body["action_gates_passed"] is True
     assert body["evidence"][0]["multiplier"] == "1"
     assert body["evidence"][0]["normalized_price"] == body["evidence"][0]["raw_price"]
+
+
+def test_openapi_exposes_additive_dispersion_contract() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    properties = schemas["PricingEvaluateResponse"]["properties"]
+    stored_properties = schemas["RecommendationResponse"]["properties"]
+
+    assert "dispersion_method" in properties
+    assert "dispersion_profile" in properties
+    assert "dispersion_method" in stored_properties
+    assert "dispersion_profile" in stored_properties

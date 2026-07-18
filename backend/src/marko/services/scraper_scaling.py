@@ -130,6 +130,198 @@ class ReconciliationSnapshot:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class SubmissionReconciliation:
+    submitted: int
+    deduplicated: int
+    rejected: int
+    admitted: int
+    queued: int
+    running: int
+    retry_wait: int
+    success: int
+    failed: int
+    cancelled: int
+    unaccounted_loss: int
+    reconciled: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def reconcile_submission_cohort(
+    *,
+    submitted: int,
+    deduplicated: int,
+    rejected: int,
+    admitted: int,
+    queued: int,
+    running: int,
+    retry_wait: int,
+    success: int,
+    failed: int,
+    cancelled: int,
+) -> SubmissionReconciliation:
+    values = (
+        submitted,
+        deduplicated,
+        rejected,
+        admitted,
+        queued,
+        running,
+        retry_wait,
+        success,
+        failed,
+        cancelled,
+    )
+    if any(value < 0 for value in values):
+        raise ValueError("submission reconciliation counts must be non-negative")
+    if submitted != deduplicated + rejected + admitted:
+        raise ValueError("submitted must equal deduplicated + rejected + admitted")
+    accounted = queued + running + retry_wait + success + failed + cancelled
+    loss = admitted - accounted
+    return SubmissionReconciliation(
+        submitted=submitted,
+        deduplicated=deduplicated,
+        rejected=rejected,
+        admitted=admitted,
+        queued=queued,
+        running=running,
+        retry_wait=retry_wait,
+        success=success,
+        failed=failed,
+        cancelled=cancelled,
+        unaccounted_loss=loss,
+        reconciled=loss == 0,
+    )
+
+
+@dataclass(frozen=True)
+class BinomialConfidenceInterval:
+    successes: int
+    sample_size: int
+    estimate: float | None
+    lower: float | None
+    upper: float | None
+    confidence_level: float
+    method: str = "wilson"
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def wilson_confidence_interval(
+    *,
+    successes: int,
+    sample_size: int,
+    confidence_level: float = 0.95,
+    z_score: float = 1.959963984540054,
+) -> BinomialConfidenceInterval:
+    if sample_size < 0 or successes < 0 or successes > sample_size:
+        raise ValueError("binomial counts are inconsistent")
+    if not 0 < confidence_level < 1 or z_score <= 0:
+        raise ValueError("confidence level and z score must be positive and bounded")
+    if sample_size == 0:
+        return BinomialConfidenceInterval(
+            successes=0,
+            sample_size=0,
+            estimate=None,
+            lower=None,
+            upper=None,
+            confidence_level=confidence_level,
+        )
+    estimate = successes / sample_size
+    z2 = z_score**2
+    denominator = 1 + z2 / sample_size
+    center = (estimate + z2 / (2 * sample_size)) / denominator
+    margin = (
+        z_score
+        * math.sqrt(
+            estimate * (1 - estimate) / sample_size
+            + z2 / (4 * sample_size**2)
+        )
+        / denominator
+    )
+    return BinomialConfidenceInterval(
+        successes=successes,
+        sample_size=sample_size,
+        estimate=round(estimate, 8),
+        lower=round(max(0.0, center - margin), 8),
+        upper=round(min(1.0, center + margin), 8),
+        confidence_level=confidence_level,
+    )
+
+
+@dataclass(frozen=True)
+class CompletenessDistribution:
+    count: int
+    minimum: float | None
+    p05: float | None
+    p50: float | None
+    p95: float | None
+    critical_field_missing_rate: float | None
+    per_field_missing_rate: dict[str, float | None]
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def calculate_completeness_distribution(
+    records: Iterable[dict[str, Any]],
+    *,
+    field_weights: dict[str, float],
+    critical_fields: set[str],
+) -> CompletenessDistribution:
+    rows = list(records)
+    if not field_weights or any(
+        weight <= 0 or not math.isfinite(weight) for weight in field_weights.values()
+    ):
+        raise ValueError("completeness weights must be finite and positive")
+    unknown_critical = critical_fields - set(field_weights)
+    if unknown_critical:
+        raise ValueError("every critical field must have a declared weight")
+    if not rows:
+        return CompletenessDistribution(
+            count=0,
+            minimum=None,
+            p05=None,
+            p50=None,
+            p95=None,
+            critical_field_missing_rate=None,
+            per_field_missing_rate={field: None for field in field_weights},
+        )
+    weight_sum = sum(field_weights.values())
+    scores: list[float] = []
+    missing_by_field = {field: 0 for field in field_weights}
+    critical_failures = 0
+    for row in rows:
+        present: dict[str, bool] = {}
+        for field in field_weights:
+            value = row.get(field)
+            valid = value is not None and value != "" and value != []
+            present[field] = valid
+            if not valid:
+                missing_by_field[field] += 1
+        if any(not present[field] for field in critical_fields):
+            critical_failures += 1
+        scores.append(
+            sum(field_weights[field] * present[field] for field in field_weights)
+            / weight_sum
+        )
+    return CompletenessDistribution(
+        count=len(rows),
+        minimum=round(min(scores), 8),
+        p05=_percentile(scores, 0.05),
+        p50=_percentile(scores, 0.50),
+        p95=_percentile(scores, 0.95),
+        critical_field_missing_rate=round(critical_failures / len(rows), 8),
+        per_field_missing_rate={
+            field: round(missing / len(rows), 8)
+            for field, missing in missing_by_field.items()
+        },
+    )
+
+
 def reconcile_items(
     *,
     valid_total: int,
@@ -1136,8 +1328,10 @@ def _rounded_optional(
 __all__ = [
     "AttemptMetricSample",
     "BatchCompletionEstimate",
+    "BinomialConfidenceInterval",
     "CapacityModel",
     "CollectionMetrics",
+    "CompletenessDistribution",
     "ENGINEERING_HEADROOM_TARGET",
     "ENGINEERING_UTILIZATION_TARGET",
     "ReconciliationSnapshot",
@@ -1145,9 +1339,11 @@ __all__ = [
     "RequiredCapacityPlan",
     "RetryAmplification",
     "StorageModel",
+    "SubmissionReconciliation",
     "TargetMetricSample",
     "aggregate_collection_metrics",
     "calculate_capacity",
+    "calculate_completeness_distribution",
     "calculate_derived_capacity",
     "calculate_measured_capacity",
     "calculate_retry_amplification",
@@ -1156,6 +1352,8 @@ __all__ = [
     "estimate_storage_batch",
     "parallel_efficiency",
     "reconcile_items",
+    "reconcile_submission_cohort",
     "request_retry_sanity_check",
     "required_capacity_plan",
+    "wilson_confidence_interval",
 ]

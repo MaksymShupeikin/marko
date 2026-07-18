@@ -11,7 +11,7 @@
 > масштабирование вокруг неизменённого Prom parser, append-only market
 > evidence/tiering, обе модели коэффициентов, robust fair price, confidence
 > abstention, fresh/stale/dead_stock modes, priority, audit decisions и Flutter
-> UI. Актуальные пути: `backend/src/marko/pricing/`,
+> UI. Актуальные пути: `backend/src/metis/pricing/`,
 > `backend/src/marko/services/{xlsx_catalog,market_collection,pricing_runs}.py`,
 > migrations `20260716_0005` + `20260716_0006`, API `/catalog` + `/pricing`, Flutter features
 > `catalog/` + `pricing/`. Старые gap-таблицы не следует использовать как

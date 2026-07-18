@@ -3,7 +3,7 @@
 Этот документ описывает фактически реализованный pricing-контур Marko для
 секций 3.2–3.6: cross-tier normalization, robust fair price, confidence,
 recommendation modes и economic priority. Каноническая реализация находится в
-`backend/src/marko/pricing/`; orchestration — в
+`backend/src/metis/pricing/`; orchestration — в
 `backend/src/marko/services/market_collection.py` и
 `backend/src/marko/services/pricing_runs.py`.
 
@@ -44,14 +44,15 @@ PricingResult
 
 Модули:
 
-- `pricing/types.py` — canonical contracts и versioned policy;
-- `pricing/statistics.py` — median, percentile, MAD, IQR, winsorization,
+- `metis/pricing/types.py` — canonical contracts и versioned policy;
+- `metis/pricing/statistics.py` — median, percentile, raw/scaled MAD и IQR,
+  exact Rousseeuw-Croux Sn/Qn, versioned finite corrections, winsorization,
   effective sample size, geometric mean и tick rounding;
-- `pricing/calibration.py` — simple median и hierarchical shrinkage;
-- `pricing/tiering.py` — tier classification contract;
-- `pricing/engine.py` — eligibility, normalization, fair price, confidence,
+- `metis/pricing/calibration.py` — simple median и hierarchical shrinkage;
+- `metis/pricing/tiering.py` — tier classification contract;
+- `metis/pricing/engine.py` — eligibility, normalization, fair price, confidence,
   modes, priority и invariant enforcement;
-- `pricing/observability.py` — low-cardinality structured events.
+- `metis/pricing/observability.py` — low-cardinality structured events.
 
 ## 3. Calibration dataset
 
@@ -235,12 +236,55 @@ sensitivity=\frac{|P^*-P_{winsor}|}{P^*}
 Превышение tolerance блокирует automatic action с
 `ESTIMATOR_SENSITIVITY`. UI range — Q1/Q3 cleaned cohort.
 
+### 5.1. Versioned robust dispersion profile
+
+Fair-price location не изменилась: `P*` остаётся median cleaned
+seller-deduplicated cohort. Отдельный scale profile вычисляется дважды:
+
+1. `pre_clean` — после eligibility/normalization/seller dedup;
+2. `post_clean` — на cohort, из которого берётся `P*`.
+
+На одной Gaussian-consistent шкале сохраняются:
+
+\[
+IQR_\sigma=\frac{Q_3-Q_1}{1.348979500392163},\qquad
+MAD_\sigma=1.482602218505602\,MAD
+\]
+
+\[
+S_n=c_n\,1.1926\,\operatorname{lowmed}_i
+\left(\operatorname{highmed}_j |x_i-x_j|\right)
+\]
+
+\[
+Q_n=d_n\,2.219144465985076\,OS_{\binom{\lfloor n/2\rfloor+1}{2}}
+\{|x_i-x_j|:i<j\}
+\]
+
+Sn включает self-distance, использует inner high median и outer low median.
+Qn использует только `i < j`, 1-based rank и corrected constant; historical
+`2.2219` не используется под новым version ID. Finite corrections соответствуют
+`robustbase-modern-v1`; для Qn при `n >= 13` результат делится на `f_n`.
+
+Policy paths разделены явно:
+
+- `pricing-v2`: `legacy_mad`, то есть прежний
+  `1.4826 * raw_MAD / median`; scalar output и replay-v1 не переопределяются;
+- `pricing-v3-robust-dispersion`: default `qn`; scalar `dispersion` равен
+  corrected `Qn / median`, а остальные estimators остаются diagnostics.
+
+Если часть scales равна нулю, а часть положительна, v3 блокирует automatic
+action с `ROBUST_SCALE_PARTIAL_DEGENERACY`. Полностью равный independent-seller
+cohort является валидным zero-scale case. Exact implementation ограничена
+`robust_scale_max_cohort_size=500`; production collector имеет более строгий
+default bound `pricing_scraper_max_sellers=10`.
+
 ## 6. Confidence and hard gates
 
 Positive quality factors лежат в `[0,1]`:
 
 - coverage — logarithmic transform от weighted `n_eff`;
-- dispersion — `1 - robust_dispersion / max_dispersion`;
+- dispersion — `1 - selected_post_clean_robust_cv / max_dispersion`;
 - freshness — Q1 истинного half-life score `2^(-age/half_life)`;
 - match — Q1 match confidence;
 - tier — Q1 `tier_confidence * coefficient_confidence`;
@@ -262,6 +306,7 @@ Policy также поддерживает conservative `minimum`. Factor scores
 - aggregate confidence >= `confidence_min`;
 - каждый factor >= собственному floor;
 - sensitivity <= tolerance.
+- для non-legacy policy нет partial robust-scale degeneracy.
 
 Grades `A/B/C/MANUAL` — evidence grades, не probability of correctness.
 
@@ -444,6 +489,8 @@ Recommendation хранит:
 - catalog snapshot, run, parser/classifier/policy/coefficient/tick versions;
 - calibration dataset hash;
 - estimator, outlier filter, confidence aggregation и factor floors;
+- `rc-scale-v1` pre/post profiles, selected method, finite-correction version и
+  Decimal constants;
 - raw/unique/clean/effective counts, dispersion, outliers и sensitivity;
 - полный normalized-offer trace;
 - применённые tier coefficients и validation reasons;
@@ -453,6 +500,25 @@ Recommendation хранит:
 
 Evidence endpoint возвращает только IDs, реально вошедшие в cleaned cohort этой
 recommendation.
+
+## 12.1. Deterministic recommendation replay
+
+Старые recommendations с `recommendation-replay-v1` остаются читаемыми. Каждая
+новая recommendation хранит `recommendation-replay-v2` и точный `calculated_at`.
+Network-free replay повторно собирает frozen context,
+observations, последнюю на тот момент classification, run policy и выбранные
+run-scoped coefficients. V1 сравнивает прежние durable scalar fields; V2
+дополнительно сравнивает selected method, pre/post normalized profiles,
+profile/correction versions и constants:
+
+```text
+GET /api/v1/pricing/recommendations/{recommendation_id}/replay
+```
+
+Ответ содержит `exact_match`, field-level `mismatches` и replayed summary.
+Legacy recommendations без replay contract честно возвращают
+`RECOMMENDATION_REPLAY_UNAVAILABLE`, а не подменяют проверку приблизительным
+сравнением.
 
 ## 13. Observability
 
@@ -502,19 +568,25 @@ capacity/retry/storage contract is documented in
 ```bash
 cd backend
 PYTHONPATH=src .venv/bin/python -m pytest -q
+cd ..
+backend/.venv/bin/python scripts/run_robust_dispersion_mutation_probes.py
+backend/.venv/bin/python scripts/validate_robust_dispersion_decision_diff.py
+backend/.venv/bin/python scripts/benchmark_robust_dispersion.py --repeats 5
+cd backend
 .venv/bin/alembic upgrade head --sql
-.venv/bin/alembic downgrade 20260716_0008:base --sql
+.venv/bin/alembic downgrade 20260716_0009:base --sql
 
 cd ../frontend
-dart format lib test
-flutter analyze
+dart format --output=none --set-exit-if-changed lib test
+dart analyze lib test
 flutter test
 flutter build web --release
 ```
 
-Для текущего Unicode path Dart analysis server может аварийно завершиться до
-анализа исходников; проверка exact tree из ASCII temporary path является
-эквивалентным workaround.
+В текущем Unicode path wrapper `flutter analyze` может аварийно завершиться
+внутри LSP JSON transport до анализа исходников. Прямой `dart analyze lib test`
+использует тот же analyzer ruleset и проходит; release Flutter build является
+дополнительной compiler-проверкой.
 
 ## 16. External production gates
 
@@ -527,6 +599,12 @@ flutter build web --release
 - live PostgreSQL/Redis/Celery/Prom smoke run в целевом окружении;
 - мониторинг parser drift и последующая calibration reliability review.
 
+Robust-dispersion v3 отдельно остаётся `NO_GO`: synthetic decision diff нашёл
+один unsafe `MANUAL_REVIEW -> RAISE` transition на двухкластерной выборке, а
+разрешённого representative dataset для calibration нет. Поэтому
+`PRICING_V3_ROBUST_DISPERSION_ENABLED=false` по умолчанию блокирует persisted
+v3 runs; side-effect-free preview и replay доступны для validation.
+
 При отсутствии этих подтверждений engine корректно работает в shadow/manual
 review режиме, но evidence grade нельзя называть вероятностью правильности.
 
@@ -534,9 +612,9 @@ review режиме, но evidence grade нельзя называть веро�
 
 | Requirement | Domain implementation | Persistence / API / UI | Verification |
 |---|---|---|---|
-| 3.2 KEMP normalization | `pricing/calibration.py`, `pricing/engine.py`, simple median and hierarchical log-shrinkage, leakage guards and coefficient validation | append-only pairs/coefficients, coefficient API, raw and normalized evidence in Flutter | `test_tier_calibration.py`, `test_pricing_engine_matrix.py` |
-| 3.3 Robust fair price | `pricing/statistics.py`, IQR, MAD fallback, `MAD = 0`, small-sample abstention, winsor sensitivity, median/range output | estimator, exclusions, counts and sensitivity persisted in calculation trace | `test_pricing_statistics.py`, `test_pricing_engine.py` |
+| 3.2 KEMP normalization | `metis/pricing/calibration.py`, `metis/pricing/engine.py`, simple median and hierarchical log-shrinkage, leakage guards and coefficient validation | append-only pairs/coefficients, coefficient API, raw and normalized evidence in Flutter | `test_tier_calibration.py`, `test_pricing_engine_matrix.py` |
+| 3.3 Robust fair price | `metis/pricing/statistics.py`, IQR/MAD cleaning, exact Sn/Qn diagnostics, pre/post scale profiles, partial-degeneracy and capacity gates, median/range output | method/profile/constants in API and immutable trace; v1/v2 replay | `test_pricing_statistics.py`, `test_robust_dispersion*.py`, mutation and decision-diff scripts |
 | 3.4 Confidence | coverage, dispersion, half-life freshness, match/tier/source/independence factors, geometric/minimum aggregation and hard floors | factor breakdown, weakest factor, gates and human-readable reasons in API/UI | confidence matrix and policy validation tests |
 | 3.5 Recommendation modes | fresh raise-only invariant; stale/dead markdown; cost and approved below-cost floor enforcement | action constraints, immutable decisions, explicit warning confirmation and audit event | engine matrix, API safety tests, Flutter below-cost dialog tests |
 | 3.6 Economic priority | typed raw score with explicit unit; separate actionable and manual-review queues | priority fields in DB/API and operator-first ordering in Flutter | priority scenarios and API queue tests |
-| Cross-cutting sections 23–30 | pure domain boundary, run-level calibration barrier, deterministic versions/hashes, structured events | migration `20260716_0006`, Celery orchestration, 12 pricing endpoints, calculation trace | backend suite, OpenAPI build, Alembic SQL round-trip, Flutter tests/analyzer/release build |
+| Cross-cutting sections 23–30 | pure domain boundary, run-level calibration barrier, deterministic versions/hashes, structured events | migration `20260716_0006`, Celery orchestration, recommendation replay, calculation trace | backend suite, replay tests, OpenAPI build, Alembic chain, Flutter tests/analyzer/release build |

@@ -6,5 +6,9 @@ class RequestFailed(RuntimeError):
     """Request failed after all retries."""
 
 
+class UnsafeResponse(RequestFailed):
+    """Response violates the bounded fetch security contract."""
+
+
 class ParseError(RuntimeError):
     """HTML does not contain the expected Apollo state."""

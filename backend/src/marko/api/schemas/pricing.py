@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from marko.pricing import (
+from metis.pricing import (
     CoefficientModel,
     CompetitorOffer,
     ProductPricingContext,
@@ -221,6 +221,8 @@ class RecommendationResponse(BaseModel):
     clean_competitor_count: int
     effective_competitor_count: Decimal
     dispersion: Decimal | None
+    dispersion_method: str
+    dispersion_profile: dict[str, Any] | None
     outlier_method: str
     outlier_count: int
     sensitivity: Decimal | None
@@ -250,6 +252,15 @@ class RecommendationPageResponse(BaseModel):
     run_id: UUID | None
     limit: int
     offset: int
+
+
+class RecommendationReplayResponse(BaseModel):
+    recommendation_id: UUID
+    replay_contract_version: str
+    calculated_at: datetime
+    exact_match: bool
+    mismatches: dict[str, dict[str, Any]]
+    replayed: dict[str, Any]
 
 
 class RecommendationDecisionRequest(BaseModel):
@@ -439,6 +450,8 @@ class PricingEvaluateResponse(BaseModel):
     clean_competitor_count: int
     effective_competitor_count: Decimal
     dispersion: Decimal | None
+    dispersion_method: str
+    dispersion_profile: dict[str, Any] | None
     outlier_method: str
     outlier_count: int
     sensitivity: Decimal | None

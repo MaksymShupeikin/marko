@@ -1,0 +1,175 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: PROMPT_15_013_IMPLEMENTATION
+      title: MACHINE_READABLE_SUMMARY_IMPLEMENTATION
+      type: IMPLEMENTATION
+      scope_owner: Cross-cutting
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-MACHINE-SCHEMA
+        result: Typed schema 1.1.0 and canonical state records are implemented.
+        artifact_refs:
+          - backend/src/marko/governance/machine_summary_models.py
+        evidence_refs:
+          - backend/tests/test_machine_summary.py
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-STRICT-VALIDATION
+        result: Strict YAML, arithmetic, semantic, trace, partition, response, and CLI validation are implemented.
+        artifact_refs:
+          - backend/src/marko/governance/machine_summary.py
+          - backend/src/marko/governance/machine_summary_cli.py
+        evidence_refs:
+          - backend/tests/test_machine_summary.py
+          - docs/examples/machine_readable_summary_prompt_15_013.yaml
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-REPOSITORY-ADOPTION
+        result: Repository instructions, commands, documentation, and a truthful versioned manifest are installed.
+        artifact_refs:
+          - AGENTS.md
+          - docs/PROMPT_15_013_MACHINE_READABLE_SUMMARY.md
+          - docs/examples/machine_readable_summary_prompt_15_013.yaml
+        evidence_refs:
+          - Makefile
+          - README.md
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope: []
+    strongest_verified_result:
+      claim_id: CLM-MACHINE-SUMMARY-EXECUTABLE
+      result: Schema 1.1.0 manifests and combined Section 15/16 responses are deterministically validated.
+      evidence_level: E3
+      evidence_refs:
+        - backend/tests/test_machine_summary.py
+        - command:make validate-machine-summary
+      reproduction_status: reproducible
+      limitations:
+        - Focused local execution is not representative cross-surface operational evidence.
+    weakest_critical_area:
+      area_id: AREA-CROSS-SURFACE-ADOPTION
+      area: Adoption by every response-producing surface
+      score: 50
+      evidence_level: E2
+      reason: Repository instructions and examples are located artifacts, not E4/E5 adoption evidence.
+      downstream_impact: A client can still emit a non-canonical or non-final YAML block.
+      required_resolution: Run pinned cross-surface adoption validation.
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E2
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: partial
+      limitations:
+        - No representative response corpus was executed.
+        - The supplied workspace has no Git metadata, so evidence is path-bound rather than commit-bound.
+    production_implication:
+      state: DEVELOPMENT_ONLY
+      production_ready: false
+      evidence_level: E3
+      passed_hard_gates:
+        - MACHINE_SUMMARY_LOCAL_VALIDATION
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - REPOSITORY_PROVENANCE_FOR_PRODUCTION
+        - CROSS_SURFACE_ADOPTION_NOT_PROVEN
+      statement: The response-governance contract is locally verified; Marko/Metis product readiness is not claimed.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-REPOSITORY-PROVENANCE
+        priority: P1
+        category: environment_reproducibility
+        description: The supplied workspace has no Git metadata, so evidence cannot be bound to a canonical commit.
+        blocked_scope:
+          - production-grade reproducibility and provenance
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - "git rev-parse --show-toplevel: not a git repository"
+        owner: repository maintainer
+        resolution_condition: The workspace is attached to its canonical repository and commit identity is recorded.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-RESPONSE-CORPUS
+        priority: P1
+        category: data
+        description: A pinned corpus from every response-producing surface is not available in the current scope.
+        blocked_scope:
+          - cross-surface adoption validation
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: false
+        evidence_refs:
+          - docs/examples/machine_readable_summary_prompt_15_013.yaml
+        owner: response surface owners
+        resolution_condition: Responses and matching manifests from every in-scope surface are frozen and supplied.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions: []
+    source_access: []
+    data:
+      - BLK-P1-RESPONSE-CORPUS
+    environment_reproducibility:
+      - BLK-P1-REPOSITORY-PROVENANCE
+    unknowns: []
+
+  next_stage:
+    id: MACHINE_SUMMARY_ADOPTION_VALIDATION
+    title: MACHINE_SUMMARY_ADOPTION_VALIDATION
+    why_it_is_next:
+      - Local E3 contract evidence must precede any cross-surface compliance claim.
+    required_inputs:
+      - input_id: INPUT-PINNED-CONTRACTS
+        description: Pinned Section 15 and Section 16 manifests plus response corpus
+        source: current workspace and response-producing surfaces
+        required_state: local contract tests passing and corpus frozen
+        currently_available: false
+        evidence_ref: null
+    expected_artifacts:
+      - artifact_id: ART-MACHINE-SUMMARY-ADOPTION-REPORT
+        type: report
+        purpose: Must be created to report cross-surface human/machine response compliance.
+        required_fields:
+          - surface
+          - footer_manifest
+          - machine_manifest
+          - response
+          - validation_result
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-MACHINE-ADOPTION-01
+        predicate: every sampled response passes combined Section 15 and Section 16 validation
+        required_evidence: pinned response corpus and validator output
+        threshold: 100%
+    stop_condition:
+      gate_key: STOP_GATE_MACHINE_SUMMARY_ADOPTION_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_PROMPT_15_013_IMPLEMENTATION
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

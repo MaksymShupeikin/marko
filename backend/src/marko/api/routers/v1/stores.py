@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser, get_session
+from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.stores import (
     ProductPageResponse,
     ProductResponse,
@@ -33,7 +33,7 @@ router = APIRouter()
 async def create_store(
     payload: StoreCreateRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceAdmin,
 ) -> StoreSyncResponse:
     try:
         store_id, sync_run = await register_store(
@@ -88,7 +88,7 @@ async def get_store_details(
 async def sync_store(
     store_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceAdmin,
 ) -> StoreSyncResponse:
     try:
         sync_run = await queue_store_sync(

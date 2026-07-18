@@ -1,0 +1,378 @@
+schema:
+  name: metis_marko_machine_readable_stage_summary
+  version: 1.1.0
+  generated_at: "2026-07-17T22:49:48+02:00"
+  report_id: REPORT-PROMPT-15-013-IMPLEMENTATION
+  audit_id: VALIDATION-PROMPT-15-013-IMPLEMENTATION
+
+stage:
+  id: PROMPT_15_013_IMPLEMENTATION
+  title: MACHINE_READABLE_SUMMARY_IMPLEMENTATION
+  status: PASS
+  status_reason: Section 16 models, strict YAML parser, arithmetic, cross-field validation, CLI, and hostile tests passed.
+  acceptance_criteria_passed: true
+  audit_complete: true
+  production_ready: false
+  secondary_findings: []
+  evidence_refs:
+    - backend/tests/test_machine_summary.py
+    - backend/src/marko/governance/machine_summary.py
+
+repository:
+  audit_root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  audit_root_realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  topology: UNKNOWN
+  git_commit: null
+  dirty_before_audit: null
+  identity_verified: false
+  runtime_import_identity: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src"
+  components:
+    metis:
+      root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis"
+      realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis"
+      repository_top_level: null
+      git_commit: null
+      branch: null
+      detached_head: null
+      dirty_before_audit: null
+      identity_verified: false
+      runtime_import_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis"
+      evidence_refs:
+        - backend/src/metis
+    marko:
+      root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko"
+      realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko"
+      repository_top_level: null
+      git_commit: null
+      branch: null
+      detached_head: null
+      dirty_before_audit: null
+      identity_verified: false
+      runtime_import_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko"
+      evidence_refs:
+        - backend/src/marko
+  duplicate_copies: []
+  unresolved_identity_conflicts:
+    - NO_GIT_METADATA
+
+metis:
+  weighted_readiness: null
+  readiness_interval:
+    lower: null
+    upper: null
+  readiness_scale: "0_100"
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  critical_floor: null
+  evidence_level: null
+  evidence_level_semantics: CRITICAL_EVIDENCE_FLOOR
+  highest_evidence_level: null
+  unknown_weight: null
+  critical_unknown_count: null
+  engineering_weights_approved: false
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+      - PROJECT_READINESS_NOT_ASSESSED
+  dimension_weights:
+    implementation: 0.20
+    verification: 0.15
+    integration: 0.15
+    auditability: 0.15
+    operations: 0.15
+    security: 0.10
+    documentation: 0.10
+  capabilities: []
+  critical_capability_ids: []
+  strongest_domains: []
+  missing_critical_domains: []
+  evidence_refs: []
+  maturity_class: UNKNOWN
+
+marko:
+  weighted_readiness: null
+  readiness_interval:
+    lower: null
+    upper: null
+  readiness_scale: "0_100"
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  critical_floor: null
+  evidence_level: null
+  evidence_level_semantics: CRITICAL_EVIDENCE_FLOOR
+  highest_evidence_level: null
+  unknown_weight: null
+  critical_unknown_count: null
+  engineering_weights_approved: false
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+      - PROJECT_READINESS_NOT_ASSESSED
+  dimension_weights:
+    implementation: 0.20
+    verification: 0.15
+    integration: 0.15
+    auditability: 0.15
+    operations: 0.15
+    security: 0.10
+    documentation: 0.10
+  capabilities: []
+  critical_capability_ids: []
+  strongest_domains: []
+  missing_critical_domains: []
+  evidence_refs: []
+  maturity_class: UNKNOWN
+  existing_scraper:
+    located: UNKNOWN
+    physical_path: null
+    entry_point: null
+    entry_point_verified: UNKNOWN
+    input_contract_verified: UNKNOWN
+    output_contract_verified: UNKNOWN
+    runtime_reverified: UNKNOWN
+    single_request_verified: UNKNOWN
+    small_batch_verified: UNKNOWN
+    batch_ready: UNKNOWN
+    parallel_safe: UNKNOWN
+    timeout_bounded: UNKNOWN
+    retry_safe: UNKNOWN
+    idempotent: UNKNOWN
+    queue_integrated: UNKNOWN
+    dead_letter_integrated: UNKNOWN
+    raw_storage_integrated: UNKNOWN
+    structured_storage_integrated: UNKNOWN
+    metis_evidence_integrated: UNKNOWN
+    replayable: UNKNOWN
+    observable: UNKNOWN
+    load_tested: UNKNOWN
+    production_proven: UNKNOWN
+    capacity:
+      measured: false
+      unique_urls: null
+      arrival_rate_urls_per_second: null
+      worker_service_rate_urls_per_second: null
+      active_workers: null
+      average_attempts_per_unique_url: null
+      effective_worker_service_rate: null
+      total_capacity_urls_per_second: null
+      utilization_rho: null
+      queue_backlog: null
+      queue_stability: NOT_MEASURED
+      estimated_drain_seconds: null
+      success_rate: null
+      retry_amplification: null
+      latency_p50_seconds: null
+      latency_p95_seconds: null
+      latency_p99_seconds: null
+      raw_storage_bytes: null
+      structured_storage_bytes: null
+      memory_peak_bytes: null
+      cpu_average_percent: null
+    evidence_refs: []
+  reusable_as_is: []
+  adapt_before_reuse: []
+  reference_only: []
+  do_not_port: []
+  unknown_reuse_state: []
+  evaluated_component_ids: []
+  reuse_partition_valid: null
+
+combined_system:
+  maturity_class: UNKNOWN
+  end_to_end_flow_verified: UNKNOWN
+  end_to_end_evidence_level: null
+  trace_coverage: null
+  verified_trace_coverage: null
+  integrated_trace_coverage: null
+  last_verified_node: null
+  first_unverified_node: null
+  first_broken_transition: null
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+      - PROJECT_READINESS_NOT_ASSESSED
+  recommendation_contract:
+    explainable: UNKNOWN
+    auditable: UNKNOWN
+    reproducible: UNKNOWN
+    insufficient_data_abstention: UNKNOWN
+    manual_review_routing: UNKNOWN
+  evidence_refs: []
+
+gaps:
+  p0: []
+  p1: []
+  p2: []
+  p3: []
+  priority_partition_valid: null
+  duplicate_gap_ids: []
+  critical_dependency_chain: []
+
+business_decisions_required: []
+source_access_states: []
+
+engineering_assumptions:
+  - assumption_id: ASSUMPTION-READINESS-WEIGHTS
+    statement: Default Section 16 engineering weights remain unapproved business assumptions.
+    rationale: No business weight approval was part of the implementation request.
+    affected_fields:
+      - metis.dimension_weights
+      - marko.dimension_weights
+    impact_if_false: Any future readiness calculation must be recalculated with approved weights.
+    validation_method: Obtain an approved decision artifact before using weights for a production gate.
+    required_by_stage: PROJECT_READINESS_ASSESSMENT
+    status: UNVALIDATED
+    evidence_refs:
+      - docs/PROMPT_15_013_MACHINE_READABLE_SUMMARY.md
+
+future_hypotheses:
+  - hypothesis_id: HYPOTHESIS-MACHINE-SUMMARY-ADOPTION
+    statement: Every response-producing surface can emit the canonical final YAML block.
+    expected_value: 100% of a pinned cross-surface response corpus validates.
+    required_data:
+      - Pinned responses from every response-producing surface
+    falsification_test: Run validate-machine-summary against the full corpus and reject any invalid response.
+    earliest_applicable_stage: MACHINE_SUMMARY_ADOPTION_VALIDATION
+    current_action: DEFER
+    evidence_refs: []
+
+unknowns:
+  - unknown_id: UNKNOWN-REPOSITORY-SNAPSHOT
+    field_path: repository.*
+    question: Which canonical Git snapshot owns the supplied workspace?
+    reason_unknown: The supplied workspace contains no Git metadata.
+    impact: Evidence is path-bound and cannot be attributed to a canonical commit.
+    resolver_type: REPOSITORY_OWNER_INPUT
+    required_input: Canonical repository and commit identity
+    owner: repository maintainer
+    blocks:
+      - PRODUCTION_REPRODUCIBILITY
+    target_stage: MACHINE_SUMMARY_ADOPTION_VALIDATION
+  - unknown_id: UNKNOWN-METIS-READINESS
+    field_path: metis.*
+    question: What is current Metis system readiness on the canonical snapshot?
+    reason_unknown: Section 16 implementation did not authorize a new project readiness audit.
+    impact: Metis readiness, maturity, and production eligibility cannot be positively claimed.
+    resolver_type: PROJECT_STATE_AUDIT
+    required_input: Authorized capability-level Metis audit with evidence
+    owner: engineering
+    blocks:
+      - METIS_PRODUCTION_GATE
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-MARKO-READINESS
+    field_path: marko.*
+    question: What is current Marko and existing-scraper readiness on the canonical snapshot?
+    reason_unknown: Section 16 implementation did not authorize runtime or scale re-audit.
+    impact: Marko, scraper capacity, and reuse readiness cannot be positively claimed.
+    resolver_type: PROJECT_STATE_AUDIT
+    required_input: Authorized Marko and scraper evidence audit
+    owner: engineering
+    blocks:
+      - MARKO_PRODUCTION_GATE
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-COMBINED-READINESS
+    field_path: combined_system.*
+    question: Is the complete Marko-to-Metis flow integrated and reproducible?
+    reason_unknown: No E4 end-to-end run was part of this format implementation stage.
+    impact: Combined production eligibility remains false.
+    resolver_type: END_TO_END_TEST
+    required_input: Pinned E4 end-to-end evidence
+    owner: engineering
+    blocks:
+      - COMBINED_PRODUCTION_GATE
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-GAP-INVENTORY
+    field_path: gaps
+    question: What is the current P0-P3 project gap inventory?
+    reason_unknown: A new project gap audit was outside the requested implementation scope.
+    impact: Empty priority arrays cannot be interpreted as verified absence of gaps.
+    resolver_type: PROJECT_STATE_AUDIT
+    required_input: Authorized gap inventory with evidence
+    owner: engineering
+    blocks:
+      - PRODUCTION_GAP_ASSERTION
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-BUSINESS-DECISIONS
+    field_path: business_decisions_required
+    question: Which project-level decisions remain outstanding?
+    reason_unknown: No business-decision audit was authorized in this stage.
+    impact: The empty array is not a claim that no decisions remain.
+    resolver_type: CLIENT_DECISION_AUDIT
+    required_input: Approved decision registry
+    owner: client
+    blocks:
+      - PRODUCTION_AUTHORIZATION
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-SOURCE-STATES
+    field_path: source_access_states
+    question: What source permissions apply on the current snapshot?
+    reason_unknown: Source-access state was not revalidated during format implementation.
+    impact: No source-dependent production gate may pass from this summary.
+    resolver_type: SOURCE_ACCESS_REVIEW
+    required_input: Current verified source-access decisions
+    owner: source authority
+    blocks:
+      - SOURCE_DEPENDENT_COLLECTION
+    target_stage: PROJECT_READINESS_ASSESSMENT
+
+next_stage:
+  id: MACHINE_SUMMARY_ADOPTION_VALIDATION
+  title: MACHINE SUMMARY ADOPTION VALIDATION
+  objective: Validate the Section 16 contract across every response-producing surface.
+  why_it_is_next: Local executable evidence must precede any cross-surface compliance claim.
+  required_inputs:
+    - Pinned Section 15 and Section 16 manifests
+    - Pinned response corpus from every response-producing surface
+  expected_outputs:
+    - A cross-surface adoption report must be created.
+    - A response-to-manifest validation ledger must be created.
+  acceptance_criteria:
+    - Every sampled response contains exactly one final YAML document.
+    - Every human stop-gate equals its machine stage status.
+    - Every sampled manifest passes strict parsing and semantic validation.
+  stop_condition: STOP_GATE_MACHINE_SUMMARY_ADOPTION_VALIDATION with no automatic continuation
+  client_decisions_required: []
+  started: false
+  new_direct_instruction_required: true
+
+validation:
+  yaml_parse: true
+  duplicate_key_check: true
+  schema_validation: true
+  required_field_validation: true
+  enum_validation: true
+  type_validation: true
+  arithmetic_validation: true
+  readiness_interval_validation: true
+  evidence_ceiling_validation: true
+  critical_floor_validation: true
+  stop_gate_consistency: true
+  production_gate_consistency: true
+  reuse_partition_validation: true
+  gap_partition_validation: true
+  evidence_traceability: true
+  reverse_trace_validation: true
+  variation_validation: true
+  hostile_review: true
+  errors: []
+  warnings:
+    - PROJECT_READINESS_NOT_ASSESSED
+    - REPOSITORY_SNAPSHOT_NOT_GIT_BOUND
+
+termination:
+  stop_gate_key: STOP_GATE_PROMPT_15_013_IMPLEMENTATION
+  stop_gate_value: PASS
+  stage_status_matches_stop_gate: true
+  next_stage_started: false
+  execution_stopped: true
+  no_content_after_summary: true

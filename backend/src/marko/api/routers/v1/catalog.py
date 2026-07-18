@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser, get_session
+from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.catalog import (
     CatalogImportPageResponse,
     CatalogImportResponse,
@@ -33,7 +33,7 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_catalog(
-    current: CurrentUser,
+    current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
     file: Annotated[UploadFile, File(description="Prom.ua XLSX export")],
     mapping: Annotated[str | None, Form()] = None,
@@ -125,4 +125,3 @@ async def get_catalog_items(
         limit=limit,
         offset=offset,
     )
-

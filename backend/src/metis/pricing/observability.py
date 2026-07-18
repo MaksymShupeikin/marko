@@ -1,4 +1,4 @@
-"""Low-cardinality structured events for pricing operations."""
+"""Low-cardinality structured events for Metis pricing operations."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 
-logger = logging.getLogger("marko.pricing")
+logger = logging.getLogger("metis.pricing")
 
 
 def pricing_event(event: str, **fields: Any) -> None:

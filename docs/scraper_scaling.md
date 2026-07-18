@@ -24,6 +24,11 @@ Repository verification established:
 
 ## Implemented boundary
 
+The revision-2 architecture implementation is audited in
+`SCRAPER_ARCHITECTURE_AUDIT_AND_IMPLEMENTATION_2026-07-17.md`; its strict
+machine summary is `SCRAPER_ARCHITECTURE_AUDIT_SUMMARY_2026-07-17.yaml` and is
+validated with `uv run validate-scraper-audit --manifest <path>`.
+
 ```text
 logical item
   store_sync       -> SyncRun
@@ -49,7 +54,7 @@ immutable store-sync result
   -> StoreSyncProductSnapshot(sync_run_id, external_id, content SHA-256)
 
 Metis evidence lineage
-  -> RawMarketCapture(scrape_target_id)
+  -> RawMarketCapture(scrape_target_id, hash-verified raw HTTP manifest)
   -> MarketObservation
   -> ObservationTierClassification
 ```
@@ -79,6 +84,38 @@ HTTP and task retries use separate budgets:
 - task execution, logical request, and physical attempt counters are separate;
 - exhausted retry budget becomes explicit `terminal_failure`;
 - retryable work cannot circulate indefinitely.
+- HTTP retries use capped full-jitter exponential backoff;
+- numeric `Retry-After` is honored only within the configured cap.
+
+## Trusted admission and multi-axis result
+
+`services/scraper_architecture.py` owns strict `scrape-request.v2` and
+`scrape-result.v2` contracts. A client cannot supply source-policy authority,
+canonical input, or server idempotency keys. The trusted server computes four
+separate namespaces: submission, acquisition, parse, and observation.
+
+Execution, acquisition, parse, evidence, downstream eligibility, and operator
+action are independent axes. In particular, a worker may finish successfully
+while the result still requires review/no recommendation. Partial or invalid
+evidence cannot be marked downstream eligible.
+
+## Transactional dispatch outbox
+
+Accepted store-sync/pricing jobs and their first dispatch event are committed
+in one database transaction. Pricing fan-out and calculation fan-out use the
+same outbox. Every event has an immutable payload and deterministic Celery task
+ID. The recovery task `marko.worker.reconcile_scrape_outbox` republishes pending
+or expired-lease events; consumers remain at-least-once, idempotent, and fenced.
+
+This closes the silent DB-to-broker gap without claiming exactly-once delivery.
+The following metrics expose its operational state:
+
+```text
+scrape_outbox_pending
+scrape_outbox_dispatching
+scrape_outbox_terminal_failed
+scrape_outbox_oldest_pending_age_seconds
+```
 
 Measured amplification:
 
@@ -246,7 +283,18 @@ Scheduler overhead and tail time are added separately.
 
 ## Reconciliation
 
-Every snapshot calculates:
+Admission and lifecycle reconciliation are kept as two explicit equations:
+
+\[
+N_{submitted} = N_{deduplicated}+N_{rejected}+N_{admitted}
+\]
+
+\[
+N_{admitted} = N_{queued}+N_{running}+N_{retry-wait}+N_{success}
++N_{failed}+N_{cancelled}
+\]
+
+The compatibility snapshot also calculates:
 
 \[
 N_{valid} =
@@ -259,6 +307,11 @@ N_{loss}=N_{valid}-N_{accounted}
 
 `N_loss` must be zero. Terminal rate and success rate are separate. An explicit
 terminal failure is preferable to a silently lost item.
+
+Binary rates are accompanied by a Wilson confidence interval rather than an
+unqualified point estimate. Structured completeness is a weighted per-record
+distribution (`minimum`, `p05`, `p50`, `p95`) plus per-field and critical-field
+missing rates; an empty cohort is represented as unknown, not as perfect data.
 
 ## Storage
 
@@ -399,7 +452,24 @@ Implemented and locally verified:
 14. generation/attempt fencing for stale-worker rejection;
 15. race-safe content-addressed evidence insertion and hash verification;
 16. bounded orphan-evidence garbage collection;
-17. extraction parser internals unchanged.
+17. extraction parser internals unchanged;
+18. fail-closed source authorization before every physical HTTP attempt;
+19. workspace-scoped dead-letter visibility and admin-only replay into a new
+    workflow without rewriting terminal history.
+
+Source-access behavior is deliberately asymmetric:
+
+- retained raw evidence can replay without network permission;
+- client-supplied XLSX can be ingested without marketplace permission;
+- `NOT_PERMITTED` or `UNKNOWN` blocks all new public-marketplace HTTP attempts;
+- a `PERMITTED_*` verdict is invalid without an auditable reference.
+
+Dead-letter endpoints:
+
+```text
+GET  /api/v1/operations/dead-letters
+POST /api/v1/operations/dead-letters/{kind}/{id}/replay
+```
 
 Requires an approved controlled benchmark before production PASS:
 

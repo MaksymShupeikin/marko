@@ -7,7 +7,7 @@ import time
 from redis import Redis
 
 from marko.core.config import Settings
-from marko.pricing.observability import pricing_event
+from metis.pricing.observability import pricing_event
 
 _SLOT_SCRIPT = """
 local next_at = tonumber(redis.call('GET', KEYS[1]) or '0')

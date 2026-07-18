@@ -276,6 +276,8 @@ class _RecommendationCard extends ConsumerStatefulWidget {
 class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
   Future<List<RecommendationEvidence>>? _evidence;
   bool _savingDecision = false;
+  bool _verifyingReplay = false;
+  RecommendationReplay? _replay;
 
   @override
   Widget build(BuildContext context) {
@@ -385,6 +387,16 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                 icon: const Icon(Icons.inventory_2_outlined, size: 18),
                 label: const Text('Контекст склада'),
               ),
+              OutlinedButton.icon(
+                onPressed: _verifyingReplay ? null : _verifyReplay,
+                icon: _verifyingReplay
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.verified_outlined, size: 18),
+                label: const Text('Проверить replay'),
+              ),
               if (recommendation.recommendedPrice != null) ...[
                 FilledButton.icon(
                   onPressed: _savingDecision
@@ -409,6 +421,10 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
               ],
             ],
           ),
+          if (_replay != null) ...[
+            const SizedBox(height: 12),
+            _ReplayStatus(replay: _replay!),
+          ],
           if (_evidence != null) ...[
             const SizedBox(height: 18),
             const Divider(),
@@ -477,6 +493,26 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
     );
   }
 
+  Future<void> _verifyReplay() async {
+    setState(() => _verifyingReplay = true);
+    try {
+      final replay = await ref
+          .read(pricingApiProvider)
+          .verifyReplay(widget.recommendation.id);
+      if (!mounted) return;
+      setState(() {
+        _replay = replay;
+        _verifyingReplay = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _verifyingReplay = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Replay недоступен: $error')));
+    }
+  }
+
   Future<void> _overrideTier(RecommendationEvidence evidence) async {
     final override = await showTierOverrideDialog(
       context,
@@ -508,6 +544,46 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
         context,
       ).showSnackBar(SnackBar(content: Text('Не удалось сохранить: $error')));
     }
+  }
+}
+
+class _ReplayStatus extends StatelessWidget {
+  const _ReplayStatus({required this.replay});
+
+  final RecommendationReplay replay;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final exact = replay.exactMatch;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: exact ? colors.positiveSoft : colors.negativeSoft,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            exact ? Icons.verified_rounded : Icons.warning_amber_rounded,
+            color: exact ? colors.positive : colors.negative,
+            size: 19,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              exact
+                  ? 'Replay совпал: ${replay.contractVersion}'
+                  : 'Обнаружен drift: ${replay.mismatches.keys.join(', ')}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: exact ? colors.positive : colors.negative,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

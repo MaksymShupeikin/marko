@@ -28,12 +28,14 @@ def test_comparison_claim_is_rejected_after_generation_takeover() -> None:
         status="collecting",
         owner_task_id=task_id,
         network_attempts=2,
+        fencing_token=7,
     )
     attempt = ScrapeAttempt(
         id=uuid4(),
         status="running",
         task_id=task_id,
         delivery_no=5,
+        fencing_token=7,
     )
     claim = CollectionClaim(
         action="target_collect",
@@ -43,6 +45,7 @@ def test_comparison_claim_is_rejected_after_generation_takeover() -> None:
         product_url="https://prom.ua/ua/p1-product.html",
         oe_norm="OE-1",
         delivery_no=5,
+        fencing_token=7,
         execution_no=2,
         task_id=task_id,
         scrape_attempt_id=attempt.id,
@@ -50,6 +53,9 @@ def test_comparison_claim_is_rejected_after_generation_takeover() -> None:
 
     assert _target_claim_is_current(target, attempt, claim) is True
     target.network_attempts = 3
+    assert _target_claim_is_current(target, attempt, claim) is False
+    target.network_attempts = 2
+    target.fencing_token = 8
     assert _target_claim_is_current(target, attempt, claim) is False
 
 
@@ -65,20 +71,26 @@ def test_store_sync_claim_is_rejected_after_new_execution_takes_over() -> None:
         max_task_executions=3,
         deadline_at=datetime.now(UTC),
         task_id=task_id,
+        fencing_token=7,
     )
     sync_run = SimpleNamespace(
         scrape_state="running",
         scrape_task_executions=2,
         scrape_owner_task_id=task_id,
+        scrape_fencing_token=7,
     )
     execution = SimpleNamespace(
         id=execution_id,
         execution_no=2,
         outcome="running",
+        fencing_token=7,
     )
 
     assert _store_claim_is_current(sync_run, execution, claim) is True
     sync_run.scrape_task_executions = 3
+    assert _store_claim_is_current(sync_run, execution, claim) is False
+    sync_run.scrape_task_executions = 2
+    sync_run.scrape_fencing_token = 8
     assert _store_claim_is_current(sync_run, execution, claim) is False
 
 

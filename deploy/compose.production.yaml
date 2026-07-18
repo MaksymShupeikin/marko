@@ -1,0 +1,193 @@
+name: marko-production
+
+x-backend-environment: &backend-environment
+  ENVIRONMENT: production
+  DEBUG: "false"
+  API_DOCS_ENABLED: "false"
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL is required}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND is required}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+  CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+  CORS_ALLOW_CREDENTIALS: "false"
+  CORS_METHODS: GET,POST,PUT,PATCH,DELETE,OPTIONS
+  CORS_HEADERS: Authorization,Content-Type,Accept,Origin,X-Request-ID
+  FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?FIREBASE_PROJECT_ID is required}
+  PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT: ${PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT:-NOT_PERMITTED}
+  PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE: ${PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE:-}
+  PRICING_COLLECTION_MIN_INTERVAL_SECONDS: ${PRICING_COLLECTION_MIN_INTERVAL_SECONDS:-2}
+  PRICING_CIRCUIT_FAILURE_THRESHOLD: ${PRICING_CIRCUIT_FAILURE_THRESHOLD:-5}
+  PRICING_CIRCUIT_OPEN_SECONDS: ${PRICING_CIRCUIT_OPEN_SECONDS:-300}
+  PRICING_DISPATCH_BATCH_SIZE: ${PRICING_DISPATCH_BATCH_SIZE:-100}
+  PRICING_COLLECTION_WORKER_COUNT: ${PRICING_WORKER_CONCURRENCY:-1}
+  PRICING_COLLECTION_MAX_TASK_EXECUTIONS: ${PRICING_COLLECTION_MAX_TASK_EXECUTIONS:-4}
+  PRICING_COLLECTION_ITEM_DEADLINE_SECONDS: ${PRICING_COLLECTION_ITEM_DEADLINE_SECONDS:-1800}
+  PRICING_COLLECTION_LEASE_SECONDS: ${PRICING_COLLECTION_LEASE_SECONDS:-900}
+  PRICING_COLLECTION_TASK_SOFT_TIME_LIMIT_SECONDS: ${PRICING_COLLECTION_TASK_SOFT_TIME_LIMIT_SECONDS:-840}
+  PRICING_COLLECTION_TASK_TIME_LIMIT_SECONDS: ${PRICING_COLLECTION_TASK_TIME_LIMIT_SECONDS:-900}
+  PRICING_SCRAPER_HTTP_TIMEOUT_SECONDS: ${PRICING_SCRAPER_HTTP_TIMEOUT_SECONDS:-30}
+  PRICING_SCRAPER_HTTP_MAX_ATTEMPTS: ${PRICING_SCRAPER_HTTP_MAX_ATTEMPTS:-4}
+  PRICING_SCRAPER_REQUEST_DELAY_SECONDS: ${PRICING_SCRAPER_REQUEST_DELAY_SECONDS:-1}
+  PRICING_SCRAPER_REQUEST_JITTER_SECONDS: ${PRICING_SCRAPER_REQUEST_JITTER_SECONDS:-0.5}
+  PRICING_SCRAPER_MAX_SEARCH_PAGES: ${PRICING_SCRAPER_MAX_SEARCH_PAGES:-3}
+  PRICING_SCRAPER_MAX_SELLERS: ${PRICING_SCRAPER_MAX_SELLERS:-10}
+  PRICING_V3_ROBUST_DISPERSION_ENABLED: ${PRICING_V3_ROBUST_DISPERSION_ENABLED:-false}
+  STORE_SYNC_WORKER_COUNT: ${STORE_SYNC_WORKER_CONCURRENCY:-2}
+  STORE_SYNC_MAX_TASK_EXECUTIONS: ${STORE_SYNC_MAX_TASK_EXECUTIONS:-3}
+  STORE_SYNC_ITEM_DEADLINE_SECONDS: ${STORE_SYNC_ITEM_DEADLINE_SECONDS:-3600}
+  STORE_SYNC_LEASE_SECONDS: ${STORE_SYNC_LEASE_SECONDS:-300}
+  STORE_SYNC_TASK_SOFT_TIME_LIMIT_SECONDS: ${STORE_SYNC_TASK_SOFT_TIME_LIMIT_SECONDS:-1740}
+  STORE_SYNC_TASK_TIME_LIMIT_SECONDS: ${STORE_SYNC_TASK_TIME_LIMIT_SECONDS:-1800}
+  STORE_SYNC_RETRY_BASE_DELAY_SECONDS: ${STORE_SYNC_RETRY_BASE_DELAY_SECONDS:-30}
+  STORE_SYNC_SCRAPER_HTTP_TIMEOUT_SECONDS: ${STORE_SYNC_SCRAPER_HTTP_TIMEOUT_SECONDS:-30}
+  STORE_SYNC_SCRAPER_HTTP_MAX_ATTEMPTS: ${STORE_SYNC_SCRAPER_HTTP_MAX_ATTEMPTS:-4}
+  STORE_SYNC_SCRAPER_MAX_PAGES: ${STORE_SYNC_SCRAPER_MAX_PAGES:-0}
+  SCRAPE_RAW_EVIDENCE_REPLAY_ENABLED: "true"
+  SCRAPE_EVIDENCE_GC_BATCH_SIZE: ${SCRAPE_EVIDENCE_GC_BATCH_SIZE:-1000}
+  SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS: ${SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS:-3600}
+  PYTHONDONTWRITEBYTECODE: "1"
+
+x-backend: &backend
+  build:
+    context: ../backend
+    target: production
+  environment: *backend-environment
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  migrate:
+    <<: *backend
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    <<: *backend
+    command:
+      [
+        "uvicorn",
+        "marko.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--workers",
+        "${API_WORKERS:-2}",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "${TRUSTED_PROXY_IPS:?TRUSTED_PROXY_IPS is required}",
+      ]
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=2)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: ${API_MEMORY_LIMIT:-768m}
+    cpus: ${API_CPU_LIMIT:-1.5}
+
+  worker:
+    <<: *backend
+    command:
+      [
+        "celery",
+        "--app",
+        "marko.worker.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--queues=celery,pricing-calculation",
+        "--concurrency=${GENERAL_WORKER_CONCURRENCY:-1}",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: ${GENERAL_WORKER_MEMORY_LIMIT:-1g}
+    cpus: ${GENERAL_WORKER_CPU_LIMIT:-1.5}
+
+  store-sync-worker:
+    <<: *backend
+    command:
+      [
+        "celery",
+        "--app",
+        "marko.worker.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--queues=store-sync",
+        "--concurrency=${STORE_SYNC_WORKER_CONCURRENCY:-2}",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: ${STORE_SYNC_WORKER_MEMORY_LIMIT:-1g}
+    cpus: ${STORE_SYNC_WORKER_CPU_LIMIT:-1.5}
+
+  pricing-worker:
+    <<: *backend
+    command:
+      [
+        "celery",
+        "--app",
+        "marko.worker.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--queues=pricing",
+        "--concurrency=${PRICING_WORKER_CONCURRENCY:-1}",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: ${PRICING_WORKER_MEMORY_LIMIT:-1g}
+    cpus: ${PRICING_WORKER_CPU_LIMIT:-1.5}
+
+  scheduler:
+    <<: *backend
+    command:
+      [
+        "celery",
+        "--app",
+        "marko.worker.celery_app:celery_app",
+        "beat",
+        "--loglevel=INFO",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: ${SCHEDULER_MEMORY_LIMIT:-512m}
+    cpus: ${SCHEDULER_CPU_LIMIT:-0.5}
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        API_BASE_URL: ${PUBLIC_API_BASE_URL:?PUBLIC_API_BASE_URL is required}
+        FIREBASE_API_KEY: ${FIREBASE_API_KEY:?FIREBASE_API_KEY is required}
+        FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:?FIREBASE_AUTH_DOMAIN is required}
+        FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?FIREBASE_PROJECT_ID is required}
+        FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:?FIREBASE_MESSAGING_SENDER_ID is required}
+        FIREBASE_WEB_APP_ID: ${FIREBASE_WEB_APP_ID:?FIREBASE_WEB_APP_ID is required}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: ${FRONTEND_CPU_LIMIT:-0.5}

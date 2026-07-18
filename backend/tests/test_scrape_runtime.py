@@ -258,3 +258,60 @@ def test_any_successful_http_2xx_response_reaches_the_parser_boundary() -> None:
     client._session.get = Mock(return_value=_response(206, b"partial"))  # noqa: SLF001
 
     assert client.get_html("https://prom.ua/ua/p1-product.html") == "partial"
+
+
+def test_redirects_are_not_followed_without_per_hop_admission() -> None:
+    response = _response(302)
+    response.headers["Location"] = "http://127.0.0.1/internal"
+    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    get = Mock(return_value=response)
+    client._session.get = get  # noqa: SLF001
+
+    with pytest.raises(RequestFailed):
+        client.get_html("https://prom.ua/ua/p1-product.html")
+
+    assert get.call_args.kwargs["allow_redirects"] is False
+    assert get.call_args.kwargs["stream"] is True
+
+
+def test_response_size_limit_is_terminal_and_evidence_safe() -> None:
+    response = _response(200, b"x" * 11)
+    response.headers["Content-Length"] = "11"
+    client = HttpClient(
+        ScrapeConfig(
+            delay=0,
+            delay_jitter=0,
+            max_attempts=3,
+            max_response_bytes=10,
+        )
+    )
+    get = Mock(return_value=response)
+    client._session.get = get  # noqa: SLF001
+
+    with pytest.raises(RequestFailed) as captured:
+        client.get_html("https://prom.ua/ua/p1-product.html")
+
+    boundary = classify_scraper_exception(captured.value)
+    assert boundary.code == ScraperErrorCode.UNSAFE_RESPONSE
+    assert boundary.retryable is False
+    assert get.call_count == 1
+
+
+def test_retry_after_is_bounded_by_policy() -> None:
+    response = _response(429)
+    response.headers["Retry-After"] = "999"
+    client = HttpClient(
+        ScrapeConfig(
+            delay=0,
+            delay_jitter=0,
+            max_attempts=2,
+            backoff_max=7,
+        )
+    )
+    client._session.get = Mock(  # noqa: SLF001
+        side_effect=[response, _response(200)]
+    )
+    client._sleep_backoff = Mock()  # type: ignore[method-assign]
+
+    assert client.get_html("https://prom.ua/ua/p1-product.html")
+    client._sleep_backoff.assert_called_once_with(7)

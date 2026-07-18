@@ -1,4 +1,4 @@
-"""Deterministic brand/tier classification with explicit conflict states."""
+"""Metis brand/tier classification with explicit conflict states."""
 
 from __future__ import annotations
 

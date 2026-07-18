@@ -130,4 +130,20 @@ void main() {
     expect(evidence.coefficientModel, 'shrinkage');
     expect(evidence.tierLabel, 'OEM');
   });
+
+  test('parses field-level recommendation replay drift', () {
+    final replay = RecommendationReplay.fromJson({
+      'recommendation_id': 'rec-1',
+      'replay_contract_version': 'recommendation-replay-v1',
+      'calculated_at': '2026-07-16T12:00:00Z',
+      'exact_match': false,
+      'mismatches': {
+        'recommended_price': {'stored': '920.00', 'replayed': '921.00'},
+      },
+      'replayed': {'action': 'RAISE'},
+    });
+
+    expect(replay.exactMatch, isFalse);
+    expect(replay.mismatches.keys, contains('recommended_price'));
+  });
 }

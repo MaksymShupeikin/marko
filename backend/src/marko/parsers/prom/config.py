@@ -33,7 +33,15 @@ class ScrapeConfig:
     # name ``max_retries`` was ambiguous because 4 meant 4 attempts, not
     # 1 initial attempt + 4 retries.
     max_attempts: int = 4
-    backoff_factor: float = 1.5 # exponential backoff factor
+    backoff_factor: float = 1.5  # base seconds for full-jitter exponential backoff
+    backoff_max: float = 60.0
+    max_response_bytes: int = 10 * 1024 * 1024
+    max_compression_ratio: float = 100.0
+    allowed_content_types: tuple[str, ...] = (
+        "text/html",
+        "application/xhtml+xml",
+        "application/json",
+    )
     max_pages: int = 0
     start_page: int = 1
     # Cross-seller comparison knobs.

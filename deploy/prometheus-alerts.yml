@@ -1,0 +1,46 @@
+groups:
+  - name: marko-availability
+    rules:
+      - alert: MarkoApiDown
+        expr: up{job="marko-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Marko API is unavailable
+
+      - alert: MarkoQueueStalled
+        expr: scrape_queue_depth > 0 and scrape_oldest_item_age_seconds > 900
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Marko collection queue is not draining
+
+      - alert: MarkoTerminalFailureRateHigh
+        expr: |
+          sum(rate(scrape_items_terminal_total{outcome="failed"}[15m]))
+          /
+          clamp_min(sum(rate(scrape_items_terminal_total[15m])), 0.000001)
+          > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5 percent of scraper items are failing
+
+      - alert: MarkoEvidenceCoverageLow
+        expr: scrape_evidence_coverage_ratio < 0.99
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Raw evidence coverage is below the required boundary
+
+      - alert: MarkoRetryAmplificationHigh
+        expr: scrape_http_attempts_per_item > 3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Retry amplification is consuming source capacity

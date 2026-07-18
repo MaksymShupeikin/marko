@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import asdict, fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 import json
 from typing import Any, Mapping
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from celery import Celery
 from sqlalchemy import case, func, select
@@ -30,7 +29,7 @@ from marko.infrastructure.db.models import (
     TierCalibrationPairRecord,
     TierCoefficientRecord,
 )
-from marko.pricing import (
+from metis.pricing import (
     CalibrationPair,
     CoefficientModel,
     PricingPolicy,
@@ -42,14 +41,28 @@ from marko.pricing import (
     fit_shrinkage_coefficients,
     fit_simple_coefficients,
 )
-from marko.pricing.tiering import TIER_METHOD_VERSION
-from marko.pricing.observability import pricing_event
+from metis.pricing.tiering import TIER_METHOD_VERSION
+from metis.pricing.observability import pricing_event
 from marko.services.scraper_contract import (
     PROM_ADAPTER_VERSION,
-    ScrapeInput,
     ScraperBoundaryError,
+    ScraperErrorCode,
     fallback_input_hash,
 )
+from marko.services.scraper_architecture import (
+    ADMISSION_POLICY_VERSION,
+    AcquisitionMode,
+    ActorType,
+    InputKind,
+    SCRAPE_REQUEST_CONTRACT_VERSION,
+    ScrapeRequest,
+    ScrapeRequestItem,
+    SourceType,
+    admit_prom_public_item,
+    parser_contract_defaults,
+)
+from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 PARSER_ADAPTER_VERSION = PROM_ADAPTER_VERSION
 ACTIVE_RUN_STATUSES = (
@@ -201,6 +214,17 @@ def _validate_policy(policy: PricingPolicy) -> None:
         raise PricingRunError("pricing policy version is required")
 
 
+def require_activated_run_policy(
+    policy: PricingPolicy, *, robust_v3_enabled: bool
+) -> None:
+    if policy.version == "pricing-v3-robust-dispersion" and not robust_v3_enabled:
+        raise PricingRunError(
+            "pricing-v3-robust-dispersion is implemented for preview/replay "
+            "but production run activation is NO_GO until representative "
+            "decision-diff calibration passes"
+        )
+
+
 async def create_pricing_run(
     session: AsyncSession,
     *,
@@ -209,6 +233,7 @@ async def create_pricing_run(
     celery_app: Celery,
     policy_config: Mapping[str, Any] | None = None,
 ) -> PricingRun:
+    require_live_prom_marketplace_collection()
     batch = await session.scalar(
         select(CatalogImportBatch).where(
             CatalogImportBatch.id == import_batch_id,
@@ -233,6 +258,11 @@ async def create_pricing_run(
         return active
 
     policy = policy_from_dict(policy_config)
+    settings = get_settings()
+    require_activated_run_policy(
+        policy,
+        robust_v3_enabled=settings.pricing_v3_robust_dispersion_enabled,
+    )
     catalog_items = list(
         (
             await session.scalars(
@@ -263,19 +293,57 @@ async def create_pricing_run(
     session.add(run)
     await session.flush()
 
+    submitted_at = datetime.now(UTC)
+    parser_contract = parser_contract_defaults()
     targets_by_hash: dict[str, ScrapeTarget] = {}
     target_hash_by_item: dict[UUID, str] = {}
-    settings = get_settings()
     for catalog_item in catalog_items:
         raw_url = (catalog_item.product_url or "").strip() or None
         raw_query = catalog_item.oe_norm
+        request = ScrapeRequest(
+            contract_version=SCRAPE_REQUEST_CONTRACT_VERSION,
+            request_id=str(run.id),
+            client_idempotency_token=f"pricing-run:{run.id}:{catalog_item.id}",
+            workspace_id=str(workspace_id),
+            source_type=SourceType.PROM_PUBLIC,
+            acquisition_mode=AcquisitionMode.COMPARISON_JOB,
+            submitted_by_actor_id="marko.pricing_runs",
+            submitted_by_actor_type=ActorType.SERVICE,
+            submitted_at=submitted_at,
+            deadline_at=submitted_at
+            + timedelta(
+                seconds=max(
+                    1,
+                    settings.pricing_collection_item_deadline_seconds,
+                )
+            ),
+            items=[
+                ScrapeRequestItem(
+                    item_id=str(catalog_item.id),
+                    input_kind=InputKind.PRODUCT_SEED,
+                    input_value=raw_url or "invalid://missing-product-url",
+                    priority=0,
+                    client_item_reference=catalog_item.sku,
+                    metadata={"query": raw_query},
+                )
+            ],
+        )
+        rejected_reason: str | None = None
         try:
-            scrape_input = ScrapeInput.build(
-                raw_url,
-                raw_query,
-                adapter_version=PARSER_ADAPTER_VERSION,
+            admission, admitted_input = admit_prom_public_item(
+                request,
+                request.items[0],
+                settings=settings,
+                now=submitted_at,
             )
-        except ScraperBoundaryError:
+            if admitted_input is None:
+                raise ScraperBoundaryError(
+                    code=ScraperErrorCode.SOURCE_ACCESS_BLOCKED,
+                    message="Trusted admission rejected the public source",
+                    retryable=False,
+                )
+            scrape_input = admitted_input
+        except (ScraperBoundaryError, ValueError) as exc:
             input_hash = fallback_input_hash(
                 raw_url,
                 raw_query,
@@ -290,24 +358,61 @@ async def create_pricing_run(
                 "query": normalized_query,
                 "input_hash": input_hash,
             }
+            policy_decision_id = f"rejected-{uuid4()}"
+            source_policy_version = ADMISSION_POLICY_VERSION
+            source_policy_state = "PERMITTED"
+            submission_key = input_hash
+            acquisition_key = input_hash
+            rejected_reason = (
+                exc.code.value
+                if isinstance(exc, ScraperBoundaryError)
+                else "invalid_input"
+            )
         else:
             input_hash = scrape_input.input_hash
             canonical_url = scrape_input.canonical_url
             product_key = scrape_input.product_key
             normalized_query = scrape_input.query
             metadata_payload = scrape_input.as_dict()
+            policy_decision_id = admission.policy_decision_id
+            source_policy_version = admission.source_policy_version
+            source_policy_state = admission.source_policy_state.value
+            submission_key = admission.server_idempotency_keys.submission_key
+            acquisition_key = admission.server_idempotency_keys.acquisition_key
         target = targets_by_hash.get(input_hash)
         if target is None:
             target = ScrapeTarget(
                 pricing_run_id=run.id,
                 source="prom",
+                source_type="prom_public",
+                source_lane="PUBLIC_COMPETITOR",
+                source_policy_decision_id=policy_decision_id,
+                source_policy_version=source_policy_version,
+                source_policy_state=source_policy_state,
+                submission_key=submission_key,
+                acquisition_key=acquisition_key,
+                freshness_generation=0,
                 original_url=raw_url,
                 canonical_url=canonical_url,
                 product_key=product_key,
                 query=normalized_query,
                 input_hash=input_hash,
                 adapter_version=PARSER_ADAPTER_VERSION,
-                status="queued",
+                status=("terminal_failure" if rejected_reason else "queued"),
+                parser_name=parser_contract["parser_name"],
+                parser_config_hash=parser_contract["parser_config_hash"],
+                output_schema_version=parser_contract["output_schema_version"],
+                execution_status=(
+                    "TERMINAL_FAILED" if rejected_reason else "QUEUED"
+                ),
+                acquisition_status=("BLOCKED" if rejected_reason else "NOT_STARTED"),
+                parse_status="NOT_STARTED",
+                evidence_status="NONE",
+                downstream_eligibility=(
+                    "INELIGIBLE" if rejected_reason else "UNKNOWN"
+                ),
+                operator_action="NO_RECOMMENDATION",
+                reason_codes=([rejected_reason] if rejected_reason else []),
                 max_task_executions=max(
                     1,
                     settings.pricing_collection_max_task_executions,
@@ -327,6 +432,13 @@ async def create_pricing_run(
                         ensure_ascii=False,
                     ).encode()
                 ),
+                error_category=rejected_reason,
+                error_detail=(
+                    "Rejected by trusted admission before network execution"
+                    if rejected_reason
+                    else None
+                ),
+                finished_at=(submitted_at if rejected_reason else None),
             )
             targets_by_hash[input_hash] = target
         target_hash_by_item[catalog_item.id] = input_hash
@@ -347,21 +459,24 @@ async def create_pricing_run(
             for catalog_item in catalog_items
         ]
     )
+    dispatch = await enqueue_dispatch(
+        session,
+        event_key=f"pricing-run:{run.id}:start:v1",
+        aggregate_type="pricing_run",
+        aggregate_id=run.id,
+        workspace_id=workspace_id,
+        task_name="marko.worker.start_pricing_run",
+        task_args=[str(run.id)],
+        queue="celery",
+    )
     await session.commit()
     await session.refresh(run)
 
-    try:
-        await asyncio.to_thread(
-            celery_app.send_task,
-            "marko.worker.start_pricing_run",
-            args=[str(run.id)],
-        )
-    except Exception as exc:
-        run.status = "failed"
-        run.error = f"Could not enqueue pricing run: {exc}"[:4000]
-        run.finished_at = datetime.now(UTC)
-        await session.commit()
-        raise PricingTaskDispatchError(run.error) from exc
+    await publish_dispatch(
+        session,
+        event_id=dispatch.id,
+        celery_app=celery_app,
+    )
     pricing_event(
         "pricing_run_started",
         pricing_run_id=str(run.id),
@@ -1208,5 +1323,6 @@ __all__ = [
     "persist_run_calibration_pairs",
     "policy_from_dict",
     "policy_to_dict",
+    "require_activated_run_policy",
     "override_observation_tier",
 ]

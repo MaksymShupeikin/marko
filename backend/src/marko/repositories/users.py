@@ -58,8 +58,15 @@ async def get_workspace_member(
 async def get_first_workspace_id_by_user_id(
     session: AsyncSession, user_id: uuid.UUID
 ) -> uuid.UUID | None:
+    member = await get_first_workspace_member_by_user_id(session, user_id)
+    return member.workspace_id if member is not None else None
+
+
+async def get_first_workspace_member_by_user_id(
+    session: AsyncSession, user_id: uuid.UUID
+) -> WorkspaceMember | None:
     return await session.scalar(
-        select(WorkspaceMember.workspace_id)
+        select(WorkspaceMember)
         .where(WorkspaceMember.user_id == user_id)
         .order_by(WorkspaceMember.created_at)
         .limit(1)

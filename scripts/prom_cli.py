@@ -9,7 +9,7 @@ backend_src = pathlib.Path(__file__).resolve().parent.parent / "backend" / "src"
 if str(backend_src) not in sys.path:
     sys.path.insert(0, str(backend_src))
 
-from marko.cli import main
+from marko.cli import main  # noqa: E402
 
 
 if __name__ == "__main__":

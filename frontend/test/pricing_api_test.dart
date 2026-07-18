@@ -107,4 +107,35 @@ void main() {
       reason: 'Verified manufacturer catalogue',
     );
   });
+
+  test('verifies a recommendation through the replay endpoint', () async {
+    final api = PricingApi(
+      ApiClient(
+        client: MockClient((request) async {
+          expect(
+            request.url.path,
+            '/api/v1/pricing/recommendations/rec-1/replay',
+          );
+          return http.Response(
+            jsonEncode({
+              'recommendation_id': 'rec-1',
+              'replay_contract_version': 'recommendation-replay-v1',
+              'calculated_at': '2026-07-16T12:00:00Z',
+              'exact_match': true,
+              'mismatches': <String, dynamic>{},
+              'replayed': {'action': 'RAISE'},
+            }),
+            200,
+          );
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+
+    final replay = await api.verifyReplay('rec-1');
+
+    expect(replay.exactMatch, isTrue);
+    expect(replay.contractVersion, 'recommendation-replay-v1');
+    expect(replay.replayed['action'], 'RAISE');
+  });
 }

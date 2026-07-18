@@ -1,0 +1,71 @@
+"""Public Metis pricing-domain API."""
+
+from .calibration import (
+    calibration_dataset_hash,
+    fit_shrinkage_coefficients,
+    fit_simple_coefficients,
+)
+from .engine import recommend_price
+from .statistics import (
+    dispersion_profile_to_dict,
+    qn_scale,
+    robust_dispersion_trace,
+    robust_price_dispersion,
+    scaled_iqr,
+    scaled_mad,
+    sn_scale,
+)
+from .tiering import DEFAULT_BRAND_TIERS, classify_tier, normalize_brand
+from .types import (
+    CalibrationPair,
+    CoefficientModel,
+    CompetitorOffer,
+    ConfidenceAggregation,
+    ExcludedOffer,
+    NormalizedOffer,
+    PricingPolicy,
+    PricingResult,
+    PriorityScoreType,
+    ProductPricingContext,
+    ProductTier,
+    RecommendationAction,
+    RobustDispersionProfile,
+    RobustScaleMethod,
+    StockStatus,
+    TierClassification,
+    TierCoefficient,
+)
+
+__all__ = [
+    "CalibrationPair",
+    "CoefficientModel",
+    "CompetitorOffer",
+    "ConfidenceAggregation",
+    "DEFAULT_BRAND_TIERS",
+    "ExcludedOffer",
+    "NormalizedOffer",
+    "PricingPolicy",
+    "PricingResult",
+    "PriorityScoreType",
+    "ProductPricingContext",
+    "ProductTier",
+    "RecommendationAction",
+    "RobustDispersionProfile",
+    "RobustScaleMethod",
+    "StockStatus",
+    "TierClassification",
+    "TierCoefficient",
+    "calibration_dataset_hash",
+    "classify_tier",
+    "fit_shrinkage_coefficients",
+    "fit_simple_coefficients",
+    "dispersion_profile_to_dict",
+    "normalize_brand",
+    "qn_scale",
+    "recommend_price",
+    "robust_dispersion_trace",
+    "robust_price_dispersion",
+    "scaled_iqr",
+    "scaled_mad",
+    "sn_scale",
+]

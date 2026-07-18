@@ -25,7 +25,7 @@ from marko.infrastructure.db.models import (
 from marko.infrastructure.db.session import async_session_factory
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.gateway import PromGateway
-from marko.pricing.observability import pricing_event
+from metis.pricing.observability import pricing_event
 from marko.services.collection_guard import DistributedCollectionGuard
 from marko.services.parser_models import Product
 from marko.services.scrape_journal import (
@@ -45,6 +45,7 @@ from marko.services.scraper_contract import (
     ScraperErrorCode,
     classify_scraper_exception,
 )
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 import marko.repositories.listings as listings_repo
 
@@ -79,6 +80,7 @@ class StoreSyncClaim:
     max_task_executions: int
     deadline_at: datetime
     task_id: str | None
+    fencing_token: int = 0
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,7 @@ async def import_store_catalog(
             execution_no=claim.execution_no,
             replay_cache=replay_cache,
             guard=DistributedCollectionGuard(settings, namespace="prom"),
+            live_request_gate=require_live_prom_marketplace_collection,
         )
         imported = await _run_import(claim, trace)
         measurement = probe.finish()
@@ -290,10 +293,13 @@ async def _claim_execution(
                     "a terminal task outcome"
                 )
                 previous.finished_at = now
+        sync_run.scrape_fencing_token += 1
+        fencing_token = sync_run.scrape_fencing_token
         execution = StoreSyncTaskExecution(
             sync_run_id=sync_run.id,
             task_id=task_id,
             execution_no=execution_no,
+            fencing_token=fencing_token,
             is_redelivery=redelivered,
             redelivery_reason=(
                 redelivery_reason
@@ -337,6 +343,7 @@ async def _claim_execution(
             sync_run_id=sync_run.id,
             execution_id=execution_id,
             execution_no=execution_no,
+            fencing_token=fencing_token,
             store_id=store.id,
             store_url=store.canonical_url,
             max_task_executions=sync_run.scrape_max_task_executions,
@@ -859,10 +866,15 @@ def _store_claim_is_current(
     execution: StoreSyncTaskExecution | None,
     claim: StoreSyncClaim,
 ) -> bool:
+    explicit_fence_matches = claim.fencing_token == 0 or (
+        getattr(execution, "fencing_token", None) == claim.fencing_token
+        and getattr(sync_run, "scrape_fencing_token", None) == claim.fencing_token
+    )
     return bool(
         execution is not None
         and execution.id == claim.execution_id
         and execution.execution_no == claim.execution_no
+        and explicit_fence_matches
         and execution.outcome == "running"
         and sync_run.scrape_state == "running"
         and sync_run.scrape_task_executions == claim.execution_no

@@ -10,7 +10,7 @@ import requests
 from marko.services.scrape_runtime import current_scrape_trace
 
 from .config import ScrapeConfig
-from .exceptions import RequestFailed
+from .exceptions import RequestFailed, UnsafeResponse
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class HttpClient:
                 return replayed
 
         for attempt in range(1, self._config.max_attempts + 1):
+            retry_after_seconds: float | None = None
             local_wait_ms = round(self._respect_rate_limit() * 1000)
             try:
                 global_wait_ms = (
@@ -67,7 +68,16 @@ class HttpClient:
             attempt_started = time.perf_counter()
             try:
                 response = self._session.get(
-                    url, params=params, timeout=self._config.timeout, allow_redirects=True
+                    # Redirects are fail-closed.  The trusted admission layer
+                    # validates the original Prom host, while requests would
+                    # otherwise follow a Location to an unvalidated host.
+                    # Supporting redirects later requires per-hop admission
+                    # and separate physical-attempt telemetry.
+                    url,
+                    params=params,
+                    timeout=self._config.timeout,
+                    allow_redirects=False,
+                    stream=True,
                 )
             except requests.RequestException as exc:
                 last_error = exc
@@ -91,6 +101,31 @@ class HttpClient:
                 log.warning("Мережева помилка (спроба %d): %s", attempt, exc)
             else:
                 if 200 <= response.status_code < 300:
+                    try:
+                        self._consume_bounded_response(response)
+                    except UnsafeResponse as error:
+                        if trace is not None and request_trace is not None:
+                            trace.record_attempt(
+                                request_trace,
+                                attempt_no=attempt,
+                                outcome="terminal_failure",
+                                status_code=response.status_code,
+                                latency_ms=round(
+                                    (time.perf_counter() - attempt_started) * 1000
+                                ),
+                                local_rate_wait_ms=local_wait_ms,
+                                global_rate_wait_ms=global_wait_ms,
+                                error_category="unsafe_response",
+                                error_detail=str(error),
+                            )
+                            trace.finish_failure(
+                                request_trace,
+                                outcome="terminal_failure",
+                                error_category="unsafe_response",
+                                error_detail=str(error),
+                                status_code=response.status_code,
+                            )
+                        raise
                     if trace is not None and request_trace is not None:
                         trace.record_attempt(
                             request_trace,
@@ -137,6 +172,7 @@ class HttpClient:
                         )
                     raise error
                 last_error = RequestFailed(f"HTTP {response.status_code}")
+                retry_after_seconds = self._retry_after_seconds(response)
                 if trace is not None and request_trace is not None:
                     attempt_trace = trace.record_attempt(
                         request_trace,
@@ -162,7 +198,11 @@ class HttpClient:
                 log.warning("HTTP %d (спроба %d) для %s", response.status_code, attempt, url)
 
             if attempt < self._config.max_attempts:
-                backoff = self._backoff_seconds(attempt)
+                backoff = (
+                    retry_after_seconds
+                    if retry_after_seconds is not None
+                    else self._backoff_seconds(attempt)
+                )
                 if trace is not None and request_trace is not None:
                     trace.record_backoff(request_trace, attempt_trace, backoff)
                 self._sleep_backoff(backoff)
@@ -199,7 +239,82 @@ class HttpClient:
         )
 
     def _backoff_seconds(self, attempt: int) -> float:
-        return self._config.backoff_factor ** attempt
+        cap = min(
+            max(0.0, self._config.backoff_max),
+            max(0.0, self._config.backoff_factor) * (2 ** (attempt - 1)),
+        )
+        return random.uniform(0, cap)
+
+    def _retry_after_seconds(self, response: requests.Response) -> float | None:
+        raw = response.headers.get("Retry-After")
+        if raw is None:
+            return None
+        try:
+            seconds = float(raw)
+        except ValueError:
+            return None
+        if seconds < 0:
+            return None
+        return min(seconds, max(0.0, self._config.backoff_max))
+
+    def _consume_bounded_response(self, response: requests.Response) -> None:
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0]
+        content_type = content_type.strip().casefold()
+        if content_type not in self._config.allowed_content_types:
+            self._close_response(response)
+            raise UnsafeResponse(f"Unsupported response content type: {content_type or 'none'}")
+        raw_length = self._content_length(response)
+        if raw_length is not None and raw_length > self._config.max_response_bytes:
+            self._close_response(response)
+            raise UnsafeResponse("Response Content-Length exceeds configured limit")
+        existing = getattr(response, "_content", False)
+        if isinstance(existing, bytes):
+            body = existing
+        else:
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > self._config.max_response_bytes:
+                    self._close_response(response)
+                    raise UnsafeResponse("Decoded response exceeds configured byte limit")
+                chunks.append(chunk)
+            body = b"".join(chunks)
+        if len(body) > self._config.max_response_bytes:
+            self._close_response(response)
+            raise UnsafeResponse("Decoded response exceeds configured byte limit")
+        if (
+            raw_length is not None
+            and raw_length > 0
+            and len(body) / raw_length > self._config.max_compression_ratio
+        ):
+            self._close_response(response)
+            raise UnsafeResponse("Response exceeds configured compression ratio")
+        response._content = body  # noqa: SLF001 - bounded buffering boundary
+        response._content_consumed = True  # noqa: SLF001
+
+    @staticmethod
+    def _content_length(response: requests.Response) -> int | None:
+        raw = response.headers.get("Content-Length")
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            raise UnsafeResponse("Invalid Content-Length header") from None
+        if value < 0:
+            raise UnsafeResponse("Invalid negative Content-Length header")
+        return value
+
+    @staticmethod
+    def _close_response(response: requests.Response) -> None:
+        try:
+            response.close()
+        except AttributeError:
+            # Unit-test/replay responses may have no transport object.
+            return
 
     def _sleep_backoff(self, delay: float) -> None:
         log.debug("Backoff %.1fs перед наступною спробою", delay)

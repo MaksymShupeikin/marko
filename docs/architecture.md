@@ -23,9 +23,13 @@ Flutter ──login/session──> Firebase Auth
 - `repositories` содержит SQL-запросы, а `infrastructure/db` — ORM-модели и
   создание сессий.
 - `worker` выполняет медленные сетевые операции вне HTTP-запросов.
-- `pricing` содержит чистое детерминированное ядро: tier coefficients,
-  paired-OE calibration, KEMP normalization, MAD/IQR, confidence,
+- `metis.pricing` содержит чистое Metis-owned детерминированное ядро: tier coefficients,
+  paired-OE calibration, KEMP normalization, MAD/IQR/Sn/Qn robust-dispersion
+  profiles, confidence,
   режимы fresh/stale/dead_stock, priority и invariant enforcement.
+- Marko `api/services/worker` зависят от публичного `metis.pricing` contract.
+  Старый `marko.pricing` оставлен только как compatibility facade и не владеет
+  реализацией.
 
 ## Pricing run
 
@@ -43,6 +47,13 @@ XLSX import
                                              └─> recommendation + priority
                                              + immutable calculation trace
 ```
+
+Pricing calculation строит `pre_clean` и `post_clean` dispersion profiles.
+`pricing-v2` продолжает принимать решения по historical MAD scalar;
+`pricing-v3-robust-dispersion` использует corrected Qn, но persisted activation
+по умолчанию заблокирована feature flag до representative decision-diff
+calibration. Trace/replay boundary поддерживает старый v1 и новый profile-aware
+v2 contract.
 
 Сетевой парсер `parsers/prom` не масштабируется путём модификации его
 внутренностей. Масштабирование находится вокруг него: versioned logical items,
@@ -64,6 +75,8 @@ Recommendations не смешиваются в одну очередь по не
 
 Подробные формулы и policy contract находятся в
 [`kemp_pricing_engine.md`](kemp_pricing_engine.md).
+Decision diff, mutation probes и exact-scale benchmark находятся в
+[`ROBUST_PRICE_DISPERSION_IMPLEMENTATION_2026-07-17.md`](ROBUST_PRICE_DISPERSION_IMPLEMENTATION_2026-07-17.md).
 Scraper capacity, reconciliation, storage и benchmark contract находятся в
 [`scraper_scaling.md`](scraper_scaling.md).
 

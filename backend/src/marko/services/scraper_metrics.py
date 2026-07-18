@@ -45,6 +45,7 @@ from marko.services.scraper_scaling import (
     calculate_storage,
     reconcile_items,
 )
+from marko.services.scraper_outbox import OutboxHealth, outbox_health
 from marko.services.stores import SyncRunNotFoundError
 
 
@@ -67,6 +68,7 @@ async def get_store_sync_scraper_metrics(
     if run is None:
         raise SyncRunNotFoundError(str(sync_run_id))
     database_latency = await _database_probe_latency(session)
+    dispatch_health = await outbox_health(session, workspace_id=workspace_id)
     settings = get_settings()
     now = datetime.now(UTC)
     requests = list(
@@ -222,6 +224,7 @@ async def get_store_sync_scraper_metrics(
         executions=executions,
         requests=requests,
         database_probe_latency_seconds=database_latency,
+        outbox=dispatch_health,
     )
     end_to_end_latency = _percentiles([elapsed_seconds])
     return {
@@ -422,6 +425,7 @@ async def get_pricing_run_scraper_metrics(
     if run is None:
         raise PricingRunNotFoundError(str(run_id))
     database_latency = await _database_probe_latency(session)
+    dispatch_health = await outbox_health(session, workspace_id=workspace_id)
     settings = get_settings()
     now = datetime.now(UTC)
     targets = list(
@@ -671,6 +675,7 @@ async def get_pricing_run_scraper_metrics(
         executions=task_executions,
         requests=requests,
         database_probe_latency_seconds=database_latency,
+        outbox=dispatch_health,
     )
     return {
         "generated_at": now,
@@ -1052,6 +1057,16 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         "broker_consumer_lag",
         resources["broker_consumer_lag"],
         available="false",
+    )
+    metric("scrape_outbox_pending", resources.get("outbox_pending", 0))
+    metric("scrape_outbox_dispatching", resources.get("outbox_dispatching", 0))
+    metric(
+        "scrape_outbox_terminal_failed",
+        resources.get("outbox_terminal_failed", 0),
+    )
+    metric(
+        "scrape_outbox_oldest_pending_age_seconds",
+        resources.get("outbox_oldest_pending_age_seconds", 0),
     )
     metric(
         "object_storage_write_latency_seconds",
@@ -1512,6 +1527,7 @@ def _resource_dependency_metrics(
     executions: list[Any],
     requests: list[ScrapeHttpRequest],
     database_probe_latency_seconds: float | None,
+    outbox: OutboxHealth,
 ) -> dict[str, Any]:
     wall_ms = sum(_execution_wall_ms(row) for row in executions)
     cpu_ms = sum(max(0, int(row.cpu_time_ms)) for row in executions)
@@ -1534,6 +1550,10 @@ def _resource_dependency_metrics(
         "database_transaction_latency_seconds": None,
         "broker_publish_latency_seconds": None,
         "broker_consumer_lag": None,
+        "outbox_pending": outbox.pending,
+        "outbox_dispatching": outbox.dispatching,
+        "outbox_terminal_failed": outbox.terminal_failed,
+        "outbox_oldest_pending_age_seconds": outbox.oldest_pending_age_seconds,
         "object_storage_write_latency_seconds": None,
         "request_rate_wait_seconds": sum(row.rate_wait_ms for row in requests)
         / 1000,

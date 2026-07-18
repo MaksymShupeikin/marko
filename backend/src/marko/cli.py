@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from marko.parsers.prom import PromGateway, ScrapeConfig
 from marko.services.matching import Match, Offer, PriceComparison
 from marko.services.parser_models import Product
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _scrape(args: argparse.Namespace) -> int:
+    require_live_prom_marketplace_collection()
     products = PromGateway(
         ScrapeConfig(
             delay=args.delay,
@@ -150,6 +152,7 @@ def _scrape(args: argparse.Namespace) -> int:
 
 
 def _compare(args: argparse.Namespace) -> int:
+    require_live_prom_marketplace_collection()
     comparison = PromGateway(
         ScrapeConfig(
             delay=args.delay,

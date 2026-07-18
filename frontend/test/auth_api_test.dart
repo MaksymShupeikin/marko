@@ -25,6 +25,8 @@ void main() {
 
     expect(user.email, 'seller@example.com');
     expect(user.workspaceId, 'workspace-id');
+    expect(user.workspaceRole, 'owner');
+    expect(user.canAdministerWorkspace, isTrue);
   });
 
   test('refreshes the Firebase ID token once after 401 and retries', () async {
@@ -65,5 +67,6 @@ Map<String, dynamic> _userJson() {
     'display_name': null,
     'avatar_url': null,
     'workspace_id': 'workspace-id',
+    'workspace_role': 'owner',
   };
 }

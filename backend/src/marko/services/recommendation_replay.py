@@ -1,0 +1,434 @@
+"""Network-free verification of persisted pricing recommendations."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Mapping
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from marko.infrastructure.db.models import (
+    MarketObservation,
+    ObservationTierClassification,
+    PricingRecommendation,
+    PricingRunItem,
+)
+from metis.pricing import (
+    PricingResult,
+    ProductPricingContext,
+    StockStatus,
+    dispersion_profile_to_dict,
+    recommend_price,
+    robust_dispersion_trace,
+)
+from marko.services.market_collection import _domain_offer
+from marko.services.pricing_runs import (
+    get_pricing_run,
+    get_recommendation,
+    load_target_tier_coefficients,
+    policy_from_dict,
+)
+
+
+REPLAY_CONTRACT_V1 = "recommendation-replay-v1"
+REPLAY_CONTRACT_V2 = "recommendation-replay-v2"
+REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V2
+SUPPORTED_REPLAY_CONTRACTS = frozenset({REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2})
+
+
+class RecommendationReplayUnavailable(RuntimeError):
+    """The stored recommendation predates the replay input contract."""
+
+
+@dataclass(frozen=True)
+class RecommendationReplay:
+    recommendation_id: UUID
+    replay_contract_version: str
+    calculated_at: datetime
+    exact_match: bool
+    mismatches: dict[str, dict[str, Any]]
+    replayed: dict[str, Any]
+
+
+async def replay_recommendation(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    recommendation_id: UUID,
+) -> RecommendationReplay:
+    recommendation, item = await get_recommendation(
+        session,
+        workspace_id=workspace_id,
+        recommendation_id=recommendation_id,
+    )
+    trace = recommendation.calculation_trace
+    replay_contract_version = str(trace.get("replay_contract_version", ""))
+    if replay_contract_version not in SUPPORTED_REPLAY_CONTRACTS:
+        raise RecommendationReplayUnavailable(
+            "Recommendation has no supported replay contract"
+        )
+    calculated_at = _required_datetime(trace.get("calculated_at"))
+    run = await get_pricing_run(
+        session,
+        workspace_id=workspace_id,
+        run_id=recommendation.pricing_run_id,
+    )
+    run_item = await session.scalar(
+        select(PricingRunItem).where(
+            PricingRunItem.id == recommendation.pricing_run_item_id,
+            PricingRunItem.pricing_run_id == run.id,
+            PricingRunItem.catalog_item_id == item.id,
+        )
+    )
+    if run_item is None:
+        raise RecommendationReplayUnavailable(
+            "Recommendation run-item snapshot is missing"
+        )
+
+    rows = list(
+        (
+            await session.execute(
+                select(MarketObservation, ObservationTierClassification)
+                .join(
+                    ObservationTierClassification,
+                    ObservationTierClassification.market_observation_id
+                    == MarketObservation.id,
+                )
+                .where(
+                    MarketObservation.pricing_run_item_id == run_item.id,
+                    ObservationTierClassification.classified_at <= calculated_at,
+                )
+                .order_by(
+                    MarketObservation.id,
+                    ObservationTierClassification.classified_at.desc(),
+                    ObservationTierClassification.id.desc(),
+                )
+            )
+        ).all()
+    )
+    latest: dict[
+        UUID,
+        tuple[MarketObservation, ObservationTierClassification],
+    ] = {}
+    for observation, classification in rows:
+        latest.setdefault(observation.id, (observation, classification))
+
+    context = context_from_snapshot(recommendation.context_snapshot)
+    policy = policy_from_dict(run.policy_config)
+    coefficients = await load_target_tier_coefficients(
+        session,
+        run=run,
+        category=item.category,
+        oe_norm=item.oe_norm,
+        policy=policy,
+    )
+    result = recommend_price(
+        context,
+        [
+            _domain_offer(observation, classification, calculated_at)
+            for observation, classification in latest.values()
+        ],
+        coefficients,
+        policy=policy,
+    )
+    mismatches = compare_replayed_result(
+        recommendation,
+        result,
+        replay_contract_version=replay_contract_version,
+    )
+    return RecommendationReplay(
+        recommendation_id=recommendation.id,
+        replay_contract_version=replay_contract_version,
+        calculated_at=calculated_at,
+        exact_match=not mismatches,
+        mismatches=mismatches,
+        replayed=_replayed_summary(result),
+    )
+
+
+def context_from_snapshot(snapshot: Mapping[str, Any]) -> ProductPricingContext:
+    return ProductPricingContext(
+        sku=_required_string(snapshot, "sku"),
+        category=_required_string(snapshot, "category"),
+        current_price=_required_decimal(snapshot, "current_price"),
+        currency=_required_string(snapshot, "currency"),
+        stock_status=StockStatus(
+            str(snapshot.get("stock_status", StockStatus.UNKNOWN.value))
+        ),
+        cost=_optional_decimal(snapshot.get("cost")),
+        stock_qty=_optional_decimal(snapshot.get("stock_qty")),
+        stock_age_days=_optional_decimal(snapshot.get("stock_age_days")),
+        expected_units_sold=_optional_decimal(snapshot.get("expected_units_sold")),
+        units_sold_30d=_optional_decimal(snapshot.get("units_sold_30d")),
+        units_sold_60d=_optional_decimal(snapshot.get("units_sold_60d")),
+        units_sold_90d=_optional_decimal(snapshot.get("units_sold_90d")),
+        days_since_last_sale=_optional_decimal(snapshot.get("days_since_last_sale")),
+        historical_monthly_units=_optional_decimal(
+            snapshot.get("historical_monthly_units")
+        ),
+        views_30d=_optional_decimal(snapshot.get("views_30d")),
+        conversion_rate_proxy=_optional_decimal(snapshot.get("conversion_rate_proxy")),
+        liquidity_target=_decimal_or_default(
+            snapshot.get("liquidity_target"), Decimal("0")
+        ),
+        urgency=_decimal_or_default(snapshot.get("urgency"), Decimal("1")),
+        manual_priority=_decimal_or_default(
+            snapshot.get("manual_priority"), Decimal("1")
+        ),
+        allow_below_cost=bool(snapshot.get("allow_below_cost", False)),
+        below_cost_floor=_optional_decimal(snapshot.get("below_cost_floor")),
+        below_cost_authorization_id=_optional_string(
+            snapshot.get("below_cost_authorization_id")
+        ),
+        below_cost_authorized_by=_optional_string(
+            snapshot.get("below_cost_authorized_by")
+        ),
+        below_cost_authorized_at=_optional_datetime(
+            snapshot.get("below_cost_authorized_at")
+        ),
+        below_cost_reason=_optional_string(snapshot.get("below_cost_reason")),
+        below_cost_warning_confirmed=bool(
+            snapshot.get("below_cost_warning_confirmed", False)
+        ),
+    )
+
+
+def compare_replayed_result(
+    stored: PricingRecommendation,
+    replayed: PricingResult,
+    *,
+    replay_contract_version: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    trace = getattr(stored, "calculation_trace", {})
+    if not isinstance(trace, Mapping):
+        trace = {}
+    contract = replay_contract_version or str(
+        trace.get("replay_contract_version", REPLAY_CONTRACT_V1)
+    )
+    expected = {
+        "action": stored.action,
+        "current_price": _quantize(stored.current_price, "0.01"),
+        "fair_price": _quantize(stored.fair_price, "0.01"),
+        "recommended_price": _quantize(stored.recommended_price, "0.01"),
+        "lower_bound": _quantize(stored.lower_bound, "0.01"),
+        "upper_bound": _quantize(stored.upper_bound, "0.01"),
+        "confidence": _quantize(stored.confidence, "0.0001"),
+        "confidence_grade": stored.confidence_grade,
+        "weakest_factor": stored.weakest_factor,
+        "competitor_count": stored.competitor_count,
+        "raw_competitor_count": stored.raw_competitor_count,
+        "unique_seller_count": stored.unique_seller_count,
+        "clean_competitor_count": stored.clean_competitor_count,
+        "effective_competitor_count": _quantize(
+            stored.effective_competitor_count, "0.0001"
+        ),
+        "dispersion": _quantize(stored.dispersion, "0.00000001"),
+        "outlier_method": stored.outlier_method,
+        "outlier_count": stored.outlier_count,
+        "sensitivity": _quantize(stored.sensitivity, "0.00000001"),
+        "action_gates_passed": stored.action_gates_passed,
+        "cost_floor": _quantize(stored.cost_floor, "0.01"),
+        "priority_score": _quantize(stored.priority_score, "0.000001"),
+        "priority_score_type": stored.priority_score_type,
+        "review_priority": _quantize(stored.review_priority, "0.000001"),
+        "reason_codes": list(stored.reason_codes),
+        "evidence_observation_ids": list(stored.evidence_observation_ids),
+        "policy_version": stored.policy_version,
+    }
+    actual = {
+        "action": replayed.action.value,
+        "current_price": _quantize(replayed.current_price, "0.01"),
+        "fair_price": _quantize(replayed.fair_price, "0.01"),
+        "recommended_price": _quantize(replayed.recommended_price, "0.01"),
+        "lower_bound": _quantize(replayed.lower_bound, "0.01"),
+        "upper_bound": _quantize(replayed.upper_bound, "0.01"),
+        "confidence": _quantize(replayed.confidence, "0.0001"),
+        "confidence_grade": replayed.confidence_grade,
+        "weakest_factor": replayed.weakest_factor,
+        "competitor_count": replayed.competitor_count,
+        "raw_competitor_count": replayed.raw_competitor_count,
+        "unique_seller_count": replayed.unique_seller_count,
+        "clean_competitor_count": replayed.clean_competitor_count,
+        "effective_competitor_count": _quantize(
+            replayed.effective_competitor_count, "0.0001"
+        ),
+        "dispersion": _quantize(replayed.dispersion, "0.00000001"),
+        "outlier_method": replayed.outlier_method,
+        "outlier_count": replayed.outlier_count,
+        "sensitivity": _quantize(replayed.sensitivity, "0.00000001"),
+        "action_gates_passed": replayed.action_gates_passed,
+        "cost_floor": _quantize(replayed.cost_floor, "0.01"),
+        "priority_score": _quantize(replayed.priority_score, "0.000001"),
+        "priority_score_type": replayed.priority_score_type.value,
+        "review_priority": _quantize(replayed.review_priority, "0.000001"),
+        "reason_codes": list(replayed.reasons),
+        "evidence_observation_ids": [
+            offer.observation_id for offer in replayed.evidence
+        ],
+        "policy_version": replayed.policy_version,
+    }
+    if contract == REPLAY_CONTRACT_V2:
+        stored_robust = trace.get("robust_dispersion", {})
+        if not isinstance(stored_robust, Mapping):
+            stored_robust = {}
+        replayed_robust = robust_dispersion_trace(
+            selected_method=replayed.dispersion_method,
+            pre_clean=replayed.pre_clean_dispersion_profile,
+            post_clean=replayed.dispersion_profile,
+            profile_version=replayed.robust_dispersion_profile_version,
+            correction_profile_version=(
+                replayed.robust_scale_correction_profile_version
+            ),
+            finite_sample_correction=replayed.finite_sample_scale_correction,
+        )
+        expected.update(
+            {
+                "dispersion_method": stored_robust.get("selected_method"),
+                "pre_clean_dispersion_profile": stored_robust.get("pre_clean"),
+                "dispersion_profile": stored_robust.get("post_clean"),
+                "profile_version": stored_robust.get("profile_version"),
+                "correction_profile_version": stored_robust.get(
+                    "correction_profile_version"
+                ),
+                "finite_sample_correction": stored_robust.get(
+                    "finite_sample_correction"
+                ),
+                "robust_constants": stored_robust.get("constants"),
+            }
+        )
+        actual.update(
+            {
+                "dispersion_method": replayed_robust["selected_method"],
+                "pre_clean_dispersion_profile": replayed_robust["pre_clean"],
+                "dispersion_profile": replayed_robust["post_clean"],
+                "profile_version": replayed_robust["profile_version"],
+                "correction_profile_version": replayed_robust[
+                    "correction_profile_version"
+                ],
+                "finite_sample_correction": replayed_robust["finite_sample_correction"],
+                "robust_constants": replayed_robust["constants"],
+            }
+        )
+    return {
+        field: {
+            "stored": _json_value(expected[field]),
+            "replayed": _json_value(actual[field]),
+        }
+        for field in expected
+        if expected[field] != actual[field]
+    }
+
+
+def _replayed_summary(result: PricingResult) -> dict[str, Any]:
+    return {
+        "action": result.action.value,
+        "current_price": str(result.current_price),
+        "fair_price": _string_or_none(result.fair_price),
+        "recommended_price": _string_or_none(result.recommended_price),
+        "lower_bound": _string_or_none(result.lower_bound),
+        "upper_bound": _string_or_none(result.upper_bound),
+        "confidence": str(result.confidence),
+        "confidence_grade": result.confidence_grade,
+        "weakest_factor": result.weakest_factor,
+        "competitor_count": result.competitor_count,
+        "raw_competitor_count": result.raw_competitor_count,
+        "unique_seller_count": result.unique_seller_count,
+        "clean_competitor_count": result.clean_competitor_count,
+        "effective_competitor_count": str(result.effective_competitor_count),
+        "dispersion": _string_or_none(result.dispersion),
+        "dispersion_method": result.dispersion_method.value,
+        "dispersion_profile": dispersion_profile_to_dict(result.dispersion_profile),
+        "reason_codes": list(result.reasons),
+        "evidence_observation_ids": [offer.observation_id for offer in result.evidence],
+        "policy_version": result.policy_version,
+    }
+
+
+def _required_string(snapshot: Mapping[str, Any], key: str) -> str:
+    value = snapshot.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RecommendationReplayUnavailable(
+            f"Recommendation context snapshot is missing {key}"
+        )
+    return value
+
+
+def _required_decimal(snapshot: Mapping[str, Any], key: str) -> Decimal:
+    value = _optional_decimal(snapshot.get(key))
+    if value is None:
+        raise RecommendationReplayUnavailable(
+            f"Recommendation context snapshot is missing {key}"
+        )
+    return value
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value))
+
+
+def _decimal_or_default(value: Any, default: Decimal) -> Decimal:
+    parsed = _optional_decimal(value)
+    return default if parsed is None else parsed
+
+
+def _optional_string(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
+def _required_datetime(value: Any) -> datetime:
+    parsed = _optional_datetime(value)
+    if parsed is None:
+        raise RecommendationReplayUnavailable(
+            "Recommendation trace is missing calculated_at"
+        )
+    return parsed
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _quantize(value: Decimal | None, quantum: str) -> Decimal | None:
+    return value.quantize(Decimal(quantum)) if value is not None else None
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    return value
+
+
+def _string_or_none(value: Decimal | None) -> str | None:
+    return str(value) if value is not None else None
+
+
+__all__ = [
+    "REPLAY_CONTRACT_VERSION",
+    "REPLAY_CONTRACT_V1",
+    "REPLAY_CONTRACT_V2",
+    "RecommendationReplay",
+    "RecommendationReplayUnavailable",
+    "compare_replayed_result",
+    "context_from_snapshot",
+    "replay_recommendation",
+]

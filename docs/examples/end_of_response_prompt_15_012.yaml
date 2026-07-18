@@ -1,0 +1,152 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: PROMPT_15_012_IMPLEMENTATION
+      title: END_OF_RESPONSE_CONTRACT_IMPLEMENTATION
+      type: IMPLEMENTATION
+      scope_owner: Cross-cutting
+
+    status: PASS
+
+    completed_scope:
+      - scope_item_id: SCOPE-TYPED-CONTRACT
+        result: Typed manifest, normalization, renderer, and validator are implemented.
+        artifact_refs:
+          - backend/src/marko/governance/response_footer.py
+          - backend/src/marko/governance/response_footer_cli.py
+        evidence_refs:
+          - backend/tests/test_response_footer.py
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-REPOSITORY-ADOPTION
+        result: Repository instructions and normative implementation documentation are installed.
+        artifact_refs:
+          - AGENTS.md
+          - docs/PROMPT_15_012_END_OF_RESPONSE_CONTRACT.md
+        evidence_refs:
+          - docs/examples/end_of_response_prompt_15_012.yaml
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+
+    incomplete_scope: []
+
+    strongest_verified_result:
+      claim_id: CLM-EXECUTABLE-CONTRACT
+      result: Canonical Section 15.1 manifests are rendered and validated deterministically.
+      evidence_level: E3
+      evidence_refs:
+        - backend/tests/test_response_footer.py
+      reproduction_status: reproducible
+      limitations:
+        - Focused local execution does not prove adoption by every response-producing surface.
+
+    weakest_critical_area:
+      area_id: AREA-CROSS-SURFACE-ADOPTION
+      area: Adoption by every response-producing surface
+      score: 50
+      evidence_level: E2
+      reason: Repository instructions are located evidence, not representative operational evidence.
+      downstream_impact: A client that ignores repository instructions could still omit or corrupt the footer.
+      required_resolution: Run pinned cross-surface adoption validation.
+
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E2
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: partial
+      limitations:
+        - No representative E5 operational response corpus was executed.
+        - The supplied workspace has no Git metadata, so evidence is path-bound rather than commit-bound.
+
+    production_implication:
+      state: DEVELOPMENT_ONLY
+      production_ready: false
+      evidence_level: E3
+      passed_hard_gates:
+        - FOOTER_CONTRACT_LOCAL_TESTS
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - REPOSITORY_PROVENANCE_FOR_PRODUCTION
+      statement: The response-governance component is locally verified; Marko/Metis production readiness is not claimed.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-REPOSITORY-PROVENANCE
+        priority: P1
+        category: environment_reproducibility
+        description: The supplied workspace has no Git metadata, so evidence cannot be bound to a canonical commit.
+        blocked_scope:
+          - production-grade reproducibility and provenance
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - "git rev-parse --show-toplevel: not a git repository"
+        owner: repository maintainer
+        resolution_condition: The workspace is attached to its canonical repository and commit identity is recorded.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions: []
+    source_access: []
+    data: []
+    environment_reproducibility:
+      - BLK-P1-REPOSITORY-PROVENANCE
+    unknowns: []
+
+  next_stage:
+    id: RESPONSE_FOOTER_ADOPTION_VALIDATION
+    title: CROSS_SURFACE_ADOPTION_VALIDATION
+    why_it_is_next:
+      - Adoption evidence is required before any broader compliance claim.
+    required_inputs:
+      - input_id: INPUT-PINNED-CONTRACT
+        description: Pinned Section 15.1 contract implementation and test corpus
+        source: current workspace
+        required_state: focused tests passing
+        currently_available: true
+        evidence_ref: backend/tests/test_response_footer.py
+    expected_artifacts:
+      - artifact_id: ART-CROSS-SURFACE-ADOPTION-REPORT
+        type: report
+        purpose: Must be created to report compliance across sampled response surfaces.
+        required_fields:
+          - surface
+          - pinned_response
+          - manifest
+          - validation_result
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-ADOPTION-01
+        predicate: all sampled substantive responses validate against their pinned manifests
+        required_evidence: pinned response corpus plus validator output
+        threshold: 100%
+    stop_condition:
+      gate_key: STOP_GATE_RESPONSE_FOOTER_ADOPTION_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_PROMPT_15_012_IMPLEMENTATION
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

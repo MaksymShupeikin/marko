@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from marko.pricing.statistics import (
+from metis.pricing.statistics import (
     effective_sample_size,
     geometric_mean,
     iqr_fences,

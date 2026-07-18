@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from marko.pricing import (
+from metis.pricing import (
     CoefficientModel,
     CompetitorOffer,
     ConfidenceAggregation,

@@ -334,6 +334,11 @@ class SyncRun(TimestampMixin, Base):
     scrape_lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    scrape_fencing_token: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        server_default="0",
+    )
     scrape_checkpoint: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     scrape_catalog_pages: Mapped[int] = mapped_column(
         Integer,
@@ -396,7 +401,7 @@ class StoreSyncTaskExecution(Base):
         ),
         CheckConstraint(
             "execution_no > 0 AND wall_time_ms >= 0 AND cpu_time_ms >= 0 "
-            "AND memory_peak_bytes >= 0",
+            "AND memory_peak_bytes >= 0 AND fencing_token > 0",
             name="ck_store_sync_task_execution_measurements",
         ),
         CheckConstraint(
@@ -417,6 +422,7 @@ class StoreSyncTaskExecution(Base):
     )
     task_id: Mapped[str | None] = mapped_column(String(255), index=True)
     execution_no: Mapped[int] = mapped_column(Integer)
+    fencing_token: Mapped[int] = mapped_column(BigInteger)
     is_redelivery: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
@@ -451,6 +457,63 @@ class StoreSyncTaskExecution(Base):
         nullable=False,
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ScrapeDispatchOutbox(TimestampMixin, Base):
+    """Durable DB-to-broker handoff for scraper and pricing workflow tasks."""
+
+    __tablename__ = "scrape_dispatch_outbox"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_scrape_dispatch_outbox_event_key"),
+        UniqueConstraint("task_id", name="uq_scrape_dispatch_outbox_task_id"),
+        CheckConstraint(
+            "status IN ('pending', 'dispatching', 'published', 'terminal_failed')",
+            name="ck_scrape_dispatch_outbox_status",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0 AND max_attempts > 0",
+            name="ck_scrape_dispatch_outbox_attempts",
+        ),
+        Index(
+            "ix_scrape_dispatch_outbox_ready",
+            "status",
+            "available_at",
+            "created_at",
+        ),
+        Index(
+            "ix_scrape_dispatch_outbox_aggregate",
+            "aggregate_type",
+            "aggregate_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    event_key: Mapped[str] = mapped_column(String(255))
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    aggregate_type: Mapped[str] = mapped_column(String(80))
+    aggregate_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    task_name: Mapped[str] = mapped_column(String(255))
+    task_id: Mapped[str] = mapped_column(String(255))
+    queue: Mapped[str | None] = mapped_column(String(100))
+    task_args: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    task_kwargs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(24), default="pending", server_default="pending"
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, default=20, server_default="20"
+    )
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class StoreSyncProductSnapshot(Base):
@@ -937,7 +1000,8 @@ class ScrapeTarget(TimestampMixin, Base):
         ),
         CheckConstraint(
             "delivery_count >= 0 AND network_attempts >= 0 "
-            "AND max_task_executions > 0",
+            "AND max_task_executions > 0 AND freshness_generation >= 0 "
+            "AND fencing_token >= 0",
             name="ck_scrape_target_attempt_counts",
         ),
         CheckConstraint(
@@ -950,7 +1014,47 @@ class ScrapeTarget(TimestampMixin, Base):
             "(structured_completeness >= 0 AND structured_completeness <= 1)",
             name="ck_scrape_target_completeness",
         ),
+        CheckConstraint(
+            "source_policy_state IN "
+            "('PERMITTED', 'OWNER_RISK_ACCEPTED', 'NOT_PERMITTED', 'UNKNOWN')",
+            name="ck_scrape_target_source_policy_state",
+        ),
+        CheckConstraint(
+            "source_lane IN "
+            "('OWNED_STOREFRONT', 'PUBLIC_COMPETITOR', 'REPLAY', 'CLIENT_EXPORT')",
+            name="ck_scrape_target_source_lane",
+        ),
+        CheckConstraint(
+            "execution_status IN ('QUEUED', 'RUNNING', 'RETRY_WAIT', "
+            "'SUCCEEDED', 'TERMINAL_FAILED', 'CANCELLED', 'DEAD_LETTERED')",
+            name="ck_scrape_target_execution_status",
+        ),
+        CheckConstraint(
+            "acquisition_status IN ('NOT_STARTED', 'SUCCEEDED', 'FAILED', 'BLOCKED')",
+            name="ck_scrape_target_acquisition_status",
+        ),
+        CheckConstraint(
+            "parse_status IN "
+            "('NOT_STARTED', 'SUCCEEDED', 'PARTIAL', 'FAILED', 'NOT_APPLICABLE')",
+            name="ck_scrape_target_parse_status",
+        ),
+        CheckConstraint(
+            "evidence_status IN "
+            "('NONE', 'RAW_AVAILABLE', 'STRUCTURED_AVAILABLE', 'INGESTED', "
+            "'INTEGRITY_FAILED')",
+            name="ck_scrape_target_evidence_status",
+        ),
+        CheckConstraint(
+            "downstream_eligibility IN ('ELIGIBLE', 'INELIGIBLE', 'UNKNOWN')",
+            name="ck_scrape_target_downstream_eligibility",
+        ),
+        CheckConstraint(
+            "operator_action IN ('NONE', 'MANUAL_REVIEW_REQUIRED', "
+            "'REPLAY_REQUIRED', 'NO_RECOMMENDATION')",
+            name="ck_scrape_target_operator_action",
+        ),
         Index("ix_scrape_target_run_status", "pricing_run_id", "status"),
+        Index("ix_scrape_target_acquisition_key", "acquisition_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -959,6 +1063,21 @@ class ScrapeTarget(TimestampMixin, Base):
     )
     source: Mapped[str] = mapped_column(
         String(50), default="prom", server_default="prom"
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(50), default="prom_public", server_default="prom_public"
+    )
+    source_lane: Mapped[str] = mapped_column(
+        String(32), default="PUBLIC_COMPETITOR", server_default="PUBLIC_COMPETITOR"
+    )
+    source_policy_decision_id: Mapped[str] = mapped_column(String(160), index=True)
+    source_policy_version: Mapped[str] = mapped_column(String(160))
+    source_policy_state: Mapped[str] = mapped_column(String(24))
+    submission_key: Mapped[str] = mapped_column(String(64), index=True)
+    acquisition_key: Mapped[str] = mapped_column(String(64))
+    parse_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    freshness_generation: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
     )
     original_url: Mapped[str | None] = mapped_column(Text)
     canonical_url: Mapped[str | None] = mapped_column(Text)
@@ -970,6 +1089,11 @@ class ScrapeTarget(TimestampMixin, Base):
         String(24), default="queued", server_default="queued"
     )
     owner_task_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    attempt_group_id: Mapped[uuid.UUID] = mapped_column(Uuid, default=uuid.uuid4)
+    winning_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    fencing_token: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0"
+    )
     delivery_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     network_attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
@@ -981,6 +1105,28 @@ class ScrapeTarget(TimestampMixin, Base):
     )
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    parser_name: Mapped[str] = mapped_column(String(160))
+    parser_config_hash: Mapped[str] = mapped_column(String(64))
+    output_schema_version: Mapped[str] = mapped_column(String(160))
+    execution_status: Mapped[str] = mapped_column(
+        String(24), default="QUEUED", server_default="QUEUED"
+    )
+    acquisition_status: Mapped[str] = mapped_column(
+        String(24), default="NOT_STARTED", server_default="NOT_STARTED"
+    )
+    parse_status: Mapped[str] = mapped_column(
+        String(24), default="NOT_STARTED", server_default="NOT_STARTED"
+    )
+    evidence_status: Mapped[str] = mapped_column(
+        String(32), default="NONE", server_default="NONE"
+    )
+    downstream_eligibility: Mapped[str] = mapped_column(
+        String(24), default="UNKNOWN", server_default="UNKNOWN"
+    )
+    operator_action: Mapped[str] = mapped_column(
+        String(32), default="NO_RECOMMENDATION", server_default="NO_RECOMMENDATION"
+    )
+    reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     content_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_size_bytes: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default="0"
@@ -1055,7 +1201,7 @@ class ScrapeAttempt(Base):
         ),
         CheckConstraint(
             "delivery_no > 0 AND wall_time_ms >= 0 AND cpu_time_ms >= 0 "
-            "AND memory_peak_bytes >= 0",
+            "AND memory_peak_bytes >= 0 AND fencing_token > 0",
             name="ck_scrape_attempt_measurements",
         ),
         CheckConstraint(
@@ -1080,6 +1226,7 @@ class ScrapeAttempt(Base):
     )
     task_id: Mapped[str | None] = mapped_column(String(255), index=True)
     delivery_no: Mapped[int] = mapped_column(Integer)
+    fencing_token: Mapped[int] = mapped_column(BigInteger)
     network_attempted: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

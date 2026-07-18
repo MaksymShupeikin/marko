@@ -1,0 +1,45 @@
+{
+  "provenance": {
+    "reference_package": "robustbase 0.99-7",
+    "reference_source": "https://rdrr.io/cran/robustbase/src/R/qnsn.R",
+    "reference_manual": "https://stat.ethz.ch/CRAN/web/packages/robustbase/robustbase.pdf",
+    "generation_date": "2026-07-17",
+    "live_r_check_in_this_run": false,
+    "reason": "R and robustbase were not installed in the execution environment; values are locked from the reviewed master-contract vectors and independently hand-checked order statistics.",
+    "sn_command": "robustbase::Sn(x, constant = 1.1926, finite.corr = TRUE)",
+    "qn_command": "robustbase::Qn(x, constant = 2.219144465985076, finite.corr = TRUE)",
+    "decimal_tolerance": "0.000000001"
+  },
+  "vectors": [
+    {
+      "id": "one_extreme_outlier_n4",
+      "values": ["100", "105", "110", "1000"],
+      "median": "107.5",
+      "raw_iqr": "228.75",
+      "scaled_iqr": "169.5726287415782739432411236",
+      "scaled_mad": "7.4130110925280100",
+      "sn": "11.3774040",
+      "qn": "11.38887131388200853960"
+    },
+    {
+      "id": "clean_grid_n5",
+      "values": ["100", "105", "110", "115", "120"],
+      "median": "110",
+      "raw_iqr": "10.00",
+      "scaled_iqr": "7.413011092528011975660814148",
+      "scaled_mad": "7.413011092528010",
+      "sn": "8.0560130",
+      "qn": "9.36490060368031997380"
+    },
+    {
+      "id": "right_skew_n7",
+      "values": ["100", "101", "103", "108", "120", "160", "300"],
+      "median": "108",
+      "raw_iqr": "38.00",
+      "scaled_iqr": "28.16944215160644550751109376",
+      "scaled_mad": "11.860817748044816",
+      "sn": "11.4298784",
+      "qn": "15.24587754443202973216"
+    }
+  ]
+}

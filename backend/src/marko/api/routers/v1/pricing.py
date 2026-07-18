@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser, get_session
+from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.pricing import (
     CalibrationRequest,
     CatalogItemOverrideRequest,
@@ -28,11 +28,17 @@ from marko.api.schemas.pricing import (
     RecommendationDecisionResponse,
     RecommendationEvidenceResponse,
     RecommendationPageResponse,
+    RecommendationReplayResponse,
     RecommendationResponse,
     TierCoefficientResponse,
     TierCoefficientPageResponse,
 )
-from marko.pricing import CalibrationPair, CoefficientModel, recommend_price
+from metis.pricing import (
+    CalibrationPair,
+    CoefficientModel,
+    dispersion_profile_to_dict,
+    recommend_price,
+)
 from marko.services.pricing_runs import (
     CatalogItemNotFoundError,
     PricingRunError,
@@ -52,6 +58,10 @@ from marko.services.pricing_runs import (
     list_tier_coefficients,
     policy_from_dict,
     override_observation_tier,
+)
+from marko.services.recommendation_replay import (
+    RecommendationReplayUnavailable,
+    replay_recommendation,
 )
 from marko.worker.celery_app import celery_app
 from marko.services.scraper_metrics import (
@@ -100,6 +110,8 @@ async def evaluate_price(
         clean_competitor_count=result.clean_competitor_count,
         effective_competitor_count=result.effective_competitor_count,
         dispersion=result.dispersion,
+        dispersion_method=result.dispersion_method.value,
+        dispersion_profile=dispersion_profile_to_dict(result.dispersion_profile),
         outlier_method=result.outlier_method,
         outlier_count=result.outlier_count,
         sensitivity=result.sensitivity,
@@ -121,7 +133,7 @@ async def evaluate_price(
 )
 async def start_pricing_run(
     payload: PricingRunCreateRequest,
-    current: CurrentUser,
+    current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PricingRunResponse:
     try:
@@ -198,9 +210,7 @@ async def get_pricing_run_collection_metrics(
             run_id=run_id,
             arrival_rate_items_per_second=arrival_rate_items_per_second,
             parallel_efficiency=parallel_efficiency,
-            database_write_capacity_per_second=(
-                database_write_capacity_per_second
-            ),
+            database_write_capacity_per_second=(database_write_capacity_per_second),
             queue_capacity_items_per_second=queue_capacity_items_per_second,
         )
     except PricingRunNotFoundError as exc:
@@ -234,7 +244,7 @@ async def get_pricing_run_collection_metrics_prometheus(
 @router.post("/runs/{run_id}/cancel", response_model=PricingRunResponse)
 async def request_run_cancellation(
     run_id: UUID,
-    current: CurrentUser,
+    current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PricingRunResponse:
     try:
@@ -253,7 +263,7 @@ async def request_run_cancellation(
 )
 async def calibrate_coefficients(
     payload: CalibrationRequest,
-    current: CurrentUser,
+    current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> list[TierCoefficientResponse]:
     pairs = [
@@ -320,7 +330,7 @@ async def get_coefficients(
 async def create_catalog_override(
     catalog_item_id: UUID,
     payload: CatalogItemOverrideRequest,
-    current: CurrentUser,
+    current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CatalogItemOverrideResponse:
     try:
@@ -484,6 +494,44 @@ async def get_recommendation_market_evidence(
     return response
 
 
+@router.get(
+    "/recommendations/{recommendation_id}/replay",
+    response_model=RecommendationReplayResponse,
+)
+async def replay_persisted_recommendation(
+    recommendation_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RecommendationReplayResponse:
+    try:
+        replay = await replay_recommendation(
+            session,
+            workspace_id=current.workspace_id,
+            recommendation_id=recommendation_id,
+        )
+    except RecommendationNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Recommendation not found",
+        ) from exc
+    except RecommendationReplayUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOMMENDATION_REPLAY_UNAVAILABLE",
+                "message": str(exc),
+            },
+        ) from exc
+    return RecommendationReplayResponse(
+        recommendation_id=replay.recommendation_id,
+        replay_contract_version=replay.replay_contract_version,
+        calculated_at=replay.calculated_at,
+        exact_match=replay.exact_match,
+        mismatches=replay.mismatches,
+        replayed=replay.replayed,
+    )
+
+
 @router.post(
     "/observations/{observation_id}/tier-overrides",
     response_model=ObservationTierOverrideResponse,
@@ -492,7 +540,7 @@ async def get_recommendation_market_evidence(
 async def override_market_observation_tier(
     observation_id: UUID,
     payload: ObservationTierOverrideRequest,
-    current: CurrentUser,
+    current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ObservationTierOverrideResponse:
     try:
@@ -542,6 +590,9 @@ async def decide_recommendation(
 
 
 def _recommendation_response(recommendation, item) -> RecommendationResponse:
+    robust_trace = recommendation.calculation_trace.get("robust_dispersion", {})
+    if not isinstance(robust_trace, dict):
+        robust_trace = {}
     return RecommendationResponse(
         id=recommendation.id,
         pricing_run_id=recommendation.pricing_run_id,
@@ -572,6 +623,12 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         clean_competitor_count=recommendation.clean_competitor_count,
         effective_competitor_count=recommendation.effective_competitor_count,
         dispersion=recommendation.dispersion,
+        dispersion_method=str(robust_trace.get("selected_method", "legacy_mad")),
+        dispersion_profile=(
+            robust_trace.get("post_clean")
+            if isinstance(robust_trace.get("post_clean"), dict)
+            else None
+        ),
         outlier_method=recommendation.outlier_method,
         outlier_count=recommendation.outlier_count,
         sensitivity=recommendation.sensitivity,

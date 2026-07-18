@@ -1,4 +1,4 @@
-"""Versioned domain contracts for deterministic KEMP pricing decisions."""
+"""Versioned Metis contracts for deterministic KEMP pricing decisions."""
 
 from __future__ import annotations
 
@@ -47,6 +47,16 @@ class CoefficientModel(str, Enum):
 class ConfidenceAggregation(str, Enum):
     MINIMUM = "minimum"
     GEOMETRIC = "geometric"
+
+
+class RobustScaleMethod(str, Enum):
+    """Versioned scale estimator selected for the decision dispersion."""
+
+    LEGACY_MAD = "legacy_mad"
+    IQR = "iqr"
+    MAD = "mad"
+    SN = "sn"
+    QN = "qn"
 
 
 class PriorityScoreType(str, Enum):
@@ -182,6 +192,35 @@ def _default_confidence_weights() -> dict[str, Decimal]:
 
 
 @dataclass(frozen=True, slots=True)
+class RobustDispersionProfile:
+    """Immutable, Gaussian-consistent comparison of robust scale estimators."""
+
+    version: str
+    correction_profile_version: str
+    finite_sample_correction: bool
+    sample_stage: str
+    sample_size: int
+    center: Decimal
+    q1: Decimal
+    q3: Decimal
+    raw_iqr: Decimal
+    raw_mad: Decimal
+    gaussian_scales: Mapping[str, Decimal]
+    robust_cvs: Mapping[str, Decimal]
+    selected_method: RobustScaleMethod
+    selected_scale: Decimal
+    robust_cv: Decimal
+    zero_scale_methods: tuple[str, ...]
+    all_scales_zero: bool
+    partial_scale_degeneracy: bool
+    cv_min: Decimal
+    cv_max: Decimal
+    cv_span: Decimal
+    cv_median: Decimal
+    cv_relative_span: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
 class PricingPolicy:
     version: str = "pricing-v2"
     currency: str = "UAH"
@@ -194,6 +233,11 @@ class PricingPolicy:
     iqr_min_competitors: int = 8
     reference_competitors: int = 10
     max_dispersion: Decimal = Decimal("0.35")
+    dispersion_method: RobustScaleMethod | None = None
+    finite_sample_scale_correction: bool = True
+    robust_dispersion_profile_version: str = "rc-scale-v1"
+    robust_scale_correction_profile_version: str = "robustbase-modern-v1"
+    robust_scale_max_cohort_size: int = 500
     freshness_half_life_hours: Decimal = Decimal("24")
     confidence_min: Decimal = Decimal("0.55")
     factor_floor: Decimal = Decimal("0.40")
@@ -238,6 +282,25 @@ class PricingPolicy:
     price_tick_version: str = "uah-integer-v1"
 
     def __post_init__(self) -> None:
+        selected_method = self.dispersion_method
+        if selected_method is None:
+            selected_method = (
+                RobustScaleMethod.QN
+                if self.version == "pricing-v3-robust-dispersion"
+                else RobustScaleMethod.LEGACY_MAD
+            )
+        else:
+            try:
+                selected_method = RobustScaleMethod(selected_method)
+            except ValueError as exc:
+                raise ValueError("unsupported dispersion_method") from exc
+        if (
+            self.version == "pricing-v2"
+            and selected_method != RobustScaleMethod.LEGACY_MAD
+        ):
+            raise ValueError("pricing-v2 requires dispersion_method=legacy_mad")
+        object.__setattr__(self, "dispersion_method", selected_method)
+
         currency = self.currency.strip().upper()
         if len(currency) != 3 or not currency.isalpha():
             raise ValueError("currency must be a three-letter alphabetic code")
@@ -288,8 +351,16 @@ class PricingPolicy:
             raise ValueError("iqr_min_competitors must be >= min_competitors")
         if self.reference_competitors < 1:
             raise ValueError("reference_competitors must be positive")
+        if self.robust_scale_max_cohort_size < 2:
+            raise ValueError("robust_scale_max_cohort_size must be at least 2")
         if self.min_category_pairs < 3 or self.min_global_pairs < 3:
             raise ValueError("calibration sample thresholds must be at least 3")
+        if not isinstance(self.finite_sample_scale_correction, bool):
+            raise ValueError("finite_sample_scale_correction must be boolean")
+        if self.robust_dispersion_profile_version != "rc-scale-v1":
+            raise ValueError("unsupported robust_dispersion_profile_version")
+        if self.robust_scale_correction_profile_version != "robustbase-modern-v1":
+            raise ValueError("unsupported robust_scale_correction_profile_version")
         positive = (
             self.max_age_hours,
             self.max_dispersion,
@@ -431,6 +502,12 @@ class PricingResult:
     cost_basis_inventory_value: Decimal | None = None
     priority_inputs: Mapping[str, str] = field(default_factory=dict)
     data_health_issues: tuple[str, ...] = field(default_factory=tuple)
+    dispersion_method: RobustScaleMethod = RobustScaleMethod.LEGACY_MAD
+    pre_clean_dispersion_profile: RobustDispersionProfile | None = None
+    dispersion_profile: RobustDispersionProfile | None = None
+    robust_dispersion_profile_version: str = "rc-scale-v1"
+    robust_scale_correction_profile_version: str = "robustbase-modern-v1"
+    finite_sample_scale_correction: bool = True
 
 
 __all__ = [
@@ -446,6 +523,8 @@ __all__ = [
     "ProductPricingContext",
     "ProductTier",
     "RecommendationAction",
+    "RobustDispersionProfile",
+    "RobustScaleMethod",
     "StockStatus",
     "TierClassification",
     "TierCoefficient",

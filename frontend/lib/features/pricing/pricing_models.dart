@@ -266,6 +266,39 @@ class RecommendationPage {
   final String? runId;
 }
 
+class RecommendationReplay {
+  const RecommendationReplay({
+    required this.recommendationId,
+    required this.contractVersion,
+    required this.calculatedAt,
+    required this.exactMatch,
+    required this.mismatches,
+    required this.replayed,
+  });
+
+  factory RecommendationReplay.fromJson(Map<String, dynamic> json) {
+    return RecommendationReplay(
+      recommendationId: json['recommendation_id'] as String,
+      contractVersion: json['replay_contract_version'] as String,
+      calculatedAt: DateTime.parse(json['calculated_at'] as String),
+      exactMatch: json['exact_match'] as bool,
+      mismatches: (json['mismatches'] as Map<String, dynamic>? ?? const {}).map(
+        (key, value) => MapEntry(key, Map<String, dynamic>.from(value as Map)),
+      ),
+      replayed:
+          json['replayed'] as Map<String, dynamic>? ??
+          const <String, dynamic>{},
+    );
+  }
+
+  final String recommendationId;
+  final String contractVersion;
+  final DateTime calculatedAt;
+  final bool exactMatch;
+  final Map<String, Map<String, dynamic>> mismatches;
+  final Map<String, dynamic> replayed;
+}
+
 class RecommendationEvidence {
   const RecommendationEvidence({
     required this.observationId,

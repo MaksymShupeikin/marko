@@ -31,6 +31,8 @@ from marko.infrastructure.db.models import (
     PricingRunItem,
     RawMarketCapture,
     ScrapeAttempt,
+    ScrapeEvidenceBlob,
+    ScrapeHttpRequest,
     ScrapeTarget,
     StoreKind,
     WorkspaceStore,
@@ -38,7 +40,7 @@ from marko.infrastructure.db.models import (
 from marko.infrastructure.db.session import async_session_factory
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.gateway import PromGateway
-from marko.pricing import (
+from metis.pricing import (
     CalibrationPair,
     CoefficientModel,
     CompetitorOffer,
@@ -49,9 +51,10 @@ from marko.pricing import (
     classify_tier,
     normalize_brand,
     recommend_price,
+    robust_dispersion_trace,
 )
-from marko.pricing.statistics import median as decimal_median
-from marko.pricing.observability import pricing_event
+from metis.pricing.statistics import median as decimal_median
+from metis.pricing.observability import pricing_event
 from marko.services.collection_guard import DistributedCollectionGuard
 from marko.services.matching import PriceComparison
 from marko.services.pricing_runs import (
@@ -61,6 +64,7 @@ from marko.services.pricing_runs import (
     load_target_tier_coefficients,
     persist_run_calibration_pairs,
     policy_from_dict,
+    require_activated_run_policy,
 )
 from marko.services.scrape_journal import (
     evidence_coverage_ratio,
@@ -82,6 +86,8 @@ from marko.services.scraper_contract import (
     ScraperErrorCode,
     classify_scraper_exception,
 )
+from marko.services.scraper_outbox import enqueue_dispatch
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 
 class PricingItemNotFoundError(LookupError):
@@ -112,6 +118,7 @@ class CollectionClaim:
     scrape_target_id: UUID | None = None
     scrape_attempt_id: UUID | None = None
     delivery_no: int = 0
+    fencing_token: int = 0
     execution_no: int = 0
     task_id: str | None = None
     scrape_input: ScrapeInput | None = None
@@ -120,7 +127,7 @@ class CollectionClaim:
 
 
 async def prepare_run_dispatch(run_id: UUID) -> list[UUID]:
-    """Move a queued run to running and dispatch one item per scrape target."""
+    """Move a run to collecting and durably enqueue one item per target."""
     async with async_session_factory() as session:
         run = await session.scalar(
             select(PricingRun).where(PricingRun.id == run_id).with_for_update()
@@ -194,8 +201,46 @@ async def prepare_run_dispatch(run_id: UUID) -> list[UUID]:
                 continue
             dispatched_targets.add(target_id)
             ids.append(item_id)
+        event_ids: list[UUID] = []
+        for item_id in ids:
+            event = await enqueue_dispatch(
+                session,
+                event_key=f"pricing-run:{run.id}:collect:{item_id}:v1",
+                aggregate_type="pricing_run_item",
+                aggregate_id=item_id,
+                workspace_id=run.workspace_id,
+                task_name="marko.worker.process_pricing_item",
+                task_args=[str(item_id)],
+                queue="pricing",
+            )
+            event_ids.append(event.id)
         await session.commit()
-        return ids
+        return event_ids
+
+
+async def enqueue_collection_finalizer_dispatch(
+    run_id: UUID,
+    *,
+    trigger_key: str,
+) -> UUID:
+    """Durably enqueue one idempotent finalizer probe for a completed trigger."""
+
+    async with async_session_factory() as session:
+        run = await session.get(PricingRun, run_id)
+        if run is None:
+            raise PricingItemNotFoundError(str(run_id))
+        event = await enqueue_dispatch(
+            session,
+            event_key=f"pricing-run:{run.id}:finalize:{trigger_key}:v1",
+            aggregate_type="pricing_run",
+            aggregate_id=run.id,
+            workspace_id=run.workspace_id,
+            task_name="marko.worker.finalize_pricing_collection",
+            task_args=[str(run.id)],
+            queue="celery",
+        )
+        await session.commit()
+        return event.id
 
 
 async def process_pricing_item(
@@ -288,6 +333,7 @@ async def _process_target_collection(claim: CollectionClaim) -> UUID:
             execution_no=claim.delivery_no,
             replay_cache=replay_cache,
             guard=DistributedCollectionGuard(settings, namespace="prom"),
+            live_request_gate=require_live_prom_marketplace_collection,
         )
         output = await asyncio.to_thread(
             _collect_target_output,
@@ -424,6 +470,7 @@ def _verified_target_output(target: ScrapeTarget) -> ScrapeOutput:
 
 def _collect_comparison(product_url: str, oe_norm: str) -> PriceComparison:
     settings = get_settings()
+    require_live_prom_marketplace_collection(settings)
     with DistributedCollectionGuard(settings) as guard:
         guard.wait_for_slot()
         try:
@@ -523,6 +570,12 @@ async def _claim_target_item(
             output = _verified_target_output(target)
         except ScraperBoundaryError as exc:
             target.status = "terminal_failure"
+            _set_terminal_target_contract(
+                target,
+                reason=exc.code.value,
+                raw_available=target.raw_size_bytes > 0,
+                parse_failed=True,
+            )
             target.error_category = exc.code.value
             target.error_detail = str(exc)[:4000]
             target.owner_task_id = None
@@ -651,16 +704,13 @@ async def _claim_target_item(
                 lost_attempt.wall_time_ms = max(
                     0,
                     round(
-                        (
-                            now - _aware_datetime(lost_attempt.started_at)
-                        ).total_seconds()
+                        (now - _aware_datetime(lost_attempt.started_at)).total_seconds()
                         * 1000
                     ),
                 )
 
     deadline_expired = (
-        target.deadline_at is not None
-        and _aware_datetime(target.deadline_at) <= now
+        target.deadline_at is not None and _aware_datetime(target.deadline_at) <= now
     )
     if target.network_attempts >= target.max_task_executions or deadline_expired:
         attempt = await _create_target_delivery_attempt(
@@ -676,6 +726,11 @@ async def _claim_target_item(
             retryable=False,
         )
         target.status = "terminal_failure"
+        _set_terminal_target_contract(
+            target,
+            reason=error.code.value,
+            raw_available=target.raw_size_bytes > 0,
+        )
         target.error_category = error.code.value
         target.error_detail = str(error)
         target.owner_task_id = None
@@ -714,6 +769,11 @@ async def _claim_target_item(
             now=now,
         )
         target.status = "terminal_failure"
+        _set_terminal_target_contract(
+            target,
+            reason=exc.code.value,
+            raw_available=target.raw_size_bytes > 0,
+        )
         target.error_category = exc.code.value
         target.error_detail = str(exc)[:4000]
         target.finished_at = now
@@ -743,9 +803,17 @@ async def _claim_target_item(
         item=item,
         task_id=task_id,
         now=now,
+        advance_fence=True,
     )
     settings = get_settings()
     target.status = "collecting"
+    target.execution_status = "RUNNING"
+    target.acquisition_status = "NOT_STARTED"
+    target.parse_status = "NOT_STARTED"
+    target.evidence_status = "NONE"
+    target.downstream_eligibility = "UNKNOWN"
+    target.operator_action = "NO_RECOMMENDATION"
+    target.reason_codes = []
     target.owner_task_id = task_id
     target.lease_expires_at = now + timedelta(
         seconds=max(1, settings.pricing_collection_lease_seconds)
@@ -779,6 +847,7 @@ async def _claim_target_item(
         scrape_target_id=target.id,
         scrape_attempt_id=attempt.id,
         delivery_no=attempt.delivery_no,
+        fencing_token=attempt.fencing_token,
         execution_no=execution_no,
         task_id=task_id,
         scrape_input=scrape_input,
@@ -792,13 +861,18 @@ async def _create_target_delivery_attempt(
     item: PricingRunItem,
     task_id: str | None,
     now: datetime,
+    advance_fence: bool = False,
 ) -> ScrapeAttempt:
     target.delivery_count += 1
+    if advance_fence:
+        target.fencing_token += 1
+    attempt_fencing_token = max(1, target.fencing_token)
     attempt = ScrapeAttempt(
         scrape_target_id=target.id,
         pricing_run_item_id=item.id,
         task_id=task_id,
         delivery_no=target.delivery_count,
+        fencing_token=attempt_fencing_token,
         network_attempted=False,
         status="running",
         started_at=now,
@@ -851,8 +925,22 @@ async def _persist_target_success(
                 session,
                 scrape_target_id=target.id,
             )
+            if raw_bytes <= 0:
+                raise ScraperBoundaryError(
+                    ScraperErrorCode.EVIDENCE_PERSISTENCE,
+                    "Structured scraper output has no retained raw HTTP evidence",
+                    retryable=False,
+                )
             now = datetime.now(UTC)
             target.status = "succeeded"
+            target.execution_status = "SUCCEEDED"
+            target.acquisition_status = "SUCCEEDED"
+            target.parse_status = "SUCCEEDED"
+            target.evidence_status = "STRUCTURED_AVAILABLE"
+            target.downstream_eligibility = "UNKNOWN"
+            target.operator_action = "NO_RECOMMENDATION"
+            target.reason_codes = []
+            target.winning_attempt_id = attempt.id
             target.payload = output.payload
             target.content_sha256 = output.content_sha256
             target.raw_size_bytes = raw_bytes
@@ -946,6 +1034,27 @@ async def _persist_target_failure(
             target.status = (
                 "retryable_failure" if error.retryable else "terminal_failure"
             )
+            raw_parse_failure = raw_bytes > 0 and error.code in {
+                ScraperErrorCode.PARSE_CONTRACT,
+                ScraperErrorCode.SERIALIZATION,
+            }
+            target.execution_status = (
+                "RETRY_WAIT" if error.retryable else "TERMINAL_FAILED"
+            )
+            target.acquisition_status = (
+                "BLOCKED"
+                if error.code == ScraperErrorCode.SOURCE_ACCESS_BLOCKED
+                else ("SUCCEEDED" if raw_parse_failure else "FAILED")
+            )
+            target.parse_status = "FAILED" if raw_parse_failure else "NOT_STARTED"
+            target.evidence_status = "RAW_AVAILABLE" if raw_bytes > 0 else "NONE"
+            target.downstream_eligibility = (
+                "UNKNOWN" if error.retryable else "INELIGIBLE"
+            )
+            target.operator_action = (
+                "REPLAY_REQUIRED" if raw_parse_failure else "NO_RECOMMENDATION"
+            )
+            target.reason_codes = [error.code.value]
             target.error_category = error.code.value
             target.error_detail = str(error)[:4000]
             target.raw_size_bytes = raw_bytes
@@ -964,9 +1073,7 @@ async def _persist_target_failure(
             attempt.finished_at = now
             item.error = f"{error.code.value}: {error}"[:4000]
             item.checkpoint = {
-                "stage": (
-                    "retry_wait" if error.retryable else "terminal_failure"
-                ),
+                "stage": ("retry_wait" if error.retryable else "terminal_failure"),
                 "scrape_target_id": str(target.id),
                 "delivery_no": claim.delivery_no,
                 "error_category": error.code.value,
@@ -997,12 +1104,17 @@ def _target_claim_is_current(
     attempt: ScrapeAttempt,
     claim: CollectionClaim,
 ) -> bool:
+    explicit_fence_matches = claim.fencing_token == 0 or (
+        getattr(target, "fencing_token", None) == claim.fencing_token
+        and getattr(attempt, "fencing_token", None) == claim.fencing_token
+    )
     return bool(
         claim.scrape_attempt_id is not None
         and attempt.id == claim.scrape_attempt_id
         and target.status == "collecting"
         and target.owner_task_id == claim.task_id
         and target.network_attempts == claim.execution_no
+        and explicit_fence_matches
         and attempt.status == "running"
         and attempt.delivery_no == claim.delivery_no
         and attempt.task_id == claim.task_id
@@ -1042,6 +1154,26 @@ def _mark_stale_target_attempt(
     attempt.finished_at = datetime.now(UTC)
 
 
+def _set_terminal_target_contract(
+    target: ScrapeTarget,
+    *,
+    reason: str,
+    raw_available: bool,
+    parse_failed: bool = False,
+) -> None:
+    """Keep legacy target state and the v2 multi-axis contract consistent."""
+
+    target.execution_status = "TERMINAL_FAILED"
+    target.acquisition_status = (
+        "SUCCEEDED" if raw_available and parse_failed else "FAILED"
+    )
+    target.parse_status = "FAILED" if parse_failed else "NOT_STARTED"
+    target.evidence_status = "RAW_AVAILABLE" if raw_available else "NONE"
+    target.downstream_eligibility = "INELIGIBLE"
+    target.operator_action = "REPLAY_REQUIRED" if parse_failed else "NO_RECOMMENDATION"
+    target.reason_codes = [reason]
+
+
 async def _refresh_target_attempt_measurement(
     claim: CollectionClaim,
     measurement: AttemptMeasurement,
@@ -1079,6 +1211,15 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                 f"Succeeded scrape target {scrape_target_id} is unavailable"
             )
         output = _verified_target_output(target)
+        raw_manifest = await _verified_raw_evidence_manifest(session, target.id)
+        raw_manifest_sha256 = hashlib.sha256(
+            json.dumps(
+                raw_manifest,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
         run = await session.get(PricingRun, target.pricing_run_id)
         if run is None:
             raise PricingItemNotFoundError("Pricing run disappeared")
@@ -1144,10 +1285,18 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                     source="prom",
                     capture_kind="parser_output_ref",
                     payload={
-                        "schema_version": "metis-scrape-target-ref-v1",
+                        "schema_version": "metis-scrape-target-ref-v2",
                         "scrape_target_id": str(target.id),
-                        "content_sha256": target.content_sha256,
+                        "canonical_output_sha256": target.content_sha256,
+                        "raw_manifest_sha256": raw_manifest_sha256,
+                        "raw_evidence": raw_manifest,
                         "adapter_version": target.adapter_version,
+                        "parser_name": target.parser_name,
+                        "parser_config_hash": target.parser_config_hash,
+                        "output_schema_version": target.output_schema_version,
+                        "source_policy_decision_id": target.source_policy_decision_id,
+                        "source_policy_version": target.source_policy_version,
+                        "source_lane": target.source_lane,
                     },
                     content_sha256=target.content_sha256 or output.content_sha256,
                     parser_version=target.adapter_version,
@@ -1181,6 +1330,9 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                 "offers": len(offers),
                 "at": datetime.now(UTC).isoformat(),
             }
+        target.evidence_status = "INGESTED"
+        target.downstream_eligibility = "UNKNOWN"
+        target.operator_action = "NO_RECOMMENDATION"
         await session.commit()
         pricing_event(
             "scrape_target_materialized",
@@ -1190,6 +1342,55 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
             newly_materialized_items=materialized,
             offers=len(offers),
         )
+
+
+async def _verified_raw_evidence_manifest(
+    session,
+    scrape_target_id: UUID,
+) -> list[dict[str, Any]]:
+    """Return a hash-verified, ordered HTTP evidence manifest for Metis lineage."""
+
+    await load_replay_cache(session, scrape_target_id=scrape_target_id)
+    rows = list(
+        (
+            await session.execute(
+                select(ScrapeHttpRequest, ScrapeEvidenceBlob)
+                .join(
+                    ScrapeEvidenceBlob,
+                    ScrapeEvidenceBlob.id == ScrapeHttpRequest.evidence_blob_id,
+                )
+                .where(
+                    ScrapeHttpRequest.scrape_target_id == scrape_target_id,
+                    ScrapeHttpRequest.outcome.in_(("success", "replayed")),
+                )
+                .order_by(
+                    ScrapeHttpRequest.execution_no,
+                    ScrapeHttpRequest.sequence_no,
+                    ScrapeHttpRequest.id,
+                )
+            )
+        ).all()
+    )
+    if not rows:
+        raise ScraperBoundaryError(
+            ScraperErrorCode.EVIDENCE_PERSISTENCE,
+            "Metis evidence ingestion requires retained raw HTTP captures",
+            retryable=False,
+        )
+    return [
+        {
+            "logical_request_id": str(request.id),
+            "request_key": request.request_key,
+            "request_kind": request.request_kind,
+            "execution_no": request.execution_no,
+            "sequence_no": request.sequence_no,
+            "evidence_blob_id": str(blob.id),
+            "raw_content_sha256": blob.content_sha256,
+            "raw_size_bytes": blob.raw_size_bytes,
+            "stored_size_bytes": blob.stored_size_bytes,
+        }
+        for request, blob in rows
+    ]
 
 
 async def _persist_payload_observations(
@@ -1210,17 +1411,15 @@ async def _persist_payload_observations(
             continue
         try:
             price = Decimal(str(raw_offer.get("price"))).quantize(Decimal("0.01"))
-            match_confidence = Decimal(
-                str(raw_offer.get("match_score"))
-            ).quantize(Decimal("0.0001"))
+            match_confidence = Decimal(str(raw_offer.get("match_score"))).quantize(
+                Decimal("0.0001")
+            )
         except Exception:
             continue
         if price <= 0 or not Decimal("0") <= match_confidence <= Decimal("1"):
             continue
         seller_id = str(
-            raw_offer.get("seller_id")
-            or raw_offer.get("seller_name")
-            or "unknown"
+            raw_offer.get("seller_id") or raw_offer.get("seller_name") or "unknown"
         )[:255]
         title = str(raw_offer.get("name") or "")
         brand = _optional_string(raw_offer.get("brand"))
@@ -1304,6 +1503,12 @@ async def _mark_target_group_classified(
         now = datetime.now(UTC)
         if target.status != "succeeded":
             target.status = "terminal_failure"
+            _set_terminal_target_contract(
+                target,
+                reason=reason[:50],
+                raw_available=target.raw_size_bytes > 0,
+                parse_failed=target.raw_size_bytes > 0,
+            )
             target.error_category = reason[:50]
             target.error_detail = str(error)[:4000]
             target.owner_task_id = None
@@ -1632,6 +1837,10 @@ async def calibrate_run_and_prepare_calculations(run_id: UUID) -> list[UUID]:
             raise PricingItemNotFoundError(str(run_id))
         workspace_id = run.workspace_id
         policy = policy_from_dict(run.policy_config)
+        require_activated_run_policy(
+            policy,
+            robust_v3_enabled=(get_settings().pricing_v3_robust_dispersion_enabled),
+        )
         pairs = await _derive_calibration_pairs(session, run_id, policy)
         _, dataset_hash = await persist_run_calibration_pairs(
             session,
@@ -1733,8 +1942,21 @@ async def calibrate_run_and_prepare_calculations(run_id: UUID) -> list[UUID]:
                 )
             ).all()
         )
+        event_ids: list[UUID] = []
+        for item_id in item_ids:
+            event = await enqueue_dispatch(
+                session,
+                event_key=f"pricing-run:{run.id}:calculate:{item_id}:v1",
+                aggregate_type="pricing_run_item",
+                aggregate_id=item_id,
+                workspace_id=run.workspace_id,
+                task_name="marko.worker.calculate_pricing_item",
+                task_args=[str(item_id)],
+                queue="pricing-calculation",
+            )
+            event_ids.append(event.id)
         await session.commit()
-        return item_ids
+        return event_ids
 
 
 async def mark_run_calculating(run_id: UUID, *, task_id: str | None) -> None:
@@ -2037,6 +2259,10 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
         override = await get_latest_override(session, catalog_item.id)
         context = build_pricing_context(catalog_item, override)
         policy = policy_from_dict(run.policy_config)
+        require_activated_run_policy(
+            policy,
+            robust_v3_enabled=(get_settings().pricing_v3_robust_dispersion_enabled),
+        )
         coefficients = await load_target_tier_coefficients(
             session,
             run=run,
@@ -2107,10 +2333,22 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "below_cost_warning_confirmed": context.below_cost_warning_confirmed,
         }
         calculation_trace = {
+            "replay_contract_version": "recommendation-replay-v2",
+            "calculated_at": now.isoformat(),
             "catalog_snapshot_id": str(run.import_batch_id),
             "pricing_run_id": str(run.id),
             "fair_price_estimator": "median",
             "outlier_filter": result.outlier_method,
+            "robust_dispersion": robust_dispersion_trace(
+                selected_method=result.dispersion_method,
+                pre_clean=result.pre_clean_dispersion_profile,
+                post_clean=result.dispersion_profile,
+                profile_version=policy.robust_dispersion_profile_version,
+                correction_profile_version=(
+                    policy.robust_scale_correction_profile_version
+                ),
+                finite_sample_correction=(policy.finite_sample_scale_correction),
+            ),
             "confidence_aggregation": policy.confidence_aggregation.value,
             "factor_scores": {
                 key: str(value) for key, value in result.factor_scores.items()
@@ -2397,10 +2635,11 @@ async def fail_pricing_item(run_item_id: UUID, error: Exception) -> None:
         if item is None or item.status in {"calculated", "manual_review", "cancelled"}:
             return
         run_id = item.pricing_run_id
-        if (
-            item.scrape_target_id is not None
-            and item.status in {"queued", "collecting", "collected"}
-        ):
+        if item.scrape_target_id is not None and item.status in {
+            "queued",
+            "collecting",
+            "collected",
+        }:
             target = await session.scalar(
                 select(ScrapeTarget)
                 .where(ScrapeTarget.id == item.scrape_target_id)
@@ -2410,8 +2649,7 @@ async def fail_pricing_item(run_item_id: UUID, error: Exception) -> None:
                 (
                     await session.scalars(
                         select(PricingRunItem).where(
-                            PricingRunItem.scrape_target_id
-                            == item.scrape_target_id,
+                            PricingRunItem.scrape_target_id == item.scrape_target_id,
                             PricingRunItem.status.in_(
                                 ("queued", "collecting", "collected")
                             ),
@@ -2423,22 +2661,21 @@ async def fail_pricing_item(run_item_id: UUID, error: Exception) -> None:
             if target is not None and target.status != "succeeded":
                 if target.status != "terminal_failure":
                     target.status = "terminal_failure"
-                    target.error_category = (
-                        ScraperErrorCode.RETRY_EXHAUSTED.value
+                    _set_terminal_target_contract(
+                        target,
+                        reason=ScraperErrorCode.RETRY_EXHAUSTED.value,
+                        raw_available=target.raw_size_bytes > 0,
                     )
-                    target.error_detail = (
-                        f"{type(error).__name__}: {error}"
-                    )[:4000]
+                    target.error_category = ScraperErrorCode.RETRY_EXHAUSTED.value
+                    target.error_detail = (f"{type(error).__name__}: {error}")[:4000]
                 target.owner_task_id = None
                 target.lease_expires_at = None
                 target.finished_at = target.finished_at or now
                 terminal_reason = (
-                    target.error_category
-                    or ScraperErrorCode.RETRY_EXHAUSTED.value
+                    target.error_category or ScraperErrorCode.RETRY_EXHAUSTED.value
                 )
                 terminal_detail = (
-                    target.error_detail
-                    or f"{type(error).__name__}: {error}"
+                    target.error_detail or f"{type(error).__name__}: {error}"
                 )[:4000]
                 for sibling in siblings:
                     sibling.status = "classified"
@@ -2452,8 +2689,7 @@ async def fail_pricing_item(run_item_id: UUID, error: Exception) -> None:
                 for sibling in siblings:
                     sibling.status = "failed"
                     sibling.error = (
-                        "evidence_persistence: "
-                        f"{type(error).__name__}: {error}"
+                        f"evidence_persistence: {type(error).__name__}: {error}"
                     )[:4000]
                     sibling.finished_at = now
                     sibling.checkpoint = {
@@ -2518,6 +2754,11 @@ async def fail_pricing_run_dispatch(run_id: UUID, error: Exception) -> None:
         target_ids = [target.id for target in targets]
         for target in targets:
             target.status = "terminal_failure"
+            _set_terminal_target_contract(
+                target,
+                reason=ScraperErrorCode.RETRY_EXHAUSTED.value,
+                raw_available=target.raw_size_bytes > 0,
+            )
             target.error_category = ScraperErrorCode.RETRY_EXHAUSTED.value
             target.error_detail = detail
             target.owner_task_id = None
@@ -2543,9 +2784,7 @@ async def fail_pricing_run_dispatch(run_id: UUID, error: Exception) -> None:
                     attempt.wall_time_ms = max(
                         0,
                         round(
-                            (
-                                now - _aware_datetime(attempt.started_at)
-                            ).total_seconds()
+                            (now - _aware_datetime(attempt.started_at)).total_seconds()
                             * 1000
                         ),
                     )
@@ -2698,9 +2937,7 @@ def _payload_source_listing_id(
     product_id = offer.get("product_id")
     if product_id is not None:
         return str(product_id)[:255]
-    return hashlib.sha256(
-        f"{offer.get('url') or ''}|{price}".encode()
-    ).hexdigest()
+    return hashlib.sha256(f"{offer.get('url') or ''}|{price}".encode()).hexdigest()
 
 
 __all__ = [

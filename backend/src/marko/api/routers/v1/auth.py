@@ -15,4 +15,5 @@ async def me(current: CurrentUser) -> AuthUserResponse:
         display_name=current.user.display_name,
         avatar_url=current.user.avatar_url,
         workspace_id=current.workspace_id,
+        workspace_role=current.workspace_role,
     )

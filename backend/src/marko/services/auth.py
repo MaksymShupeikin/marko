@@ -38,6 +38,7 @@ class AuthConflictError(AuthError):
 class AuthContext:
     user: User
     workspace_id: UUID
+    workspace_role: WorkspaceRole
 
 
 @dataclass(frozen=True)
@@ -144,13 +145,22 @@ async def get_or_create_auth_context(
     if not user.is_active:
         raise InvalidTokenError("Marko account is disabled")
 
-    workspace_id = await users_repo.get_first_workspace_id_by_user_id(session, user.id)
-    if workspace_id is None:
-        workspace_id = await _create_workspace(session, user)
+    membership = await users_repo.get_first_workspace_member_by_user_id(
+        session, user.id
+    )
+    if membership is None:
+        workspace_id, workspace_role = await _create_workspace(session, user)
         needs_commit = True
+    else:
+        workspace_id = membership.workspace_id
+        workspace_role = membership.role
 
     if not needs_commit:
-        return AuthContext(user=user, workspace_id=workspace_id)
+        return AuthContext(
+            user=user,
+            workspace_id=workspace_id,
+            workspace_role=workspace_role,
+        )
 
     try:
         await session.commit()
@@ -161,7 +171,11 @@ async def get_or_create_auth_context(
         if concurrent is not None:
             return concurrent
         raise AuthConflictError("Marko account could not be linked to Firebase") from exc
-    return AuthContext(user=user, workspace_id=workspace_id)
+    return AuthContext(
+        user=user,
+        workspace_id=workspace_id,
+        workspace_role=workspace_role,
+    )
 
 
 async def _concurrent_auth_context(
@@ -170,13 +184,21 @@ async def _concurrent_auth_context(
     user = await users_repo.get_user_by_firebase_uid(session, subject)
     if user is None or not user.is_active:
         return None
-    workspace_id = await users_repo.get_first_workspace_id_by_user_id(session, user.id)
-    if workspace_id is None:
+    membership = await users_repo.get_first_workspace_member_by_user_id(
+        session, user.id
+    )
+    if membership is None:
         return None
-    return AuthContext(user=user, workspace_id=workspace_id)
+    return AuthContext(
+        user=user,
+        workspace_id=membership.workspace_id,
+        workspace_role=membership.role,
+    )
 
 
-async def _create_workspace(session: AsyncSession, user: User) -> UUID:
+async def _create_workspace(
+    session: AsyncSession, user: User
+) -> tuple[UUID, WorkspaceRole]:
     workspace_id = uuid4()
     local_part = user.email.split("@", 1)[0]
     slug_base = re.sub(r"[^a-z0-9]+", "-", local_part.casefold()).strip("-")
@@ -192,7 +214,7 @@ async def _create_workspace(session: AsyncSession, user: User) -> UUID:
         user_id=user.id,
         role=WorkspaceRole.owner,
     )
-    return workspace_id
+    return workspace_id, WorkspaceRole.owner
 
 
 def _require_firebase_settings(settings: Settings) -> None:

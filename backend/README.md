@@ -31,11 +31,20 @@ evidence, replay, checkpoints, persistence, reconciliation, and metrics live
 around it. See
 [`../docs/scraper_scaling.md`](../docs/scraper_scaling.md).
 
-The pure domain under `src/marko/pricing/` implements Decimal KEMP
+Live public-marketplace requests are protected by a fail-closed source-access
+gate. `NOT_PERMITTED`/`UNKNOWN` blocks dispatch and physical HTTP attempts while
+leaving XLSX ingestion and stored evidence replay usable. Permitted verdicts
+require an auditable reference.
+
+The Metis-owned pure domain under `src/metis/pricing/` implements Decimal KEMP
 normalization, simple-median and hierarchical-shrinkage calibration,
 leave-one-category/leave-one-OE leakage protection, MAD/IQR fair price,
 half-life confidence, stock modes and typed economic priority. See
 [`../docs/kemp_pricing_engine.md`](../docs/kemp_pricing_engine.md).
+
+Recommendation replay, workspace roles, tenant-scoped dead letters, controlled
+retry, production settings validation, and recovery procedures are documented
+in [`../docs/production_runbook.md`](../docs/production_runbook.md).
 
 Host verification when `.venv` is present:
 

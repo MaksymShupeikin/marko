@@ -27,12 +27,13 @@ database and are accessed only through FastAPI.
 │   ├── src/marko/
 │   │   ├── api/                    FastAPI routes and dependencies
 │   │   ├── core/                   application configuration
+│   │   ├── governance/             response publication contracts
 │   │   ├── infrastructure/db/      SQLAlchemy models and sessions
 │   │   ├── parsers/prom/           prom.ua integration
-│   │   ├── pricing/                deterministic KEMP-normalized engine
 │   │   ├── repositories/           database queries
 │   │   ├── services/               import, matching, and authentication logic
 │   │   └── worker/                 Celery tasks and scheduler
+│   ├── src/metis/pricing/           Metis-owned deterministic pricing kernel
 │   └── tests/
 ├── frontend/
 │   ├── lib/main.dart               app entry point and MaterialApp
@@ -42,6 +43,47 @@ database and are accessed only through FastAPI.
 ├── compose.yaml
 └── .env.example
 ```
+
+## Response governance
+
+Substantive project responses use the executable Section 15.1 end-of-response
+contract. It keeps current-stage status separate from production readiness,
+requires explicit P0/P1 and unknown inventories, describes but does not start
+the next stage, and ends with one normalized terminal stop-gate.
+
+Validate the versioned example:
+
+```bash
+make validate-response-footer
+make validate-machine-summary
+```
+
+Render a canonical footer or validate a full response against its manifest:
+
+```bash
+cd backend
+uv run validate-response-footer --manifest MANIFEST.yaml --render
+uv run validate-response-footer --manifest MANIFEST.yaml --self-check
+uv run validate-response-footer --manifest MANIFEST.yaml --footer RESPONSE.md
+uv run validate-machine-summary --manifest MACHINE_SUMMARY.yaml --self-check
+uv run validate-machine-summary \
+  --manifest MACHINE_SUMMARY.yaml \
+  --footer-manifest MANIFEST.yaml \
+  --response RESPONSE.md
+```
+
+See [`docs/PROMPT_15_012_END_OF_RESPONSE_CONTRACT.md`](docs/PROMPT_15_012_END_OF_RESPONSE_CONTRACT.md)
+for the status, evidence, blocker, temporal, acceptance, and hostile-variation
+contracts.
+
+Section 16 adds the final strict YAML state document after the Section 15
+stop-gate. It records repository identity, conservative readiness intervals,
+critical floors, scraper evidence, reuse/gap partitions, decisions, source
+states, assumptions, hypotheses, unknowns, validation, and termination. The
+validator rejects duplicate YAML keys, aliases, anchors, implicit timestamps,
+coerced scalar types, arithmetic drift, unsupported production claims, and
+human/machine stop-gate divergence. See
+[`docs/PROMPT_15_013_MACHINE_READABLE_SUMMARY.md`](docs/PROMPT_15_013_MACHINE_READABLE_SUMMARY.md).
 
 ## Scraper scaling and evidence
 
@@ -67,6 +109,24 @@ See [`docs/scraper_scaling.md`](docs/scraper_scaling.md) for the mathematical,
 storage, reconciliation, and controlled benchmark contracts. Production
 concurrency is not inferred from Compose defaults.
 
+## Source-access boundary
+
+Live HTTP collection from public Prom marketplace pages is fail-closed.
+`PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT` defaults to `NOT_PERMITTED`; a
+`PERMITTED_OFFICIAL` or `PERMITTED_LIMITED` value is accepted only together
+with an auditable `PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE`. The check runs
+before run/store dispatch and again before every physical HTTP attempt.
+Content-addressed evidence replay and client-supplied XLSX ingestion do not
+cross that live-source gate.
+
+```text
+GET /api/v1/health/source-access
+```
+
+The current project source verdict therefore blocks new marketplace collection
+without disabling deterministic evaluation, catalog review, stored evidence,
+or recommendation replay.
+
 ## Authentication design
 
 The client signs in with Firebase Authentication and obtains a Firebase ID
@@ -88,6 +148,12 @@ On the first valid request, FastAPI creates a local user and a default workspace
 Later requests look up that user by `users.firebase_uid`. No Google access token,
 password, Firebase API key, OAuth secret, or service-account key is stored in
 PostgreSQL.
+
+Workspace membership carries an `owner`, `admin`, or `member` role. Object
+queries bind object identity and `workspace_id`; source-triggering workflows,
+calibration, cancellation, and administrative overrides require `owner` or
+`admin`. Operator recommendation decisions remain available to authenticated
+workspace members and are recorded append-only.
 
 The login screen supports:
 
@@ -394,11 +460,18 @@ reach each other. Production clients must use HTTPS.
 | `REDIS_PORT` | `6379` | host port mapping |
 | `API_PORT` | `8000` | FastAPI host port |
 | `WEB_PORT` | `8080` | Flutter web host port |
+| `ENVIRONMENT` | `development` | environment-specific validation |
+| `API_DOCS_ENABLED` | `true` locally | OpenAPI/Swagger exposure |
+| `ALLOWED_HOSTS` | local hosts | trusted Host header allowlist |
+| `CORS_ORIGINS` | local web origin | browser origin allowlist |
+| `PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT` | `NOT_PERMITTED` | live-source hard gate |
+| `PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE` | empty | auditable permission record |
 | `PRICING_WORKER_CONCURRENCY` | `1` | Prom collection worker processes |
 | `PRICING_COLLECTION_MIN_INTERVAL_SECONDS` | `2` | shared Redis pacing between collection starts |
 | `PRICING_CIRCUIT_FAILURE_THRESHOLD` | `5` | failures before collection circuit opens |
 | `PRICING_CIRCUIT_OPEN_SECONDS` | `300` | circuit cooldown |
 | `PRICING_DISPATCH_BATCH_SIZE` | `100` | item task fan-out batch size |
+| `PRICING_V3_ROBUST_DISPERSION_ENABLED` | `false` | persisted v3 pricing-run activation gate |
 | `FIREBASE_PROJECT_ID` | required | backend and Flutter |
 | `FIREBASE_API_KEY` | required for web | Flutter web |
 | `FIREBASE_AUTH_DOMAIN` | required for web | Flutter web |
@@ -416,6 +489,7 @@ The main endpoints are:
 ```text
 GET  /api/v1/health/live
 GET  /api/v1/health/ready
+GET  /api/v1/health/source-access
 GET  /api/v1/auth/me
 GET  /api/v1/stores
 POST /api/v1/stores
@@ -432,10 +506,13 @@ POST /api/v1/pricing/catalog-items/{catalog_item_id}/overrides
 GET  /api/v1/pricing/recommendations
 GET  /api/v1/pricing/recommendations/{recommendation_id}
 GET  /api/v1/pricing/recommendations/{recommendation_id}/evidence
+GET  /api/v1/pricing/recommendations/{recommendation_id}/replay
 POST /api/v1/pricing/recommendations/{recommendation_id}/decisions
 POST /api/v1/pricing/coefficients/calibrate
 GET  /api/v1/pricing/coefficients
 POST /api/v1/pricing/observations/{observation_id}/tier-overrides
+GET  /api/v1/operations/dead-letters
+POST /api/v1/operations/dead-letters/{kind}/{id}/replay
 ```
 
 `POST /api/v1/stores` validates and stores the requested prom.ua shop, creates a
@@ -461,8 +538,9 @@ The operator-facing workflow is implemented in the Flutter **Catalog** and
    selects hierarchical log-space shrinkage with a leave-one-category-out
    prior. A target OE is removed from its own applied coefficient.
 4. Calculation tasks filter invalid offers, normalize tiers to KEMP level,
-   apply MAD/IQR cleaning and winsor sensitivity, compute weighted effective
-   sample size and decomposed confidence, and either recommend
+   apply MAD/IQR cleaning, compute pre/post Gaussian-consistent IQR/MAD/Sn/Qn
+   dispersion profiles and winsor sensitivity, then compute weighted effective
+   sample size and decomposed confidence and either recommend
    `RAISE`/`LOWER`/`HOLD` or abstain with `MANUAL_REVIEW`.
 5. Recommendations are split into unit-safe raise, clearance, manual-review and
    hold queues, then sorted by economic priority within each queue. Expanding a row loads the
@@ -472,12 +550,24 @@ The operator-facing workflow is implemented in the Flutter **Catalog** and
    sales, liquidity target, urgency, and manual priority from the same card.
 6. The operator can accept, reject, or override a recommended price. Marko
    records the decision append-only but never publishes a Prom.ua price
-automatically. A below-cost decision requires a second explicit warning
-acknowledgement and cannot cross the approved floor.
+   automatically. A below-cost decision requires a second explicit warning
+   acknowledgement and cannot cross the approved floor.
+7. Every newly calculated recommendation carries the profile-aware
+   `recommendation-replay-v2` contract and frozen
+   calculation timestamp. The replay endpoint reconstructs the original
+   context, observations, classifications, coefficients and policy without
+   network access, then reports an exact match or field-level drift.
+
+Terminal collection failures are exposed through a workspace-scoped,
+database-backed dead-letter registry. Admin replay creates a new workflow and
+never rewrites terminal history.
 
 The formulas, defaults, reason codes, state machine, trace contract and semantic
 scenario matrix are documented in
 [`docs/kemp_pricing_engine.md`](docs/kemp_pricing_engine.md).
+The implementation/activation evidence, decision diff, mutation probes and
+capacity benchmark are recorded in
+[`docs/ROBUST_PRICE_DISPERSION_IMPLEMENTATION_2026-07-17.md`](docs/ROBUST_PRICE_DISPERSION_IMPLEMENTATION_2026-07-17.md).
 
 Raw parser output, market observations, tier classifications,
 recommendations, manual item context, and recommendation decisions are stored
@@ -519,6 +609,24 @@ docker compose up -d --build
 The `-v` flag deletes PostgreSQL and Redis volumes, so do not use it against data
 you need to keep.
 
+## Production and recovery
+
+The local `compose.yaml` remains a development stack. The hardened reference
+manifest is [`deploy/compose.production.yaml`](deploy/compose.production.yaml);
+it expects private managed PostgreSQL/Redis, explicit hosts/origins, Firebase
+configuration, TLS termination, and injected secrets. Backend processes run as
+an unprivileged user with a read-only filesystem.
+
+Deployment preflight, source shutdown, dead-letter replay, backup/checksum,
+clean-database restore, exact recommendation replay, rollback, and capacity
+proof are documented in
+[`docs/production_runbook.md`](docs/production_runbook.md). A manifest or
+script is not itself proof of a successful live restore/load/deployment drill.
+
+The completed engineering remediation and its final verification evidence are
+recorded in
+[`docs/PRODUCTION_READINESS_REMEDIATION_COMPLETION_2026-07-16.md`](docs/PRODUCTION_READINESS_REMEDIATION_COMPLETION_2026-07-16.md).
+
 ## Tests and checks
 
 Backend tests run in Docker:
@@ -533,14 +641,14 @@ The repository-local virtual environment can run the same suite directly:
 cd backend
 PYTHONPATH=src .venv/bin/python -m pytest -q
 .venv/bin/alembic upgrade head --sql
-.venv/bin/alembic downgrade 20260716_0006:base --sql
+.venv/bin/alembic downgrade 20260716_0009:base --sql
 ```
 
 Flutter checks run from `frontend/`:
 
 ```bash
-dart format lib test
-flutter analyze
+dart format --output=none --set-exit-if-changed lib test
+dart analyze lib test
 flutter test
 ```
 

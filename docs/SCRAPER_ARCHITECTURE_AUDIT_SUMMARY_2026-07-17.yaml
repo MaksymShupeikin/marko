@@ -1,0 +1,409 @@
+schema_version: scraper-architecture-audit.v2
+
+scraper_architecture_audit:
+  stage_id: SCRAPER_ARCHITECTURE_AUDIT_AND_SCALING_REVIEW
+  prompt_revision: "2.0"
+  status: PASS
+  audit_complete: true
+  execution_stopped: true
+  next_stage_started: false
+
+gates:
+  audit_artifact:
+    status: PASS
+    reasons:
+      - Repository root, duplicate copy, component boundaries, contracts, hard gates, gaps, and validation evidence are recorded.
+      - Agent-owned implementation and focused verification completed without changing extraction selectors.
+  scraper_scaling:
+    status: BLOCKED
+    reasons:
+      - Public Prom source access is NOT_PERMITTED in the fail-closed runtime configuration.
+      - No approved workload envelope, broker/database test environment, or representative load SLO was supplied.
+      - Offline contract and recovery tests do not prove source behaviour or production capacity.
+  production_eligibility:
+    status: BLOCKED
+    eligible: false
+    reasons:
+      - Source authorization and production-like E5 load/recovery evidence are absent.
+      - Migration 20260717_0010 and outbox recovery still require deployment-environment integration evidence.
+
+repository:
+  audit_id: scraper-audit-2026-07-17-marko-copy
+  audit_started_at: "2026-07-17T21:40:55Z"
+  cwd: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  metis_root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/metis"
+  marko_root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  git_commit: null
+  git_branch: null
+  dirty_before_audit: null
+  tracked_diff_sha256: null
+  relevant_file_manifest_sha256: 97aa36f1f4c85599571d180e4e5ce1bf991f2fdf478019c1276e846ffc0a543a
+  duplicate_repo_candidates:
+    - root: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/metis_alpha/marko
+      role: CROSS_COPY_REFERENCE
+      parser_tree_sha256: d0a623a727ebd225139a4c89269d5dfd00f00cd09de9013c9e242f9a9a833651
+      selected: false
+  selected_root_reason: Active workspace root and project AGENTS.md select the nested Marko copy; cross-copy evidence is not borrowed.
+  identity_verified: true
+
+component_identity:
+  candidates:
+    - component_id: marko-prom-extraction
+      physical_root: backend/src/marko/parsers/prom
+      entrypoint: marko.parsers.prom.gateway.PromGateway
+      input_unit: store_sync_or_product_seed
+      output_unit: Product_or_PriceComparison
+      raw_evidence: via_scrape_runtime_and_scrape_journal
+      replay: verified_focused
+      queue_use: celery
+      current_consumers: [catalog_import, market_collection]
+      tests: [test_prom_gateway_boundary, test_scrape_runtime, test_scraper_contract]
+      content_hash: 361447bc58ab21689694c7999a21b3da0b61ea05629605b79607d4d78e08f544
+      canonical_status: CANONICAL_EXTRACTION
+    - component_id: marko-metis-evidence-adapter
+      physical_root: backend/src/marko/services/market_collection.py
+      entrypoint: _materialize_target_evidence
+      input_unit: succeeded_scrape_target
+      output_unit: raw_capture_market_observation_classification
+      raw_evidence: hash_verified_http_manifest
+      replay: verified_focused
+      queue_use: pricing_worker
+      current_consumers: [metis_pricing_pipeline]
+      tests: [test_scraper_contract, test_recommendation_replay]
+      content_hash: included_in_relevant_manifest
+      canonical_status: CANONICAL_EVIDENCE_ADAPTER
+    - component_id: marko-outbox-orchestration
+      physical_root: backend/src/marko/services/scraper_outbox.py
+      entrypoint: reconcile_dispatch_outbox
+      input_unit: durable_dispatch_event
+      output_unit: at_least_once_celery_delivery
+      raw_evidence: not_applicable
+      replay: deterministic_task_id
+      queue_use: celery
+      current_consumers: [store_sync, pricing_run, pricing_fanout]
+      tests: [test_scraper_outbox]
+      content_hash: included_in_relevant_manifest
+      canonical_status: REUSED_ORCHESTRATION
+    - component_id: sibling-metis-collector
+      physical_root: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/metis_alpha/metis/metis/collect/prom.py
+      entrypoint: cross_copy_not_executed
+      input_unit: unknown_for_selected_root
+      output_unit: unknown_for_selected_root
+      raw_evidence: cross_copy_reference
+      replay: cross_copy_reference
+      queue_use: unknown
+      current_consumers: []
+      tests: []
+      content_hash: not_mixed_into_selected_root
+      canonical_status: DUPLICATE_DIVERGED
+  canonical_extraction_component_id: marko-prom-extraction
+  canonical_evidence_adapter_id: marko-metis-evidence-adapter
+  reused_orchestration_component_id: marko-outbox-orchestration
+  unresolved_divergence: false
+
+existing_scraper:
+  located: VERIFIED
+  entry_point_verified: VERIFIED
+  input_contract_verified: VERIFIED
+  output_contract_verified: VERIFIED
+  parser_internals_changed: false
+  black_box_boundary_preserved: VERIFIED
+  runtime_reverified: PARTIAL
+  single_request_verified: VERIFIED
+  small_batch_verified: VERIFIED
+  batch_ready: PARTIAL
+  parallel_safe: PARTIAL
+  timeout_bounded: VERIFIED
+  retry_safe: VERIFIED
+  idempotent_effects: VERIFIED
+  outbox_or_dispatch_reconciled: VERIFIED
+  fencing_verified: VERIFIED
+  queue_integrated: PARTIAL
+  dead_letter_integrated: PARTIAL
+  raw_storage_integrated: VERIFIED
+  structured_storage_integrated: VERIFIED
+  replayable: VERIFIED
+  observable: PARTIAL
+  load_tested: NOT_VERIFIED
+  production_proven: NOT_VERIFIED
+
+readiness:
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  weighted_score: 59.75
+  interval:
+    lower: 59.75
+    upper: 75.0
+  critical_floor: 0.0
+  evidence_level: E3
+  production_eligible: false
+  dimensions:
+    - capability: boundary_contracts
+      alpha: 0.15
+      conservative_score: 75
+      evidence_level: E3
+    - capability: raw_evidence_and_replay
+      alpha: 0.15
+      conservative_score: 70
+      evidence_level: E3
+    - capability: queue_outbox_recovery
+      alpha: 0.15
+      conservative_score: 60
+      evidence_level: E3
+    - capability: idempotency_and_fencing
+      alpha: 0.15
+      conservative_score: 65
+      evidence_level: E3
+    - capability: observability
+      alpha: 0.10
+      conservative_score: 60
+      evidence_level: E3
+    - capability: metis_evidence_integration
+      alpha: 0.15
+      conservative_score: 55
+      evidence_level: E3
+    - capability: security_and_tenant_scope
+      alpha: 0.10
+      conservative_score: 50
+      evidence_level: E3
+    - capability: representative_load
+      alpha: 0.05
+      conservative_score: 0
+      evidence_level: E0
+  reason: Focused executable evidence reaches E3; absent representative load forces a zero critical floor and blocks scaling/production gates.
+
+capacity_model:
+  measured: false
+  model_kind: UNKNOWN
+  item_kind: null
+  item_version: null
+  dataset_fingerprint: null
+  configuration_fingerprint: null
+  observation_window_seconds: null
+  logical_items: null
+  logical_http_requests: null
+  physical_http_attempts: null
+  task_executions: null
+  terminal_items: null
+  successful_items: null
+  lambda_item_per_second: null
+  worker_count: null
+  parallel_efficiency: null
+  retry_amplification:
+    http_attempts_per_request: null
+    task_executions_per_item: null
+    physical_attempts_per_item: null
+  capacity_items_per_second:
+    worker: null
+    source: null
+    database: null
+    queue: null
+    terminal: null
+    successful: null
+  utilization:
+    worker: null
+    source: null
+    database: null
+    queue: null
+    system_max: null
+  queue_stability: UNKNOWN
+  backlog_items: null
+  drain_seconds_no_arrivals: null
+  drain_seconds_with_arrivals: null
+  capacity_proven: false
+  warnings:
+    - No capacity number is inferred from unit-test duration.
+    - rho<=0.70 remains an unapproved engineering assumption.
+
+reconciliation:
+  submitted: null
+  admitted: null
+  deduplicated: null
+  rejected: null
+  queued: null
+  running: null
+  retry_wait: null
+  success: null
+  failed: null
+  cancelled: null
+  unaccounted_loss: null
+  reconciled: false
+
+contracts:
+  input_contract_status: VERIFIED
+  output_contract_status: VERIFIED
+  error_taxonomy_status: VERIFIED
+  idempotency_namespace_status: VERIFIED
+  retry_deadline_status: VERIFIED
+  queue_ack_recovery_status: PARTIAL
+  storage_lineage_status: VERIFIED
+  replay_determinism_status: VERIFIED
+  observability_status: PARTIAL
+  admission_security_status: VERIFIED
+  tenant_isolation_status: PARTIAL
+
+metis_integration:
+  adapter_contract_status: VERIFIED
+  raw_evidence_preserved: VERIFIED
+  replayable: VERIFIED
+  source_lineage_preserved: VERIFIED
+  owned_competitor_separation: PARTIAL
+  missing_data_abstains: VERIFIED
+  recommendation_bypass_prevented: VERIFIED
+
+marko_reuse:
+  reusable_as_is:
+    - workspace_scoped_API_reads
+    - Celery_late_ack_configuration
+  adapt_before_reuse:
+    - job_dispatch_via_transactional_outbox
+    - listing_sync_to_Metis_evidence_adapter
+    - operator_progress_for_multi_axis_status
+  reference_only:
+    - current_frontend_sync_progress
+    - deployment_topology_without_E5_evidence
+  do_not_port:
+    - mutable_listing_raw_data_as_evidence_truth
+    - sync_success_as_recommendation_readiness
+
+source_lanes:
+  owned_storefront: PARTIAL
+  public_competitor: BLOCKED
+  replay: VERIFIED
+  cross_lane_metric_separation: PARTIAL
+
+gaps:
+  p0:
+    - P0-SOURCE-AUTHORIZATION
+    - P0-MIGRATION-INTEGRATION
+    - P0-REPRESENTATIVE-LOAD-ENVELOPE
+  p1:
+    - P1-DLQ-OPERATOR-REPLAY
+    - P1-MULTI-HOST-OUTBOX-RECOVERY
+    - P1-TENANT-INTEGRATION-TEST
+    - P1-PER-LANE-SLI
+  p2:
+    - P2-ALERT-DELIVERY-VALIDATION
+    - P2-OBJECT-STORAGE-ADAPTER
+  p3:
+    - P3-SEPARATE-ACQUISITION-SERVICE-EVALUATION
+
+business_decisions_required:
+  - Approve or reject public competitor collection and record an auditable source reference.
+  - Define the first logical item kind and average/peak/burst workload envelope.
+  - Approve latency, freshness, success, manual-review, and confidence-bound SLOs.
+  - Select raw evidence retention, backup, deletion, and legal-hold policy.
+  - Select deployment broker/database topology and global per-source request budget.
+  - Decide whether Marko is the operator UI for scraper batches and DLQ replay.
+
+source_access_states:
+  - source: prom_public_marketplace
+    state: NOT_PERMITTED
+    live_collection_allowed: false
+    technical_effect: New live fetch stops before network execution; retained evidence replay remains allowed.
+  - source: retained_raw_replay
+    state: PERMITTED_OFFLINE
+    live_collection_allowed: false
+    technical_effect: Parser/storage/queue validation can proceed without new source requests.
+
+engineering_assumptions:
+  - id: ASSUMPTION-RHO-HEADROOM
+    statement: rho_system<=0.70 is the initial headroom target.
+    status: UNAPPROVED
+  - id: ASSUMPTION-OUTBOX-LEASE
+    statement: A 60-second outbox dispatch lease is adequate for broker publish.
+    status: REQUIRES_ENVIRONMENT_VALIDATION
+  - id: ASSUMPTION-RAW-INLINE-STORAGE
+    statement: PostgreSQL compressed blobs remain acceptable until measured storage throughput requires object storage.
+    status: REQUIRES_LOAD_EVIDENCE
+
+future_hypotheses:
+  - id: HYPOTHESIS-OBJECT-STORE
+    proposal: Move immutable raw bodies to content-addressed object storage while retaining transactional metadata.
+    expected_gain: Lower database bloat and independent retention tiers.
+    required_evidence: Measured database write/storage bottleneck.
+    first_validation_step: Compare PostgreSQL and object-store replay fixtures under L3 load.
+    not_current_fact: true
+
+unknowns:
+  - id: UNKNOWN-GIT-PROVENANCE
+    field: repository.git_commit
+    reason: Selected workspace has no .git metadata.
+  - id: UNKNOWN-CAPACITY
+    field: capacity_model
+    reason: No approved workload, broker/database environment, or representative test run.
+  - id: UNKNOWN-RETENTION
+    field: raw_capture_retention
+    reason: Client decision absent.
+  - id: UNKNOWN-DLQ
+    field: existing_scraper.dead_letter_integrated
+    reason: No authorized operator replay workflow is implemented and integration-tested.
+
+evidence:
+  ontology_version: P15_012_V1
+  highest_level: E3
+  records:
+    - evidence_id: EVID-SCRAPER-FOCUSED-TESTS
+      level: E3
+      procedure: uv run pytest focused scraper contract/runtime/outbox/fencing/scaling suite
+      artifact: backend/tests
+      limitation: No live broker/database/source environment.
+    - evidence_id: EVID-PARSER-HASH
+      level: E2
+      procedure: Relative-path/size/content SHA-256 manifests for selected and sibling parser trees
+      artifact: component_identity.candidates
+      limitation: Cross-copy runtime not executed.
+    - evidence_id: EVID-MANIFEST
+      level: E2
+      procedure: Sorted 137-file path/size/SHA-256 manifest hash excluding the two self-referential scraper audit artifacts
+      artifact: repository.relevant_file_manifest_sha256
+      limitation: Git tracked/untracked classification unavailable.
+
+claims:
+  records:
+    - claim_id: CLAIM-PARSER-FROZEN
+      claim_type: REPOSITORY_FACT
+      statement: Extraction selector/parser.py content was not modified; security fixes are isolated to boundary/fetch controls.
+      scope: selected_root
+      evidence_refs: [EVID-PARSER-HASH]
+      evidence_level: E2
+      falsification_procedure: Compare parser.py SHA-256 and implementation diff inventory.
+      limitations: No Git baseline is available inside the selected root.
+      confidence: HIGH
+    - claim_id: CLAIM-OUTBOX-RECOVERY
+      claim_type: MEASURED_RESULT
+      statement: Focused tests verify deterministic task IDs, broker failure retention, and expired-lease redispatch.
+      scope: in_process_test_double
+      evidence_refs: [EVID-SCRAPER-FOCUSED-TESTS]
+      evidence_level: E3
+      falsification_procedure: Run test_scraper_outbox.py and inject payload mismatch/broker failure.
+      limitations: Multi-host PostgreSQL/Celery integration remains unverified.
+      confidence: HIGH
+
+validation:
+  structural_validation_passed: true
+  mathematical_validation_passed: true
+  unit_consistency_passed: true
+  no_retry_double_counting_passed: true
+  readiness_evidence_ceiling_passed: true
+  stop_gate_consistency_passed: true
+  semantic_validation_passed: true
+  yaml_parse_passed: true
+  yaml_round_trip_passed: true
+  hostile_review_passed: true
+  variation_tests_passed: true
+  failed_variations: []
+  errors: []
+
+next_stage:
+  id: SCRAPER_PHASE_9_INTEGRATION_AND_LOAD_VALIDATION
+  objective: Apply migration 20260717_0010 in an isolated PostgreSQL/Redis environment and run L0-L7 recovery, concurrency, and load tests against replay/source emulation.
+  required_inputs:
+    - Approved logical item workload envelope and SLO thresholds.
+    - Isolated PostgreSQL, Redis/Celery, worker topology, and retained replay corpus.
+    - Client decision for source lanes and retention policy.
+  expected_outputs:
+    - Reproducible load_test_result artifacts with dataset/config/environment fingerprints.
+    - Outbox crash-window, stale-worker, redelivery, reconciliation, and tenant-isolation evidence.
+    - Capacity bottleneck model, confidence bounds, and explicit scaling gate verdict.
+  stop_condition: Stop after L0-L7 artifacts and independent gate reassessment; do not start live pilot automatically.
+  direct_user_instruction_required: true

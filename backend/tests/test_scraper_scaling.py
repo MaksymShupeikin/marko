@@ -7,14 +7,17 @@ from marko.services.scraper_scaling import (
     TargetMetricSample,
     aggregate_collection_metrics,
     calculate_capacity,
+    calculate_completeness_distribution,
     calculate_derived_capacity,
     calculate_retry_amplification,
     calculate_storage,
     estimate_batch_completion,
     parallel_efficiency,
     reconcile_items,
+    reconcile_submission_cohort,
     request_retry_sanity_check,
     required_capacity_plan,
+    wilson_confidence_interval,
 )
 
 
@@ -271,3 +274,109 @@ def test_comparison_aggregate_reconciles_targets_and_uses_terminal_time() -> Non
     assert result.reconciliation.reconciled is True
     assert result.reconciliation.retry_wait == 1
     assert result.capacity.mean_terminal_item_time_seconds == 1
+
+
+def test_submission_cohort_reconciliation_accounts_for_every_admitted_item() -> None:
+    result = reconcile_submission_cohort(
+        submitted=12,
+        deduplicated=2,
+        rejected=1,
+        admitted=9,
+        queued=1,
+        running=1,
+        retry_wait=1,
+        success=5,
+        failed=1,
+        cancelled=0,
+    )
+
+    assert result.unaccounted_loss == 0
+    assert result.reconciled is True
+
+
+def test_submission_cohort_reconciliation_rejects_an_invalid_admission_equation() -> None:
+    with pytest.raises(
+        ValueError,
+        match="submitted must equal deduplicated \\+ rejected \\+ admitted",
+    ):
+        reconcile_submission_cohort(
+            submitted=12,
+            deduplicated=2,
+            rejected=1,
+            admitted=8,
+            queued=1,
+            running=1,
+            retry_wait=1,
+            success=4,
+            failed=1,
+            cancelled=0,
+        )
+
+
+def test_submission_cohort_reconciliation_exposes_silent_loss() -> None:
+    result = reconcile_submission_cohort(
+        submitted=10,
+        deduplicated=0,
+        rejected=0,
+        admitted=10,
+        queued=1,
+        running=1,
+        retry_wait=1,
+        success=5,
+        failed=1,
+        cancelled=0,
+    )
+
+    assert result.unaccounted_loss == 1
+    assert result.reconciled is False
+
+
+def test_wilson_interval_reports_uncertainty_without_normal_approximation_edges() -> None:
+    result = wilson_confidence_interval(successes=95, sample_size=100)
+
+    assert result.estimate == 0.95
+    assert result.lower == pytest.approx(0.88825, abs=1e-5)
+    assert result.upper == pytest.approx(0.97846, abs=1e-5)
+    assert result.lower < result.estimate < result.upper
+
+
+def test_wilson_interval_for_an_empty_cohort_is_explicitly_unknown() -> None:
+    result = wilson_confidence_interval(successes=0, sample_size=0)
+
+    assert result.estimate is None
+    assert result.lower is None
+    assert result.upper is None
+
+
+def test_completeness_distribution_is_weighted_and_tracks_critical_fields() -> None:
+    result = calculate_completeness_distribution(
+        [
+            {
+                "source_url": "https://prom.ua/p1",
+                "raw_capture_id": "capture-1",
+                "price": "100.00",
+            },
+            {
+                "source_url": "https://prom.ua/p2",
+                "raw_capture_id": "capture-2",
+                "price": None,
+            },
+            {
+                "source_url": "https://prom.ua/p3",
+                "raw_capture_id": None,
+                "price": "120.00",
+            },
+        ],
+        field_weights={"source_url": 2, "raw_capture_id": 2, "price": 1},
+        critical_fields={"source_url", "raw_capture_id"},
+    )
+
+    assert result.count == 3
+    assert result.minimum == 0.6
+    assert result.p50 == 0.8
+    assert result.critical_field_missing_rate == pytest.approx(1 / 3, abs=1e-8)
+    assert result.per_field_missing_rate == {
+        "source_url": 0.0,
+        "raw_capture_id": pytest.approx(1 / 3, abs=1e-8),
+        "price": pytest.approx(1 / 3, abs=1e-8),
+    }

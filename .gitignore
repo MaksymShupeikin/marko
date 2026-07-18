@@ -19,9 +19,3 @@ Thumbs.db
 
 # Logs
 *.log
-
-# Tooling caches at the repository root
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-__pycache__/
