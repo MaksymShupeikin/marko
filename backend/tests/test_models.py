@@ -6,6 +6,7 @@ import pytest
 from marko.api.schemas.stores import ProductResponse
 from marko.infrastructure.db.models import (
     Listing,
+    MarketObservation,
     StoreSyncProductSnapshot,
     SyncRun,
 )
@@ -15,6 +16,7 @@ from factories import product
 
 
 # get_nested
+
 
 def test_get_nested_returns_leaf_value():
     assert get_nested({"a": {"b": {"c": 7}}}, "a.b.c") == 7
@@ -29,6 +31,7 @@ def test_get_nested_non_dict_midway_returns_none():
 
 
 # Product.from_raw
+
 
 def test_from_raw_builds_url():
     assert product(id=5, urlText="slug").url == "https://prom.ua/ua/p5-slug.html"
@@ -79,8 +82,7 @@ def test_product_response_includes_listing_image_url():
 def test_store_sync_has_active_run_guard_and_immutable_snapshot_model():
     index_names = {index.name for index in SyncRun.__table__.indexes}
     constraints = {
-        constraint.name
-        for constraint in StoreSyncProductSnapshot.__table__.constraints
+        constraint.name for constraint in StoreSyncProductSnapshot.__table__.constraints
     }
 
     assert "uq_sync_run_active_store_sync" in index_names
@@ -96,7 +98,16 @@ def test_store_sync_has_active_run_guard_and_immutable_snapshot_model():
     }
 
 
+def test_market_observation_orm_matches_currency_evidence_migration() -> None:
+    columns = MarketObservation.__table__.c
+
+    assert columns.currency_raw.nullable
+    assert not columns.currency_inferred.nullable
+    assert columns.currency_inferred.server_default is not None
+
+
 # Seller.from_url
+
 
 def test_seller_from_url_parses_and_lowercases_lang():
     seller = Seller.from_url("https://prom.ua/UA/c2847093-kemp.html")

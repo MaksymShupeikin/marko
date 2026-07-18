@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/environment.dart';
 import 'pricing_api.dart';
 import 'pricing_models.dart';
 
@@ -38,11 +39,30 @@ class RecommendationsController extends AsyncNotifier<RecommendationsState> {
 
   @override
   Future<RecommendationsState> build() async {
-    return RecommendationsState(
-      page: await ref
-          .watch(pricingApiProvider)
-          .listRecommendations(queue: 'raise'),
-      queue: 'raise',
+    final initialQueue = Environment.e2eMode ? 'review' : 'raise';
+    final initialPage = await _loadInitialPage(
+      ref.watch(pricingApiProvider),
+      initialQueue,
+    );
+    return RecommendationsState(page: initialPage, queue: initialQueue);
+  }
+
+  Future<RecommendationPage> _loadInitialPage(
+    PricingApi api,
+    String queue,
+  ) async {
+    final attempts = Environment.e2eMode ? 120 : 1;
+    for (var attempt = 0; attempt < attempts; attempt += 1) {
+      final page = await api.listRecommendations(
+        queue: queue,
+        sort: queue == 'review' ? 'review_priority' : 'priority',
+      );
+      if (!Environment.e2eMode || page.items.isNotEmpty) return page;
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+    return api.listRecommendations(
+      queue: queue,
+      sort: queue == 'review' ? 'review_priority' : 'priority',
     );
   }
 

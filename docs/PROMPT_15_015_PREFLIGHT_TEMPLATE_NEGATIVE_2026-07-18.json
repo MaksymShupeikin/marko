@@ -1,0 +1,246 @@
+{
+  "blockers": [
+    "PREFLIGHT_SECRET_FILE_PERMISSIONS_UNSAFE",
+    "PREFLIGHT_DATABASE_URL_PLACEHOLDER",
+    "PREFLIGHT_CELERY_BROKER_URL_PLACEHOLDER",
+    "PREFLIGHT_CELERY_RESULT_BACKEND_PLACEHOLDER",
+    "PREFLIGHT_ALLOWED_HOSTS_PLACEHOLDER",
+    "PREFLIGHT_CORS_ORIGINS_PLACEHOLDER",
+    "PREFLIGHT_FIREBASE_PROJECT_ID_PLACEHOLDER",
+    "PREFLIGHT_PUBLIC_API_BASE_URL_PLACEHOLDER",
+    "PREFLIGHT_FIREBASE_API_KEY_PLACEHOLDER",
+    "PREFLIGHT_FIREBASE_AUTH_DOMAIN_PLACEHOLDER",
+    "PREFLIGHT_FIREBASE_MESSAGING_SENDER_ID_PLACEHOLDER",
+    "PREFLIGHT_FIREBASE_WEB_APP_ID_PLACEHOLDER",
+    "PREFLIGHT_ALLOWED_HOSTS_UNSAFE",
+    "PREFLIGHT_CORS_UNSAFE"
+  ],
+  "checks": [
+    {
+      "id": "PREFLIGHT_INPUT_SOURCE",
+      "layer": "P0_INPUT_SOURCE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_DUPLICATE_KEYS",
+      "layer": "P0_INPUT_SOURCE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONFIG_PERMISSIONS",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_SECRET_FILE_PERMISSIONS_UNSAFE"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_ENVIRONMENT",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_DEBUG_DISABLED",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_API_DOCS_DISABLED",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_ENVIRONMENT",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_DATABASE_URL",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_DATABASE_URL_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_CELERY_BROKER_URL",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_CELERY_BROKER_URL_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_CELERY_RESULT_BACKEND",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_CELERY_RESULT_BACKEND_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_ALLOWED_HOSTS",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_ALLOWED_HOSTS_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_CORS_ORIGINS",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_CORS_ORIGINS_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_PROJECT_ID",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_FIREBASE_PROJECT_ID_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_PUBLIC_API_BASE_URL",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_PUBLIC_API_BASE_URL_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_API_KEY",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_FIREBASE_API_KEY_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_AUTH_DOMAIN",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_FIREBASE_AUTH_DOMAIN_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_MESSAGING_SENDER_ID",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_FIREBASE_MESSAGING_SENDER_ID_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_WEB_APP_ID",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [
+        "PREFLIGHT_FIREBASE_WEB_APP_ID_PLACEHOLDER"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_ALLOWED_HOSTS",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [
+        "PREFLIGHT_ALLOWED_HOSTS_UNSAFE"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_CORS",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [
+        "PREFLIGHT_CORS_UNSAFE"
+      ],
+      "secret_safe": true,
+      "status": "FAIL"
+    },
+    {
+      "id": "PREFLIGHT_E2E_AUTH_BYPASS",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_E2E_AUTH_TOKEN",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_ROBUST_V3_ACTIVATION",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_COMPARABILITY_ACTIVATION",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_SOURCE_ACCESS_REFERENCE",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_SETTINGS_SCHEMA",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONFIG_NOT_TRACKED",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    }
+  ],
+  "config_sha256": "e8e863e6b26e0c5068450da5b8b377475b9235e00f9de4d84cb7a946a818f43a",
+  "config_source": ".env.production.example",
+  "environment": "production",
+  "git_commit": "NOT_AVAILABLE",
+  "passed": false,
+  "requested_mode": "static",
+  "schema_version": "1.0.0",
+  "secrets_emitted": false,
+  "warnings": []
+}

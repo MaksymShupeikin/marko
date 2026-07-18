@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
@@ -36,6 +36,8 @@ from marko.api.schemas.pricing import (
 from metis.pricing import (
     CalibrationPair,
     CoefficientModel,
+    cluster_diagnostic_to_dict,
+    comparison_evidence_to_dict,
     dispersion_profile_to_dict,
     recommend_price,
 )
@@ -116,16 +118,39 @@ async def evaluate_price(
         outlier_count=result.outlier_count,
         sensitivity=result.sensitivity,
         action_gates_passed=result.action_gates_passed,
+        automatic_eligible=result.automatic_eligible,
+        verified_seller_count=result.verified_seller_count,
+        comparability_policy_id=result.comparability_policy_id,
+        comparability_policy_hash=result.comparability_policy_hash,
+        hard_gate_results=dict(result.hard_gate_results),
+        failed_hard_gates=list(result.failed_hard_gates),
+        unknown_hard_fields=list(result.unknown_hard_fields),
+        robust_diagnostic=cluster_diagnostic_to_dict(result.cluster_diagnostic),
+        robust_policy_fingerprint=dict(result.robust_policy_fingerprint),
         cost_floor=result.cost_floor,
         cost_basis_inventory_value=result.cost_basis_inventory_value,
         priority_score=result.priority_score,
         priority_score_type=result.priority_score_type.value,
         review_priority=result.review_priority,
         reasons=list(result.reasons),
-        evidence=[asdict(item) for item in result.evidence],
+        evidence=[_normalized_offer_payload(item) for item in result.evidence],
         excluded=[asdict(item) for item in result.excluded],
         policy_version=result.policy_version,
     )
+
+
+def _normalized_offer_payload(item: object) -> dict[str, object]:
+    """Serialize an immutable offer without deepcopying MappingProxyType evidence."""
+
+    payload = {
+        field.name: getattr(item, field.name)
+        for field in fields(item)
+        if field.name != "comparison_evidence"
+    }
+    payload["comparison_evidence"] = comparison_evidence_to_dict(
+        getattr(item, "comparison_evidence")
+    )
+    return payload
 
 
 @router.post(
@@ -462,6 +487,8 @@ async def get_recommendation_market_evidence(
                 url=observation.url,
                 price=observation.price,
                 currency=observation.currency,
+                currency_raw=observation.currency_raw,
+                currency_inferred=observation.currency_inferred,
                 is_available=observation.is_available,
                 match_confidence=observation.match_confidence,
                 source_confidence=observation.source_confidence,
@@ -489,6 +516,10 @@ async def get_recommendation_market_evidence(
                     str(normalized.get("coefficient_confidence", "1"))
                 ),
                 observed_at=observation.observed_at,
+                automatic_eligible=observation.automatic_eligible,
+                comparability_policy_id=observation.comparability_policy_id,
+                comparability_policy_hash=observation.comparability_policy_hash,
+                comparison_evidence=observation.comparison_evidence,
             )
         )
     return response
@@ -633,6 +664,13 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         outlier_count=recommendation.outlier_count,
         sensitivity=recommendation.sensitivity,
         action_gates_passed=recommendation.action_gates_passed,
+        automatic_eligible=recommendation.automatic_eligible,
+        verified_seller_count=recommendation.verified_seller_count,
+        comparability_policy_id=recommendation.comparability_policy_id,
+        comparability_policy_hash=recommendation.comparability_policy_hash,
+        decision_fingerprint=recommendation.decision_fingerprint,
+        hard_gate_trace=recommendation.hard_gate_trace,
+        robust_diagnostic=recommendation.robust_diagnostic,
         cost_floor=recommendation.cost_floor,
         cost_basis_inventory_value=recommendation.cost_basis_inventory_value,
         priority_score=recommendation.priority_score,

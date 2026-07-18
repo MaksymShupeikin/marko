@@ -6,6 +6,7 @@ x-backend-environment: &backend-environment
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-marko}:${POSTGRES_PASSWORD:-marko}@db:5432/${POSTGRES_DB:-marko}
   CELERY_BROKER_URL: redis://broker:6379/0
   CELERY_RESULT_BACKEND: redis://broker:6379/1
+  CELERY_VISIBILITY_TIMEOUT_SECONDS: ${CELERY_VISIBILITY_TIMEOUT_SECONDS:-3600}
   API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
   ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,test,testserver}
   CORS_ORIGINS: http://localhost:${WEB_PORT:-8080}
@@ -32,6 +33,14 @@ x-backend-environment: &backend-environment
   PRICING_SCRAPER_MAX_SEARCH_PAGES: ${PRICING_SCRAPER_MAX_SEARCH_PAGES:-3}
   PRICING_SCRAPER_MAX_SELLERS: ${PRICING_SCRAPER_MAX_SELLERS:-10}
   PRICING_V3_ROBUST_DISPERSION_ENABLED: ${PRICING_V3_ROBUST_DISPERSION_ENABLED:-false}
+  PRICING_V3_ACTIVATION_ARTIFACT: ${PRICING_V3_ACTIVATION_ARTIFACT:-}
+  PRICING_V3_ACTIVATION_SHA256: ${PRICING_V3_ACTIVATION_SHA256:-}
+  PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED: ${PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED:-false}
+  PRICING_COMPARABILITY_ACTIVATION_ARTIFACT: ${PRICING_COMPARABILITY_ACTIVATION_ARTIFACT:-}
+  PRICING_COMPARABILITY_ACTIVATION_SHA256: ${PRICING_COMPARABILITY_ACTIVATION_SHA256:-}
+  E2E_AUTH_BYPASS: ${E2E_AUTH_BYPASS:-false}
+  E2E_AUTH_TOKEN: ${E2E_AUTH_TOKEN:-}
+  E2E_TASK_HOLD_SECONDS: ${E2E_TASK_HOLD_SECONDS:-0}
   STORE_SYNC_WORKER_COUNT: ${STORE_SYNC_WORKER_CONCURRENCY:-2}
   STORE_SYNC_MAX_TASK_EXECUTIONS: ${STORE_SYNC_MAX_TASK_EXECUTIONS:-3}
   STORE_SYNC_ITEM_DEADLINE_SECONDS: ${STORE_SYNC_ITEM_DEADLINE_SECONDS:-3600}
@@ -45,6 +54,9 @@ x-backend-environment: &backend-environment
   SCRAPE_RAW_EVIDENCE_REPLAY_ENABLED: ${SCRAPE_RAW_EVIDENCE_REPLAY_ENABLED:-true}
   SCRAPE_EVIDENCE_GC_BATCH_SIZE: ${SCRAPE_EVIDENCE_GC_BATCH_SIZE:-1000}
   SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS: ${SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS:-3600}
+  SCHEDULER_SINGLETON_LOCK_KEY: ${SCHEDULER_SINGLETON_LOCK_KEY:-marko:scheduler:singleton:v1}
+  SCHEDULER_SINGLETON_TTL_SECONDS: ${SCHEDULER_SINGLETON_TTL_SECONDS:-30}
+  SCHEDULER_SINGLETON_REFRESH_SECONDS: ${SCHEDULER_SINGLETON_REFRESH_SECONDS:-10}
   PYTHONDONTWRITEBYTECODE: 1
 
 x-backend: &backend
@@ -61,7 +73,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-marko}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marko}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -107,7 +119,7 @@ services:
         "${API_WORKERS:-1}",
       ]
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -136,12 +148,18 @@ services:
         "--loglevel=INFO",
         "--queues=celery,pricing-calculation",
         "--concurrency=${GENERAL_WORKER_CONCURRENCY:-1}",
+        "--hostname=general@%h",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
       broker:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app marko.worker.celery_app:celery_app inspect ping --destination general@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
 
   store-sync-worker:
     <<: *backend
@@ -154,12 +172,18 @@ services:
         "--loglevel=INFO",
         "--queues=store-sync",
         "--concurrency=${STORE_SYNC_WORKER_CONCURRENCY:-2}",
+        "--hostname=store-sync@%h",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
       broker:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app marko.worker.celery_app:celery_app inspect ping --destination store-sync@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
 
   pricing-worker:
     <<: *backend
@@ -172,23 +196,22 @@ services:
         "--loglevel=INFO",
         "--queues=pricing",
         "--concurrency=${PRICING_WORKER_CONCURRENCY:-1}",
+        "--hostname=pricing@%h",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
       broker:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app marko.worker.celery_app:celery_app inspect ping --destination pricing@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
 
   scheduler:
     <<: *backend
-    command:
-      [
-        "celery",
-        "--app",
-        "marko.worker.celery_app:celery_app",
-        "beat",
-        "--loglevel=INFO",
-      ]
+    command: ["python", "-m", "marko.worker.beat_singleton"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -215,12 +238,19 @@ services:
         FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
         FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
         FIREBASE_WEB_APP_ID: ${FIREBASE_WEB_APP_ID:-}
+        E2E_MODE: ${E2E_MODE:-false}
+        E2E_AUTH_TOKEN: ${E2E_AUTH_TOKEN:-}
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   postgres_data:

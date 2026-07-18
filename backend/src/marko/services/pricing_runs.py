@@ -6,8 +6,10 @@ from dataclasses import asdict, fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+import hashlib
 import json
-from typing import Any, Mapping
+from pathlib import Path
+from typing import Any, Literal, Mapping
 from uuid import UUID, uuid4
 
 from celery import Celery
@@ -45,6 +47,7 @@ from metis.pricing.tiering import TIER_METHOD_VERSION
 from metis.pricing.observability import pricing_event
 from marko.services.scraper_contract import (
     PROM_ADAPTER_VERSION,
+    ScrapeInput,
     ScraperBoundaryError,
     ScraperErrorCode,
     fallback_input_hash,
@@ -215,14 +218,30 @@ def _validate_policy(policy: PricingPolicy) -> None:
 
 
 def require_activated_run_policy(
-    policy: PricingPolicy, *, robust_v3_enabled: bool
+    policy: PricingPolicy,
+    *,
+    robust_v3_enabled: bool,
+    activation_artifact_verified: bool = False,
 ) -> None:
-    if policy.version == "pricing-v3-robust-dispersion" and not robust_v3_enabled:
+    if policy.version in {
+        "pricing-v3-robust-dispersion",
+        "pricing-v3.1-heterogeneity-gated",
+    } and not (robust_v3_enabled and activation_artifact_verified):
         raise PricingRunError(
-            "pricing-v3-robust-dispersion is implemented for preview/replay "
-            "but production run activation is NO_GO until representative "
-            "decision-diff calibration passes"
+            "robust pricing activation is NO_GO: the policy is implemented for "
+            "preview/replay, but persisted activation requires both the explicit "
+            "feature flag and a verified versioned activation artifact"
         )
+
+
+def activation_artifact_verified(path_value: str, expected_sha256: str) -> bool:
+    if not path_value.strip() or len(expected_sha256.strip()) != 64:
+        return False
+    try:
+        payload = Path(path_value).expanduser().read_bytes()
+    except OSError:
+        return False
+    return hashlib.sha256(payload).hexdigest() == expected_sha256.strip().casefold()
 
 
 async def create_pricing_run(
@@ -232,8 +251,17 @@ async def create_pricing_run(
     import_batch_id: UUID,
     celery_app: Celery,
     policy_config: Mapping[str, Any] | None = None,
+    source_mode: Literal["live", "e2e_fixture_replay"] = "live",
 ) -> PricingRun:
-    require_live_prom_marketplace_collection()
+    settings = get_settings()
+    if source_mode == "live":
+        require_live_prom_marketplace_collection(settings)
+    elif not (
+        source_mode == "e2e_fixture_replay"
+        and settings.environment.strip().casefold() == "e2e"
+        and settings.e2e_auth_bypass
+    ):
+        raise PricingRunError("Fixture replay is isolated to authenticated E2E mode")
     batch = await session.scalar(
         select(CatalogImportBatch).where(
             CatalogImportBatch.id == import_batch_id,
@@ -258,10 +286,13 @@ async def create_pricing_run(
         return active
 
     policy = policy_from_dict(policy_config)
-    settings = get_settings()
     require_activated_run_policy(
         policy,
         robust_v3_enabled=settings.pricing_v3_robust_dispersion_enabled,
+        activation_artifact_verified=activation_artifact_verified(
+            settings.pricing_v3_activation_artifact,
+            settings.pricing_v3_activation_sha256,
+        ),
     )
     catalog_items = list(
         (
@@ -330,18 +361,26 @@ async def create_pricing_run(
         )
         rejected_reason: str | None = None
         try:
-            admission, admitted_input = admit_prom_public_item(
-                request,
-                request.items[0],
-                settings=settings,
-                now=submitted_at,
-            )
-            if admitted_input is None:
-                raise ScraperBoundaryError(
-                    code=ScraperErrorCode.SOURCE_ACCESS_BLOCKED,
-                    message="Trusted admission rejected the public source",
-                    retryable=False,
+            if source_mode == "e2e_fixture_replay":
+                admission = None
+                admitted_input = ScrapeInput.build(
+                    raw_url,
+                    raw_query,
+                    adapter_version=PARSER_ADAPTER_VERSION,
                 )
+            else:
+                admission, admitted_input = admit_prom_public_item(
+                    request,
+                    request.items[0],
+                    settings=settings,
+                    now=submitted_at,
+                )
+                if admitted_input is None:
+                    raise ScraperBoundaryError(
+                        code=ScraperErrorCode.SOURCE_ACCESS_BLOCKED,
+                        message="Trusted admission rejected the public source",
+                        retryable=False,
+                    )
             scrape_input = admitted_input
         except (ScraperBoundaryError, ValueError) as exc:
             input_hash = fallback_input_hash(
@@ -360,7 +399,12 @@ async def create_pricing_run(
             }
             policy_decision_id = f"rejected-{uuid4()}"
             source_policy_version = ADMISSION_POLICY_VERSION
-            source_policy_state = "PERMITTED"
+            source_policy_state = (
+                "NOT_PERMITTED"
+                if isinstance(exc, ScraperBoundaryError)
+                and exc.code == ScraperErrorCode.SOURCE_ACCESS_BLOCKED
+                else "UNKNOWN"
+            )
             submission_key = input_hash
             acquisition_key = input_hash
             rejected_reason = (
@@ -374,18 +418,33 @@ async def create_pricing_run(
             product_key = scrape_input.product_key
             normalized_query = scrape_input.query
             metadata_payload = scrape_input.as_dict()
-            policy_decision_id = admission.policy_decision_id
-            source_policy_version = admission.source_policy_version
-            source_policy_state = admission.source_policy_state.value
-            submission_key = admission.server_idempotency_keys.submission_key
-            acquisition_key = admission.server_idempotency_keys.acquisition_key
+            if admission is None:
+                policy_decision_id = f"e2e-fixture-replay-{run.id}"
+                source_policy_version = "e2e-fixture-replay-v1"
+                source_policy_state = "NOT_PERMITTED"
+                submission_key = input_hash
+                acquisition_key = input_hash
+            else:
+                policy_decision_id = admission.policy_decision_id
+                source_policy_version = admission.source_policy_version
+                source_policy_state = admission.source_policy_state.value
+                submission_key = admission.server_idempotency_keys.submission_key
+                acquisition_key = admission.server_idempotency_keys.acquisition_key
         target = targets_by_hash.get(input_hash)
         if target is None:
             target = ScrapeTarget(
                 pricing_run_id=run.id,
                 source="prom",
-                source_type="prom_public",
-                source_lane="PUBLIC_COMPETITOR",
+                source_type=(
+                    "persisted_replay"
+                    if source_mode == "e2e_fixture_replay"
+                    else "prom_public"
+                ),
+                source_lane=(
+                    "REPLAY"
+                    if source_mode == "e2e_fixture_replay"
+                    else "PUBLIC_COMPETITOR"
+                ),
                 source_policy_decision_id=policy_decision_id,
                 source_policy_version=source_policy_version,
                 source_policy_state=source_policy_state,
@@ -1234,6 +1293,10 @@ async def add_recommendation_decision(
     )
     if decision not in {"accepted", "rejected", "overridden"}:
         raise PricingRunError("Unknown recommendation decision")
+    if decision == "accepted" and not recommendation.automatic_eligible:
+        raise PricingRunError(
+            "Ineligible recommendation cannot be accepted; reject it or record a manual override"
+        )
     if decision == "overridden" and (new_price is None or new_price <= 0):
         raise PricingRunError("Override requires a positive new_price")
     if decision == "accepted":
@@ -1293,6 +1356,14 @@ async def add_recommendation_decision(
             decision=decision,
             new_price=str(new_price),
             approved_floor=str(approved_floor),
+        )
+    if decision == "overridden":
+        pricing_event(
+            "manual_recommendation_override",
+            recommendation_id=str(recommendation_id),
+            user_id=str(user_id),
+            original_automatic_eligible=recommendation.automatic_eligible,
+            policy_version=recommendation.policy_version,
         )
     return record
 

@@ -1,0 +1,50 @@
+{
+  "critical_mutations_survived": 0,
+  "mutation_probe_status": "PASS",
+  "mutations": [
+    {
+      "mutation_id": "unknown_dimension_treated_as_match",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_m021_removing_any_required_dimension_revokes_automatic"
+    },
+    {
+      "mutation_id": "conflict_not_classified_as_conflict",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_m001_m013_hard_dimensions_never_auto"
+    },
+    {
+      "mutation_id": "seller_identity_verification_bypassed",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_blank_or_mismatched_seller_identity_fails_direct_gate"
+    },
+    {
+      "mutation_id": "missing_raw_currency_inferred_from_normalized",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_m018_missing_raw_currency_does_not_default_to_uah"
+    },
+    {
+      "mutation_id": "unknown_source_type_trusted",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_m014_unknown_source_cannot_be_faked_by_confidence"
+    },
+    {
+      "mutation_id": "missing_provenance_hash_trusted",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_m015_missing_source_hash_abstains"
+    },
+    {
+      "mutation_id": "engine_skips_comparability_gate",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_comparability_contract.py::test_m025_original_raise_920_payload_is_killed"
+    }
+  ],
+  "production_files_modified": false,
+  "schema_version": "comparability-mutation-report-v1"
+}

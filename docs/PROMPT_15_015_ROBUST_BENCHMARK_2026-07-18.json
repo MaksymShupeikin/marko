@@ -1,0 +1,61 @@
+{
+  "benchmark_environment": {
+    "decimal_precision": 28,
+    "machine": "arm64",
+    "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
+    "python": "3.13.9"
+  },
+  "results": [
+    {
+      "full_profile_ms": 0.044167,
+      "n": 10,
+      "pair_count": 45,
+      "qn_ms": 0.010334,
+      "repeats": 5,
+      "sn_ms": 0.020833
+    },
+    {
+      "full_profile_ms": 0.20025,
+      "n": 25,
+      "pair_count": 300,
+      "qn_ms": 0.069166,
+      "repeats": 5,
+      "sn_ms": 0.114125
+    },
+    {
+      "full_profile_ms": 0.806166,
+      "n": 50,
+      "pair_count": 1225,
+      "qn_ms": 0.298334,
+      "repeats": 5,
+      "sn_ms": 0.463875
+    },
+    {
+      "full_profile_ms": 3.575583,
+      "n": 100,
+      "pair_count": 4950,
+      "qn_ms": 1.384959,
+      "repeats": 5,
+      "sn_ms": 1.942709
+    },
+    {
+      "full_profile_ms": 25.520417,
+      "n": 250,
+      "pair_count": 31125,
+      "qn_ms": 12.205541,
+      "repeats": 5,
+      "sn_ms": 18.540583
+    },
+    {
+      "full_profile_ms": 127.911542,
+      "n": 500,
+      "pair_count": 124750,
+      "qn_ms": 50.401541,
+      "repeats": 5,
+      "sn_ms": 59.528833
+    }
+  ],
+  "upstream_bound_evidence": "The pricing collector passes Settings.pricing_scraper_max_sellers (default 10) to ScrapeConfig; preview/API inputs remain guarded by PricingPolicy.robust_scale_max_cohort_size=500.",
+  "validated_ceiling": 500,
+  "validation_meaning": "largest exact cohort completed for Sn, Qn and the full profile; this is a capacity guard, not a latency SLO"
+}

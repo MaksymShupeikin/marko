@@ -1,0 +1,108 @@
+schema_version: "1.0.0"
+prompt_id: PROMPT_15_015
+captured_at: "2026-07-18T09:54:07Z"
+
+execution_input:
+  repo_requested: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  repo_realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  git_top_level: NOT_AVAILABLE
+  git_commit_before: NOT_AVAILABLE
+  branch_before: NOT_AVAILABLE
+  dirty_paths_before: []
+  dirty_paths_assessment: NOT_AVAILABLE_NO_GIT_METADATA
+  operating_system: Darwin_25.4.0
+  architecture: arm64
+  docker_binary: NOT_AVAILABLE
+  docker_daemon: NOT_AVAILABLE
+  compose_version: NOT_AVAILABLE
+  approved_container_runtime_documented: Docker_Desktop_with_Compose_v2
+  python_version: "3.14.3"
+  uv_version: "0.11.25"
+  flutter_version: "3.44.4"
+  dart_version: "3.12.2"
+  source_access_changes_authorized: false
+  live_prom_requests_authorized: false
+  automatic_price_application_authorized: false
+
+baseline_verification:
+  backend_tests:
+    command: cd backend && uv run pytest -q
+    status: PASS
+    result: 415_passed
+  ruff:
+    command: cd backend && uvx ruff check .
+    status: PASS
+  compileall:
+    command: cd backend && uv run python -m compileall -q src
+    status: PASS
+  alembic_heads:
+    command: cd backend && uv run alembic heads
+    status: PASS
+    result: 20260717_0010_single_head
+  alembic_offline_sql:
+    command: cd backend && uv run alembic upgrade head --sql
+    status: PASS
+    output_lines: 1422
+  frontend_format:
+    command: cd frontend && dart format --output=none --set-exit-if-changed lib test
+    status: PASS
+    changed_files: 0
+  frontend_analyze:
+    command: cd frontend && flutter analyze
+    status: BLOCKED_ENVIRONMENT
+    reason_code: DART_ANALYSIS_SERVER_TRUNCATED_LSP_JSON
+  frontend_tests:
+    command: cd frontend && flutter test
+    status: PASS
+    result: 21_passed
+  frontend_release_build:
+    command: cd frontend && flutter build web --release
+    status: PASS
+
+baseline_reproductions:
+  E2E-BASELINE:
+    status: BLOCKED_ENVIRONMENT
+    observed_before_fix: DOCKER_BINARY_NOT_AVAILABLE
+  MATCH-MISSING-HARD-FIELDS:
+    status: REPRODUCED
+    observed_before_fix:
+      action: RAISE
+      recommended_price: "920"
+  DISP-TWO-CLUSTERS:
+    status: REPRODUCED
+    observed_before_fix:
+      baseline_action: MANUAL_REVIEW
+      candidate_action: RAISE
+      candidate_price: "92"
+  PREFLIGHT-PLACEHOLDER:
+    status: REPRODUCED
+    observed_before_fix:
+      exit_code: 0
+      placeholder_template_accepted: true
+  executable_evidence:
+    command: >-
+      backend/.venv/bin/python scripts/reproduce_prompt_15_015_baseline.py
+      --expect before --output docs/PROMPT_15_015_BASELINE_REPRO_2026-07-18.json
+    status: PASS
+    artifact: docs/PROMPT_15_015_BASELINE_REPRO_2026-07-18.json
+
+hashes:
+  relevant_source_files:
+    backend/src/marko/services/matching.py: 037f828e20eedd0a2e1edb0b89068a0ac19fdcba043aa28b10c7cb75e8cf858e
+    backend/src/marko/services/parser_models.py: 759903519eeb0ef5f11ef7b159c239fcc06bcbb39ca7f11ee90f8b3f1ed41196
+    backend/src/marko/services/market_collection.py: a7d1f70ce4d5cab9fbccb6d8d11595d642534ebde7638fd132ba82878c399493
+    backend/src/marko/services/pricing_runs.py: bf29c6424797b179f7c91f0e1f78d113540b84c105b36697d3e1c20ea3ef67ba
+    backend/src/marko/services/recommendation_replay.py: be77f3a43f8ee464907319a719253b6b1804eeb2b2bdd049ea416936dec3c82d
+    backend/src/metis/pricing/types.py: 0aa590e7247358374a850af144bb9189d199185130683e515df31732f9557470
+    backend/src/metis/pricing/engine.py: 4dacb53a0451b950826f85edc55e9c897199e9967a913a0b1cf791b704b1697e
+    backend/src/metis/pricing/statistics.py: 15d6d2cb4fba0ef987a116e43709c19a1ac70b7e349bc2f027c42199aafe1e98
+    scripts/check_production_config.py: 562816cebf51f191e20ed61889e949f0f0dd4be8ffb1a8cc5b3319eb7d8fb8b6
+    scripts/validate_robust_dispersion_decision_diff.py: 4912351f18160b618ef688ed00c20c79d6d3b46c02f6226512b806ad4abd965e
+    deploy/.env.production.example: 8097deb787ea70abcf86cb2108179a291466e9f21bcef84104110da6ca3820de
+    compose.yaml: dbfd38da2aaaa097c8dfbe885cc206b4be80fec8be8c8bc8d440b30c06ab747e
+    deploy/compose.production.yaml: 590f09db992ce707aa2693e5940ee1cc4697350ca5be0dfdaa99f4f883bfdaa0
+  fixtures:
+    scripts/reproduce_prompt_15_015_baseline.py: EXECUTABLE_REPRO_SOURCE
+    docs/PROMPT_15_015_BASELINE_REPRO_2026-07-18.json: BEFORE_FIX_OUTPUT
+
+secrets_included: false

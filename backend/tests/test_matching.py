@@ -71,7 +71,7 @@ def test_brands_compatible_equal():
 
 
 def test_brands_compatible_missing_one_side():
-    assert brands_compatible("Bosch", None) is True
+    assert brands_compatible("Bosch", None) is False
 
 
 def test_brands_compatible_different_brands():
@@ -90,6 +90,18 @@ def test_match_offer_sku_exact():
     seed = product(id=1, sku="S1")
     cand = product(id=2, name="геть інша назва", sku="S1")
     assert match_offer(seed, cand, 0.55).kind == "sku"
+
+
+def test_match_offer_exact_model_does_not_bypass_brand_conflict():
+    seed = product(id=1, **{"model": {"id": "M1"}}, manufacturerInfo={"name": "Bosch"})
+    cand = product(id=2, **{"model": {"id": "M1"}}, manufacturerInfo={"name": "Sachs"})
+    assert match_offer(seed, cand, 0.01) is None
+
+
+def test_match_offer_exact_sku_does_not_bypass_laterality_conflict():
+    seed = product(id=1, sku="S1", name="Фара ліва")
+    cand = product(id=2, sku="S1", name="Фара права")
+    assert match_offer(seed, cand, 0.01) is None
 
 
 def test_match_offer_fuzzy_above_threshold():

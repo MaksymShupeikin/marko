@@ -22,23 +22,32 @@ from metis.pricing import (
     PricingResult,
     ProductPricingContext,
     StockStatus,
+    cluster_diagnostic_to_dict,
     dispersion_profile_to_dict,
     recommend_price,
     robust_dispersion_trace,
 )
 from marko.services.market_collection import _domain_offer
+from marko.services.decision_fingerprint import (
+    build_decision_fingerprint_payload,
+    canonical_sha256,
+)
 from marko.services.pricing_runs import (
     get_pricing_run,
     get_recommendation,
     load_target_tier_coefficients,
     policy_from_dict,
 )
+from metis.pricing.observability import pricing_event
 
 
 REPLAY_CONTRACT_V1 = "recommendation-replay-v1"
 REPLAY_CONTRACT_V2 = "recommendation-replay-v2"
-REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V2
-SUPPORTED_REPLAY_CONTRACTS = frozenset({REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2})
+REPLAY_CONTRACT_V3 = "recommendation-replay-v3"
+REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V3
+SUPPORTED_REPLAY_CONTRACTS = frozenset(
+    {REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3}
+)
 
 
 class RecommendationReplayUnavailable(RuntimeError):
@@ -135,11 +144,44 @@ async def replay_recommendation(
         ],
         coefficients,
         policy=policy,
+        legacy_replay="comparability" not in trace,
     )
     mismatches = compare_replayed_result(
         recommendation,
         result,
         replay_contract_version=replay_contract_version,
+    )
+    fingerprint_payload = build_decision_fingerprint_payload(
+        context_snapshot=recommendation.context_snapshot,
+        result=result,
+        observations=[value[0] for value in latest.values()],
+        policy_config=run.policy_config,
+        coefficients=coefficients.values(),
+        parser_version=run.parser_version,
+        classifier_version=run.classifier_version,
+        calibration_dataset_hash=run.calibration_dataset_hash,
+        coefficient_version=recommendation.coefficient_version,
+        build_identity=str(trace.get("build_identity", "NOT_AVAILABLE")),
+        price_tick=policy.price_tick,
+        price_tick_version=policy.price_tick_version,
+    )
+    replayed_fingerprint = canonical_sha256(fingerprint_payload)
+    if (
+        replay_contract_version == REPLAY_CONTRACT_V3
+        and recommendation.decision_fingerprint
+        and recommendation.decision_fingerprint != replayed_fingerprint
+    ):
+        mismatches["decision_fingerprint"] = {
+            "expected": recommendation.decision_fingerprint,
+            "actual": replayed_fingerprint,
+        }
+    replayed_summary = _replayed_summary(result)
+    replayed_summary["decision_fingerprint"] = replayed_fingerprint
+    pricing_event(
+        "replay_exact_match_total",
+        policy_version=result.policy_version,
+        exact_match=not mismatches,
+        value=1,
     )
     return RecommendationReplay(
         recommendation_id=recommendation.id,
@@ -147,7 +189,7 @@ async def replay_recommendation(
         calculated_at=calculated_at,
         exact_match=not mismatches,
         mismatches=mismatches,
-        replayed=_replayed_summary(result),
+        replayed=replayed_summary,
     )
 
 
@@ -272,7 +314,7 @@ def compare_replayed_result(
         ],
         "policy_version": replayed.policy_version,
     }
-    if contract == REPLAY_CONTRACT_V2:
+    if contract in {REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3}:
         stored_robust = trace.get("robust_dispersion", {})
         if not isinstance(stored_robust, Mapping):
             stored_robust = {}
@@ -314,6 +356,50 @@ def compare_replayed_result(
                 "robust_constants": replayed_robust["constants"],
             }
         )
+    if contract == REPLAY_CONTRACT_V3:
+        stored_comparability = trace.get("comparability", {})
+        if not isinstance(stored_comparability, Mapping):
+            stored_comparability = {}
+        expected.update(
+            {
+                "automatic_eligible": stored_comparability.get(
+                    "automatic_eligible"
+                ),
+                "verified_seller_count": stored_comparability.get(
+                    "verified_seller_count"
+                ),
+                "comparability_policy_id": stored_comparability.get("policy_id"),
+                "comparability_policy_hash": stored_comparability.get("policy_hash"),
+                "hard_gate_results": stored_comparability.get("hard_gates"),
+                "failed_hard_gates": stored_comparability.get(
+                    "failed_hard_gates"
+                ),
+                "unknown_hard_fields": stored_comparability.get(
+                    "unknown_hard_fields"
+                ),
+                "robust_diagnostic": trace.get("robust_diagnostic"),
+                "robust_policy_fingerprint": trace.get(
+                    "robust_policy_fingerprint"
+                ),
+            }
+        )
+        actual.update(
+            {
+                "automatic_eligible": replayed.automatic_eligible,
+                "verified_seller_count": replayed.verified_seller_count,
+                "comparability_policy_id": replayed.comparability_policy_id,
+                "comparability_policy_hash": replayed.comparability_policy_hash,
+                "hard_gate_results": dict(replayed.hard_gate_results),
+                "failed_hard_gates": list(replayed.failed_hard_gates),
+                "unknown_hard_fields": list(replayed.unknown_hard_fields),
+                "robust_diagnostic": cluster_diagnostic_to_dict(
+                    replayed.cluster_diagnostic
+                ),
+                "robust_policy_fingerprint": dict(
+                    replayed.robust_policy_fingerprint
+                ),
+            }
+        )
     return {
         field: {
             "stored": _json_value(expected[field]),
@@ -346,6 +432,13 @@ def _replayed_summary(result: PricingResult) -> dict[str, Any]:
         "reason_codes": list(result.reasons),
         "evidence_observation_ids": [offer.observation_id for offer in result.evidence],
         "policy_version": result.policy_version,
+        "automatic_eligible": result.automatic_eligible,
+        "verified_seller_count": result.verified_seller_count,
+        "comparability_policy_id": result.comparability_policy_id,
+        "comparability_policy_hash": result.comparability_policy_hash,
+        "hard_gate_results": dict(result.hard_gate_results),
+        "failed_hard_gates": list(result.failed_hard_gates),
+        "unknown_hard_fields": list(result.unknown_hard_fields),
     }
 
 

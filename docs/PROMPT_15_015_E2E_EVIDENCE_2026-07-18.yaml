@@ -1,0 +1,398 @@
+e2e_evidence:
+  schema_version: prompt-15.015-e2e-evidence-v1
+  status: PASS
+  run_id: 20260718T140556Z-1b2165b5
+  compose_project: marko-e2e-20260718t140556z-1b2165b5
+  git_commit: NOT_AVAILABLE
+  image_ids:
+  - ID: sha256:93eda1f122a1c002b99c9c967ad957c33d861fa85ad0ea348d53818ebbac0eed
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-browser-e2e-run-63fbb8ee1c7a
+    Repository: marko-e2e-20260718t140556z-1b2165b5-browser-e2e
+    Tag: latest
+    Platform: linux/arm64
+    Size: 902787196
+    Created: '2026-07-18T16:01:14.082880072+02:00'
+    LastTagTime: '2026-07-18T14:05:57.054962222Z'
+  - ID: sha256:4ad5c7eb6263196ce9358ddd7ca78a1a7aec7f4fdc1b49a8a1b0a6ea386921e3
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-scheduler-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-scheduler
+    Tag: latest
+    Platform: linux/arm64
+    Size: 133239564
+    Created: '2026-07-18T16:05:58.554701645+02:00'
+    LastTagTime: '2026-07-18T14:05:58.75196116Z'
+  - ID: sha256:aabdec7315b0114703d57fdd534e6be507b3f6ca156e12b2590ab8f1bb9d169a
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-api-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-api
+    Tag: latest
+    Platform: linux/arm64
+    Size: 133239558
+    Created: '2026-07-18T16:05:58.554701645+02:00'
+    LastTagTime: '2026-07-18T14:05:58.752303986Z'
+  - ID: sha256:b4752701af539b60de3fa1e3c63bcecce552d1d705798e66a71cac6cbd81df12
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-store-sync-worker-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-store-sync-worker
+    Tag: latest
+    Platform: linux/arm64
+    Size: 133239572
+    Created: '2026-07-18T16:05:58.554701645+02:00'
+    LastTagTime: '2026-07-18T14:05:58.751646739Z'
+  - ID: sha256:351c0bcafd9f49c0cebbe1bddcc912b5718074cf7229b89c0d1ba9737d003ae8
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-pricing-worker-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-pricing-worker
+    Tag: latest
+    Platform: linux/arm64
+    Size: 133239569
+    Created: '2026-07-18T16:05:58.554701645+02:00'
+    LastTagTime: '2026-07-18T14:05:58.750972951Z'
+  - ID: sha256:ba16b0bef1bacb5a757e2827ed9751c2fb60ab5234738515a65ac2bba2d4f79d
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-worker-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-worker
+    Tag: latest
+    Platform: linux/arm64
+    Size: 133239561
+    Created: '2026-07-18T16:05:58.554701645+02:00'
+    LastTagTime: '2026-07-18T14:05:58.752799949Z'
+  - ID: sha256:7390a0a69064c92b0586fffab1f442e44873df2e2a619d9515c41a5715f54dcd
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-frontend-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-frontend
+    Tag: latest
+    Platform: linux/arm64
+    Size: 40484650
+    Created: '2026-07-18T16:06:22.792855095+02:00'
+    LastTagTime: '2026-07-18T14:06:23.609185737Z'
+  - ID: sha256:1576124547a81d026b6dc96a6a4d6812871b85e4947a2e52564d24aa0a52149a
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-migrate-1
+    Repository: marko-e2e-20260718t140556z-1b2165b5-migrate
+    Tag: latest
+    Platform: linux/arm64
+    Size: 133239562
+    Created: '2026-07-18T16:05:58.554701645+02:00'
+    LastTagTime: '2026-07-18T14:05:58.750582129Z'
+  - ID: sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-broker-1
+    Repository: redis
+    Tag: 8-alpine
+    Platform: linux/arm64/v8
+    Size: 37303206
+    Created: '2026-06-22T20:06:22.485623546Z'
+    LastTagTime: '2026-07-18T12:52:03.458883679Z'
+  - ID: sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    ContainerName: marko-e2e-20260718t140556z-1b2165b5-db-1
+    Repository: postgres
+    Tag: 17-alpine
+    Platform: linux/arm64/v8
+    Size: 114981107
+    Created: '2026-07-07T17:46:49.401690597Z'
+    LastTagTime: '2026-07-18T12:52:07.966276647Z'
+  tool_versions:
+    python: 3.13.9
+    docker: 29.5.2
+    compose: 5.3.1
+  migration_head: 20260718_0011 (head)
+  service_health:
+    compose_ps_json:
+    - Command: '"uvicorn marko.api.m…"'
+      CreatedAt: 2026-07-18 16:06:31 +0200 CEST
+      ExitCode: 0
+      Health: healthy
+      ID: f166fe14cc75
+      Image: marko-e2e-20260718t140556z-1b2165b5-api
+      Labels: com.docker.compose.container-number=1,com.docker.compose.depends_on=migrate:service_completed_successfully:false,broker:service_healthy:false,com.docker.compose.image=sha256:aabdec7315b0114703d57fdd534e6be507b3f6ca156e12b2590ab8f1bb9d169a,com.docker.compose.oneoff=False,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.service=api,com.docker.compose.config-hash=c6edd30c9e052c9cde81d9553a73b772e673ca1fd7e31cbf4800cc8cd47bdb47,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.version=5.3.1
+      LocalVolumes: '0'
+      Mounts: ''
+      Name: marko-e2e-20260718t140556z-1b2165b5-api-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-api-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 127.0.0.1:54135->8000/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: 127.0.0.1
+        TargetPort: 8000
+        PublishedPort: 54135
+        Protocol: tcp
+      RunningFor: About a minute ago
+      Service: api
+      Size: 0B
+      State: running
+      Status: Up About a minute (healthy)
+    - Command: '"docker-entrypoint.s…"'
+      CreatedAt: 2026-07-18 16:06:24 +0200 CEST
+      ExitCode: 0
+      Health: healthy
+      ID: 0f7ef6c49cf7
+      Image: redis:8-alpine
+      Labels: com.docker.compose.config-hash=f190f30bba3e78627712824d56dfbbdd3f4a56dc613fe48acf7d26f7a40483c8,com.docker.compose.container-number=1,com.docker.compose.image=sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005,com.docker.compose.oneoff=False,com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.service=broker,com.docker.compose.depends_on=,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.version=5.3.1
+      LocalVolumes: '1'
+      Mounts: marko-e2e-2026…
+      Name: marko-e2e-20260718t140556z-1b2165b5-broker-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-broker-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 127.0.0.1:54134->6379/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: 127.0.0.1
+        TargetPort: 6379
+        PublishedPort: 54134
+        Protocol: tcp
+      RunningFor: 2 minutes ago
+      Service: broker
+      Size: 0B
+      State: running
+      Status: Up 6 seconds (healthy)
+    - Command: '"docker-entrypoint.s…"'
+      CreatedAt: 2026-07-18 16:06:24 +0200 CEST
+      ExitCode: 0
+      Health: starting
+      ID: 3550919b0391
+      Image: postgres:17-alpine
+      Labels: com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.depends_on=,com.docker.compose.image=sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193,com.docker.compose.oneoff=False,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.service=db,com.docker.compose.version=5.3.1,com.docker.compose.config-hash=e9ef2c282af27ef46ee4304d45860e1ddc709ab228defd8efe7d05a630d48ddf,com.docker.compose.container-number=1
+      LocalVolumes: '1'
+      Mounts: marko-e2e-2026…
+      Name: marko-e2e-20260718t140556z-1b2165b5-db-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-db-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 127.0.0.1:54133->5432/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: 127.0.0.1
+        TargetPort: 5432
+        PublishedPort: 54133
+        Protocol: tcp
+      RunningFor: 2 minutes ago
+      Service: db
+      Size: 0B
+      State: running
+      Status: 'Up Less than a second (health: starting)'
+    - Command: '"/docker-entrypoint.…"'
+      CreatedAt: 2026-07-18 16:06:29 +0200 CEST
+      ExitCode: 0
+      Health: starting
+      ID: 87d54e26eacb
+      Image: marko-e2e-20260718t140556z-1b2165b5-frontend
+      Labels: com.docker.compose.depends_on=,com.docker.compose.image=sha256:7390a0a69064c92b0586fffab1f442e44873df2e2a619d9515c41a5715f54dcd,com.docker.compose.service=frontend,maintainer=NGINX
+        Docker Maintainers <docker-maint@nginx.com>,com.docker.compose.container-number=1,com.docker.compose.oneoff=False,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.version=5.3.1,com.docker.compose.config-hash=377f3db88c39d18927b514e81ffb2ee8550844a7baa58115daa5ce02e20231de
+      LocalVolumes: '0'
+      Mounts: ''
+      Name: marko-e2e-20260718t140556z-1b2165b5-frontend-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-frontend-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 127.0.0.1:54136->80/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: 127.0.0.1
+        TargetPort: 80
+        PublishedPort: 54136
+        Protocol: tcp
+      RunningFor: About a minute ago
+      Service: frontend
+      Size: 0B
+      State: running
+      Status: 'Up About a minute (health: starting)'
+    - Command: '"celery --app marko.…"'
+      CreatedAt: 2026-07-18 16:06:44 +0200 CEST
+      ExitCode: 0
+      Health: healthy
+      ID: d3e919f1eceb
+      Image: marko-e2e-20260718t140556z-1b2165b5-pricing-worker
+      Labels: com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.version=5.3.1,com.docker.compose.depends_on=broker:service_healthy:false,migrate:service_completed_successfully:false,com.docker.compose.image=sha256:351c0bcafd9f49c0cebbe1bddcc912b5718074cf7229b89c0d1ba9737d003ae8,com.docker.compose.oneoff=False,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.service=pricing-worker,com.docker.compose.config-hash=1470814530fb7b9de4d80ef2d072c0750c4b2373572d30030aa613664427600b,com.docker.compose.container-number=1
+      LocalVolumes: '0'
+      Mounts: ''
+      Name: marko-e2e-20260718t140556z-1b2165b5-pricing-worker-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-pricing-worker-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 8000/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: ''
+        TargetPort: 8000
+        PublishedPort: 0
+        Protocol: tcp
+      RunningFor: About a minute ago
+      Service: pricing-worker
+      Size: 0B
+      State: running
+      Status: Up About a minute (healthy)
+    - Command: '"python -m marko.wor…"'
+      CreatedAt: 2026-07-18 16:06:31 +0200 CEST
+      ExitCode: 0
+      Health: ''
+      ID: 50fbd7340afc
+      Image: marko-e2e-20260718t140556z-1b2165b5-scheduler
+      Labels: com.docker.compose.depends_on=migrate:service_completed_successfully:false,broker:service_healthy:false,com.docker.compose.image=sha256:4ad5c7eb6263196ce9358ddd7ca78a1a7aec7f4fdc1b49a8a1b0a6ea386921e3,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.container-number=1,com.docker.compose.oneoff=False,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.service=scheduler,com.docker.compose.version=5.3.1,com.docker.compose.config-hash=821cc14c7b08141d61b9c212e5c468f51add86440eeafb6ec4941b218117f637
+      LocalVolumes: '0'
+      Mounts: ''
+      Name: marko-e2e-20260718t140556z-1b2165b5-scheduler-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-scheduler-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 8000/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: ''
+        TargetPort: 8000
+        PublishedPort: 0
+        Protocol: tcp
+      RunningFor: About a minute ago
+      Service: scheduler
+      Size: 0B
+      State: running
+      Status: Up About a minute
+    - Command: '"celery --app marko.…"'
+      CreatedAt: 2026-07-18 16:06:31 +0200 CEST
+      ExitCode: 0
+      Health: healthy
+      ID: 03f6222438d5
+      Image: marko-e2e-20260718t140556z-1b2165b5-store-sync-worker
+      Labels: com.docker.compose.container-number=1,com.docker.compose.depends_on=migrate:service_completed_successfully:false,broker:service_healthy:false,com.docker.compose.oneoff=False,com.docker.compose.service=store-sync-worker,com.docker.compose.config-hash=9044b8dee56cec77d99da8c4220ef5ca4e94cb851b26830527f67afbc8dcbbb7,com.docker.compose.image=sha256:b4752701af539b60de3fa1e3c63bcecce552d1d705798e66a71cac6cbd81df12,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.version=5.3.1
+      LocalVolumes: '0'
+      Mounts: ''
+      Name: marko-e2e-20260718t140556z-1b2165b5-store-sync-worker-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-store-sync-worker-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 8000/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: ''
+        TargetPort: 8000
+        PublishedPort: 0
+        Protocol: tcp
+      RunningFor: About a minute ago
+      Service: store-sync-worker
+      Size: 0B
+      State: running
+      Status: Up About a minute (healthy)
+    - Command: '"celery --app marko.…"'
+      CreatedAt: 2026-07-18 16:06:31 +0200 CEST
+      ExitCode: 0
+      Health: healthy
+      ID: cf72937f66b6
+      Image: marko-e2e-20260718t140556z-1b2165b5-worker
+      Labels: com.docker.compose.depends_on=migrate:service_completed_successfully:false,broker:service_healthy:false,com.docker.compose.project.config_files=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия/compose.yaml,/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/compose.e2e.yaml,com.docker.compose.project.working_dir=/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko —
+        копия,com.docker.compose.version=5.3.1,com.docker.compose.config-hash=f177160910ce866991cb0b223ad4e6d44fd942e8e1030acac0b8a60d89ddfb35,com.docker.compose.container-number=1,com.docker.compose.image=sha256:ba16b0bef1bacb5a757e2827ed9751c2fb60ab5234738515a65ac2bba2d4f79d,com.docker.compose.oneoff=False,com.docker.compose.project=marko-e2e-20260718t140556z-1b2165b5,com.docker.compose.service=worker
+      LocalVolumes: '0'
+      Mounts: ''
+      Name: marko-e2e-20260718t140556z-1b2165b5-worker-1
+      Names: marko-e2e-20260718t140556z-1b2165b5-worker-1
+      Networks: marko-e2e-20260718t140556z-1b2165b5_default
+      Ports: 8000/tcp
+      Project: marko-e2e-20260718t140556z-1b2165b5
+      Publishers:
+      - URL: ''
+        TargetPort: 8000
+        PublishedPort: 0
+        Protocol: tcp
+      RunningFor: About a minute ago
+      Service: worker
+      Size: 0B
+      State: running
+      Status: Up About a minute (healthy)
+  queue_counts:
+    submitted: 2
+    terminal: 2
+    active: 0
+    unexplained_loss: 0
+  workflow_ids:
+  - 32c808f4-69ae-4f9c-8792-24e16c3d32d6
+  - a58a2537-15fd-4c44-8bca-cf7e3728129e
+  - 115dcea8-7ebc-463b-880b-125e140ae269
+  fixture_hashes:
+    catalog_xlsx: 639d48599af5f857bd1f6956218521404b46ba9f3c99dfdacab3b6be4b7ff2fb
+    persisted_replay: ce61cfe2bf833cb630548b2b1a85ffccbfd4cd2ca3b4800946fa1e68de1749d8
+  original_decision_hash: c8223f759cf92d62b5f0d24f7e6e642f3e382af238143d6e3d7beed87b55e261
+  replay_decision_hash: c8223f759cf92d62b5f0d24f7e6e642f3e382af238143d6e3d7beed87b55e261
+  failure_injection_results:
+  - id: E2E-F01
+    status: PASS
+    reason: READINESS_FAILED_CLOSED
+  - id: E2E-F02
+    status: PASS
+    reason: BROKER_FAILURE_BOUNDED_AND_VISIBLE
+  - id: E2E-F03
+    status: PASS
+    reason: WORKER_LOSS_FENCED_AND_REDELIVERED
+  - id: E2E-F04
+    status: PASS
+    reason: DUPLICATE_DELIVERY_IDEMPOTENT
+  - id: E2E-F05
+    status: PASS
+    reason: ROW_LEVEL_REJECTION_AUDITED
+  - id: E2E-F06
+    status: PASS
+    reason: MISSING_EVIDENCE_ABSTAINED
+  - id: E2E-F07
+    status: PASS
+    reason: FRONTEND_STARTED_BEFORE_API_AND_EVENTUALLY_RENDERED
+  - id: E2E-F08
+    status: PASS
+    reason: MIGRATION_FAILURE_BLOCKED_API
+  - id: E2E-F09
+    status: PASS
+    reason: SCHEDULER_SINGLETON_LEASE_REJECTED_DUPLICATE
+  - id: E2E-F10
+    status: PASS
+    reason: EVIDENCE_INTEGRITY_REJECTED
+  log_artifacts:
+  - .artifacts/prompt_15_015_e2e/20260718T140556Z-1b2165b5/browser-assertions.json
+  - .artifacts/prompt_15_015_e2e/20260718T140556Z-1b2165b5/browser-recommendation.png
+  - .artifacts/prompt_15_015_e2e/20260718T140556Z-1b2165b5/catalog-fixture.xlsx
+  - .artifacts/prompt_15_015_e2e/20260718T140556Z-1b2165b5/compose.log
+  browser_assertions:
+  - id: BROWSER_PAGE_RENDERED
+    status: PASS
+    expected: Какую цену поставить сейчас
+  - id: BROWSER_RECOMMENDATION_VISIBLE
+    status: PASS
+    expected: PROMPT 15.015 E2E brake pad
+  - id: BROWSER_ABSTENTION_VISIBLE
+    status: PASS
+    expected: автоцена не сформирована
+  - id: BROWSER_ELIGIBILITY_VISIBLE
+    status: PASS
+    expected: Automatic eligibility
+  - id: BROWSER_ELIGIBILITY_BLOCKED
+    status: PASS
+    expected: blocked
+  - id: BROWSER_MANUAL_OVERRIDE_VISIBLE
+    status: PASS
+    expected: Ручная цена (audit)
+  - id: BROWSER_REJECT_VISIBLE
+    status: PASS
+    expected: Отклонить
+  - id: BROWSER_ACCEPT_HIDDEN
+    status: PASS
+    expected: 0
+  - id: BROWSER_E2E_AUTH
+    status: PASS
+    status_code: 200
+  - id: BROWSER_REAL_API
+    status: PASS
+    status_code: 200
+  browser_trace_artifact: null
+  clean_migration_passed: true
+  runtime_services_passed: true
+  celery_workers_passed: true
+  scheduler_singleton_passed: true
+  frontend_served: true
+  business_workflow_passed: true
+  replay_exact: true
+  duplicate_delivery_safe: true
+  failure_matrix_passed: true
+  live_prom_requests: 0
+  automatic_price_applications: 0
+  cleanup_complete: true
+  blockers: []

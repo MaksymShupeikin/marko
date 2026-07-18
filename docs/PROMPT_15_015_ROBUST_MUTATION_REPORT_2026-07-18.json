@@ -1,0 +1,72 @@
+{
+  "mutation_probe_status": "PASS",
+  "mutations": [
+    {
+      "mutation_id": "qn_zero_based_rank",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion.py::test_qn_uses_only_pair_distances_and_one_based_k_rank"
+    },
+    {
+      "mutation_id": "qn_includes_self_distances",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion.py::test_qn_uses_only_pair_distances_and_one_based_k_rank"
+    },
+    {
+      "mutation_id": "sn_excludes_self_distance",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion.py::test_sn_includes_self_distance_and_uses_high_then_low_median"
+    },
+    {
+      "mutation_id": "sn_averages_inner_median",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion.py::test_sn_includes_self_distance_and_uses_high_then_low_median"
+    },
+    {
+      "mutation_id": "qn_historical_constant",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion.py::test_tight_oracle_detects_historical_qn_constant_substitution"
+    },
+    {
+      "mutation_id": "qn_multiplies_finite_denominator",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion.py::test_qn_n13_divides_by_finite_denominator_instead_of_multiplying"
+    },
+    {
+      "mutation_id": "cv_uses_mean_center",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion_variations.py::test_cv_uses_median_center_not_mean_mutation"
+    },
+    {
+      "mutation_id": "decision_profile_before_seller_dedup",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_dispersion_engine.py::test_profiles_are_built_after_seller_deduplication"
+    },
+    {
+      "mutation_id": "cluster_threshold_excludes_boundary",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_heterogeneity_gate.py::test_r017_threshold_boundary_uses_documented_inclusive_side"
+    },
+    {
+      "mutation_id": "cluster_diagnostic_ignored",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_heterogeneity_gate.py::test_r006_balanced_two_clusters_abstain_explicitly"
+    },
+    {
+      "mutation_id": "baseline_non_relaxation_ignored",
+      "return_code": 1,
+      "status": "KILLED",
+      "test_node": "tests/test_robust_heterogeneity_gate.py::test_r019_baseline_abstention_cannot_be_relaxed"
+    }
+  ],
+  "production_files_modified": false
+}

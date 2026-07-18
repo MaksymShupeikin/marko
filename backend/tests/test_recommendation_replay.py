@@ -11,6 +11,7 @@ from metis.pricing import (
     ProductTier,
     robust_dispersion_trace,
     recommend_price,
+    verified_comparison_evidence,
 )
 from marko.services.recommendation_replay import (
     REPLAY_CONTRACT_V1,
@@ -39,6 +40,11 @@ def _pricing_result():
             match_confidence=Decimal("0.95"),
             tier=ProductTier.BUDGET,
             tier_confidence=Decimal("0.95"),
+            currency_raw="UAH",
+            comparison_evidence=verified_comparison_evidence(
+                stable_seller_id=f"seller-{index}",
+                source_record_id=f"obs-{index}",
+            ),
         )
         for index in range(5)
     ]

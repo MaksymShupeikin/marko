@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/firebase_auth_client.dart';
+import '../../core/environment.dart';
 import 'auth_api.dart';
 import 'auth_models.dart';
 
@@ -93,7 +94,7 @@ class AuthController extends AsyncNotifier<MarkoAuthState> {
       _current.copyWith(busy: true, clearError: true, clearNotice: true),
     );
     try {
-      final user = await _api.me();
+      final user = await _loadUserWithBoundedStartupRetry();
       state = AsyncData(
         MarkoAuthState(user: user, busy: false, error: null, notice: null),
       );
@@ -108,7 +109,7 @@ class AuthController extends AsyncNotifier<MarkoAuthState> {
     }
     try {
       return MarkoAuthState(
-        user: await _api.me(),
+        user: await _loadUserWithBoundedStartupRetry(),
         busy: false,
         error: null,
         notice: null,
@@ -116,6 +117,22 @@ class AuthController extends AsyncNotifier<MarkoAuthState> {
     } catch (error) {
       return MarkoAuthState.initial.copyWith(error: _message(error));
     }
+  }
+
+  Future<AuthUser> _loadUserWithBoundedStartupRetry() async {
+    final attempts = Environment.e2eMode ? 20 : 1;
+    Object? lastError;
+    for (var attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return await _api.me();
+      } catch (error) {
+        lastError = error;
+        if (attempt + 1 >= attempts) rethrow;
+        final delayMs = (250 * (1 << attempt)).clamp(250, 2000);
+        await Future<void>.delayed(Duration(milliseconds: delayMs));
+      }
+    }
+    throw StateError('Authentication startup retry failed: $lastError');
   }
 
   bool _validate(String email, String password) {

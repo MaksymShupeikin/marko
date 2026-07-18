@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'environment.dart';
+
 class AuthSession {
   const AuthSession({
     required this.uid,
@@ -194,6 +196,40 @@ class FirebaseAuthClient implements AuthClient {
   }
 }
 
+/// Compile-time isolated browser session used by the disposable E2E image.
+class E2eAuthClient implements AuthClient {
+  const E2eAuthClient();
+
+  static const _session = AuthSession(
+    uid: 'marko-e2e-user-v1',
+    email: 'marko-e2e@example.com',
+    emailVerified: true,
+  );
+
+  @override
+  AuthSession get currentSession => _session;
+
+  @override
+  Stream<AuthSession?> get authStateChanges => Stream.value(_session);
+
+  @override
+  Future<String?> idToken({bool forceRefresh = false}) async =>
+      Environment.e2eAuthToken;
+
+  @override
+  Future<AuthSession> login(String email, String password) async => _session;
+
+  @override
+  Future<AuthSession> loginWithGoogle() async => _session;
+
+  @override
+  Future<void> logout() async {}
+
+  @override
+  Future<void> register(String email, String password) async {}
+}
+
 final authClientProvider = Provider<AuthClient>((ref) {
+  if (Environment.hasValidE2eConfig) return const E2eAuthClient();
   return FirebaseAuthClient(FirebaseAuth.instance);
 });

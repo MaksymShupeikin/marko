@@ -5,18 +5,20 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "Marko API"
+    build_identity: str = "NOT_AVAILABLE"
     environment: str = "development"
     debug: bool = False
     api_prefix: str = "/api/v1"
     database_url: str = "postgresql+asyncpg://marko@localhost:5432/marko"
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
+    celery_visibility_timeout_seconds: int = Field(default=3600, gt=0)
     api_docs_enabled: bool | None = None
     allowed_hosts: str = "localhost,127.0.0.1,test,testserver"
     cors_origins: str = "http://localhost:8080,http://localhost:3000"
@@ -48,6 +50,19 @@ class Settings(BaseSettings):
     pricing_scraper_max_search_pages: int = 3
     pricing_scraper_max_sellers: int = 10
     pricing_v3_robust_dispersion_enabled: bool = False
+    pricing_v3_activation_artifact: str = ""
+    pricing_v3_activation_sha256: str = ""
+    pricing_comparability_v1_automatic_enabled: bool = False
+    pricing_comparability_activation_artifact: str = ""
+    pricing_comparability_activation_sha256: str = ""
+    e2e_auth_bypass: bool = False
+    e2e_auth_token: str = ""
+    e2e_task_hold_seconds: float = 0.0
+    public_api_base_url: str = ""
+    firebase_api_key: str = ""
+    firebase_auth_domain: str = ""
+    firebase_messaging_sender_id: str = ""
+    firebase_web_app_id: str = ""
     store_sync_worker_count: int = 2
     store_sync_max_task_executions: int = 3
     store_sync_item_deadline_seconds: int = 3600
@@ -63,6 +78,9 @@ class Settings(BaseSettings):
     scrape_evidence_gc_interval_seconds: int = 3600
     scrape_outbox_reconcile_batch_size: int = 100
     scrape_outbox_reconcile_interval_seconds: int = 15
+    scheduler_singleton_lock_key: str = "marko:scheduler:singleton:v1"
+    scheduler_singleton_ttl_seconds: int = 30
+    scheduler_singleton_refresh_seconds: int = 10
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -84,6 +102,19 @@ class Settings(BaseSettings):
                     "A permitted Prom marketplace source requires an auditable "
                     "PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE"
                 )
+        if self.e2e_auth_bypass:
+            if environment != "e2e":
+                raise ValueError("E2E_AUTH_BYPASS is allowed only in ENVIRONMENT=e2e")
+            if len(self.e2e_auth_token) < 32:
+                raise ValueError(
+                    "E2E_AUTH_TOKEN must contain at least 32 characters when bypass is enabled"
+                )
+        elif self.e2e_auth_token:
+            raise ValueError("E2E_AUTH_TOKEN requires E2E_AUTH_BYPASS=true")
+        if self.e2e_task_hold_seconds < 0:
+            raise ValueError("E2E_TASK_HOLD_SECONDS must not be negative")
+        if self.e2e_task_hold_seconds and environment != "e2e":
+            raise ValueError("E2E_TASK_HOLD_SECONDS is allowed only in ENVIRONMENT=e2e")
         if environment == "production":
             if self.debug:
                 raise ValueError("DEBUG must be false in production")
@@ -95,6 +126,24 @@ class Settings(BaseSettings):
                 raise ValueError("Production CORS_ORIGINS must not contain a wildcard")
             if not self.firebase_project_id.strip():
                 raise ValueError("FIREBASE_PROJECT_ID must be configured in production")
+            if self.pricing_v3_robust_dispersion_enabled and not all(
+                (
+                    self.pricing_v3_activation_artifact.strip(),
+                    self.pricing_v3_activation_sha256.strip(),
+                )
+            ):
+                raise ValueError(
+                    "Robust v3 production activation requires an artifact and SHA-256"
+                )
+            if self.pricing_comparability_v1_automatic_enabled and not all(
+                (
+                    self.pricing_comparability_activation_artifact.strip(),
+                    self.pricing_comparability_activation_sha256.strip(),
+                )
+            ):
+                raise ValueError(
+                    "Comparability automatic activation requires an artifact and SHA-256"
+                )
         return self
 
     @property

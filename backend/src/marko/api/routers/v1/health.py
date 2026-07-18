@@ -1,4 +1,5 @@
 """Liveness and dependency readiness endpoints."""
+
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -37,10 +38,12 @@ async def source_access() -> SourceAccessResponse:
 
 
 @router.get("/ready", response_model=HealthResponse)
-async def ready(session: Annotated[AsyncSession, Depends(get_session)]) -> HealthResponse:
+async def ready(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> HealthResponse:
     try:
         await session.execute(text("SELECT 1"))
-    except SQLAlchemyError as exc:
+    except (SQLAlchemyError, OSError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database is unavailable",

@@ -1,0 +1,308 @@
+{
+  "blockers": [],
+  "checks": [
+    {
+      "id": "PREFLIGHT_INPUT_SOURCE",
+      "layer": "P0_INPUT_SOURCE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_DUPLICATE_KEYS",
+      "layer": "P0_INPUT_SOURCE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONFIG_PERMISSIONS",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_ENVIRONMENT",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_DEBUG_DISABLED",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_API_DOCS_DISABLED",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_ENVIRONMENT",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_DATABASE_URL",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_CELERY_BROKER_URL",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_CELERY_RESULT_BACKEND",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_ALLOWED_HOSTS",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_CORS_ORIGINS",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_PROJECT_ID",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_PUBLIC_API_BASE_URL",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_API_KEY",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_AUTH_DOMAIN",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_MESSAGING_SENDER_ID",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FIELD_FIREBASE_WEB_APP_ID",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_ALLOWED_HOSTS",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CORS",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_E2E_AUTH_BYPASS",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_E2E_AUTH_TOKEN",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_ROBUST_V3_ACTIVATION",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_COMPARABILITY_ACTIVATION",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_SOURCE_ACCESS_REFERENCE",
+      "layer": "P3_TOPOLOGY_AND_SECURITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_SETTINGS_SCHEMA",
+      "layer": "P1_STATIC_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONFIG_NOT_TRACKED",
+      "layer": "P2_PLACEHOLDER_AND_SECRET_HYGIENE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONNECTIVITY_DATABASE_URL",
+      "layer": "P4_DEPENDENCY_CONNECTIVITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONNECTIVITY_CELERY_BROKER_URL",
+      "layer": "P4_DEPENDENCY_CONNECTIVITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CONNECTIVITY_CELERY_RESULT_BACKEND",
+      "layer": "P4_DEPENDENCY_CONNECTIVITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_POSTGRES_SELECT_1",
+      "layer": "P4_DEPENDENCY_CONNECTIVITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_REDIS_BROKER_PING",
+      "layer": "P4_DEPENDENCY_CONNECTIVITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_REDIS_BACKEND_PING",
+      "layer": "P4_DEPENDENCY_CONNECTIVITY",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_DATABASE_SCHEMA",
+      "layer": "P5_DATABASE_SCHEMA",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_RUNTIME_SERVICES",
+      "layer": "P6_RUNTIME_SERVICES",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_CELERY_WORKERS",
+      "layer": "P6_RUNTIME_SERVICES",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_SCHEDULER_SINGLETON",
+      "layer": "P6_RUNTIME_SERVICES",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FRONTEND_RUNTIME",
+      "layer": "P6_RUNTIME_SERVICES",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_WORKFLOW_SMOKE",
+      "layer": "P7_WORKFLOW_SMOKE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_DUPLICATE_DELIVERY",
+      "layer": "P7_WORKFLOW_SMOKE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_FAILURE_MATRIX",
+      "layer": "P7_WORKFLOW_SMOKE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    },
+    {
+      "id": "PREFLIGHT_E2E_CLEANUP",
+      "layer": "P7_WORKFLOW_SMOKE",
+      "reason_codes": [],
+      "secret_safe": true,
+      "status": "PASS"
+    }
+  ],
+  "config_sha256": "7634565860f97b9ba17a12b458a4d7003ab514c6fa76a8669c1a69ff5e4e2ef7",
+  "config_source": "runtime.env",
+  "environment": "production",
+  "git_commit": "NOT_AVAILABLE",
+  "passed": true,
+  "requested_mode": "full",
+  "schema_version": "1.0.0",
+  "secrets_emitted": false,
+  "warnings": []
+}

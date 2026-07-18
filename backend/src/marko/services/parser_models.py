@@ -33,12 +33,26 @@ _FIELDS_PATH_MAP = {
     "opinions_rating": "productOpinionCounters.rating",
     "image": "imageAlt",
     "url_text": "urlText",
+    # Additive post-parse/enrichment boundary. The frozen network parser may
+    # leave every field below absent; UNKNOWN is preserved downstream.
+    "oe_raw": "comparisonEvidence.oeRaw",
+    "fitment": "comparisonEvidence.fitment",
+    "vehicle_generation": "comparisonEvidence.vehicleGeneration",
+    "year_from": "comparisonEvidence.yearFrom",
+    "year_to": "comparisonEvidence.yearTo",
+    "engine": "comparisonEvidence.engine",
+    "body_variant": "comparisonEvidence.bodyVariant",
+    "side": "comparisonEvidence.side",
+    "position": "comparisonEvidence.position",
+    "condition": "comparisonEvidence.condition",
+    "package_quantity": "comparisonEvidence.packageQuantity",
 }
 
 # Raw keys used as fallbacks when the primary nested path is absent.
 _FALLBACK_KEYS = {
     "model_id": "newModelId",
     "seller_id": "company_id",
+    "oe_raw": "oe",
 }
 
 
@@ -77,7 +91,18 @@ class Product:
     opinions_rating: float | None
     image: str | None
     url_text: str | None
-    url: str | None  # calculated, not from map
+    oe_raw: str | None
+    fitment: str | None
+    vehicle_generation: str | None
+    year_from: int | None
+    year_to: int | None
+    engine: str | None
+    body_variant: str | None
+    side: str | None
+    position: str | None
+    condition: str | None
+    package_quantity: int | None
+    url: str | None  # calculated, not from map; kept last for CSV compatibility
 
     @classmethod
     def from_raw(cls, raw: dict, lang: str = "ua") -> Product:

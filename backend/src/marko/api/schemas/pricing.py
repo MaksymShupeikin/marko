@@ -16,6 +16,7 @@ from metis.pricing import (
     ProductTier,
     StockStatus,
     TierCoefficient,
+    comparison_evidence_from_dict,
 )
 
 
@@ -227,6 +228,13 @@ class RecommendationResponse(BaseModel):
     outlier_count: int
     sensitivity: Decimal | None
     action_gates_passed: bool
+    automatic_eligible: bool
+    verified_seller_count: int
+    comparability_policy_id: str | None
+    comparability_policy_hash: str | None
+    decision_fingerprint: str | None
+    hard_gate_trace: dict[str, Any]
+    robust_diagnostic: dict[str, Any] | None
     cost_floor: Decimal | None
     cost_basis_inventory_value: Decimal | None
     priority_score: Decimal
@@ -301,6 +309,8 @@ class RecommendationEvidenceResponse(BaseModel):
     url: str
     price: Decimal
     currency: str
+    currency_raw: str | None
+    currency_inferred: bool
     is_available: bool | None
     match_confidence: Decimal
     source_confidence: Decimal
@@ -318,6 +328,10 @@ class RecommendationEvidenceResponse(BaseModel):
     coefficient_version: str
     coefficient_confidence: Decimal
     observed_at: datetime
+    automatic_eligible: bool
+    comparability_policy_id: str | None
+    comparability_policy_hash: str | None
+    comparison_evidence: dict[str, Any] | None
 
 
 class ObservationTierOverrideRequest(BaseModel):
@@ -345,10 +359,13 @@ class ObservationTierOverrideResponse(BaseModel):
 
 class CompetitorOfferInput(BaseModel):
     observation_id: str
-    seller_id: str
+    seller_id: str | None = None
     seller_name: str
     price: Decimal
-    currency: str = "UAH"
+    currency: str | None = None
+    currency_raw: str | None = None
+    currency_inferred: bool = False
+    currency_evidence: str | None = None
     is_available: bool | None = True
     age_hours: Decimal = Field(ge=0)
     match_confidence: Decimal = Field(ge=0, le=1)
@@ -361,9 +378,16 @@ class CompetitorOfferInput(BaseModel):
     is_dumping: bool = False
     severe_conflict: bool = False
     conflict_reason: str | None = None
+    source: str = "unknown"
+    listing_url: str | None = None
+    comparison_evidence: dict[str, Any] | None = None
 
     def to_domain(self) -> CompetitorOffer:
-        return CompetitorOffer(**self.model_dump())
+        values = self.model_dump()
+        values["comparison_evidence"] = comparison_evidence_from_dict(
+            values["comparison_evidence"]
+        )
+        return CompetitorOffer(**values)
 
 
 class TierCoefficientInput(BaseModel):
@@ -456,6 +480,15 @@ class PricingEvaluateResponse(BaseModel):
     outlier_count: int
     sensitivity: Decimal | None
     action_gates_passed: bool
+    automatic_eligible: bool
+    verified_seller_count: int
+    comparability_policy_id: str
+    comparability_policy_hash: str
+    hard_gate_results: dict[str, int]
+    failed_hard_gates: list[str]
+    unknown_hard_fields: list[str]
+    robust_diagnostic: dict[str, Any] | None
+    robust_policy_fingerprint: dict[str, str]
     cost_floor: Decimal | None
     cost_basis_inventory_value: Decimal | None
     priority_score: Decimal

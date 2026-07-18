@@ -1,0 +1,1454 @@
+schema: full_project_audit_gap_register
+schema_version: 2.0.0
+prompt_id: PROMPT_15_014
+prompt_revision: 2.0.0
+audit_run_id: AUDIT-20260718-115504-LOCAL
+audit_date: '2026-07-18'
+gaps:
+- gap_id: GAP-P0-001
+  system: SHARED
+  priority: P0
+  capability_id: MARKO-OPS-DEPLOY
+  title: 'Uncontrolled shared worktree: no VCS and concurrent uncoordinated agent writes'
+  description: No Git; during the audit another process rewrote metis/pricing, transiently broke the tree (F821) and left the suite red.
+  gap_type: DEPLOYMENT_GAP
+  risk_factors:
+    severity:
+      low: 5
+      high: 5
+      basis: hard-gate semantics
+    likelihood:
+      low: 5
+      high: 5
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 2
+      high: 2
+      basis: visibility of failure
+    dependency_centrality:
+      low: 3
+      high: 3
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 150
+    rpn_high: 150
+    normalized_low: 39.839572
+    normalized_high: 39.839572
+  section16_projection:
+    severity: 5
+    likelihood: 5
+    detection_difficulty: 2
+    dependency_centrality: 3
+    rpn: 150
+    normalized_rpn: 39.839572
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E3
+  evidence_refs: []
+  affected_invariants:
+  - reproducibility
+  - rollback
+  impacted_gates:
+  - AUDIT_REPORT_GATE
+  - PRODUCTION_GATE
+  blocks:
+  - REPRODUCIBLE_AUDIT
+  - SAFE_PARALLEL_DEVELOPMENT
+  owner_type: repository owner
+  remediation_class: process_and_tooling
+  backlog_item_id: IMPROVEMENT-001
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P0-001
+    predicate: git repository initialized with committed baseline; agent runs serialized
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P1-002
+  system: MARKO
+  priority: P1
+  capability_id: MARKO-PRICING-ORCHESTRATION
+  title: No executable database/broker integration evidence
+  description: All tests run without a database; PG-only SQL, migrations, Celery/Redis untested at runtime; no CI.
+  gap_type: EVIDENCE_GAP
+  risk_factors:
+    severity:
+      low: 4
+      high: 4
+      basis: hard-gate semantics
+    likelihood:
+      low: 3
+      high: 4
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 3
+      high: 3
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 108
+    rpn_high: 144
+    normalized_low: 28.609626
+    normalized_high: 38.235294
+  section16_projection:
+    severity: 4
+    likelihood: 4
+    detection_difficulty: 3
+    dependency_centrality: 3
+    rpn: 144
+    normalized_rpn: 38.235294
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E3
+  evidence_refs: []
+  affected_invariants:
+  - tenant isolation
+  - no duplicate observations
+  impacted_gates:
+  - PILOT_GATE
+  blocks:
+  - PILOT
+  - PRODUCTION_CANDIDATE
+  owner_type: engineering
+  remediation_class: integration_test_infrastructure
+  backlog_item_id: IMPROVEMENT-002
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P1-002
+    predicate: pytest and alembic upgrade pass against PostgreSQL/Redis in CI
+    required_evidence: E4 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E4
+  first_verification_command_id: null
+- gap_id: GAP-P1-003
+  system: COMBINED
+  priority: P1
+  capability_id: MARKO-SCRAPER-RUNTIME
+  title: Public competitor collection NOT_PERMITTED closes the mandatory live branch
+  description: Fail-closed verdict blocks run creation, sync, CLI and physical attempts pending a business/legal decision.
+  gap_type: SOURCE_ACCESS_GAP
+  risk_factors:
+    severity:
+      low: 4
+      high: 4
+      basis: hard-gate semantics
+    likelihood:
+      low: 5
+      high: 5
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 1
+      high: 1
+      basis: visibility of failure
+    dependency_centrality:
+      low: 3
+      high: 3
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 60
+    rpn_high: 60
+    normalized_low: 15.775401
+    normalized_high: 15.775401
+  section16_projection:
+    severity: 4
+    likelihood: 5
+    detection_difficulty: 1
+    dependency_centrality: 3
+    rpn: 60
+    normalized_rpn: 15.775401
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants:
+  - no forbidden source request
+  impacted_gates:
+  - PUBLIC_COLLECTION_GATE
+  blocks:
+  - LIVE_COMPETITOR_COLLECTION
+  owner_type: client and legal owner
+  remediation_class: business_decision
+  backlog_item_id: IMPROVEMENT-003
+  predecessors: []
+  successors: []
+  status: BLOCKED_DECISION
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P1-003
+    predicate: auditable permitted reference recorded or export-only decision documented
+    required_evidence: E2 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E2
+  first_verification_command_id: null
+- gap_id: GAP-P1-004
+  system: COMBINED
+  priority: P1
+  capability_id: MARKO-PRICING-ORCHESTRATION
+  title: End-to-end flow, load, backup/restore and recovery never executed
+  description: Runbook preflights (benchmark, restore drill, replay) have no recorded execution anywhere.
+  gap_type: EVIDENCE_GAP
+  risk_factors:
+    severity:
+      low: 4
+      high: 4
+      basis: hard-gate semantics
+    likelihood:
+      low: 3
+      high: 4
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 3
+      high: 3
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 108
+    rpn_high: 144
+    normalized_low: 28.609626
+    normalized_high: 38.235294
+  section16_projection:
+    severity: 4
+    likelihood: 4
+    detection_difficulty: 3
+    dependency_centrality: 3
+    rpn: 144
+    normalized_rpn: 38.235294
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants:
+  - replayability
+  impacted_gates:
+  - PRODUCTION_GATE
+  blocks:
+  - PRODUCTION_READY_PROVEN
+  owner_type: engineering
+  remediation_class: representative_environment_run
+  backlog_item_id: IMPROVEMENT-004
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P1-004
+    predicate: one recorded benchmark + restore drill + exact replay on representative environment
+    required_evidence: E5 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E5
+  first_verification_command_id: null
+- gap_id: GAP-P1-005
+  system: METIS
+  priority: P1
+  capability_id: METIS-COMPARABILITY
+  title: In-flight comparability gate breaks the evaluate endpoint contract
+  description: S2 reproducibly fails one pricing API test; fixtures lack mandatory ComparisonEvidence.
+  gap_type: PARTIAL_IMPLEMENTATION
+  risk_factors:
+    severity:
+      low: 3
+      high: 3
+      basis: hard-gate semantics
+    likelihood:
+      low: 5
+      high: 5
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 1
+      high: 1
+      basis: visibility of failure
+    dependency_centrality:
+      low: 2
+      high: 2
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 30
+    rpn_high: 30
+    normalized_low: 7.754011
+    normalized_high: 7.754011
+  section16_projection:
+    severity: 3
+    likelihood: 5
+    detection_difficulty: 1
+    dependency_centrality: 2
+    rpn: 30
+    normalized_rpn: 7.754011
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E3
+  evidence_refs: []
+  affected_invariants:
+  - abstention semantics
+  impacted_gates:
+  - METIS_PRODUCTION_GATE
+  blocks:
+  - PRICING_EVALUATE_API
+  owner_type: engineering
+  remediation_class: finish_in_flight_feature
+  backlog_item_id: IMPROVEMENT-005
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P1-005
+    predicate: full suite green on frozen post-implementation snapshot
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P1-006
+  system: SHARED
+  priority: P1
+  capability_id: MARKO-OPS-DEPLOY
+  title: No CI pipeline enforcing the runbook preflight
+  description: Repository contains no CI configuration; all release gates are manual.
+  gap_type: DEPLOYMENT_GAP
+  risk_factors:
+    severity:
+      low: 4
+      high: 4
+      basis: hard-gate semantics
+    likelihood:
+      low: 3
+      high: 4
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 2
+      high: 2
+      basis: visibility of failure
+    dependency_centrality:
+      low: 2
+      high: 2
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 48
+    rpn_high: 64
+    normalized_low: 12.566845
+    normalized_high: 16.84492
+  section16_projection:
+    severity: 4
+    likelihood: 4
+    detection_difficulty: 2
+    dependency_centrality: 2
+    rpn: 64
+    normalized_rpn: 16.84492
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates:
+  - DEPLOYABILITY_GATE
+  blocks:
+  - DEPLOYABILITY
+  owner_type: engineering
+  remediation_class: ci_pipeline
+  backlog_item_id: IMPROVEMENT-006
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P1-006
+    predicate: CI runs tests, lint, migrations-SQL and flutter checks on every change
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P2-007
+  system: MARKO
+  priority: P2
+  capability_id: MARKO-REPLAY-AUDIT
+  title: Append-only guarantees are application-level only
+  description: No DB triggers or privilege separation prevent UPDATE/DELETE on audit tables.
+  gap_type: DATA_MODEL_GAP
+  risk_factors:
+    severity:
+      low: 3
+      high: 4
+      basis: hard-gate semantics
+    likelihood:
+      low: 2
+      high: 2
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 4
+      high: 4
+      basis: visibility of failure
+    dependency_centrality:
+      low: 2
+      high: 2
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 48
+    rpn_high: 64
+    normalized_low: 12.566845
+    normalized_high: 16.84492
+  section16_projection:
+    severity: 4
+    likelihood: 2
+    detection_difficulty: 4
+    dependency_centrality: 2
+    rpn: 64
+    normalized_rpn: 16.84492
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants:
+  - append-only decisions
+  impacted_gates: []
+  blocks:
+  - AUDIT_TRUST
+  owner_type: engineering
+  remediation_class: db_hardening
+  backlog_item_id: IMPROVEMENT-007
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P2-007
+    predicate: DB-level immutability (triggers or revoked privileges) verified by test
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P2-008
+  system: MARKO
+  priority: P2
+  capability_id: MARKO-AUTH-TENANT
+  title: No API rate limiting or per-tenant quotas
+  description: Endpoints bounded only by size caps and worker capacity.
+  gap_type: SECURITY_GAP
+  risk_factors:
+    severity:
+      low: 3
+      high: 3
+      basis: hard-gate semantics
+    likelihood:
+      low: 2
+      high: 3
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 2
+      high: 2
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 36
+    rpn_high: 54
+    normalized_low: 9.358289
+    normalized_high: 14.171123
+  section16_projection:
+    severity: 3
+    likelihood: 3
+    detection_difficulty: 3
+    dependency_centrality: 2
+    rpn: 54
+    normalized_rpn: 14.171123
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks:
+  - ABUSE_RESISTANCE
+  owner_type: engineering
+  remediation_class: middleware
+  backlog_item_id: IMPROVEMENT-008
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P2-008
+    predicate: rate limits active and covered by tests
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P2-009
+  system: MARKO
+  priority: P2
+  capability_id: MARKO-SCRAPER-RUNTIME
+  title: PERMITTED_LIMITED not distinguished from PERMITTED_OFFICIAL
+  description: No allowed/prohibited operation scoping for the conditional source state.
+  gap_type: SOURCE_ACCESS_GAP
+  risk_factors:
+    severity:
+      low: 3
+      high: 3
+      basis: hard-gate semantics
+    likelihood:
+      low: 2
+      high: 2
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 3
+      high: 3
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 54
+    rpn_high: 54
+    normalized_low: 14.171123
+    normalized_high: 14.171123
+  section16_projection:
+    severity: 3
+    likelihood: 2
+    detection_difficulty: 3
+    dependency_centrality: 3
+    rpn: 54
+    normalized_rpn: 14.171123
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks:
+  - CONDITIONAL_SOURCE_OPERATION
+  owner_type: engineering
+  remediation_class: policy_scoping
+  backlog_item_id: IMPROVEMENT-009
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P2-009
+    predicate: limited verdict enforces an explicit operation allowlist
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P2-010
+  system: MARKO
+  priority: P2
+  capability_id: MARKO-SCRAPER-RUNTIME
+  title: Metrics endpoints load whole-run telemetry into memory and expose global queue depth
+  description: Full-table loads per call; store queue health counts all workspaces.
+  gap_type: CAPACITY_GAP
+  risk_factors:
+    severity:
+      low: 2
+      high: 3
+      basis: hard-gate semantics
+    likelihood:
+      low: 3
+      high: 3
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 1
+      high: 1
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 18
+    rpn_high: 27
+    normalized_low: 4.545455
+    normalized_high: 6.951872
+  section16_projection:
+    severity: 3
+    likelihood: 3
+    detection_difficulty: 3
+    dependency_centrality: 1
+    rpn: 27
+    normalized_rpn: 6.951872
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks:
+  - METRICS_AT_SCALE
+  owner_type: engineering
+  remediation_class: query_optimization
+  backlog_item_id: IMPROVEMENT-010
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P2-010
+    predicate: aggregate SQL instead of row loads; workspace-scoped queue metric
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P3-011
+  system: MARKO
+  priority: P3
+  capability_id: MARKO-OPERATOR-UI
+  title: frontend/AGENTS.md omits catalog, pricing and dashboard features
+  description: Stale instruction file misleads future agents.
+  gap_type: PARTIAL_IMPLEMENTATION
+  risk_factors:
+    severity:
+      low: 2
+      high: 2
+      basis: hard-gate semantics
+    likelihood:
+      low: 3
+      high: 3
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 2
+      high: 2
+      basis: visibility of failure
+    dependency_centrality:
+      low: 1
+      high: 1
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 12
+    rpn_high: 12
+    normalized_low: 2.941176
+    normalized_high: 2.941176
+  section16_projection:
+    severity: 2
+    likelihood: 3
+    detection_difficulty: 2
+    dependency_centrality: 1
+    rpn: 12
+    normalized_rpn: 2.941176
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks: []
+  owner_type: engineering
+  remediation_class: doc_update
+  backlog_item_id: IMPROVEMENT-011
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P3-011
+    predicate: AGENTS.md structure section matches lib/features
+    required_evidence: E2 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E2
+  first_verification_command_id: null
+- gap_id: GAP-P3-012
+  system: MARKO
+  priority: P3
+  capability_id: MARKO-PRICING-ORCHESTRATION
+  title: Rejected scrape targets labeled source_policy_state=PERMITTED
+  description: Invalid-input rejection branch stamps PERMITTED without an admission decision.
+  gap_type: PARTIAL_IMPLEMENTATION
+  risk_factors:
+    severity:
+      low: 2
+      high: 2
+      basis: hard-gate semantics
+    likelihood:
+      low: 2
+      high: 2
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 1
+      high: 1
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 12
+    rpn_high: 12
+    normalized_low: 2.941176
+    normalized_high: 2.941176
+  section16_projection:
+    severity: 2
+    likelihood: 2
+    detection_difficulty: 3
+    dependency_centrality: 1
+    rpn: 12
+    normalized_rpn: 2.941176
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks: []
+  owner_type: engineering
+  remediation_class: small_fix
+  backlog_item_id: IMPROVEMENT-012
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P3-012
+    predicate: rejected targets carry UNKNOWN or NOT_APPLICABLE policy state
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P3-013
+  system: METIS
+  priority: P3
+  capability_id: METIS-PRICING-KERNEL
+  title: Float libm operations make byte-exact replay platform-dependent
+  description: math.exp/log/pow via str() are per-platform deterministic only.
+  gap_type: REPLAY_GAP
+  risk_factors:
+    severity:
+      low: 2
+      high: 2
+      basis: hard-gate semantics
+    likelihood:
+      low: 2
+      high: 2
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 4
+      high: 4
+      basis: visibility of failure
+    dependency_centrality:
+      low: 2
+      high: 2
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 32
+    rpn_high: 32
+    normalized_low: 8.28877
+    normalized_high: 8.28877
+  section16_projection:
+    severity: 2
+    likelihood: 2
+    detection_difficulty: 4
+    dependency_centrality: 2
+    rpn: 32
+    normalized_rpn: 8.28877
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks: []
+  owner_type: engineering
+  remediation_class: documentation_or_decimal_port
+  backlog_item_id: IMPROVEMENT-013
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P3-013
+    predicate: replay contract documents platform binding or uses Decimal-only math
+    required_evidence: E3 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E3
+  first_verification_command_id: null
+- gap_id: GAP-P3-014
+  system: MARKO
+  priority: P3
+  capability_id: MARKO-SCRAPER-RUNTIME
+  title: freshness_generation is plumbed but never incremented
+  description: Dead knob in idempotency namespaces.
+  gap_type: PARTIAL_IMPLEMENTATION
+  risk_factors:
+    severity:
+      low: 2
+      high: 2
+      basis: hard-gate semantics
+    likelihood:
+      low: 2
+      high: 2
+      basis: observed/reproduced or structural
+    detection_difficulty:
+      low: 3
+      high: 3
+      basis: visibility of failure
+    dependency_centrality:
+      low: 1
+      high: 1
+      basis: critical-path centrality
+  risk_interval:
+    rpn_low: 12
+    rpn_high: 12
+    normalized_low: 2.941176
+    normalized_high: 2.941176
+  section16_projection:
+    severity: 2
+    likelihood: 2
+    detection_difficulty: 3
+    dependency_centrality: 1
+    rpn: 12
+    normalized_rpn: 2.941176
+    score_basis: CONSERVATIVE_UPPER_BOUND
+    engineering_assumption_id: ASSUMPTION-RISK-UPPER-BOUND
+  evidence_level: E2
+  evidence_refs: []
+  affected_invariants: []
+  impacted_gates: []
+  blocks: []
+  owner_type: engineering
+  remediation_class: small_fix
+  backlog_item_id: IMPROVEMENT-014
+  predecessors: []
+  successors: []
+  status: OPEN
+  acceptance_criteria:
+  - criterion_id: AC-GAP-P3-014
+    predicate: re-collection increments freshness generation or the field is removed
+    required_evidence: E2 evidence record
+    threshold: predicate true
+  acceptance_evidence_required: E2
+  first_verification_command_id: null
+improvements:
+- item_id: IMPROVEMENT-001
+  gap_ids:
+  - GAP-P0-001
+  title: Initialize Git baseline and serialize agent runs
+  class: DO_NOW
+  score_inputs:
+    impact:
+      low: 5
+      high: 5
+      basis: product/trust outcome
+    confidence:
+      low: 5
+      high: 5
+      basis_claim_ids:
+      - GAP-P0-001
+    urgency:
+      low: 5
+      high: 5
+      basis: active exposure
+    risk_reduction:
+      low: 5
+      high: 5
+      basis: closes named gaps
+    dependency_unblock:
+      low: 5
+      high: 5
+      basis: critical-path successors
+    effort:
+      low: 1
+      high: 1
+      basis: effort class scale
+  priority_score_low: 5.0
+  priority_score_high: 5.0
+  hard_gate_rank: 0
+  gap_priority_rank: 0
+  owner_type: repository owner
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: git init; commit snapshot; document single-writer rule
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P0-001
+  implementation_authorized: false
+- item_id: IMPROVEMENT-005
+  gap_ids:
+  - GAP-P1-005
+  title: Finish comparability integration and restore green suite
+  class: DO_NOW
+  score_inputs:
+    impact:
+      low: 4
+      high: 4
+      basis: product/trust outcome
+    confidence:
+      low: 5
+      high: 5
+      basis_claim_ids:
+      - GAP-P1-005
+    urgency:
+      low: 5
+      high: 5
+      basis: active exposure
+    risk_reduction:
+      low: 4
+      high: 4
+      basis: closes named gaps
+    dependency_unblock:
+      low: 4
+      high: 4
+      basis: critical-path successors
+    effort:
+      low: 2
+      high: 2
+      basis: effort class scale
+  priority_score_low: 2.175
+  priority_score_high: 2.175
+  hard_gate_rank: 1
+  gap_priority_rank: 1
+  owner_type: engineering
+  predecessors:
+  - IMPROVEMENT-001
+  successors: []
+  parallelizable: false
+  smallest_safe_first_step: attach ComparisonEvidence to marko fixtures and the evaluate API contract
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P1-005
+  implementation_authorized: false
+- item_id: IMPROVEMENT-002
+  gap_ids:
+  - GAP-P1-002
+  title: DB-backed integration test infrastructure
+  class: DO_NEXT
+  score_inputs:
+    impact:
+      low: 5
+      high: 5
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 5
+      basis_claim_ids:
+      - GAP-P1-002
+    urgency:
+      low: 4
+      high: 4
+      basis: active exposure
+    risk_reduction:
+      low: 5
+      high: 5
+      basis: closes named gaps
+    dependency_unblock:
+      low: 5
+      high: 5
+      basis: critical-path successors
+    effort:
+      low: 3
+      high: 3
+      basis: effort class scale
+  priority_score_low: 1.55
+  priority_score_high: 1.616667
+  hard_gate_rank: 1
+  gap_priority_rank: 1
+  owner_type: engineering
+  predecessors:
+  - IMPROVEMENT-001
+  successors: []
+  parallelizable: false
+  smallest_safe_first_step: add a docker-compose test profile job running pytest against PostgreSQL
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P1-002
+  implementation_authorized: false
+- item_id: IMPROVEMENT-006
+  gap_ids:
+  - GAP-P1-006
+  title: CI pipeline for runbook preflight
+  class: DO_NEXT
+  score_inputs:
+    impact:
+      low: 4
+      high: 4
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 5
+      basis_claim_ids:
+      - GAP-P1-006
+    urgency:
+      low: 4
+      high: 4
+      basis: active exposure
+    risk_reduction:
+      low: 4
+      high: 4
+      basis: closes named gaps
+    dependency_unblock:
+      low: 4
+      high: 5
+      basis: critical-path successors
+    effort:
+      low: 2
+      high: 2
+      basis: effort class scale
+  priority_score_low: 2.0
+  priority_score_high: 2.2
+  hard_gate_rank: 1
+  gap_priority_rank: 1
+  owner_type: engineering
+  predecessors:
+  - IMPROVEMENT-001
+  successors: []
+  parallelizable: false
+  smallest_safe_first_step: 'add CI workflow: pytest, ruff, alembic --sql, dart analyze, flutter test'
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P1-006
+  implementation_authorized: false
+- item_id: IMPROVEMENT-004
+  gap_ids:
+  - GAP-P1-004
+  title: Representative benchmark, restore drill and replay evidence
+  class: SCHEDULE
+  score_inputs:
+    impact:
+      low: 5
+      high: 5
+      basis: product/trust outcome
+    confidence:
+      low: 3
+      high: 4
+      basis_claim_ids:
+      - GAP-P1-004
+    urgency:
+      low: 3
+      high: 3
+      basis: active exposure
+    risk_reduction:
+      low: 4
+      high: 5
+      basis: closes named gaps
+    dependency_unblock:
+      low: 3
+      high: 4
+      basis: critical-path successors
+    effort:
+      low: 4
+      high: 5
+      basis: effort class scale
+  priority_score_low: 0.74
+  priority_score_high: 1.075
+  hard_gate_rank: 1
+  gap_priority_rank: 1
+  owner_type: engineering
+  predecessors:
+  - IMPROVEMENT-002
+  successors: []
+  parallelizable: false
+  smallest_safe_first_step: run scripts/evaluate_scraper_benchmark.py against isolated fixtures
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P1-004
+  implementation_authorized: false
+- item_id: IMPROVEMENT-003
+  gap_ids:
+  - GAP-P1-003
+  title: Source-access authorization decision
+  class: BLOCKED_DECISION
+  score_inputs:
+    impact:
+      low: 5
+      high: 5
+      basis: product/trust outcome
+    confidence:
+      low: 5
+      high: 5
+      basis_claim_ids:
+      - GAP-P1-003
+    urgency:
+      low: 3
+      high: 3
+      basis: active exposure
+    risk_reduction:
+      low: 4
+      high: 4
+      basis: closes named gaps
+    dependency_unblock:
+      low: 5
+      high: 5
+      basis: critical-path successors
+    effort:
+      low: 1
+      high: 1
+      basis: effort class scale
+  priority_score_low: 4.5
+  priority_score_high: 4.5
+  hard_gate_rank: 3
+  gap_priority_rank: 1
+  owner_type: client and legal owner
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: present the two options with legal implications to the client
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P1-003
+  implementation_authorized: false
+- item_id: IMPROVEMENT-007
+  gap_ids:
+  - GAP-P2-007
+  title: DB-level append-only hardening
+  class: SCHEDULE
+  score_inputs:
+    impact:
+      low: 3
+      high: 3
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P2-007
+    urgency:
+      low: 2
+      high: 2
+      basis: active exposure
+    risk_reduction:
+      low: 3
+      high: 3
+      basis: closes named gaps
+    dependency_unblock:
+      low: 2
+      high: 2
+      basis: critical-path successors
+    effort:
+      low: 2
+      high: 2
+      basis: effort class scale
+  priority_score_low: 1.425
+  priority_score_high: 1.425
+  hard_gate_rank: 2
+  gap_priority_rank: 2
+  owner_type: engineering
+  predecessors:
+  - IMPROVEMENT-002
+  successors: []
+  parallelizable: false
+  smallest_safe_first_step: add UPDATE/DELETE-blocking triggers on decision/override tables
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P2-007
+  implementation_authorized: false
+- item_id: IMPROVEMENT-008
+  gap_ids:
+  - GAP-P2-008
+  title: API rate limiting
+  class: SCHEDULE
+  score_inputs:
+    impact:
+      low: 3
+      high: 3
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P2-008
+    urgency:
+      low: 2
+      high: 3
+      basis: active exposure
+    risk_reduction:
+      low: 3
+      high: 3
+      basis: closes named gaps
+    dependency_unblock:
+      low: 2
+      high: 2
+      basis: critical-path successors
+    effort:
+      low: 2
+      high: 2
+      basis: effort class scale
+  priority_score_low: 1.425
+  priority_score_high: 1.5
+  hard_gate_rank: 2
+  gap_priority_rank: 2
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: add per-user limiter middleware on mutating endpoints
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P2-008
+  implementation_authorized: false
+- item_id: IMPROVEMENT-009
+  gap_ids:
+  - GAP-P2-009
+  title: Scope PERMITTED_LIMITED operations
+  class: SCHEDULE
+  score_inputs:
+    impact:
+      low: 3
+      high: 3
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P2-009
+    urgency:
+      low: 2
+      high: 2
+      basis: active exposure
+    risk_reduction:
+      low: 2
+      high: 3
+      basis: closes named gaps
+    dependency_unblock:
+      low: 2
+      high: 2
+      basis: critical-path successors
+    effort:
+      low: 2
+      high: 2
+      basis: effort class scale
+  priority_score_low: 1.325
+  priority_score_high: 1.425
+  hard_gate_rank: 2
+  gap_priority_rank: 2
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: add allowed_operations to SourceAccessStatus and enforce
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P2-009
+  implementation_authorized: false
+- item_id: IMPROVEMENT-010
+  gap_ids:
+  - GAP-P2-010
+  title: Aggregate metrics queries; workspace-scope queue depth
+  class: SCHEDULE
+  score_inputs:
+    impact:
+      low: 2
+      high: 3
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P2-010
+    urgency:
+      low: 2
+      high: 2
+      basis: active exposure
+    risk_reduction:
+      low: 2
+      high: 2
+      basis: closes named gaps
+    dependency_unblock:
+      low: 1
+      high: 2
+      basis: critical-path successors
+    effort:
+      low: 2
+      high: 2
+      basis: effort class scale
+  priority_score_low: 1.1
+  priority_score_high: 1.325
+  hard_gate_rank: 2
+  gap_priority_rank: 2
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: replace row loads with SQL aggregates in scraper_metrics
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P2-010
+  implementation_authorized: false
+- item_id: IMPROVEMENT-011
+  gap_ids:
+  - GAP-P3-011
+  title: Update frontend/AGENTS.md structure
+  class: DEFER
+  score_inputs:
+    impact:
+      low: 2
+      high: 2
+      basis: product/trust outcome
+    confidence:
+      low: 5
+      high: 5
+      basis_claim_ids:
+      - GAP-P3-011
+    urgency:
+      low: 1
+      high: 1
+      basis: active exposure
+    risk_reduction:
+      low: 1
+      high: 1
+      basis: closes named gaps
+    dependency_unblock:
+      low: 1
+      high: 1
+      basis: critical-path successors
+    effort:
+      low: 1
+      high: 1
+      basis: effort class scale
+  priority_score_low: 2.05
+  priority_score_high: 2.05
+  hard_gate_rank: 2
+  gap_priority_rank: 3
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: rewrite the directory-structure section
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P3-011
+  implementation_authorized: false
+- item_id: IMPROVEMENT-012
+  gap_ids:
+  - GAP-P3-012
+  title: Fix rejected-target policy state label
+  class: DEFER
+  score_inputs:
+    impact:
+      low: 2
+      high: 2
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P3-012
+    urgency:
+      low: 1
+      high: 1
+      basis: active exposure
+    risk_reduction:
+      low: 1
+      high: 1
+      basis: closes named gaps
+    dependency_unblock:
+      low: 1
+      high: 1
+      basis: critical-path successors
+    effort:
+      low: 1
+      high: 1
+      basis: effort class scale
+  priority_score_low: 1.85
+  priority_score_high: 1.85
+  hard_gate_rank: 2
+  gap_priority_rank: 3
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: set UNKNOWN policy state in the rejection branch
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P3-012
+  implementation_authorized: false
+- item_id: IMPROVEMENT-013
+  gap_ids:
+  - GAP-P3-013
+  title: Document or remove libm platform-dependence
+  class: DEFER
+  score_inputs:
+    impact:
+      low: 2
+      high: 2
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P3-013
+    urgency:
+      low: 1
+      high: 1
+      basis: active exposure
+    risk_reduction:
+      low: 1
+      high: 1
+      basis: closes named gaps
+    dependency_unblock:
+      low: 1
+      high: 1
+      basis: critical-path successors
+    effort:
+      low: 1
+      high: 2
+      basis: effort class scale
+  priority_score_low: 0.925
+  priority_score_high: 1.85
+  hard_gate_rank: 2
+  gap_priority_rank: 3
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: document platform binding in the replay contract
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P3-013
+  implementation_authorized: false
+- item_id: IMPROVEMENT-014
+  gap_ids:
+  - GAP-P3-014
+  title: Wire or remove freshness_generation
+  class: DEFER
+  score_inputs:
+    impact:
+      low: 1
+      high: 2
+      basis: product/trust outcome
+    confidence:
+      low: 4
+      high: 4
+      basis_claim_ids:
+      - GAP-P3-014
+    urgency:
+      low: 1
+      high: 1
+      basis: active exposure
+    risk_reduction:
+      low: 1
+      high: 1
+      basis: closes named gaps
+    dependency_unblock:
+      low: 1
+      high: 1
+      basis: critical-path successors
+    effort:
+      low: 1
+      high: 1
+      basis: effort class scale
+  priority_score_low: 1.6
+  priority_score_high: 1.85
+  hard_gate_rank: 2
+  gap_priority_rank: 3
+  owner_type: engineering
+  predecessors: []
+  successors: []
+  parallelizable: true
+  smallest_safe_first_step: decide re-scrape semantics; wire or delete the field
+  rollback_risk: low
+  acceptance_criteria_ids:
+  - AC-GAP-P3-014
+  implementation_authorized: false
+partition:
+  priority_partition_valid: true
+  duplicate_gap_ids: []
+  orphan_gap_ids: []
+  critical_dependency_chain:
+  - IMPROVEMENT-001
+  - IMPROVEMENT-005
+  - IMPROVEMENT-002
+  - IMPROVEMENT-006
+  - IMPROVEMENT-004
+arithmetic:
+  formula: RPN=S*L*D*C; normalized=100*(RPN-1)/374
+  independently_recalculated: true
+  errors: []

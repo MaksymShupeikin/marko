@@ -15,6 +15,7 @@ from metis.pricing import (
     StockStatus,
     TierCoefficient,
     recommend_price,
+    verified_comparison_evidence,
 )
 
 
@@ -68,9 +69,15 @@ def offer(
         "tier": tier,
         "tier_confidence": Decimal("0.95"),
         "source_confidence": Decimal("1"),
+        "currency_raw": "UAH",
         "is_kemp": tier == ProductTier.KEMP,
     }
     values.update(overrides)
+    if "comparison_evidence" not in overrides:
+        values["comparison_evidence"] = verified_comparison_evidence(
+            stable_seller_id=str(values["seller_id"]),
+            source_record_id=str(values["observation_id"]),
+        )
     return CompetitorOffer(**values)
 
 

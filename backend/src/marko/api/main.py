@@ -35,6 +35,14 @@ def create_app() -> FastAPI:
         allow_headers=settings.cors_header_list,
     )
     application.include_router(api_router, prefix=settings.api_prefix)
+    if settings.environment.strip().casefold() == "e2e" and settings.e2e_auth_bypass:
+        from .routers.e2e import router as e2e_router
+
+        application.include_router(
+            e2e_router,
+            prefix=f"{settings.api_prefix}/e2e",
+            tags=["e2e"],
+        )
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):

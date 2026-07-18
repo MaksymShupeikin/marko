@@ -1,0 +1,280 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: PROMPT_15_015_IMPLEMENTATION
+      title: PRODUCTION_E2E_COMPARABILITY_ROBUST_DISPERSION_AND_PREFLIGHT_FIX
+      type: IMPLEMENTATION
+      scope_owner: Cross-cutting
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-COMPARABILITY-REMEDIATION
+        result: Fail-closed typed comparability, evidence persistence, replay, API, operator UI, gold-set validation, and adversarial tests are implemented.
+        artifact_refs:
+          - backend/src/metis/pricing/comparability.py
+          - backend/src/marko/services/matching.py
+          - backend/migrations/versions/20260718_0011_comparability_and_robust_gates.py
+        evidence_refs:
+          - docs/PROMPT_15_015_COMPARABILITY_GOLD_SET_REPORT_2026-07-18.json
+          - docs/PROMPT_15_015_COMPARABILITY_MUTATION_REPORT_2026-07-18.json
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-ROBUST-V3-SAFETY
+        result: Robust v3.1 estimator disagreement, multimodal detection, baseline non-relaxation, fingerprints, replay, decision diff, benchmark, and mutation probes are implemented.
+        artifact_refs:
+          - backend/src/metis/pricing/statistics.py
+          - backend/src/metis/pricing/engine.py
+          - scripts/validate_robust_dispersion_decision_diff.py
+        evidence_refs:
+          - docs/PROMPT_15_015_ROBUST_DECISION_DIFF_2026-07-18.json
+          - docs/PROMPT_15_015_ROBUST_MUTATION_REPORT_2026-07-18.json
+          - docs/PROMPT_15_015_ROBUST_BENCHMARK_2026-07-18.json
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-STRICT-PREFLIGHT
+        result: Static, connectivity, and full-mode preflight checks pass against disposable PostgreSQL, TLS Redis, and the real E2E evidence bundle without emitting secrets.
+        artifact_refs:
+          - scripts/check_production_config.py
+          - backend/src/marko/governance/production_preflight.py
+        evidence_refs:
+          - docs/PROMPT_15_015_PREFLIGHT_TEMPLATE_NEGATIVE_2026-07-18.json
+          - docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-REAL-DOCKER-E2E
+        result: Real PostgreSQL, Redis, FastAPI, three Celery workers, scheduler, served Flutter, Playwright, exact replay, and E2E-F01 through E2E-F10 all pass with scoped cleanup.
+        artifact_refs:
+          - compose.e2e.yaml
+          - scripts/run_prompt_15_015_e2e.py
+          - e2e/browser/run.mjs
+        evidence_refs:
+          - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+          - .artifacts/prompt_15_015_e2e/20260718T140556Z-1b2165b5/browser-assertions.json
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-REGRESSION-AND-HANDOFF
+        result: Backend, lint, compile, migrations, OpenAPI, Flutter format, tests, analysis mirror, release build, ledgers, and final evidence artifacts are complete.
+        artifact_refs:
+          - docs/PROMPT_15_015_IMPLEMENTATION_REPORT_2026-07-18.md
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        evidence_refs:
+          - command:547 backend tests passed
+          - command:22 Flutter tests passed
+          - command:ruff compileall OpenAPI Alembic and Flutter release build passed
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope: []
+    strongest_verified_result:
+      claim_id: CLM-REAL-E2E-AND-PREFLIGHT-PASS
+      result: A clean containerized business journey, all ten failure injections, all ten browser assertions, exact replay, cleanup, and full-mode preflight pass on real runtime dependencies.
+      evidence_level: E4
+      evidence_refs:
+        - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+        - docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+      reproduction_status: reproducible
+      limitations:
+        - Market acquisition used immutable replay and intentionally made zero live Prom requests.
+        - Representative production activation and E5 load, recovery, and pilot evidence were not part of this implementation stage.
+    weakest_critical_area:
+      area_id: AREA-PRODUCTION-ACTIVATION-EVIDENCE
+      area: Representative activation and E5 production evidence
+      score: 60
+      evidence_level: E3
+      reason: Implementation safety is verified, but representative labeled data, approved release thresholds, and E5 operational evidence were not supplied.
+      downstream_impact: Automatic production activation remains disabled and no production-ready claim is made.
+      required_resolution: Validate frozen representative datasets, approve the release policy and hashes, then execute recovery, capacity, and controlled-pilot gates.
+    evidence_quality:
+      highest_level: E4
+      critical_floor: E3
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: non_representative
+      limitations:
+        - Activation fixtures are synthetic and adversarial rather than representative market data.
+        - The checkout has no Git metadata, so evidence is path-bound.
+    production_implication:
+      state: PRODUCTION_BLOCKED
+      production_ready: false
+      evidence_level: E4
+      passed_hard_gates:
+        - DOCKER_E2E_GATE
+        - MATCHING_IMPLEMENTATION_GATE
+        - ROBUST_V3_IMPLEMENTATION_GATE
+        - PREFLIGHT_IMPLEMENTATION_GATE
+        - FULL_RUNTIME_PREFLIGHT_GATE
+        - REGRESSION_GATE
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - MATCHING_PRODUCTION_ACTIVATION
+        - ROBUST_V3_ACTIVATION_GATE
+        - E5_RECOVERY_GATE
+        - E5_CAPACITY_GATE
+        - CONTROLLED_PILOT_GATE
+      statement: PROMPT 15.015 implementation passes; production automatic activation remains fail-closed pending representative evidence and approval.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-REPRESENTATIVE-ACTIVATION-DATA
+        priority: P1
+        category: data
+        description: Representative labeled comparability and robust decision datasets are not available for production activation.
+        blocked_scope:
+          - matching production activation
+          - robust v3 production activation
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_015_COMPARABILITY_GOLD_SET_REPORT_2026-07-18.json
+          - docs/PROMPT_15_015_ROBUST_DECISION_DIFF_2026-07-18.json
+        owner: product data owner
+        resolution_condition: Frozen representative train, calibration, and untouched test partitions pass approved release gates without leakage or unsafe relaxation.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-APPROVED-ACTIVATION-POLICY
+        priority: P1
+        category: business_decisions
+        description: Production thresholds, loss weights, release decision, and exact activation hashes are not approved.
+        blocked_scope:
+          - automatic matching activation
+          - robust v3 activation
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        owner: product and risk owners
+        resolution_condition: A versioned approved policy binds thresholds, alpha, epsilon, loss weights, release decision, and activation hashes.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPOSITORY-PROVENANCE
+        priority: P1
+        category: environment_reproducibility
+        description: The supplied checkout has no Git metadata and cannot be bound to a canonical commit.
+        blocked_scope:
+          - production-grade provenance
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - "git rev-parse --show-toplevel: not a git repository"
+        owner: repository maintainer
+        resolution_condition: Attach the checkout to its canonical repository and record the commit and worktree state.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-PUBLIC-PROM-SOURCE
+        priority: P1
+        category: source_access
+        description: Live public Prom competitor collection remains NOT_PERMITTED; the verified runtime uses immutable replay.
+        blocked_scope:
+          - live public competitor collection
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+        owner: source authority
+        resolution_condition: A current permission record authorizes the exact collection scope, or a permitted alternative market source is approved.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions:
+      - BLK-P1-APPROVED-ACTIVATION-POLICY
+    source_access:
+      - BLK-P1-PUBLIC-PROM-SOURCE
+    data:
+      - BLK-P1-REPRESENTATIVE-ACTIVATION-DATA
+    environment_reproducibility:
+      - BLK-P1-REPOSITORY-PROVENANCE
+    unknowns: []
+
+  next_stage:
+    id: PRODUCTION_ACTIVATION_AND_E5_VALIDATION
+    title: PRODUCTION_ACTIVATION_AND_E5_VALIDATION
+    why_it_is_next:
+      - Runtime implementation and E4 E2E are complete; representative activation and E5 production evidence are the next distinct gates.
+    required_inputs:
+      - input_id: INPUT-REPRESENTATIVE-DATA
+        description: Frozen representative matching and robust datasets with train, calibration, and untouched test partitions
+        source: product data owner
+        required_state: provenance-verified, leakage-checked, and approved for release evaluation
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+      - input_id: INPUT-ACTIVATION-POLICY
+        description: Approved thresholds, alpha, epsilon, loss weights, release decision, and exact activation hashes
+        source: product and risk owners
+        required_state: approved and versioned
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+      - input_id: INPUT-E5-ENVIRONMENT
+        description: Representative recovery, load, observability, and controlled-pilot environment
+        source: operations owner
+        required_state: available with production-like traffic and recovery controls
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+    expected_artifacts:
+      - artifact_id: ART-PRODUCTION-ACTIVATION
+        type: report
+        purpose: Bind representative evaluation results, approvals, and exact activation hashes.
+        required_fields:
+          - dataset_hashes
+          - split_integrity
+          - release_metrics
+          - approvals
+          - activation_hashes
+        temporal_state: PLANNED_NOT_STARTED
+      - artifact_id: ART-E5-OPERATIONS
+        type: report
+        purpose: Record recovery, load, capacity, observability, and controlled-pilot evidence.
+        required_fields:
+          - recovery
+          - capacity
+          - observability
+          - pilot
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-ACTIVATION
+        predicate: Representative untouched test evidence passes frozen matching and robust release gates without leakage or unsafe relaxation.
+        required_evidence: Versioned datasets, evaluation reports, approvals, and exact activation hashes
+        threshold: Every approved release predicate passes
+      - id: AC-E5
+        predicate: Recovery, capacity, observability, and controlled-pilot gates pass under representative conditions.
+        required_evidence: E5 operational evidence bundle
+        threshold: Every production theorem factor equals one
+    stop_condition:
+      gate_key: STOP_GATE_PRODUCTION_ACTIVATION_AND_E5_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required:
+      - decision_id: DECISION-PROMPT-15-015-ACTIVATION-POLICY
+        question: Which approved thresholds, loss weights, release policy, and artifact hashes authorize production activation?
+        alternatives:
+          - Approve the frozen policy after representative validation
+          - Keep automatic activation disabled and continue manual review
+        architecture_impact: Determines whether persisted automatic recommendations may pass activation guards.
+        blocking: true
+        default_forbidden: true
+        evidence_refs:
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_PROMPT_15_015_IMPLEMENTATION
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

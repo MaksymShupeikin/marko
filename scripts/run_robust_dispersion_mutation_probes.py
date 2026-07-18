@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 import json
 import os
@@ -121,6 +122,34 @@ MUTATIONS = (
         ),
         "tests/test_robust_dispersion_engine.py::test_profiles_are_built_after_seller_deduplication",
     ),
+    Mutation(
+        "cluster_threshold_excludes_boundary",
+        "metis/pricing/statistics.py",
+        (("improvement >= improvement_threshold", "improvement > improvement_threshold"),),
+        "tests/test_robust_heterogeneity_gate.py::test_r017_threshold_boundary_uses_documented_inclusive_side",
+    ),
+    Mutation(
+        "cluster_diagnostic_ignored",
+        "metis/pricing/engine.py",
+        (
+            (
+                "robust_cluster_blocked = bool(",
+                "robust_cluster_blocked = False and bool(",
+            ),
+        ),
+        "tests/test_robust_heterogeneity_gate.py::test_r006_balanced_two_clusters_abstain_explicitly",
+    ),
+    Mutation(
+        "baseline_non_relaxation_ignored",
+        "metis/pricing/engine.py",
+        (
+            (
+                "if baseline.action in abstentions and candidate.action in automatic:",
+                "if False and baseline.action in abstentions and candidate.action in automatic:",
+            ),
+        ),
+        "tests/test_robust_heterogeneity_gate.py::test_r019_baseline_abstention_cannot_be_relaxed",
+    ),
 )
 
 
@@ -184,8 +213,15 @@ def run_mutation_probes() -> dict[str, object]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
     report = run_mutation_probes()
-    print(json.dumps(report, indent=2, sort_keys=True))
+    rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+    print(rendered, end="")
     if report["mutation_probe_status"] != "PASS":
         raise SystemExit(1)
 

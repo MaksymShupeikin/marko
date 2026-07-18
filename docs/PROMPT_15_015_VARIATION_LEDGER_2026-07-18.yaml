@@ -1,0 +1,218 @@
+schema_version: "1.0.0"
+prompt_id: PROMPT_15_015
+generated_at: "2026-07-18"
+repository: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+git_commit: NOT_AVAILABLE
+
+matching:
+  implementation_gate: PASS
+  production_activation: BLOCKED_DATA
+  deterministic_cases:
+    ids:
+      - M-001
+      - M-002
+      - M-003
+      - M-004
+      - M-005
+      - M-006
+      - M-007
+      - M-008
+      - M-009
+      - M-010
+      - M-011
+      - M-012
+      - M-013
+      - M-014
+      - M-015
+      - M-016
+      - M-017
+      - M-018
+      - M-019
+      - M-020
+      - M-021
+      - M-022
+      - M-023
+      - M-024
+      - M-025
+    status: PASS
+    retrieval_kinds: [fuzzy, sku, model]
+    command: >-
+      backend/.venv/bin/pytest -q
+      backend/tests/test_comparability_contract.py
+  property_and_metamorphic:
+    status: PASS
+    covered:
+      - removing_verified_hard_evidence_never_increases_eligibility
+      - hard_conflict_never_increases_eligibility
+      - display_name_never_creates_seller_independence
+      - duplicate_observation_never_increases_unique_sellers
+      - permutation_is_canonical
+      - exact_id_never_bypasses_unknown_or_conflict
+      - legacy_unknown_remains_ineligible
+  presence_variations:
+    raw_currency: [null, empty, whitespace, UAH, other]
+    seller_identity: [stable_unique, duplicate_id, blank_id, alias, mismatch]
+    provenance: [verified, unknown_source, missing_hash, tampered_hash]
+  critical_mutations:
+    status: PASS
+    total: 7
+    survived: 0
+    artifact: docs/PROMPT_15_015_COMPARABILITY_MUTATION_REPORT_2026-07-18.json
+  gold_set:
+    status: PASS
+    schema: comparability-gold-set-v1
+    dataset_class: synthetic_adversarial
+    representative: false
+    case_count: 15
+    split_counts: {train: 5, calibration: 5, test: 5}
+    leakage_detected: false
+    unsafe_automatic_count: 0
+    artifact: docs/PROMPT_15_015_COMPARABILITY_GOLD_SET_REPORT_2026-07-18.json
+    activation_blockers:
+      - REPRESENTATIVE_GOLD_SET_REQUIRED
+      - DOMAIN_POLICY_APPROVAL_REQUIRED
+      - REPRESENTATIVE_LABEL_APPROVAL_REQUIRED
+      - BUSINESS_ALPHA_REQUIRED
+      - BUSINESS_EPSILON_REQUIRED
+      - BUSINESS_LOSS_WEIGHTS_REQUIRED
+
+robust_dispersion:
+  implementation_gate: PASS
+  production_activation: BLOCKED_DATA
+  deterministic_cases:
+    ids:
+      - R-001
+      - R-002
+      - R-003
+      - R-004
+      - R-005
+      - R-006
+      - R-007
+      - R-008
+      - R-009
+      - R-010
+      - R-011
+      - R-012
+      - R-013
+      - R-014
+      - R-015
+      - R-016
+      - R-017
+      - R-018
+      - R-019
+      - R-020
+    status: PASS
+    command: >-
+      backend/.venv/bin/pytest -q
+      backend/tests/test_robust_heterogeneity_gate.py
+  cohort_shapes:
+    - tight
+    - all_equal
+    - partial_degeneracy
+    - single_outlier
+    - skewed
+    - two_cluster
+    - three_cluster
+    - high_global_dispersion
+  invariances:
+    permutation: PASS
+    multiplicative_scale: PASS
+    seller_dedup_before_diagnostic: PASS
+  threshold_boundary:
+    epsilon: "1E-28 Decimal"
+    inclusive_side: PASS
+  baseline_non_relaxation:
+    unsafe_relaxation_count: 0
+    status: PASS
+    artifact: docs/PROMPT_15_015_ROBUST_DECISION_DIFF_2026-07-18.json
+  critical_mutations:
+    status: PASS
+    total: 11
+    survived: 0
+    artifact: docs/PROMPT_15_015_ROBUST_MUTATION_REPORT_2026-07-18.json
+  benchmark:
+    status: PASS
+    sample_sizes: [10, 25, 50, 100, 250, 500]
+    validated_ceiling: 500
+    meaning: capacity_guard_not_latency_slo
+    artifact: docs/PROMPT_15_015_ROBUST_BENCHMARK_2026-07-18.json
+
+production_preflight:
+  static_implementation: PASS
+  full_runtime_gate: PASS
+  deterministic_cases:
+    ids:
+      - P-001
+      - P-002
+      - P-003
+      - P-004
+      - P-005
+      - P-006
+      - P-007
+      - P-008
+      - P-009
+      - P-010
+      - P-011
+      - P-012
+      - P-013
+      - P-014
+      - P-015
+      - P-016
+      - P-017
+      - P-018
+      - P-019
+      - P-020
+      - P-021
+      - P-022
+      - P-023
+      - P-024
+      - P-025
+    status: PASS
+  valid_static_config: PASS
+  template_rejected: PASS
+  skipped_full_layers_rejected: PASS
+  blocked_e2e_manifest_rejected: PASS
+  secret_canaries_emitted: 0
+  template_negative_artifact: docs/PROMPT_15_015_PREFLIGHT_TEMPLATE_NEGATIVE_2026-07-18.json
+  full_runtime_artifact: docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+
+docker_e2e:
+  harness_static_validation: PASS
+  runtime_execution: PASS
+  run_id: 20260718T140556Z-1b2165b5
+  blocker: null
+  real_services_executed: true
+  mandatory_cases:
+    E2E-F01: PASS
+    E2E-F02: PASS
+    E2E-F03: PASS
+    E2E-F04: PASS
+    E2E-F05: PASS
+    E2E-F06: PASS
+    E2E-F07: PASS
+    E2E-F08: PASS
+    E2E-F09: PASS
+    E2E-F10: PASS
+  harness_contract_tests: PASS
+  source_access: NOT_PERMITTED
+  live_prom_requests: 0
+  automatic_price_applications: 0
+  cleanup_contract: scoped_compose_project_only
+  artifact: docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+
+interaction_coverage:
+  exact_id_x_conflict: PASS
+  missing_field_x_high_confidence: PASS
+  blank_seller_x_multiple_names: PASS
+  two_cluster_x_duplicate_sellers: PASS
+  two_cluster_x_small_n: PASS
+  v3_flag_x_missing_artifact: PASS
+  production_x_e2e_auth_bypass: PASS
+  placeholder_x_syntactically_valid_url: PASS
+  retry_x_stale_fencing_token: PASS
+  replay_x_policy_or_evidence_mismatch: PASS
+
+remaining_unknowns:
+  - representative_comparability_labels_and_business_release_policy
+  - representative_robust_decision_diff_and_activation_approval
+  - E5_recovery_load_capacity_and_pilot_evidence

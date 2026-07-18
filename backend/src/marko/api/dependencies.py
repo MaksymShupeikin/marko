@@ -11,7 +11,7 @@ from marko.services.auth import (
     AuthContext,
     InvalidTokenError,
     get_or_create_auth_context,
-    verify_firebase_id_token,
+    verify_bearer_token,
 )
 from marko.infrastructure.db.models import WorkspaceRole
 
@@ -35,7 +35,7 @@ async def get_current_user(
     if credentials is None or credentials.scheme.casefold() != "bearer":
         raise unauthorized
     try:
-        identity = await verify_firebase_id_token(credentials.credentials)
+        identity = await verify_bearer_token(credentials.credentials)
     except InvalidTokenError as exc:
         raise unauthorized from exc
     except AuthConfigurationError as exc:

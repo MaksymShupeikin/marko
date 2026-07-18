@@ -4,9 +4,25 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from statistics import median
+from types import MappingProxyType
 from typing import Any, Iterable
 
 from marko.services.parser_models import Product, SeedInfo
+from metis.pricing import (
+    COMPARABILITY_DIMENSIONS,
+    COMPARABILITY_POLICY_HASH,
+    COMPARABILITY_POLICY_ID,
+    ComparisonEvidence,
+    DimensionEvidence,
+    EvidenceState,
+    HardGateResult,
+    SellerIdentityEvidence,
+    SourceProvenance,
+    categorical_dimension,
+    comparison_evidence_to_dict,
+    evaluate_comparison_evidence,
+    normalize_oe,
+)
 
 # Tokens carrying no discriminative value for product-name similarity.
 _STOPWORDS: frozenset[str] = frozenset({
@@ -71,9 +87,9 @@ def _norm_brand(brand: str | None) -> str:
 
 
 def brands_compatible(seed: str | None, cand: str | None) -> bool:
-    """Brands match, or at least one is unknown (do not reject on missing data)."""
+    """Return true only for two known equal brands; unknown is not evidence."""
     a, b = _norm_brand(seed), _norm_brand(cand)
-    return not a or not b or a == b
+    return bool(a and b and a == b)
 
 
 def build_search_query(product: Product) -> str:
@@ -94,19 +110,20 @@ class Match:
 
 
 def match_offer(seed: Product, cand: Product, threshold: float) -> Match | None:
-    """Decide whether cand is the same/similar product as seed."""
-    # Tier 1: prom.ua's own identity keys (exact, high confidence, authoritative).
+    """Retrieve a candidate without treating retrieval as comparability proof."""
+    seed_tokens = normalize_tokens(seed.name)
+    cand_tokens = normalize_tokens(cand.name)
+    if seed.brand and cand.brand and not brands_compatible(seed.brand, cand.brand):
+        return None
+    if laterality_conflict(seed_tokens, cand_tokens):
+        return None
+    # Exact IDs strengthen retrieval only. All hard fields are evaluated by
+    # build_product_comparison_evidence before Metis pricing eligibility.
     if seed.model_id and cand.model_id and seed.model_id == cand.model_id:
         return Match("model", 1.0)
     if seed.sku and cand.sku and seed.sku == cand.sku:
         return Match("sku", 1.0)
-    # Tier 2: fuzzy. Brand must be compatible and the names must not name
-    # opposite sides (лівий/правий, передній/задній, ...).
     if not brands_compatible(seed.brand, cand.brand):
-        return None
-    seed_tokens = normalize_tokens(seed.name)
-    cand_tokens = normalize_tokens(cand.name)
-    if laterality_conflict(seed_tokens, cand_tokens):
         return None
     score = _token_similarity(set(seed_tokens), set(cand_tokens))
     if score >= threshold:
@@ -129,6 +146,7 @@ class Offer:
     product: Product
     match: Match
     price: float
+    comparison_evidence: ComparisonEvidence
 
 
 @dataclass(frozen=True)
@@ -208,6 +226,13 @@ class PriceComparison:
                     "name": offer.product.name,
                     "brand": offer.product.brand,
                     "url": offer.product.url,
+                    "automatic_eligible": (
+                        offer.comparison_evidence.hard_gate_result
+                        == HardGateResult.PASS
+                    ),
+                    "comparison_evidence": comparison_evidence_to_dict(
+                        offer.comparison_evidence
+                    ),
                 }
                 for offer in self.offers
             ],
@@ -242,12 +267,22 @@ def build_comparison(
         price = _price_value(cand)
         if price is None:
             continue
-        seller_key = cand.seller_id or cand.seller_name
-        if seller_key is None:
+        seller_key = str(cand.seller_id).strip() if cand.seller_id is not None else ""
+        if not seller_key:
             continue
+        evidence = build_product_comparison_evidence(
+            seed_product,
+            cand,
+            retrieval_kind=match.kind,
+        )
         current = cheapest_by_seller.get(seller_key)
         if current is None or price < current.price:
-            cheapest_by_seller[seller_key] = Offer(product=cand, match=match, price=price)
+            cheapest_by_seller[seller_key] = Offer(
+                product=cand,
+                match=match,
+                price=price,
+                comparison_evidence=evidence,
+            )
 
     offers = sorted(cheapest_by_seller.values(), key=lambda offer: offer.price)
     return PriceComparison(
@@ -256,3 +291,172 @@ def build_comparison(
         offers=offers[: params.max_sellers],
         candidates_scanned=scanned,
     )
+
+
+def build_product_comparison_evidence(
+    seed: Product,
+    candidate: Product,
+    *,
+    retrieval_kind: str,
+    source_type: str | None = None,
+    source_record_id: str | None = None,
+    raw_evidence_sha256: str | None = None,
+    parser_contract_version: str | None = None,
+) -> ComparisonEvidence:
+    """Build typed evidence without inventing absent parser/enrichment fields."""
+
+    reference = source_record_id or str(candidate.id or "")
+    refs = (reference,) if reference else ()
+    seed_oe = normalize_oe(seed.oe_raw)
+    candidate_oe = normalize_oe(candidate.oe_raw)
+    if seed_oe is None or candidate_oe is None:
+        oe_state = EvidenceState.UNKNOWN
+    elif seed_oe == candidate_oe:
+        oe_state = EvidenceState.MATCH
+    else:
+        oe_state = EvidenceState.CONFLICT
+    dimensions: dict[str, DimensionEvidence] = {
+        "oe_reference": DimensionEvidence(
+            state=oe_state,
+            raw_value=candidate.oe_raw,
+            normalized_value=candidate_oe,
+            evidence_refs=refs,
+        ),
+        "brand_manufacturer": categorical_dimension(
+            seed.brand, candidate.brand, evidence_refs=refs
+        ),
+        "fitment": categorical_dimension(
+            seed.fitment, candidate.fitment, evidence_refs=refs
+        ),
+        "vehicle_generation": categorical_dimension(
+            seed.vehicle_generation,
+            candidate.vehicle_generation,
+            evidence_refs=refs,
+        ),
+        "year_interval": _year_dimension(seed, candidate, refs),
+        "engine": categorical_dimension(seed.engine, candidate.engine, evidence_refs=refs),
+        "body_variant": categorical_dimension(
+            seed.body_variant, candidate.body_variant, evidence_refs=refs
+        ),
+        "side": categorical_dimension(seed.side, candidate.side, evidence_refs=refs),
+        "position": categorical_dimension(
+            seed.position, candidate.position, evidence_refs=refs
+        ),
+        "condition": categorical_dimension(
+            seed.condition, candidate.condition, evidence_refs=refs
+        ),
+        "package_quantity": _quantity_dimension(seed, candidate, refs),
+        "currency_presence": DimensionEvidence(
+            state=(
+                EvidenceState.MATCH
+                if candidate.currency and candidate.currency.strip()
+                else EvidenceState.UNKNOWN
+            ),
+            raw_value=candidate.currency,
+            normalized_value=(
+                candidate.currency.strip().upper() if candidate.currency else None
+            ),
+            evidence_refs=refs,
+        ),
+    }
+    assert set(dimensions) == set(COMPARABILITY_DIMENSIONS)
+    stable_seller_id = (
+        str(candidate.seller_id).strip() if candidate.seller_id is not None else None
+    )
+    provenance_verified = bool(
+        source_type
+        and source_record_id
+        and raw_evidence_sha256
+        and parser_contract_version
+    )
+    initial = ComparisonEvidence(
+        dimensions=MappingProxyType(dimensions),
+        provenance=SourceProvenance(
+            source_type=source_type,
+            source_record_id=source_record_id,
+            raw_evidence_sha256=raw_evidence_sha256,
+            parser_contract_version=parser_contract_version,
+            verified=provenance_verified,
+        ),
+        seller_identity=SellerIdentityEvidence(
+            stable_seller_id=stable_seller_id,
+            identity_source="prom:company.id" if stable_seller_id else None,
+            verified=bool(stable_seller_id),
+        ),
+        policy_id=COMPARABILITY_POLICY_ID,
+        policy_hash=COMPARABILITY_POLICY_HASH,
+        retrieval_kind=retrieval_kind,
+        seed_product_id=str(seed.id) if seed.id is not None else None,
+        candidate_product_id=(
+            str(candidate.id) if candidate.id is not None else None
+        ),
+    )
+    decision = evaluate_comparison_evidence(
+        initial,
+        seller_id=stable_seller_id,
+        currency_raw=candidate.currency,
+        currency_normalized=_normalized_currency(candidate.currency),
+        required_currency="UAH",
+    )
+    return ComparisonEvidence(
+        dimensions=initial.dimensions,
+        provenance=initial.provenance,
+        seller_identity=initial.seller_identity,
+        policy_id=initial.policy_id,
+        policy_hash=initial.policy_hash,
+        retrieval_kind=initial.retrieval_kind,
+        seed_product_id=initial.seed_product_id,
+        candidate_product_id=initial.candidate_product_id,
+        hard_gate_result=decision.hard_gate_result,
+        reason_codes=decision.reason_codes,
+    )
+
+
+def _year_dimension(
+    seed: Product, candidate: Product, refs: tuple[str, ...]
+) -> DimensionEvidence:
+    values = (seed.year_from, seed.year_to, candidate.year_from, candidate.year_to)
+    if any(value is None for value in values):
+        state = EvidenceState.UNKNOWN
+    else:
+        assert all(value is not None for value in values)
+        overlap = max(
+            0,
+            min(seed.year_to, candidate.year_to)
+            - max(seed.year_from, candidate.year_from)
+            + 1,
+        )
+        state = EvidenceState.MATCH if overlap > 0 else EvidenceState.CONFLICT
+    return DimensionEvidence(state=state, evidence_refs=refs)
+
+
+def _quantity_dimension(
+    seed: Product, candidate: Product, refs: tuple[str, ...]
+) -> DimensionEvidence:
+    if seed.package_quantity is None or candidate.package_quantity is None:
+        state = EvidenceState.UNKNOWN
+    elif seed.package_quantity == candidate.package_quantity:
+        state = EvidenceState.MATCH
+    else:
+        state = EvidenceState.CONFLICT
+    return DimensionEvidence(
+        state=state,
+        raw_value=(
+            str(candidate.package_quantity)
+            if candidate.package_quantity is not None
+            else None
+        ),
+        normalized_value=(
+            str(candidate.package_quantity)
+            if candidate.package_quantity is not None
+            else None
+        ),
+        evidence_refs=refs,
+    )
+
+
+def _normalized_currency(value: str | None) -> str | None:
+    normalized = (value or "").strip().casefold()
+    if normalized in {"uah", "грн", "₴", "гривня", "гривень"}:
+        return "UAH"
+    return normalized.upper()[:3] or None

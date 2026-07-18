@@ -1,8 +1,10 @@
 """Firebase ID-token verification and local account provisioning."""
+
 from __future__ import annotations
 
 import asyncio
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -106,6 +108,32 @@ async def verify_firebase_id_token(token: str) -> FirebaseIdentity:
         raise InvalidTokenError("Firebase ID token is invalid or expired") from exc
 
 
+async def verify_bearer_token(token: str) -> FirebaseIdentity:
+    """Verify Firebase in normal environments or the isolated E2E token."""
+
+    settings = get_settings()
+    if not settings.e2e_auth_bypass:
+        return await verify_firebase_id_token(token)
+    if settings.environment.strip().casefold() != "e2e":
+        raise AuthConfigurationError(
+            "E2E authentication is isolated to ENVIRONMENT=e2e"
+        )
+    if not settings.e2e_auth_token or not secrets.compare_digest(
+        token,
+        settings.e2e_auth_token,
+    ):
+        raise InvalidTokenError("E2E bearer token is invalid")
+    return FirebaseIdentity(
+        subject="marko-e2e-user-v1",
+        # EmailStr intentionally rejects the special-use `.invalid` TLD.
+        # `example.com` is non-deliverable by convention but remains valid at
+        # the API serialization boundary exercised by the real E2E flow.
+        email="marko-e2e@example.com",
+        display_name="Marko E2E Operator",
+        avatar_url=None,
+    )
+
+
 async def get_or_create_auth_context(
     session: AsyncSession, identity: FirebaseIdentity
 ) -> AuthContext:
@@ -170,7 +198,9 @@ async def get_or_create_auth_context(
         concurrent = await _concurrent_auth_context(session, identity.subject)
         if concurrent is not None:
             return concurrent
-        raise AuthConflictError("Marko account could not be linked to Firebase") from exc
+        raise AuthConflictError(
+            "Marko account could not be linked to Firebase"
+        ) from exc
     return AuthContext(
         user=user,
         workspace_id=workspace_id,

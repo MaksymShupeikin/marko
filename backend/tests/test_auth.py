@@ -1,9 +1,13 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from marko.api.schemas.auth import AuthUserResponse
 from marko.core.config import Settings
+from marko.infrastructure.db.models import WorkspaceRole
 from marko.services import auth
 
 
@@ -107,6 +111,45 @@ async def test_firebase_token_requires_verified_email(monkeypatch, signing_keys)
     monkeypatch.setattr(auth, "_jwks_client", lambda _: _JwksClient(public_key))
 
     with pytest.raises(auth.InvalidTokenError, match="not verified"):
-        await auth.verify_firebase_id_token(
-            _token(private_key, email_verified=False)
+        await auth.verify_firebase_id_token(_token(private_key, email_verified=False))
+
+
+@pytest.mark.asyncio
+async def test_e2e_bearer_provider_is_environment_and_token_scoped(monkeypatch):
+    token = "synthetic-e2e-token-" + "x" * 32
+    settings = Settings(
+        environment="e2e",
+        e2e_auth_bypass=True,
+        e2e_auth_token=token,
+    )
+    monkeypatch.setattr(auth, "get_settings", lambda: settings)
+
+    identity = await auth.verify_bearer_token(token)
+
+    assert identity.subject == "marko-e2e-user-v1"
+    assert identity.email == "marko-e2e@example.com"
+    response = AuthUserResponse(
+        id=uuid4(),
+        email=identity.email,
+        display_name=identity.display_name,
+        avatar_url=identity.avatar_url,
+        workspace_id=uuid4(),
+        workspace_role=WorkspaceRole.owner,
+    )
+    assert str(response.email) == identity.email
+    with pytest.raises(auth.InvalidTokenError):
+        await auth.verify_bearer_token(token + "-wrong")
+
+
+def test_e2e_bearer_provider_cannot_be_configured_outside_e2e() -> None:
+    with pytest.raises(ValueError, match="ENVIRONMENT=e2e"):
+        Settings(
+            environment="production",
+            allowed_hosts="api.example.invalid",
+            cors_origins="https://app.example.invalid",
+            firebase_project_id="marko-production",
+            e2e_auth_bypass=True,
+            e2e_auth_token="synthetic-e2e-token-" + "x" * 32,
         )
+    with pytest.raises(ValueError, match="at least 32"):
+        Settings(environment="e2e", e2e_auth_bypass=True, e2e_auth_token="short")

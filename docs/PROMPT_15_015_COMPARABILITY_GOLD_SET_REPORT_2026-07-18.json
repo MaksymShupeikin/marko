@@ -1,0 +1,230 @@
+{
+  "activation_blockers": [
+    "REPRESENTATIVE_GOLD_SET_REQUIRED",
+    "DOMAIN_POLICY_APPROVAL_REQUIRED",
+    "REPRESENTATIVE_LABEL_APPROVAL_REQUIRED",
+    "BUSINESS_ALPHA_REQUIRED",
+    "BUSINESS_EPSILON_REQUIRED",
+    "BUSINESS_LOSS_WEIGHTS_REQUIRED"
+  ],
+  "binomial_release_bound": {
+    "alpha": null,
+    "epsilon": null,
+    "p_upper": null,
+    "required_representative_n": null,
+    "status": "BLOCKED_POLICY"
+  },
+  "case_count": 15,
+  "case_results": [
+    {
+      "actual_result": "PASS",
+      "automatic_eligible": true,
+      "case_id": "GS-TRAIN-001",
+      "expected_result": "PASS",
+      "gold_label": "comparable",
+      "reason_codes": [
+        "ELIGIBLE_VERIFIED"
+      ],
+      "retrieval_kind": "fuzzy",
+      "split": "train"
+    },
+    {
+      "actual_result": "REJECT",
+      "automatic_eligible": false,
+      "case_id": "GS-TRAIN-002",
+      "expected_result": "REJECT",
+      "gold_label": "conflict",
+      "reason_codes": [
+        "REJECTED_IDENTITY_CONFLICT"
+      ],
+      "retrieval_kind": "sku",
+      "split": "train"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-TRAIN-003",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_FITMENT"
+      ],
+      "retrieval_kind": "model",
+      "split": "train"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-TRAIN-004",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_RAW_CURRENCY"
+      ],
+      "retrieval_kind": "fuzzy",
+      "split": "train"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-TRAIN-005",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_SOURCE_PROVENANCE"
+      ],
+      "retrieval_kind": "sku",
+      "split": "train"
+    },
+    {
+      "actual_result": "PASS",
+      "automatic_eligible": true,
+      "case_id": "GS-CAL-001",
+      "expected_result": "PASS",
+      "gold_label": "comparable",
+      "reason_codes": [
+        "ELIGIBLE_VERIFIED"
+      ],
+      "retrieval_kind": "sku",
+      "split": "calibration"
+    },
+    {
+      "actual_result": "REJECT",
+      "automatic_eligible": false,
+      "case_id": "GS-CAL-002",
+      "expected_result": "REJECT",
+      "gold_label": "conflict",
+      "reason_codes": [
+        "REJECTED_COMPARABILITY_CONFLICT"
+      ],
+      "retrieval_kind": "model",
+      "split": "calibration"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-CAL-003",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_STABLE_SELLER_ID"
+      ],
+      "retrieval_kind": "fuzzy",
+      "split": "calibration"
+    },
+    {
+      "actual_result": "REJECT",
+      "automatic_eligible": false,
+      "case_id": "GS-CAL-004",
+      "expected_result": "REJECT",
+      "gold_label": "conflict",
+      "reason_codes": [
+        "REJECTED_IDENTITY_CONFLICT"
+      ],
+      "retrieval_kind": "sku",
+      "split": "calibration"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-CAL-005",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_FITMENT"
+      ],
+      "retrieval_kind": "model",
+      "split": "calibration"
+    },
+    {
+      "actual_result": "PASS",
+      "automatic_eligible": true,
+      "case_id": "GS-TEST-001",
+      "expected_result": "PASS",
+      "gold_label": "comparable",
+      "reason_codes": [
+        "ELIGIBLE_VERIFIED"
+      ],
+      "retrieval_kind": "model",
+      "split": "test"
+    },
+    {
+      "actual_result": "REJECT",
+      "automatic_eligible": false,
+      "case_id": "GS-TEST-002",
+      "expected_result": "REJECT",
+      "gold_label": "conflict",
+      "reason_codes": [
+        "REJECTED_COMPARABILITY_CONFLICT"
+      ],
+      "retrieval_kind": "sku",
+      "split": "test"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-TEST-003",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_PACKAGE_QUANTITY"
+      ],
+      "retrieval_kind": "fuzzy",
+      "split": "test"
+    },
+    {
+      "actual_result": "MANUAL_REVIEW",
+      "automatic_eligible": false,
+      "case_id": "GS-TEST-004",
+      "expected_result": "MANUAL_REVIEW",
+      "gold_label": "insufficient",
+      "reason_codes": [
+        "MANUAL_MISSING_SOURCE_PROVENANCE"
+      ],
+      "retrieval_kind": "model",
+      "split": "test"
+    },
+    {
+      "actual_result": "REJECT",
+      "automatic_eligible": false,
+      "case_id": "GS-TEST-005",
+      "expected_result": "REJECT",
+      "gold_label": "conflict",
+      "reason_codes": [
+        "REJECTED_COMPARABILITY_CONFLICT"
+      ],
+      "retrieval_kind": "sku",
+      "split": "test"
+    }
+  ],
+  "contract_errors": [],
+  "counts": {
+    "abstained_or_rejected": 12,
+    "automatic": 3,
+    "comparable": 3,
+    "conflict": 5,
+    "unsafe_automatic": 0
+  },
+  "data_class": "synthetic_adversarial",
+  "dataset_id": "marko-metis-comparability-adversarial",
+  "dataset_sha256": "5b97ba84b490e637f95ce7d355796ae08d97a0c0cfca816e2488a3bbdd5d733c",
+  "dataset_version": "1.0.0",
+  "engineering_gate": "PASS",
+  "metrics": {
+    "abstention_rate": "0.8",
+    "auto_coverage": "1",
+    "comparability_precision": "1",
+    "conflict_recall": "1",
+    "unsafe_auto_rate": "0"
+  },
+  "mismatched_case_ids": [],
+  "production_activation": "BLOCKED_DATA",
+  "representative": false,
+  "schema_version": "comparability-gold-set-report-v1",
+  "split_counts": {
+    "calibration": 5,
+    "test": 5,
+    "train": 5
+  },
+  "split_leakage_detected": false
+}

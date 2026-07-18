@@ -10,6 +10,18 @@ import 'features/auth/auth_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Environment.e2eMode) {
+    if (!Environment.hasValidE2eConfig) {
+      runApp(
+        const _ConfigurationErrorApp(
+          'E2E mode requires a synthetic token of at least 32 characters.',
+        ),
+      );
+      return;
+    }
+    runApp(const ProviderScope(child: MarkoApp()));
+    return;
+  }
   if (!Environment.usesAndroidFirebaseConfig &&
       !Environment.hasFirebaseConfig) {
     runApp(

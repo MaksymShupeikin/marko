@@ -8,7 +8,8 @@ marketplace collection.
 
 Production deployment must stop unless all of the following are true:
 
-1. `scripts/check_production_config.py` exits zero.
+1. Strict preflight exits zero for the explicitly named production env file;
+   inherited shell variables are not accepted as a substitute.
 2. `alembic upgrade head` succeeds against the target PostgreSQL database.
 3. `/api/v1/health/live` and `/api/v1/health/ready` return `200`.
 4. `/api/v1/health/source-access` matches the approved source record.
@@ -22,13 +23,32 @@ Production deployment must stop unless all of the following are true:
 8. A clean-database restore drill and at least one exact recommendation replay
    have passed.
 
-Example preflight:
+The committed `deploy/.env.production.example` is a template and must fail
+preflight until every placeholder is replaced. Never copy a preflight JSON
+artifact containing configuration values: the checker emits only field names,
+reason codes, hashes, and statuses.
+
+Static validation:
 
 ```bash
-set -a
-. deploy/.env.production
-set +a
-backend/.venv/bin/python scripts/check_production_config.py
+backend/.venv/bin/python scripts/check_production_config.py \
+  --env-file deploy/.env.production \
+  --mode static \
+  --format json \
+  --output-json .artifacts/production-preflight-static.json
+```
+
+Full validation requires reachable PostgreSQL/Redis/TLS endpoints and a real,
+successful PROMPT 15.015 E2E evidence manifest. A skipped connectivity or E2E
+layer is a failure, not a warning:
+
+```bash
+backend/.venv/bin/python scripts/check_production_config.py \
+  --env-file deploy/.env.production \
+  --mode full \
+  --format json \
+  --e2e-evidence docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml \
+  --output-json .artifacts/production-preflight-full.json
 ```
 
 ## 2. Deployment
@@ -51,9 +71,50 @@ docker compose \
   up --build -d
 ```
 
-Only one scheduler instance may run. Do not expose PostgreSQL or Redis publicly.
-TLS, secret injection, network policy, log shipping, Prometheus collection, and
-alert delivery belong to the deployment platform.
+The scheduler entrypoint owns a Redis `SET NX EX` lease and terminates if it
+cannot acquire or renew it. A second scheduler must exit with code `75`; do not
+work around that guard. Configure one stable lock key, a TTL longer than the
+refresh interval, and a refresh interval shorter than the TTL. Do not expose
+PostgreSQL or Redis publicly. TLS, secret injection, network policy, log
+shipping, Prometheus collection, and alert delivery belong to the deployment
+platform.
+
+## 2.1. Disposable local E2E
+
+The E2E runner uses a unique Compose project, random loopback ports, clean
+PostgreSQL/Redis volumes, real Celery workers/scheduler/API/frontend/browser,
+and persisted replay fixtures. It sets source access to `NOT_PERMITTED`, makes
+zero live Prom requests, never applies a price, kills/restarts a pricing worker,
+and removes only its own project resources.
+
+```bash
+backend/.venv/bin/python scripts/run_prompt_15_015_e2e.py --validate-harness
+backend/.venv/bin/python scripts/run_prompt_15_015_e2e.py \
+  --evidence-output docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml \
+  --artifact-root .artifacts/prompt_15_015_e2e
+```
+
+Exit code `3` means Docker/Compose is unavailable and the generated manifest is
+`BLOCKED_ENVIRONMENT`; it is never evidence of E2E success. Browser traces are
+not retained because they can contain the synthetic Authorization header.
+Secret canaries are removed and scanned before the manifest is finalized.
+
+## 2.2. Comparability and robust-policy activation
+
+The code is fail-closed by default. `UNKNOWN` comparability fields route to
+manual review, conflicts reject the candidate, and legacy rows never become
+verified through backfill. Automatic comparability or robust-v3.1 activation
+requires all of the following:
+
+1. an approved, representative versioned dataset;
+2. approved domain policy and business release parameters;
+3. an immutable activation artifact and its expected SHA-256;
+4. the matching feature flag for that artifact;
+5. a decision-diff with zero unsafe relaxations.
+
+Do not enable `PRICING_V3_ROBUST_DISPERSION_ENABLED` or
+`PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED` with an empty, missing, or
+unverified activation artifact. A flag alone is `NO_GO` for persisted runs.
 
 ## 3. Source-access incident
 
@@ -138,6 +199,12 @@ against the approved RTO.
 6. Re-enable dispatch gradually and watch queue age, terminal failure rate,
    retry amplification, evidence coverage, CPU, and memory.
 
+For revision `20260718_0011`, downgrade removes comparability evidence,
+fingerprints, and robust diagnostic columns. Treat that downgrade as lossy:
+export the affected recommendation/observation audit data first, test the exact
+downgrade on a restored disposable database, and prefer a forward fix. Never
+downgrade a live database merely to disable v3; leave activation flags off.
+
 ## 8. Capacity and parser incidents
 
 Do not infer capacity from unit tests or one local request. Use
@@ -154,3 +221,7 @@ terminal failure rate:
 4. Compare replay against the frozen adapter version.
 5. Route terminal items to the dead-letter view and resume only after a bounded
    canary passes.
+
+The existing Prom parser remains frozen. E2E fixture replay and typed evidence
+adapters are boundary components; they do not authorize parser-internal changes
+or public competitor collection.

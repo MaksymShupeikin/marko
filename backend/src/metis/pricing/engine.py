@@ -7,11 +7,18 @@ from decimal import Decimal
 import math
 from collections.abc import Iterable, Mapping
 
+from .comparability import (
+    COMPARABILITY_POLICY_HASH,
+    COMPARABILITY_POLICY_ID,
+    ComparabilityDecision,
+    evaluate_comparison_evidence,
+)
 from .statistics import (
     clamp01,
     effective_sample_size,
     geometric_mean,
     iqr_fences,
+    log_price_cluster_diagnostic,
     log_coverage,
     mad,
     median,
@@ -24,6 +31,7 @@ from .statistics import (
 )
 from .types import (
     CoefficientModel,
+    ClusterDiagnostic,
     CompetitorOffer,
     ConfidenceAggregation,
     ExcludedOffer,
@@ -36,6 +44,7 @@ from .types import (
     RecommendationAction,
     RobustDispersionProfile,
     RobustScaleMethod,
+    HardGateResult,
     StockStatus,
     TierCoefficient,
 )
@@ -51,11 +60,82 @@ def recommend_price(
     coefficients: Mapping[tuple[str, ProductTier], TierCoefficient],
     *,
     policy: PricingPolicy | None = None,
+    legacy_replay: bool = False,
 ) -> PricingResult:
-    """Evaluate one SKU without HTTP, ORM, queue, or mutable global state."""
+    """Evaluate one SKU without HTTP, ORM, queue, or mutable global state.
+
+    ``legacy_replay`` exists only so an already persisted pre-comparability trace
+    can be verified without granting that legacy input new automatic authority.
+    """
     policy = policy or PricingPolicy()
     collected_offers = tuple(offers)
-    if context.current_price <= ZERO or not context.current_price.is_finite():
+    candidate = _recommend_price_core(
+        context,
+        collected_offers,
+        coefficients,
+        policy=policy,
+        legacy_replay=legacy_replay,
+    )
+    if (
+        policy.version != "pricing-v3.1-heterogeneity-gated"
+        or not policy.robust_non_relaxation_enabled
+        or legacy_replay
+    ):
+        return candidate
+
+    baseline_policy = replace(
+        policy,
+        version=policy.robust_baseline_policy_version,
+        dispersion_method=RobustScaleMethod.LEGACY_MAD,
+        robust_non_relaxation_enabled=False,
+    )
+    baseline = _recommend_price_core(
+        context,
+        collected_offers,
+        coefficients,
+        policy=baseline_policy,
+        legacy_replay=False,
+    )
+    automatic = {
+        RecommendationAction.RAISE,
+        RecommendationAction.HOLD,
+        RecommendationAction.LOWER,
+    }
+    abstentions = {
+        RecommendationAction.MANUAL_REVIEW,
+        RecommendationAction.INSUFFICIENT_DATA,
+    }
+    if baseline.action in abstentions and candidate.action in automatic:
+        return replace(
+            candidate,
+            action=RecommendationAction.MANUAL_REVIEW,
+            recommended_price=None,
+            confidence_grade="MANUAL",
+            action_gates_passed=False,
+            automatic_eligible=False,
+            reasons=tuple(
+                dict.fromkeys(
+                    candidate.reasons
+                    + (
+                        "ROBUST_BASELINE_ABSTENTION_NOT_RELAXABLE",
+                        "MANUAL_REVIEW_REQUIRED",
+                    )
+                )
+            ),
+        )
+    return candidate
+
+
+def _recommend_price_core(
+    context: ProductPricingContext,
+    collected_offers: tuple[CompetitorOffer, ...],
+    coefficients: Mapping[tuple[str, ProductTier], TierCoefficient],
+    *,
+    policy: PricingPolicy,
+    legacy_replay: bool,
+) -> PricingResult:
+    """Core implementation shared by the candidate and baseline policies."""
+    if not context.current_price.is_finite() or context.current_price <= ZERO:
         return _empty_result(
             context,
             policy,
@@ -74,10 +154,23 @@ def recommend_price(
 
     eligible: list[NormalizedOffer] = []
     excluded: list[ExcludedOffer] = []
+    comparability_decisions: list[ComparabilityDecision] = []
     for offer in collected_offers:
-        rejection = _hard_rejection(context, offer, policy)
+        rejection, comparability = _hard_rejection(
+            context,
+            offer,
+            policy,
+            legacy_replay=legacy_replay,
+        )
+        if comparability is not None:
+            comparability_decisions.append(comparability)
         if rejection:
-            excluded.append(_excluded(offer, rejection, "eligibility"))
+            stage = (
+                "comparability"
+                if comparability is not None and not comparability.automatic_eligible
+                else "eligibility"
+            )
+            excluded.append(_excluded(offer, rejection, stage))
             continue
 
         if offer.is_kemp or offer.tier == ProductTier.KEMP:
@@ -133,14 +226,20 @@ def recommend_price(
                 coefficient_dataset_hash=coefficient.dataset_hash,
                 source=offer.source,
                 listing_url=offer.listing_url,
+                comparison_evidence=offer.comparison_evidence,
             )
         )
 
     eligible, inferred_dumping = _exclude_inferred_kemp_dumping(eligible, policy)
     excluded.extend(inferred_dumping)
-    deduplicated, duplicates = _deduplicate_sellers(eligible)
+    deduplicated, duplicates = _deduplicate_sellers(
+        eligible, legacy_name_fallback=legacy_replay
+    )
     excluded.extend(duplicates)
     unique_count = len(deduplicated)
+    hard_gate_results, failed_hard_gates, unknown_hard_fields = (
+        _summarize_comparability(comparability_decisions, legacy_replay=legacy_replay)
+    )
     if unique_count < 3:
         return _result_without_market_action(
             context,
@@ -151,6 +250,9 @@ def recommend_price(
             reason="TOO_FEW_COMPETITORS",
             raw_competitor_count=len(collected_offers),
             unique_seller_count=unique_count,
+            hard_gate_results=hard_gate_results,
+            failed_hard_gates=failed_hard_gates,
+            unknown_hard_fields=unknown_hard_fields,
         )
 
     selected_dispersion_method = (
@@ -167,6 +269,9 @@ def recommend_price(
             raw_competitor_count=len(collected_offers),
             unique_seller_count=unique_count,
             dispersion_method=selected_dispersion_method,
+            hard_gate_results=hard_gate_results,
+            failed_hard_gates=failed_hard_gates,
+            unknown_hard_fields=unknown_hard_fields,
         )
 
     pre_clean_profile = robust_price_dispersion(
@@ -177,6 +282,18 @@ def recommend_price(
         profile_version=policy.robust_dispersion_profile_version,
         correction_profile_version=(policy.robust_scale_correction_profile_version),
     )
+    cluster_diagnostic: ClusterDiagnostic | None = None
+    if policy.version == "pricing-v3.1-heterogeneity-gated":
+        cluster_diagnostic = log_price_cluster_diagnostic(
+            [offer.normalized_price for offer in deduplicated],
+            min_cluster_size=policy.robust_cluster_min_size,
+            improvement_threshold=policy.robust_cluster_improvement_threshold,
+            balance_threshold=policy.robust_cluster_balance_threshold,
+            separation_threshold=policy.robust_cluster_separation_threshold,
+            gap_threshold=policy.robust_cluster_gap_threshold,
+            sigma_floor=policy.robust_cluster_sigma_floor,
+            version=policy.robust_cluster_diagnostic_version,
+        )
 
     cleaned, outliers, outlier_method = _clean_outliers(deduplicated, policy)
     excluded.extend(outliers)
@@ -194,6 +311,10 @@ def recommend_price(
             outlier_count=len(outliers),
             dispersion_method=selected_dispersion_method,
             pre_clean_dispersion_profile=pre_clean_profile,
+            cluster_diagnostic=cluster_diagnostic,
+            hard_gate_results=hard_gate_results,
+            failed_hard_gates=failed_hard_gates,
+            unknown_hard_fields=unknown_hard_fields,
         )
 
     prices = [offer.normalized_price for offer in cleaned]
@@ -238,6 +359,25 @@ def recommend_price(
     )
     if robust_scale_gate_blocked:
         reasons.append("ROBUST_SCALE_PARTIAL_DEGENERACY")
+    robust_estimator_disagreement = bool(
+        policy.version == "pricing-v3.1-heterogeneity-gated"
+        and post_clean_profile.cv_relative_span is not None
+        and post_clean_profile.cv_relative_span > policy.robust_disagreement_threshold
+    )
+    if robust_estimator_disagreement:
+        reasons.append("ROBUST_ESTIMATOR_DISAGREEMENT")
+    robust_cluster_blocked = bool(
+        cluster_diagnostic is not None and cluster_diagnostic.flagged
+    )
+    if robust_cluster_blocked:
+        reasons.append("ROBUST_MULTIMODAL_COHORT")
+    robust_diagnostic_unavailable = bool(
+        policy.version == "pricing-v3.1-heterogeneity-gated"
+        and cluster_diagnostic is not None
+        and not cluster_diagnostic.available
+    )
+    if robust_diagnostic_unavailable:
+        reasons.append("ROBUST_DIAGNOSTIC_UNAVAILABLE")
     if len(cleaned) < policy.min_competitors:
         reasons.append("TOO_FEW_COMPETITORS_FOR_ACTION")
     if n_effective < policy.min_effective_competitors:
@@ -261,6 +401,9 @@ def recommend_price(
         and not failed_factors
         and sensitivity <= policy.sensitivity_tolerance
         and not robust_scale_gate_blocked
+        and not robust_estimator_disagreement
+        and not robust_cluster_blocked
+        and not robust_diagnostic_unavailable
     )
     common = {
         "context": context,
@@ -286,6 +429,10 @@ def recommend_price(
         "dispersion_method": selected_dispersion_method,
         "pre_clean_dispersion_profile": pre_clean_profile,
         "dispersion_profile": post_clean_profile,
+        "cluster_diagnostic": cluster_diagnostic,
+        "hard_gate_results": hard_gate_results,
+        "failed_hard_gates": failed_hard_gates,
+        "unknown_hard_fields": unknown_hard_fields,
     }
     if unique_count < policy.manual_review_below or not action_gates_pass:
         reasons.append("MANUAL_REVIEW_REQUIRED")
@@ -354,38 +501,56 @@ def _reference_offer(
         is_direct_kemp=is_kemp,
         source=offer.source,
         listing_url=offer.listing_url,
+        comparison_evidence=offer.comparison_evidence,
     )
 
 
 def _hard_rejection(
-    context: ProductPricingContext, offer: CompetitorOffer, policy: PricingPolicy
-) -> str | None:
-    if offer.price <= ZERO or not offer.price.is_finite():
-        return "NON_POSITIVE_PRICE"
+    context: ProductPricingContext,
+    offer: CompetitorOffer,
+    policy: PricingPolicy,
+    *,
+    legacy_replay: bool,
+) -> tuple[str | None, ComparabilityDecision | None]:
+    if not offer.price.is_finite() or offer.price <= ZERO:
+        return "NON_POSITIVE_PRICE", None
+    if not legacy_replay:
+        comparability = evaluate_comparison_evidence(
+            offer.comparison_evidence,
+            seller_id=offer.seller_id,
+            currency_raw=offer.currency_raw,
+            currency_normalized=offer.currency,
+            required_currency=policy.currency,
+        )
+        if not comparability.automatic_eligible:
+            return comparability.reason_codes[0], comparability
+    else:
+        comparability = None
+    currency = (offer.currency or "").strip().upper()
     if (
-        offer.currency.strip().upper() != context.currency.strip().upper()
-        or offer.currency.strip().upper() != policy.currency
+        currency != context.currency.strip().upper()
+        or currency != policy.currency
     ):
-        return "CURRENCY_MISMATCH"
+        return "CURRENCY_MISMATCH", comparability
     if offer.is_available is not True:
-        return "NOT_AVAILABLE"
+        return "NOT_AVAILABLE", comparability
     if offer.age_hours < ZERO or offer.age_hours > policy.max_age_hours:
-        return "STALE_SOURCE"
+        return "STALE_SOURCE", comparability
     if offer.is_used or offer.tier == ProductTier.USED:
-        return "USED_OR_REFURBISHED"
+        return "USED_OR_REFURBISHED", comparability
     if offer.is_owned:
-        return "OWNED_SELLER"
+        return "OWNED_SELLER", comparability
     if offer.severe_conflict:
-        return offer.conflict_reason or "COMMERCIAL_CONFLICT"
+        return offer.conflict_reason or "COMMERCIAL_CONFLICT", comparability
     if offer.match_confidence < policy.match_confidence_min:
-        return "LOW_MATCH_CONFIDENCE"
+        return "LOW_MATCH_CONFIDENCE", comparability
     if offer.tier == ProductTier.UNKNOWN:
-        return "UNKNOWN_TIER"
+        return "UNKNOWN_TIER", comparability
     if offer.tier_confidence < policy.tier_confidence_min:
-        return "LOW_TIER_CONFIDENCE"
+        return "LOW_TIER_CONFIDENCE", comparability
     if offer.source_confidence < policy.source_confidence_min:
-        return "LOW_SOURCE_CONFIDENCE"
-    return None
+        return "LOW_SOURCE_CONFIDENCE", comparability
+    return None, comparability
 
 
 def _excluded(offer: CompetitorOffer, reason: str, stage: str) -> ExcludedOffer:
@@ -401,11 +566,29 @@ def _excluded(offer: CompetitorOffer, reason: str, stage: str) -> ExcludedOffer:
 
 def _deduplicate_sellers(
     offers: Iterable[NormalizedOffer],
+    *,
+    legacy_name_fallback: bool = False,
 ) -> tuple[list[NormalizedOffer], list[ExcludedOffer]]:
     representatives: dict[str, NormalizedOffer] = {}
     excluded: list[ExcludedOffer] = []
     for offer in sorted(offers, key=lambda item: item.observation_id):
-        key = offer.seller_id.strip() or offer.seller_name.casefold().strip()
+        stable_id = (offer.seller_id or "").strip()
+        key = (
+            stable_id
+            or (offer.seller_name.casefold().strip() if legacy_name_fallback else "")
+        )
+        if not key:
+            excluded.append(
+                ExcludedOffer(
+                    offer.observation_id,
+                    "MANUAL_MISSING_STABLE_SELLER_ID",
+                    offer.seller_id,
+                    offer.raw_price,
+                    offer.tier,
+                    "seller_deduplication",
+                )
+            )
+            continue
         current = representatives.get(key)
         candidate_key = (offer.normalized_price, offer.observation_id)
         current_key = (
@@ -441,6 +624,49 @@ def _deduplicate_sellers(
         representatives.values(),
         key=lambda item: (item.normalized_price, item.observation_id),
     ), excluded
+
+
+def _summarize_comparability(
+    decisions: list[ComparabilityDecision],
+    *,
+    legacy_replay: bool,
+) -> tuple[dict[str, int], tuple[str, ...], tuple[str, ...]]:
+    if legacy_replay:
+        return {"legacy_replay_only": 1}, (), ()
+    verified = [
+        decision
+        for decision in decisions
+        if decision.hard_gate_result == HardGateResult.PASS
+    ]
+    gates: dict[str, int] = {"comparability_contract": int(bool(verified))}
+    gate_names = sorted(
+        {
+            name
+            for decision in verified
+            for name in decision.hard_gate_results
+        }
+    )
+    for name in gate_names:
+        gates[name] = int(
+            all(decision.hard_gate_results.get(name, 0) == 1 for decision in verified)
+        )
+    failed = tuple(
+        dict.fromkeys(
+            gate
+            for decision in decisions
+            if not decision.automatic_eligible
+            for gate in decision.failed_hard_gates
+        )
+    )
+    unknown = tuple(
+        dict.fromkeys(
+            field
+            for decision in decisions
+            if not decision.automatic_eligible
+            for field in decision.unknown_hard_fields
+        )
+    )
+    return dict(sorted(gates.items())), failed, unknown
 
 
 def _exclude_inferred_kemp_dumping(
@@ -909,6 +1135,10 @@ def _priced_result(
     dispersion_method: RobustScaleMethod,
     pre_clean_dispersion_profile: RobustDispersionProfile,
     dispersion_profile: RobustDispersionProfile,
+    cluster_diagnostic: ClusterDiagnostic | None,
+    hard_gate_results: Mapping[str, int],
+    failed_hard_gates: tuple[str, ...],
+    unknown_hard_fields: tuple[str, ...],
 ) -> PricingResult:
     priority, score_type, review_priority, cost_basis, priority_inputs = _priorities(
         context,
@@ -960,6 +1190,15 @@ def _priced_result(
             policy.robust_scale_correction_profile_version
         ),
         finite_sample_scale_correction=policy.finite_sample_scale_correction,
+        automatic_eligible=action_gates_passed,
+        verified_seller_count=unique_seller_count,
+        comparability_policy_id=COMPARABILITY_POLICY_ID,
+        comparability_policy_hash=COMPARABILITY_POLICY_HASH,
+        hard_gate_results=dict(hard_gate_results),
+        failed_hard_gates=failed_hard_gates,
+        unknown_hard_fields=unknown_hard_fields,
+        cluster_diagnostic=cluster_diagnostic,
+        robust_policy_fingerprint=_robust_policy_fingerprint(policy),
     )
 
 
@@ -978,6 +1217,10 @@ def _result_without_market_action(
     dispersion_method: RobustScaleMethod | None = None,
     pre_clean_dispersion_profile: RobustDispersionProfile | None = None,
     dispersion_profile: RobustDispersionProfile | None = None,
+    cluster_diagnostic: ClusterDiagnostic | None = None,
+    hard_gate_results: Mapping[str, int] | None = None,
+    failed_hard_gates: tuple[str, ...] = (),
+    unknown_hard_fields: tuple[str, ...] = (),
 ) -> PricingResult:
     priority, score_type, review_priority, cost_basis, priority_inputs = _priorities(
         context, action, context.current_price, None, ZERO, policy
@@ -1000,7 +1243,16 @@ def _result_without_market_action(
         priority_score=priority,
         priority_score_type=score_type,
         review_priority=review_priority,
-        reasons=(reason,),
+        reasons=tuple(
+            dict.fromkeys(
+                (reason,)
+                + tuple(
+                    item.reason
+                    for item in excluded
+                    if item.stage == "comparability"
+                )
+            )
+        ),
         evidence=tuple(evidence),
         excluded=tuple(excluded),
         policy_version=policy.version,
@@ -1024,6 +1276,15 @@ def _result_without_market_action(
             policy.robust_scale_correction_profile_version
         ),
         finite_sample_scale_correction=policy.finite_sample_scale_correction,
+        automatic_eligible=False,
+        verified_seller_count=unique_seller_count,
+        comparability_policy_id=COMPARABILITY_POLICY_ID,
+        comparability_policy_hash=COMPARABILITY_POLICY_HASH,
+        hard_gate_results=dict(hard_gate_results or {}),
+        failed_hard_gates=failed_hard_gates,
+        unknown_hard_fields=unknown_hard_fields,
+        cluster_diagnostic=cluster_diagnostic,
+        robust_policy_fingerprint=_robust_policy_fingerprint(policy),
     )
     return _enforce_invariants(result, context)
 
@@ -1046,6 +1307,29 @@ def _empty_result(
         raw_competitor_count=raw_competitor_count,
         unique_seller_count=0,
     )
+
+
+def _robust_policy_fingerprint(policy: PricingPolicy) -> dict[str, str]:
+    return {
+        "policy_version": policy.version,
+        "selected_scale_method": (
+            policy.dispersion_method or RobustScaleMethod.LEGACY_MAD
+        ).value,
+        "profile_version": policy.robust_dispersion_profile_version,
+        "correction_profile_version": (
+            policy.robust_scale_correction_profile_version
+        ),
+        "cluster_diagnostic_version": policy.robust_cluster_diagnostic_version,
+        "disagreement": str(policy.robust_disagreement_threshold),
+        "improvement": str(policy.robust_cluster_improvement_threshold),
+        "balance": str(policy.robust_cluster_balance_threshold),
+        "separation": str(policy.robust_cluster_separation_threshold),
+        "gap": str(policy.robust_cluster_gap_threshold),
+        "sigma_floor": str(policy.robust_cluster_sigma_floor),
+        "baseline_policy_version": policy.robust_baseline_policy_version,
+        "non_relaxation_enabled": str(policy.robust_non_relaxation_enabled).lower(),
+        "code_commit": "NOT_AVAILABLE",
+    }
 
 
 def _enforce_invariants(

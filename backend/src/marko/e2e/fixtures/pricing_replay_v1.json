@@ -1,0 +1,14 @@
+{
+  "schema_version": "prompt-15.015-e2e-replay-v1",
+  "fixture_id": "two-cluster-verified-sellers-v1",
+  "offers": [
+    {"product_id": 1501501, "source_record_id": "e2e-001", "seller_id": "seller-001", "seller_name": "Fixture Seller 1", "price": "100", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501502, "source_record_id": "e2e-002", "seller_id": "seller-002", "seller_name": "Fixture Seller 2", "price": "101", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501503, "source_record_id": "e2e-003", "seller_id": "seller-003", "seller_name": "Fixture Seller 3", "price": "102", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501504, "source_record_id": "e2e-004", "seller_id": "seller-004", "seller_name": "Fixture Seller 4", "price": "103", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501505, "source_record_id": "e2e-005", "seller_id": "seller-005", "seller_name": "Fixture Seller 5", "price": "180", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501506, "source_record_id": "e2e-006", "seller_id": "seller-006", "seller_name": "Fixture Seller 6", "price": "181", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501507, "source_record_id": "e2e-007", "seller_id": "seller-007", "seller_name": "Fixture Seller 7", "price": "182", "currency": "UAH", "brand": "Bosch"},
+    {"product_id": 1501508, "source_record_id": "e2e-008", "seller_id": "seller-008", "seller_name": "Fixture Seller 8", "price": "183", "currency": "UAH", "brand": "Bosch"}
+  ]
+}

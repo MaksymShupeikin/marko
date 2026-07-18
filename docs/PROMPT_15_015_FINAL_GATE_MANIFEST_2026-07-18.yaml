@@ -1,0 +1,104 @@
+schema_version: "1.0.0"
+prompt_id: PROMPT_15_015
+generated_at: "2026-07-18T16:25:00+02:00"
+reverification_note: >-
+  Implementation and real-runtime verification completed on the supplied checkout.
+  Backend 547 tests, Flutter 22 tests, E2E-F01 through E2E-F10, ten browser
+  assertions, clean PostgreSQL migration, exact replay, scoped cleanup, and a
+  secret-safe full production preflight all passed.
+
+repository_identity:
+  checkout: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  git_commit: NOT_AVAILABLE
+  git_note: The supplied directory has no Git metadata; evidence is path-bound.
+  operating_system: Darwin
+  architecture: arm64
+  docker_client: "29.6.2"
+  docker_server: "29.5.2"
+  compose_version: "5.3.1"
+  runtime: colima
+  python_backend: "3.13.9"
+  flutter: "3.44.4"
+
+final_gates:
+  remediation_execution: PASS
+  docker_e2e_gate: PASS
+  matching_implementation_gate: PASS
+  matching_production_activation: BLOCKED_DATA
+  robust_v3_implementation_gate: PASS
+  robust_v3_activation_gate: BLOCKED_DATA
+  production_preflight_gate: PASS
+  full_production_readiness: NOT_PROVEN
+
+verified_results:
+  backend_regression: "PASS: 547 tests"
+  ruff_check: PASS
+  compileall: PASS
+  alembic_single_head: "PASS: 20260718_0011"
+  alembic_offline_sql: PASS
+  clean_postgresql_migration: PASS
+  openapi_schema: "PASS: 31 paths / 45 schemas"
+  frontend_format: PASS
+  frontend_tests: "PASS: 22 tests"
+  frontend_analyze_ascii_mirror: PASS
+  frontend_analyze_original_unicode_path: BLOCKED_TOOLING_PATH_BUG
+  frontend_release_build: PASS
+  e2e_harness_static_contract: PASS
+  e2e_runtime_run_id: 20260718T140556Z-1b2165b5
+  e2e_failure_injections: "PASS: 10/10"
+  e2e_browser_assertions: "PASS: 10/10"
+  e2e_replay_exact: true
+  e2e_live_prom_requests: 0
+  e2e_automatic_price_applications: 0
+  e2e_cleanup_complete: true
+  full_preflight: PASS
+  full_preflight_secrets_emitted: false
+  comparability_gold_set_engineering_gate: PASS
+  comparability_critical_mutations: "PASS: 7/7 killed"
+  robust_decision_diff_synthetic_gate: PASS
+  robust_unsafe_relaxation_count: 0
+  robust_critical_mutations: "PASS: 11/11 killed"
+
+production_limits:
+  automatic_activation_enabled: false
+  reasons:
+    - Representative labeled activation data was not supplied.
+    - Product and risk owners have not approved release thresholds, loss weights, or activation hashes.
+    - Representative E5 recovery, load, and controlled-pilot evidence was not part of this implementation run.
+  effect_on_current_stage: NONE
+  effect_on_production_claim: Production-ready claim remains forbidden.
+
+invariants:
+  parser_internals_modified: false
+  source_access_changed: false
+  public_prom_live_collection_executed: false
+  automatic_price_applications: 0
+  fixture_replay_only: true
+  secrets_committed: false
+  production_ready_claimed: false
+
+acceptance_summary:
+  AC_E2E: PASS
+  AC_MATCHING: PASS_IMPLEMENTATION_BLOCKED_ACTIVATION
+  AC_ROBUST: PASS_IMPLEMENTATION_BLOCKED_ACTIVATION
+  AC_PREFLIGHT: PASS
+  AC_REGRESSION: PASS_WITH_DOCUMENTED_FLUTTER_UNICODE_PATH_WORKAROUND
+
+evidence_bundle:
+  after_reproduction: docs/PROMPT_15_015_AFTER_REPRO_2026-07-18.json
+  comparability_gold_set: docs/PROMPT_15_015_COMPARABILITY_GOLD_SET_REPORT_2026-07-18.json
+  comparability_mutations: docs/PROMPT_15_015_COMPARABILITY_MUTATION_REPORT_2026-07-18.json
+  robust_decision_diff: docs/PROMPT_15_015_ROBUST_DECISION_DIFF_2026-07-18.json
+  robust_mutations: docs/PROMPT_15_015_ROBUST_MUTATION_REPORT_2026-07-18.json
+  robust_benchmark: docs/PROMPT_15_015_ROBUST_BENCHMARK_2026-07-18.json
+  preflight_template_negative: docs/PROMPT_15_015_PREFLIGHT_TEMPLATE_NEGATIVE_2026-07-18.json
+  preflight_full_runtime: docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+  e2e_evidence: docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+  execution_ledger: docs/PROMPT_15_015_EXECUTION_LEDGER_2026-07-18.yaml
+  implementation_report: docs/PROMPT_15_015_IMPLEMENTATION_REPORT_2026-07-18.md
+  section_15_manifest: docs/examples/end_of_response_prompt_15_015.yaml
+  section_16_manifest: docs/examples/machine_readable_summary_prompt_15_015.yaml
+  validated_final_response: docs/PROMPT_15_015_FINAL_RESPONSE_2026-07-18.md
+
+stop_gate: PASS
+stop_gate_line: STOP_GATE_PROMPT_15_015_IMPLEMENTATION = PASS

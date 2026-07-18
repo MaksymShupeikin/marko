@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
 import math
 from types import MappingProxyType
 
-from .types import RobustDispersionProfile, RobustScaleMethod
+from .types import ClusterDiagnostic, RobustDispersionProfile, RobustScaleMethod
 
 
 ZERO = Decimal("0")
@@ -170,6 +170,171 @@ def qn_scale(
     raw = _order_statistic(distances, rank)
     correction = _qn_finite_correction(sample_size) if finite_sample_correction else ONE
     return correction * QN_NORMAL_CONSTANT * raw
+
+
+def log_price_cluster_diagnostic(
+    values: Iterable[Decimal],
+    *,
+    min_cluster_size: int,
+    improvement_threshold: Decimal,
+    balance_threshold: Decimal,
+    separation_threshold: Decimal,
+    gap_threshold: Decimal,
+    sigma_floor: Decimal,
+    version: str = "log-l1-two-cluster-v1",
+) -> ClusterDiagnostic:
+    """Return a deterministic balanced two-cluster diagnostic in log space.
+
+    The L1 objectives are scanned with prefix sums. Qn is evaluated only for
+    split candidates tied on the primary objective, keeping the common path
+    O(n log n) plus one bounded O(n^2) scale calculation.
+    """
+
+    prices = _finite_decimals(values, name="log_price_cluster_diagnostic")
+    if any(value <= ZERO for value in prices):
+        raise ValueError("cluster diagnostic requires positive prices")
+    if min_cluster_size < 2:
+        raise ValueError("min_cluster_size must be at least two")
+    thresholds = (
+        improvement_threshold,
+        balance_threshold,
+        separation_threshold,
+        gap_threshold,
+        sigma_floor,
+    )
+    if any(not value.is_finite() or value < ZERO for value in thresholds):
+        raise ValueError("cluster thresholds must be finite and non-negative")
+
+    logs = sorted(value.ln() for value in prices)
+    sample_size = len(logs)
+    if sample_size < 2 * min_cluster_size:
+        return ClusterDiagnostic(
+            version=version,
+            available=False,
+            sample_size=sample_size,
+            min_cluster_size=min_cluster_size,
+            split_index=None,
+            objective_single=None,
+            objective_split=None,
+            improvement=None,
+            balance=None,
+            separation=None,
+            gap=None,
+            flagged=False,
+            reason="INSUFFICIENT_CLUSTER_CAPACITY",
+        )
+
+    prefix = [ZERO]
+    for value in logs:
+        prefix.append(prefix[-1] + value)
+
+    def slice_median(left: int, right: int) -> Decimal:
+        size = right - left
+        midpoint = left + size // 2
+        if size % 2:
+            return logs[midpoint]
+        return (logs[midpoint - 1] + logs[midpoint]) / Decimal(2)
+
+    def l1_cost(left: int, right: int) -> Decimal:
+        center = slice_median(left, right)
+        midpoint = (left + right) // 2
+        left_cost = center * Decimal(midpoint - left) - (
+            prefix[midpoint] - prefix[left]
+        )
+        right_cost = (prefix[right] - prefix[midpoint]) - center * Decimal(
+            right - midpoint
+        )
+        return left_cost + right_cost
+
+    objective_single = l1_cost(0, sample_size)
+    if objective_single == ZERO:
+        return ClusterDiagnostic(
+            version=version,
+            available=True,
+            sample_size=sample_size,
+            min_cluster_size=min_cluster_size,
+            split_index=None,
+            objective_single=ZERO,
+            objective_split=ZERO,
+            improvement=ZERO,
+            balance=ONE,
+            separation=ZERO,
+            gap=ZERO,
+            flagged=False,
+            reason="ZERO_GLOBAL_DEVIATION",
+        )
+
+    primary: list[tuple[int, Decimal, Decimal]] = []
+    for split in range(min_cluster_size, sample_size - min_cluster_size + 1):
+        objective_split = l1_cost(0, split) + l1_cost(split, sample_size)
+        improvement = ONE - objective_split / objective_single
+        primary.append((split, objective_split, improvement))
+    best_improvement = max(item[2] for item in primary)
+    tied = [item for item in primary if item[2] == best_improvement]
+
+    candidates: list[tuple[Decimal, int, Decimal, Decimal, Decimal, Decimal]] = []
+    for split, objective_split, improvement in tied:
+        left = logs[:split]
+        right = logs[split:]
+        left_scale = qn_scale(left)
+        right_scale = qn_scale(right)
+        denominator = max(left_scale, right_scale, sigma_floor)
+        separation = abs(median(right) - median(left)) / denominator
+        balance = Decimal(min(len(left), len(right))) / Decimal(sample_size)
+        gap = logs[split] - logs[split - 1]
+        candidates.append(
+            (separation, split, objective_split, improvement, balance, gap)
+        )
+    separation, split, objective_split, improvement, balance, gap = sorted(
+        candidates, key=lambda item: (-item[0], item[1])
+    )[0]
+    flagged = bool(
+        improvement >= improvement_threshold
+        and balance >= balance_threshold
+        and separation >= separation_threshold
+        and gap >= gap_threshold
+    )
+    return ClusterDiagnostic(
+        version=version,
+        available=True,
+        sample_size=sample_size,
+        min_cluster_size=min_cluster_size,
+        split_index=split,
+        objective_single=objective_single,
+        objective_split=objective_split,
+        improvement=improvement,
+        balance=balance,
+        separation=separation,
+        gap=gap,
+        flagged=flagged,
+        reason="ROBUST_MULTIMODAL_COHORT" if flagged else None,
+    )
+
+
+def cluster_diagnostic_to_dict(
+    diagnostic: ClusterDiagnostic | None,
+) -> dict[str, object] | None:
+    if diagnostic is None:
+        return None
+    return {
+        "version": diagnostic.version,
+        "available": diagnostic.available,
+        "sample_size": diagnostic.sample_size,
+        "min_cluster_size": diagnostic.min_cluster_size,
+        "split_index": diagnostic.split_index,
+        "objective_single": _decimal_string(diagnostic.objective_single),
+        "objective_split": _decimal_string(diagnostic.objective_split),
+        "improvement": _decimal_string(diagnostic.improvement),
+        "balance": _decimal_string(diagnostic.balance),
+        "separation": _decimal_string(diagnostic.separation),
+        "gap": _decimal_string(diagnostic.gap),
+        "flagged": diagnostic.flagged,
+        "reason": diagnostic.reason,
+    }
+
+
+def _decimal_string(value: Decimal | None) -> str | None:
+    return str(value) if value is not None else None
 
 
 def robust_price_dispersion(
@@ -456,11 +621,13 @@ __all__ = [
     "ROBUST_SCALE_CORRECTION_PROFILE_VERSION",
     "SN_NORMAL_CONSTANT",
     "clamp01",
+    "cluster_diagnostic_to_dict",
     "dispersion_profile_to_dict",
     "effective_sample_size",
     "geometric_mean",
     "iqr_fences",
     "log_coverage",
+    "log_price_cluster_diagnostic",
     "mad",
     "median",
     "percentile",

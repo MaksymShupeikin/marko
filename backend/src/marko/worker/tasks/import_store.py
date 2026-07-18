@@ -1,7 +1,7 @@
 """Celery entry point for store catalog imports."""
+
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID
 
 from marko.core.config import get_settings
@@ -11,6 +11,7 @@ from marko.services.catalog_import import (
     fail_store_sync_task,
     import_store_catalog,
 )
+from marko.worker.async_runtime import run_async
 from marko.worker.celery_app import celery_app
 
 settings = get_settings()
@@ -27,8 +28,7 @@ settings = get_settings()
 )
 def import_store_catalog_task(self, sync_run_id: str) -> int:
     redelivered = bool(
-        self.request.retries
-        or (self.request.delivery_info or {}).get("redelivered")
+        self.request.retries or (self.request.delivery_info or {}).get("redelivered")
     )
     reason = (
         "bounded_retry"
@@ -36,7 +36,7 @@ def import_store_catalog_task(self, sync_run_id: str) -> int:
         else ("broker_redelivery" if redelivered else None)
     )
     try:
-        return asyncio.run(
+        return run_async(
             import_store_catalog(
                 UUID(sync_run_id),
                 task_id=self.request.id,
@@ -46,7 +46,7 @@ def import_store_catalog_task(self, sync_run_id: str) -> int:
         )
     except RetryableCatalogImportError as exc:
         if self.request.retries >= self.max_retries:
-            asyncio.run(
+            run_async(
                 fail_store_sync_task(
                     UUID(sync_run_id),
                     task_id=self.request.id,
@@ -56,15 +56,14 @@ def import_store_catalog_task(self, sync_run_id: str) -> int:
             raise
         countdown = min(
             900,
-            settings.store_sync_retry_base_delay_seconds
-            * (2**self.request.retries),
+            settings.store_sync_retry_base_delay_seconds * (2**self.request.retries),
         )
         raise self.retry(exc=exc, countdown=countdown)
     except TerminalCatalogImportError:
         raise
     except Exception as exc:
         if self.request.retries >= self.max_retries:
-            asyncio.run(
+            run_async(
                 fail_store_sync_task(
                     UUID(sync_run_id),
                     task_id=self.request.id,
@@ -74,7 +73,6 @@ def import_store_catalog_task(self, sync_run_id: str) -> int:
             raise
         countdown = min(
             900,
-            settings.store_sync_retry_base_delay_seconds
-            * (2**self.request.retries),
+            settings.store_sync_retry_base_delay_seconds * (2**self.request.retries),
         )
         raise self.retry(exc=exc, countdown=countdown)

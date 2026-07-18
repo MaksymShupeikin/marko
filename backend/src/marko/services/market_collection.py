@@ -8,7 +8,7 @@ repeating a successful network collection.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -48,7 +48,12 @@ from metis.pricing import (
     ProductTier,
     RecommendationAction,
     TierClassification,
+    bind_persisted_provenance,
     classify_tier,
+    cluster_diagnostic_to_dict,
+    comparison_evidence_from_dict,
+    comparison_evidence_to_dict,
+    HardGateResult,
     normalize_brand,
     recommend_price,
     robust_dispersion_trace,
@@ -56,9 +61,14 @@ from metis.pricing import (
 from metis.pricing.statistics import median as decimal_median
 from metis.pricing.observability import pricing_event
 from marko.services.collection_guard import DistributedCollectionGuard
+from marko.services.decision_fingerprint import (
+    build_decision_fingerprint_payload,
+    canonical_sha256,
+)
 from marko.services.matching import PriceComparison
 from marko.services.pricing_runs import (
     build_pricing_context,
+    activation_artifact_verified,
     calibrate_tier_coefficients,
     get_latest_override,
     load_target_tier_coefficients,
@@ -285,6 +295,12 @@ async def process_pricing_item(
             or claim.scrape_input is None
         ):
             raise RuntimeError("Target collection claim is incomplete")
+        settings = get_settings()
+        if (
+            settings.environment.strip().casefold() == "e2e"
+            and settings.e2e_task_hold_seconds > 0
+        ):
+            await asyncio.sleep(settings.e2e_task_hold_seconds)
         return await _process_target_collection(claim)
 
     if await _has_capture(run_item_id):
@@ -1212,14 +1228,7 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
             )
         output = _verified_target_output(target)
         raw_manifest = await _verified_raw_evidence_manifest(session, target.id)
-        raw_manifest_sha256 = hashlib.sha256(
-            json.dumps(
-                raw_manifest,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode()
-        ).hexdigest()
+        raw_manifest_sha256 = canonical_sha256(raw_manifest)
         run = await session.get(PricingRun, target.pricing_run_id)
         if run is None:
             raise PricingItemNotFoundError("Pricing run disappeared")
@@ -1282,7 +1291,7 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                 capture = RawMarketCapture(
                     pricing_run_item_id=run_item.id,
                     scrape_target_id=target.id,
-                    source="prom",
+                    source=target.source_type,
                     capture_kind="parser_output_ref",
                     payload={
                         "schema_version": "metis-scrape-target-ref-v2",
@@ -1319,6 +1328,7 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                     brand_tiers=brand_tiers,
                     brand_confidence=brand_confidence,
                     observed_at=observed_at,
+                    source_type=target.source_type,
                 )
                 materialized += 1
             run_item.status = "classified"
@@ -1405,6 +1415,7 @@ async def _persist_payload_observations(
     brand_tiers: dict[str, ProductTier],
     brand_confidence: dict[str, Decimal],
     observed_at: datetime,
+    source_type: str,
 ) -> None:
     for raw_offer in offers:
         if not isinstance(raw_offer, Mapping):
@@ -1418,9 +1429,7 @@ async def _persist_payload_observations(
             continue
         if price <= 0 or not Decimal("0") <= match_confidence <= Decimal("1"):
             continue
-        seller_id = str(
-            raw_offer.get("seller_id") or raw_offer.get("seller_name") or "unknown"
-        )[:255]
+        seller_id = str(raw_offer.get("seller_id") or "").strip()[:255]
         title = str(raw_offer.get("name") or "")
         brand = _optional_string(raw_offer.get("brand"))
         classification = classify_tier(
@@ -1444,11 +1453,31 @@ async def _persist_payload_observations(
                 method_version=classification.method_version,
             )
         source_listing_id = _payload_source_listing_id(raw_offer, price)
+        currency_raw = _optional_string(raw_offer.get("currency"))
+        try:
+            upstream_evidence = comparison_evidence_from_dict(
+                raw_offer.get("comparison_evidence")
+                if isinstance(raw_offer.get("comparison_evidence"), Mapping)
+                else None
+            )
+        except ValueError:
+            upstream_evidence = None
+        comparison_evidence = bind_persisted_provenance(
+            upstream_evidence,
+            stable_seller_id=seller_id or None,
+            source_type=source_type,
+            source_record_id=source_listing_id,
+            raw_evidence_sha256=capture.content_sha256,
+            parser_contract_version=run.parser_version,
+            currency_raw=currency_raw,
+            currency_normalized=_currency_code(currency_raw),
+            required_currency="UAH",
+        )
         observation = MarketObservation(
             pricing_run_item_id=run_item.id,
             catalog_item_id=catalog_item.id,
             raw_capture_id=capture.id,
-            source="prom",
+            source=source_type,
             source_listing_id=source_listing_id,
             seller_id=seller_id,
             seller_name=str(raw_offer.get("seller_name") or "Unknown seller")[:255],
@@ -1458,7 +1487,9 @@ async def _persist_payload_observations(
             brand_raw=brand,
             matched_oe_norm=catalog_item.oe_norm,
             price=price,
-            currency=_currency_code(_optional_string(raw_offer.get("currency"))),
+            currency=_currency_code(currency_raw),
+            currency_raw=currency_raw,
+            currency_inferred=False,
             is_available=_availability(
                 _optional_bool(raw_offer.get("is_available")),
                 _optional_string(raw_offer.get("presence")),
@@ -1466,6 +1497,15 @@ async def _persist_payload_observations(
             match_confidence=match_confidence,
             source_confidence=Decimal("1"),
             parser_version=run.parser_version,
+            evidence_contract_version="comparison-evidence-v1",
+            comparability_policy_id=comparison_evidence.policy_id,
+            comparability_policy_hash=comparison_evidence.policy_hash,
+            comparison_evidence=comparison_evidence_to_dict(comparison_evidence),
+            seller_identity_verified=(comparison_evidence.seller_identity.verified),
+            source_provenance_verified=comparison_evidence.provenance.verified,
+            automatic_eligible=(
+                comparison_evidence.hard_gate_result == HardGateResult.PASS
+            ),
             observed_at=observed_at,
         )
         session.add(observation)
@@ -1660,7 +1700,11 @@ async def _persist_comparison(
             if offer.price <= 0:
                 continue
             source_listing_id = _source_listing_id(product.id, product.url, offer.price)
-            seller_id = str(product.seller_id or product.seller_name or "unknown")[:255]
+            seller_id = (
+                str(product.seller_id).strip()[:255]
+                if product.seller_id is not None
+                else ""
+            )
             classification = classify_tier(
                 brand=product.brand,
                 title=product.name or "",
@@ -1681,6 +1725,17 @@ async def _persist_comparison(
                     reasons=classification.reasons + ("WORKSPACE_BRAND_CONFIDENCE",),
                     method_version=classification.method_version,
                 )
+            comparison_evidence = bind_persisted_provenance(
+                offer.comparison_evidence,
+                stable_seller_id=seller_id or None,
+                source_type="prom",
+                source_record_id=source_listing_id,
+                raw_evidence_sha256=capture.content_sha256,
+                parser_contract_version=run.parser_version,
+                currency_raw=product.currency,
+                currency_normalized=_currency_code(product.currency),
+                required_currency="UAH",
+            )
             observation = MarketObservation(
                 pricing_run_item_id=run_item_id,
                 catalog_item_id=catalog_item_id,
@@ -1696,10 +1751,21 @@ async def _persist_comparison(
                 matched_oe_norm=item.oe_norm,
                 price=Decimal(str(offer.price)).quantize(Decimal("0.01")),
                 currency=_currency_code(product.currency),
+                currency_raw=product.currency,
+                currency_inferred=False,
                 is_available=_availability(product.is_available, product.presence),
                 match_confidence=Decimal(str(offer.match.score)),
                 source_confidence=Decimal("1"),
                 parser_version=run.parser_version,
+                evidence_contract_version="comparison-evidence-v1",
+                comparability_policy_id=comparison_evidence.policy_id,
+                comparability_policy_hash=comparison_evidence.policy_hash,
+                comparison_evidence=comparison_evidence_to_dict(comparison_evidence),
+                seller_identity_verified=(comparison_evidence.seller_identity.verified),
+                source_provenance_verified=comparison_evidence.provenance.verified,
+                automatic_eligible=(
+                    comparison_evidence.hard_gate_result == HardGateResult.PASS
+                ),
                 observed_at=observed_at,
             )
             session.add(observation)
@@ -1837,9 +1903,14 @@ async def calibrate_run_and_prepare_calculations(run_id: UUID) -> list[UUID]:
             raise PricingItemNotFoundError(str(run_id))
         workspace_id = run.workspace_id
         policy = policy_from_dict(run.policy_config)
+        settings = get_settings()
         require_activated_run_policy(
             policy,
-            robust_v3_enabled=(get_settings().pricing_v3_robust_dispersion_enabled),
+            robust_v3_enabled=settings.pricing_v3_robust_dispersion_enabled,
+            activation_artifact_verified=activation_artifact_verified(
+                settings.pricing_v3_activation_artifact,
+                settings.pricing_v3_activation_sha256,
+            ),
         )
         pairs = await _derive_calibration_pairs(session, run_id, policy)
         _, dataset_hash = await persist_run_calibration_pairs(
@@ -2259,9 +2330,14 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
         override = await get_latest_override(session, catalog_item.id)
         context = build_pricing_context(catalog_item, override)
         policy = policy_from_dict(run.policy_config)
+        settings = get_settings()
         require_activated_run_policy(
             policy,
-            robust_v3_enabled=(get_settings().pricing_v3_robust_dispersion_enabled),
+            robust_v3_enabled=settings.pricing_v3_robust_dispersion_enabled,
+            activation_artifact_verified=activation_artifact_verified(
+                settings.pricing_v3_activation_artifact,
+                settings.pricing_v3_activation_sha256,
+            ),
         )
         coefficients = await load_target_tier_coefficients(
             session,
@@ -2271,6 +2347,31 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             policy=policy,
         )
         result = recommend_price(context, offers, coefficients, policy=policy)
+        comparability_activation_verified = bool(
+            settings.pricing_comparability_v1_automatic_enabled
+            and activation_artifact_verified(
+                settings.pricing_comparability_activation_artifact,
+                settings.pricing_comparability_activation_sha256,
+            )
+        )
+        if result.automatic_eligible and not comparability_activation_verified:
+            result = replace(
+                result,
+                action=RecommendationAction.MANUAL_REVIEW,
+                recommended_price=None,
+                action_gates_passed=False,
+                automatic_eligible=False,
+                confidence_grade="MANUAL",
+                reasons=tuple(
+                    dict.fromkeys(
+                        result.reasons
+                        + (
+                            "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED",
+                            "MANUAL_REVIEW_REQUIRED",
+                        )
+                    )
+                ),
+            )
         applied_versions = sorted(
             {
                 coefficient.coefficient_version or coefficient.method_version
@@ -2331,9 +2432,11 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             ),
             "below_cost_reason": context.below_cost_reason,
             "below_cost_warning_confirmed": context.below_cost_warning_confirmed,
+            "comparability_contract_version": "comparison-evidence-v1",
         }
+        robust_diagnostic = cluster_diagnostic_to_dict(result.cluster_diagnostic)
         calculation_trace = {
-            "replay_contract_version": "recommendation-replay-v2",
+            "replay_contract_version": "recommendation-replay-v3",
             "calculated_at": now.isoformat(),
             "catalog_snapshot_id": str(run.import_batch_id),
             "pricing_run_id": str(run.id),
@@ -2349,6 +2452,18 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 ),
                 finite_sample_correction=(policy.finite_sample_scale_correction),
             ),
+            "robust_diagnostic": robust_diagnostic,
+            "robust_policy_fingerprint": dict(result.robust_policy_fingerprint),
+            "comparability": {
+                "contract_version": "comparison-evidence-v1",
+                "policy_id": result.comparability_policy_id,
+                "policy_hash": result.comparability_policy_hash,
+                "automatic_eligible": result.automatic_eligible,
+                "verified_seller_count": result.verified_seller_count,
+                "hard_gates": dict(result.hard_gate_results),
+                "failed_hard_gates": list(result.failed_hard_gates),
+                "unknown_hard_fields": list(result.unknown_hard_fields),
+            },
             "confidence_aggregation": policy.confidence_aggregation.value,
             "factor_scores": {
                 key: str(value) for key, value in result.factor_scores.items()
@@ -2448,6 +2563,8 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 "inputs": dict(result.priority_inputs),
             },
             "policy_version": policy.version,
+            "pricing_policy_hash": canonical_sha256(run.policy_config),
+            "build_identity": settings.build_identity,
             "parser_version": run.parser_version,
             "classifier_version": run.classifier_version,
             "calibration_dataset_hash": run.calibration_dataset_hash,
@@ -2455,6 +2572,23 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "price_tick": str(policy.price_tick),
             "price_tick_version": policy.price_tick_version,
         }
+        fingerprint_payload = build_decision_fingerprint_payload(
+            context_snapshot=context_snapshot,
+            result=result,
+            observations=[value[0] for value in latest.values()],
+            policy_config=run.policy_config,
+            coefficients=coefficients.values(),
+            parser_version=run.parser_version,
+            classifier_version=run.classifier_version,
+            calibration_dataset_hash=run.calibration_dataset_hash,
+            coefficient_version=applied_coefficient_version,
+            build_identity=settings.build_identity,
+            price_tick=policy.price_tick,
+            price_tick_version=policy.price_tick_version,
+        )
+        decision_fingerprint = canonical_sha256(fingerprint_payload)
+        calculation_trace["decision_fingerprint_payload"] = fingerprint_payload
+        calculation_trace["decision_fingerprint"] = decision_fingerprint
         recommendation = PricingRecommendation(
             pricing_run_id=run.id,
             pricing_run_item_id=run_item.id,
@@ -2484,6 +2618,17 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             outlier_count=result.outlier_count,
             sensitivity=result.sensitivity,
             action_gates_passed=result.action_gates_passed,
+            automatic_eligible=result.automatic_eligible,
+            verified_seller_count=result.verified_seller_count,
+            comparability_policy_id=result.comparability_policy_id,
+            comparability_policy_hash=result.comparability_policy_hash,
+            decision_fingerprint=decision_fingerprint,
+            hard_gate_trace={
+                "hard_gates": dict(result.hard_gate_results),
+                "failed_hard_gates": list(result.failed_hard_gates),
+                "unknown_hard_fields": list(result.unknown_hard_fields),
+            },
+            robust_diagnostic=robust_diagnostic,
             cost_floor=result.cost_floor,
             cost_basis_inventory_value=result.cost_basis_inventory_value,
             priority_score=result.priority_score,
@@ -2544,6 +2689,50 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             competitor_count=result.competitor_count,
             priority_score_type=result.priority_score_type.value,
         )
+        pricing_event(
+            "matching_candidates_total",
+            classification=(
+                "automatic_eligible" if result.automatic_eligible else "abstained"
+            ),
+            reason=(result.reasons[0] if result.reasons else "NONE"),
+            value=result.raw_competitor_count,
+        )
+        pricing_event(
+            "matching_automatic_eligible_total",
+            policy_version=result.policy_version,
+            value=int(result.automatic_eligible),
+        )
+        for field in result.unknown_hard_fields:
+            pricing_event(
+                "matching_missing_hard_field_total",
+                field=field,
+                category="auto_parts",
+                value=1,
+            )
+        if result.action in {
+            RecommendationAction.MANUAL_REVIEW,
+            RecommendationAction.INSUFFICIENT_DATA,
+        }:
+            for reason in result.reasons:
+                pricing_event(
+                    "pricing_abstention_total",
+                    reason=reason,
+                    policy_version=result.policy_version,
+                    value=1,
+                )
+        if result.cluster_diagnostic and result.cluster_diagnostic.flagged:
+            pricing_event(
+                "pricing_robust_cluster_flag_total",
+                policy_version=result.policy_version,
+                value=1,
+            )
+        if "ROBUST_BASELINE_ABSTENTION_NOT_RELAXABLE" in result.reasons:
+            pricing_event(
+                "pricing_unsafe_relaxation_blocked_total",
+                baseline=policy.robust_baseline_policy_version,
+                candidate=result.policy_version,
+                value=1,
+            )
     await finalize_pricing_run(run_item.pricing_run_id)
 
 
@@ -2559,6 +2748,13 @@ def _domain_offer(
         seller_name=observation.seller_name,
         price=observation.price,
         currency=observation.currency,
+        currency_raw=observation.currency_raw,
+        currency_inferred=observation.currency_inferred,
+        currency_evidence=(
+            f"market_observation:{observation.id}:currency_raw"
+            if observation.currency_raw
+            else None
+        ),
         is_available=observation.is_available,
         age_hours=Decimal(str(age_seconds / 3600)),
         match_confidence=observation.match_confidence,
@@ -2573,6 +2769,9 @@ def _domain_offer(
         conflict_reason=classification.exclusion_reason,
         source=observation.source,
         listing_url=observation.url,
+        comparison_evidence=comparison_evidence_from_dict(
+            observation.comparison_evidence
+        ),
     )
 
 
@@ -2896,7 +3095,9 @@ def _source_listing_id(product_id: int | None, url: str | None, price: float) ->
 
 
 def _currency_code(value: str | None) -> str:
-    normalized = (value or "UAH").strip().casefold()
+    normalized = (value or "").strip().casefold()
+    if not normalized:
+        return "UNK"
     if normalized in {"uah", "грн", "₴", "гривня", "гривень"}:
         return "UAH"
     return normalized.upper()[:3]

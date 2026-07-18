@@ -1,0 +1,211 @@
+{
+  "schema_version": "comparability-gold-set-v1",
+  "dataset_id": "marko-metis-comparability-adversarial",
+  "dataset_version": "1.0.0",
+  "created_at": "2026-07-18",
+  "data_class": "synthetic_adversarial",
+  "representative": false,
+  "approval": {
+    "domain_policy_approved": false,
+    "representative_labels_approved": false,
+    "approved_by": null,
+    "approved_at": null
+  },
+  "release_policy": {
+    "alpha": null,
+    "epsilon": null,
+    "loss_weights": null,
+    "engineering_unsafe_auto_count_max": 0
+  },
+  "split_contract": {
+    "splits": ["train", "calibration", "test"],
+    "leakage_keys": [
+      "product_family",
+      "oe_family",
+      "seller_family",
+      "observed_period"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "GS-TRAIN-001",
+      "split": "train",
+      "product_family": "train-brake-pad-a",
+      "oe_family": "train-oe-a",
+      "seller_family": "train-seller-a",
+      "observed_period": "2026-Q1-train-a",
+      "retrieval_kind": "fuzzy",
+      "gold_label": "comparable",
+      "expected_result": "PASS",
+      "mutation": {"kind": "none"}
+    },
+    {
+      "case_id": "GS-TRAIN-002",
+      "split": "train",
+      "product_family": "train-brake-pad-b",
+      "oe_family": "train-oe-b",
+      "seller_family": "train-seller-b",
+      "observed_period": "2026-Q1-train-b",
+      "retrieval_kind": "sku",
+      "gold_label": "conflict",
+      "expected_result": "REJECT",
+      "mutation": {"kind": "dimension_state", "dimension": "oe_reference", "state": "CONFLICT"}
+    },
+    {
+      "case_id": "GS-TRAIN-003",
+      "split": "train",
+      "product_family": "train-brake-pad-c",
+      "oe_family": "train-oe-c",
+      "seller_family": "train-seller-c",
+      "observed_period": "2026-Q1-train-c",
+      "retrieval_kind": "model",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "dimension_state", "dimension": "fitment", "state": "UNKNOWN"}
+    },
+    {
+      "case_id": "GS-TRAIN-004",
+      "split": "train",
+      "product_family": "train-brake-pad-d",
+      "oe_family": "train-oe-d",
+      "seller_family": "train-seller-d",
+      "observed_period": "2026-Q1-train-d",
+      "retrieval_kind": "fuzzy",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "missing_raw_currency"}
+    },
+    {
+      "case_id": "GS-TRAIN-005",
+      "split": "train",
+      "product_family": "train-brake-pad-e",
+      "oe_family": "train-oe-e",
+      "seller_family": "train-seller-e",
+      "observed_period": "2026-Q1-train-e",
+      "retrieval_kind": "sku",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "unverified_provenance"}
+    },
+    {
+      "case_id": "GS-CAL-001",
+      "split": "calibration",
+      "product_family": "cal-shock-a",
+      "oe_family": "cal-oe-a",
+      "seller_family": "cal-seller-a",
+      "observed_period": "2026-Q2-cal-a",
+      "retrieval_kind": "sku",
+      "gold_label": "comparable",
+      "expected_result": "PASS",
+      "mutation": {"kind": "none"}
+    },
+    {
+      "case_id": "GS-CAL-002",
+      "split": "calibration",
+      "product_family": "cal-shock-b",
+      "oe_family": "cal-oe-b",
+      "seller_family": "cal-seller-b",
+      "observed_period": "2026-Q2-cal-b",
+      "retrieval_kind": "model",
+      "gold_label": "conflict",
+      "expected_result": "REJECT",
+      "mutation": {"kind": "dimension_state", "dimension": "condition", "state": "CONFLICT"}
+    },
+    {
+      "case_id": "GS-CAL-003",
+      "split": "calibration",
+      "product_family": "cal-shock-c",
+      "oe_family": "cal-oe-c",
+      "seller_family": "cal-seller-c",
+      "observed_period": "2026-Q2-cal-c",
+      "retrieval_kind": "fuzzy",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "missing_stable_seller_id"}
+    },
+    {
+      "case_id": "GS-CAL-004",
+      "split": "calibration",
+      "product_family": "cal-shock-d",
+      "oe_family": "cal-oe-d",
+      "seller_family": "cal-seller-d",
+      "observed_period": "2026-Q2-cal-d",
+      "retrieval_kind": "sku",
+      "gold_label": "conflict",
+      "expected_result": "REJECT",
+      "mutation": {"kind": "dimension_state", "dimension": "brand_manufacturer", "state": "CONFLICT"}
+    },
+    {
+      "case_id": "GS-CAL-005",
+      "split": "calibration",
+      "product_family": "cal-shock-e",
+      "oe_family": "cal-oe-e",
+      "seller_family": "cal-seller-e",
+      "observed_period": "2026-Q2-cal-e",
+      "retrieval_kind": "model",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "dimension_state", "dimension": "year_interval", "state": "UNKNOWN"}
+    },
+    {
+      "case_id": "GS-TEST-001",
+      "split": "test",
+      "product_family": "test-filter-a",
+      "oe_family": "test-oe-a",
+      "seller_family": "test-seller-a",
+      "observed_period": "2026-Q3-test-a",
+      "retrieval_kind": "model",
+      "gold_label": "comparable",
+      "expected_result": "PASS",
+      "mutation": {"kind": "none"}
+    },
+    {
+      "case_id": "GS-TEST-002",
+      "split": "test",
+      "product_family": "test-filter-b",
+      "oe_family": "test-oe-b",
+      "seller_family": "test-seller-b",
+      "observed_period": "2026-Q3-test-b",
+      "retrieval_kind": "sku",
+      "gold_label": "conflict",
+      "expected_result": "REJECT",
+      "mutation": {"kind": "dimension_state", "dimension": "side", "state": "CONFLICT"}
+    },
+    {
+      "case_id": "GS-TEST-003",
+      "split": "test",
+      "product_family": "test-filter-c",
+      "oe_family": "test-oe-c",
+      "seller_family": "test-seller-c",
+      "observed_period": "2026-Q3-test-c",
+      "retrieval_kind": "fuzzy",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "dimension_state", "dimension": "package_quantity", "state": "UNKNOWN"}
+    },
+    {
+      "case_id": "GS-TEST-004",
+      "split": "test",
+      "product_family": "test-filter-d",
+      "oe_family": "test-oe-d",
+      "seller_family": "test-seller-d",
+      "observed_period": "2026-Q3-test-d",
+      "retrieval_kind": "model",
+      "gold_label": "insufficient",
+      "expected_result": "MANUAL_REVIEW",
+      "mutation": {"kind": "tampered_provenance_hash"}
+    },
+    {
+      "case_id": "GS-TEST-005",
+      "split": "test",
+      "product_family": "test-filter-e",
+      "oe_family": "test-oe-e",
+      "seller_family": "test-seller-e",
+      "observed_period": "2026-Q3-test-e",
+      "retrieval_kind": "sku",
+      "gold_label": "conflict",
+      "expected_result": "REJECT",
+      "mutation": {"kind": "currency_conflict"}
+    }
+  ]
+}

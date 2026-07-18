@@ -1,12 +1,12 @@
 """Small task used to verify broker/worker connectivity."""
-from __future__ import annotations
 
-import asyncio
+from __future__ import annotations
 
 from marko.core.config import get_settings
 from marko.infrastructure.db.session import async_session_factory
 from marko.services.scrape_journal import delete_orphaned_evidence_blobs
 from marko.services.scraper_outbox import reconcile_dispatch_outbox
+from marko.worker.async_runtime import run_async
 from marko.worker.celery_app import celery_app
 
 
@@ -25,7 +25,7 @@ async def _cleanup_scrape_evidence() -> int:
 
 @celery_app.task(name="marko.worker.cleanup_scrape_evidence")
 def cleanup_scrape_evidence() -> int:
-    return asyncio.run(_cleanup_scrape_evidence())
+    return run_async(_cleanup_scrape_evidence())
 
 
 async def _reconcile_scrape_outbox() -> int:
@@ -40,4 +40,4 @@ async def _reconcile_scrape_outbox() -> int:
 
 @celery_app.task(name="marko.worker.reconcile_scrape_outbox")
 def reconcile_scrape_outbox() -> int:
-    return asyncio.run(_reconcile_scrape_outbox())
+    return run_async(_reconcile_scrape_outbox())

@@ -33,6 +33,12 @@ class PricingRecommendation {
     required this.outlierCount,
     required this.sensitivity,
     required this.actionGatesPassed,
+    required this.automaticEligible,
+    required this.verifiedSellerCount,
+    required this.comparabilityPolicyId,
+    required this.comparabilityPolicyHash,
+    required this.hardGateTrace,
+    required this.robustDiagnostic,
     required this.costFloor,
     required this.costBasisInventoryValue,
     required this.priorityScore,
@@ -96,6 +102,14 @@ class PricingRecommendation {
       outlierCount: (json['outlier_count'] as num?)?.toInt() ?? 0,
       sensitivity: _decimal(json['sensitivity']),
       actionGatesPassed: json['action_gates_passed'] as bool? ?? false,
+      automaticEligible: json['automatic_eligible'] as bool? ?? false,
+      verifiedSellerCount:
+          (json['verified_seller_count'] as num?)?.toInt() ?? 0,
+      comparabilityPolicyId: json['comparability_policy_id']?.toString(),
+      comparabilityPolicyHash: json['comparability_policy_hash']?.toString(),
+      hardGateTrace:
+          json['hard_gate_trace'] as Map<String, dynamic>? ?? const {},
+      robustDiagnostic: json['robust_diagnostic'] as Map<String, dynamic>?,
       costFloor: _decimal(json['cost_floor']),
       costBasisInventoryValue: _decimal(json['cost_basis_inventory_value']),
       priorityScore: _decimal(json['priority_score']) ?? 0,
@@ -153,6 +167,12 @@ class PricingRecommendation {
   final int outlierCount;
   final double? sensitivity;
   final bool actionGatesPassed;
+  final bool automaticEligible;
+  final int verifiedSellerCount;
+  final String? comparabilityPolicyId;
+  final String? comparabilityPolicyHash;
+  final Map<String, dynamic> hardGateTrace;
+  final Map<String, dynamic>? robustDiagnostic;
   final double? costFloor;
   final double? costBasisInventoryValue;
   final double priorityScore;
@@ -234,6 +254,18 @@ class PricingRecommendation {
     'MISSING_FLOOR' || 'MISSING_COST' => 'нужна себестоимость',
     'LOW_EFFECTIVE_SAMPLE_SIZE' => 'мало независимых конкурентов',
     'ESTIMATOR_SENSITIVITY' => 'оценка неустойчива к очистке данных',
+    'ROBUST_MULTIMODAL_COHORT' => 'обнаружены разные ценовые кластеры',
+    'ROBUST_ESTIMATOR_DISAGREEMENT' => 'робастные оценки расходятся',
+    'ROBUST_BASELINE_ABSTENTION_NOT_RELAXABLE' =>
+      'новая модель не может обойти baseline abstention',
+    'MANUAL_MISSING_COMPARABILITY_EVIDENCE' =>
+      'нет доказательств сопоставимости',
+    'MANUAL_MISSING_OE_PROVENANCE' => 'нет проверенного OE',
+    'MANUAL_MISSING_STABLE_SELLER_ID' => 'нет стабильного ID продавца',
+    'MANUAL_MISSING_SOURCE_PROVENANCE' => 'нет проверенного source evidence',
+    'MANUAL_MISSING_RAW_CURRENCY' => 'валюта не указана в source',
+    'REJECTED_IDENTITY_CONFLICT' => 'конфликт identity товара',
+    'REJECTED_COMPARABILITY_CONFLICT' => 'коммерчески несопоставимые товары',
     'MISSING_BELOW_COST_AUTHORIZATION' =>
       'нет полного подтверждения продажи ниже себестоимости',
     'MANUAL_REVIEW_REQUIRED' => 'требуется ручная проверка',
@@ -308,6 +340,8 @@ class RecommendationEvidence {
     required this.url,
     required this.price,
     required this.currency,
+    required this.currencyRaw,
+    required this.currencyInferred,
     required this.matchConfidence,
     required this.sourceConfidence,
     required this.ageHours,
@@ -321,6 +355,8 @@ class RecommendationEvidence {
     required this.coefficientVersion,
     required this.coefficientConfidence,
     required this.observedAt,
+    required this.automaticEligible,
+    required this.comparisonEvidence,
   });
 
   factory RecommendationEvidence.fromJson(Map<String, dynamic> json) {
@@ -332,6 +368,8 @@ class RecommendationEvidence {
       url: json['url'] as String,
       price: _decimal(json['price']) ?? 0,
       currency: json['currency'] as String,
+      currencyRaw: json['currency_raw']?.toString(),
+      currencyInferred: json['currency_inferred'] as bool? ?? false,
       matchConfidence: _decimal(json['match_confidence']) ?? 0,
       sourceConfidence: _decimal(json['source_confidence']) ?? 1,
       ageHours: _decimal(json['age_hours']) ?? 0,
@@ -347,6 +385,8 @@ class RecommendationEvidence {
           json['coefficient_version']?.toString() ?? 'reference-tier-v1',
       coefficientConfidence: _decimal(json['coefficient_confidence']) ?? 1,
       observedAt: DateTime.parse(json['observed_at'] as String),
+      automaticEligible: json['automatic_eligible'] as bool? ?? false,
+      comparisonEvidence: json['comparison_evidence'] as Map<String, dynamic>?,
     );
   }
 
@@ -357,6 +397,8 @@ class RecommendationEvidence {
   final String url;
   final double price;
   final String currency;
+  final String? currencyRaw;
+  final bool currencyInferred;
   final double matchConfidence;
   final double sourceConfidence;
   final double ageHours;
@@ -370,6 +412,8 @@ class RecommendationEvidence {
   final String coefficientVersion;
   final double coefficientConfidence;
   final DateTime observedAt;
+  final bool automaticEligible;
+  final Map<String, dynamic>? comparisonEvidence;
 
   String get tierLabel => switch (tier) {
     'oem' => 'OEM',

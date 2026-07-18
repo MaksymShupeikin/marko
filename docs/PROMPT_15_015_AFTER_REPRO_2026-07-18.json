@@ -1,0 +1,72 @@
+{
+  "cases": {
+    "DISP-TWO-CLUSTERS": {
+      "baseline_action": "MANUAL_REVIEW",
+      "candidate_action": "MANUAL_REVIEW",
+      "candidate_price": null,
+      "candidate_reason_codes": [
+        "ROBUST_ESTIMATOR_DISAGREEMENT",
+        "ROBUST_MULTIMODAL_COHORT",
+        "MANUAL_REVIEW_REQUIRED"
+      ]
+    },
+    "E2E-BASELINE": {
+      "docker_binary": "/opt/homebrew/bin/docker",
+      "status": "NOT_VERIFIED"
+    },
+    "MATCH-MISSING-HARD-FIELDS": {
+      "action": "INSUFFICIENT_DATA",
+      "reason_codes": [
+        "TOO_FEW_COMPETITORS",
+        "MANUAL_MISSING_COMPARABILITY_EVIDENCE"
+      ],
+      "recommended_price": null
+    },
+    "PREFLIGHT-PLACEHOLDER": {
+      "exit_code": 2,
+      "input_keys": [
+        "ALLOWED_HOSTS",
+        "API_DOCS_ENABLED",
+        "API_PORT",
+        "API_WORKERS",
+        "CELERY_BROKER_URL",
+        "CELERY_RESULT_BACKEND",
+        "CORS_ORIGINS",
+        "DATABASE_URL",
+        "DEBUG",
+        "E2E_AUTH_BYPASS",
+        "E2E_AUTH_TOKEN",
+        "E2E_TASK_HOLD_SECONDS",
+        "ENVIRONMENT",
+        "FIREBASE_API_KEY",
+        "FIREBASE_AUTH_DOMAIN",
+        "FIREBASE_MESSAGING_SENDER_ID",
+        "FIREBASE_PROJECT_ID",
+        "FIREBASE_WEB_APP_ID",
+        "GENERAL_WORKER_CONCURRENCY",
+        "PRICING_COMPARABILITY_ACTIVATION_ARTIFACT",
+        "PRICING_COMPARABILITY_ACTIVATION_SHA256",
+        "PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED",
+        "PRICING_V3_ACTIVATION_ARTIFACT",
+        "PRICING_V3_ACTIVATION_SHA256",
+        "PRICING_V3_ROBUST_DISPERSION_ENABLED",
+        "PRICING_WORKER_CONCURRENCY",
+        "PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE",
+        "PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT",
+        "PUBLIC_API_BASE_URL",
+        "STORE_SYNC_WORKER_CONCURRENCY",
+        "TRUSTED_PROXY_IPS",
+        "WEB_PORT"
+      ],
+      "stderr_nonempty": false,
+      "stdout_nonempty": true,
+      "values_emitted": false
+    }
+  },
+  "expectation": "after",
+  "expectation_met": true,
+  "network_requests": 0,
+  "prompt_id": "PROMPT_15_015",
+  "schema_version": "1.0.0",
+  "secrets_included": false
+}

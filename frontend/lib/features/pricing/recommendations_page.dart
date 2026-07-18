@@ -397,7 +397,8 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                     : const Icon(Icons.verified_outlined, size: 18),
                 label: const Text('Проверить replay'),
               ),
-              if (recommendation.recommendedPrice != null) ...[
+              if (recommendation.automaticEligible &&
+                  recommendation.recommendedPrice != null) ...[
                 FilledButton.icon(
                   onPressed: _savingDecision
                       ? null
@@ -405,20 +406,24 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                   icon: const Icon(Icons.check_rounded, size: 18),
                   label: const Text('Принять'),
                 ),
-                OutlinedButton.icon(
-                  onPressed: _savingDecision
-                      ? null
-                      : () => _recordDecision('overridden'),
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  label: const Text('Своя цена'),
-                ),
-                TextButton(
-                  onPressed: _savingDecision
-                      ? null
-                      : () => _recordDecision('rejected'),
-                  child: const Text('Отклонить'),
-                ),
               ],
+              OutlinedButton.icon(
+                onPressed: _savingDecision
+                    ? null
+                    : () => _recordDecision('overridden'),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: Text(
+                  recommendation.automaticEligible
+                      ? 'Своя цена'
+                      : 'Ручная цена (audit)',
+                ),
+              ),
+              TextButton(
+                onPressed: _savingDecision
+                    ? null
+                    : () => _recordDecision('rejected'),
+                child: const Text('Отклонить'),
+              ),
             ],
           ),
           if (_replay != null) ...[
@@ -442,6 +447,9 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
 
   String _priceDecision(PricingRecommendation item) {
     final target = item.recommendedPrice;
+    if (target == null && !item.automaticEligible) {
+      return '${_money(item.currentPrice)} — автоцена не сформирована';
+    }
     if (target == null) return '${_money(item.currentPrice)} — без изменений';
     return '${_money(item.currentPrice)} → ${_money(target)}';
   }
@@ -672,6 +680,17 @@ class _MarketEvidenceList extends StatelessWidget {
                               '${item.coefficientModel} · coefficient confidence ${(item.coefficientConfidence * 100).round()}% · ${item.ageHours.toStringAsFixed(1)} ч.',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
+                            Text(
+                              item.automaticEligible
+                                  ? 'Сопоставимость: verified'
+                                  : 'Сопоставимость: manual review',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: item.automaticEligible
+                                        ? colors.positive
+                                        : colors.warning,
+                                  ),
+                            ),
                           ],
                         ),
                       ),
@@ -845,6 +864,20 @@ class _DataHealth extends StatelessWidget {
           label: 'Валидных конкурентов',
           value: '${recommendation.competitorCount}',
         ),
+        _KeyValue(
+          label: 'Видимых / verified sellers',
+          value:
+              '${recommendation.rawCompetitorCount} / ${recommendation.verifiedSellerCount}',
+        ),
+        _KeyValue(
+          label: 'Automatic eligibility',
+          value: recommendation.automaticEligible ? 'verified' : 'blocked',
+        ),
+        if (recommendation.comparabilityPolicyId != null)
+          _KeyValue(
+            label: 'Comparability policy',
+            value: recommendation.comparabilityPolicyId!,
+          ),
         _KeyValue(
           label: 'Эффективная выборка',
           value: recommendation.effectiveCompetitorCount.toStringAsFixed(2),

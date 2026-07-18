@@ -12,13 +12,17 @@ ARG FIREBASE_AUTH_DOMAIN
 ARG FIREBASE_PROJECT_ID
 ARG FIREBASE_MESSAGING_SENDER_ID
 ARG FIREBASE_WEB_APP_ID
+ARG E2E_MODE=false
+ARG E2E_AUTH_TOKEN
 RUN flutter build web --release \
     --dart-define=API_BASE_URL=${API_BASE_URL} \
     --dart-define=FIREBASE_API_KEY=${FIREBASE_API_KEY} \
     --dart-define=FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN} \
     --dart-define=FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID} \
     --dart-define=FIREBASE_MESSAGING_SENDER_ID=${FIREBASE_MESSAGING_SENDER_ID} \
-    --dart-define=FIREBASE_WEB_APP_ID=${FIREBASE_WEB_APP_ID}
+    --dart-define=FIREBASE_WEB_APP_ID=${FIREBASE_WEB_APP_ID} \
+    --dart-define=E2E_MODE=${E2E_MODE} \
+    --dart-define=E2E_AUTH_TOKEN=${E2E_AUTH_TOKEN}
 
 FROM nginx:alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf

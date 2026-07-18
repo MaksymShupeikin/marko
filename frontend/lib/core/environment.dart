@@ -14,6 +14,8 @@ abstract final class Environment {
     'FIREBASE_MESSAGING_SENDER_ID',
   );
   static const firebaseWebAppId = String.fromEnvironment('FIREBASE_WEB_APP_ID');
+  static const e2eMode = bool.fromEnvironment('E2E_MODE');
+  static const e2eAuthToken = String.fromEnvironment('E2E_AUTH_TOKEN');
 
   static bool get usesAndroidFirebaseConfig =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -24,6 +26,8 @@ abstract final class Environment {
       firebaseProjectId.isNotEmpty &&
       firebaseMessagingSenderId.isNotEmpty &&
       firebaseWebAppId.isNotEmpty;
+
+  static bool get hasValidE2eConfig => e2eMode && e2eAuthToken.length >= 32;
 
   static FirebaseOptions get firebaseOptions => FirebaseOptions(
     apiKey: firebaseApiKey,

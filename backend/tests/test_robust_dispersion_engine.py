@@ -10,6 +10,7 @@ from metis.pricing import (
     RecommendationAction,
     RobustScaleMethod,
     recommend_price,
+    verified_comparison_evidence,
 )
 from metis.pricing.statistics import mad
 
@@ -26,6 +27,11 @@ def _offer(index: int, price: str, *, seller_id: str | None = None) -> Competito
         match_confidence=Decimal("0.95"),
         tier=ProductTier.BUDGET,
         tier_confidence=Decimal("0.95"),
+        currency_raw="UAH",
+        comparison_evidence=verified_comparison_evidence(
+            stable_seller_id=seller_id or f"seller-{index}",
+            source_record_id=f"obs-{index}",
+        ),
     )
 
 

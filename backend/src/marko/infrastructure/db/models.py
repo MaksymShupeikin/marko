@@ -197,6 +197,10 @@ class PriceObservation(Base):
     )
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     currency: Mapped[str] = mapped_column(String(3))
+    currency_raw: Mapped[str | None] = mapped_column(String(32))
+    currency_inferred: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     is_available: Mapped[bool | None] = mapped_column(Boolean)
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -324,9 +328,7 @@ class SyncRun(TimestampMixin, Base):
         default=3,
         server_default="3",
     )
-    scrape_deadline_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    scrape_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scrape_owner_task_id: Mapped[str | None] = mapped_column(
         String(255),
         index=True,
@@ -373,9 +375,7 @@ class SyncRun(TimestampMixin, Base):
     scrape_structured_completeness: Mapped[Decimal | None] = mapped_column(
         Numeric(7, 6)
     )
-    scrape_evidence_coverage: Mapped[Decimal | None] = mapped_column(
-        Numeric(7, 6)
-    )
+    scrape_evidence_coverage: Mapped[Decimal | None] = mapped_column(Numeric(7, 6))
     status: Mapped[SyncStatus] = mapped_column(
         Enum(SyncStatus, name="sync_status"), default=SyncStatus.queued
     )
@@ -502,12 +502,8 @@ class ScrapeDispatchOutbox(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(24), default="pending", server_default="pending"
     )
-    attempt_count: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0"
-    )
-    max_attempts: Mapped[int] = mapped_column(
-        Integer, default=20, server_default="20"
-    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, default=20, server_default="20")
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -531,8 +527,7 @@ class StoreSyncProductSnapshot(Base):
             name="ck_store_sync_product_snapshot_size",
         ),
         CheckConstraint(
-            "structured_completeness >= 0 "
-            "AND structured_completeness <= 1",
+            "structured_completeness >= 0 AND structured_completeness <= 1",
             name="ck_store_sync_product_snapshot_completeness",
         ),
         Index(
@@ -1140,9 +1135,7 @@ class ScrapeTarget(TimestampMixin, Base):
     structured_completeness: Mapped[Decimal | None] = mapped_column(Numeric(7, 6))
     error_category: Mapped[str | None] = mapped_column(String(50))
     error_detail: Mapped[str | None] = mapped_column(Text)
-    first_started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    first_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -1235,12 +1228,8 @@ class ScrapeAttempt(Base):
     )
     error_category: Mapped[str | None] = mapped_column(String(50))
     error_detail: Mapped[str | None] = mapped_column(Text)
-    wall_time_ms: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default="0"
-    )
-    cpu_time_ms: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default="0"
-    )
+    wall_time_ms: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    cpu_time_ms: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     memory_peak_bytes: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default="0"
     )
@@ -1318,6 +1307,14 @@ class MarketObservation(Base):
             "source_confidence >= 0 AND source_confidence <= 1",
             name="ck_market_observation_source_confidence",
         ),
+        CheckConstraint(
+            "NOT automatic_eligible OR (currency_raw IS NOT NULL AND "
+            "comparison_evidence IS NOT NULL AND comparability_policy_id IS NOT NULL "
+            "AND comparability_policy_hash IS NOT NULL AND "
+            "char_length(comparability_policy_hash) = 64 AND "
+            "seller_identity_verified AND source_provenance_verified)",
+            name="ck_market_observation_auto_evidence",
+        ),
         Index("ix_market_observation_catalog_time", "catalog_item_id", "observed_at"),
     )
 
@@ -1342,12 +1339,31 @@ class MarketObservation(Base):
     matched_oe_norm: Mapped[str] = mapped_column(String(255), index=True)
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     currency: Mapped[str] = mapped_column(String(3))
+    currency_raw: Mapped[str | None] = mapped_column(String(32))
+    currency_inferred: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     is_available: Mapped[bool | None] = mapped_column(Boolean)
     match_confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
     source_confidence: Mapped[Decimal] = mapped_column(
         Numeric(5, 4), default=Decimal("1"), server_default="1"
     )
     parser_version: Mapped[str] = mapped_column(String(80))
+    evidence_contract_version: Mapped[str] = mapped_column(
+        String(80), default="comparison-evidence-v1", server_default="legacy-unknown-v0"
+    )
+    comparability_policy_id: Mapped[str | None] = mapped_column(String(120))
+    comparability_policy_hash: Mapped[str | None] = mapped_column(String(64))
+    comparison_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    seller_identity_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    source_provenance_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    automatic_eligible: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", index=True
+    )
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -1588,6 +1604,20 @@ class PricingRecommendation(Base):
             "(action <> 'LOWER' OR recommended_price < current_price)",
             name="ck_pricing_recommendation_direction",
         ),
+        CheckConstraint(
+            "verified_seller_count >= 0",
+            name="ck_pricing_recommendation_verified_sellers",
+        ),
+        CheckConstraint(
+            "NOT automatic_eligible OR (action_gates_passed AND "
+            "action IN ('RAISE', 'HOLD', 'LOWER') AND "
+            "comparability_policy_id IS NOT NULL AND "
+            "comparability_policy_hash IS NOT NULL AND "
+            "char_length(comparability_policy_hash) = 64 AND "
+            "decision_fingerprint IS NOT NULL AND "
+            "char_length(decision_fingerprint) = 64)",
+            name="ck_pricing_recommendation_auto_evidence",
+        ),
         Index("ix_pricing_recommendation_run_action", "pricing_run_id", "action"),
         Index(
             "ix_pricing_recommendation_run_priority", "pricing_run_id", "priority_score"
@@ -1629,6 +1659,19 @@ class PricingRecommendation(Base):
     outlier_count: Mapped[int] = mapped_column(Integer)
     sensitivity: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     action_gates_passed: Mapped[bool] = mapped_column(Boolean)
+    automatic_eligible: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    verified_seller_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    comparability_policy_id: Mapped[str | None] = mapped_column(String(120))
+    comparability_policy_hash: Mapped[str | None] = mapped_column(String(64))
+    decision_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    hard_gate_trace: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    robust_diagnostic: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     cost_floor: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     cost_basis_inventory_value: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     priority_score: Mapped[Decimal] = mapped_column(Numeric(20, 6))

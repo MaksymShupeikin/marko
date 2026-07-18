@@ -1,4 +1,5 @@
 from decimal import Decimal
+import hashlib
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -13,10 +14,12 @@ from marko.services.pricing_runs import (
     PricingRunError,
     _merge_catalog_override_snapshot,
     _validate_decision_price,
+    activation_artifact_verified,
     policy_from_dict,
     policy_to_dict,
     require_activated_run_policy,
 )
+from metis.pricing import comparison_evidence_to_dict, verified_comparison_evidence
 
 
 def test_policy_round_trip_preserves_decimal_and_enum_types():
@@ -60,7 +63,22 @@ def test_v3_persisted_run_activation_is_fail_closed_by_default() -> None:
 
     with pytest.raises(PricingRunError, match="activation is NO_GO"):
         require_activated_run_policy(policy, robust_v3_enabled=False)
-    require_activated_run_policy(policy, robust_v3_enabled=True)
+    with pytest.raises(PricingRunError, match="activation is NO_GO"):
+        require_activated_run_policy(policy, robust_v3_enabled=True)
+    require_activated_run_policy(
+        policy,
+        robust_v3_enabled=True,
+        activation_artifact_verified=True,
+    )
+
+
+def test_activation_artifact_requires_exact_file_hash(tmp_path) -> None:
+    artifact = tmp_path / "activation.json"
+    artifact.write_text('{"approved":false}', encoding="utf-8")
+    expected = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert activation_artifact_verified(str(artifact), expected)
+    assert not activation_artifact_verified(str(artifact), "0" * 64)
+    assert not activation_artifact_verified(str(tmp_path / "missing"), expected)
 
 
 def test_policy_rejects_unknown_and_out_of_range_values():
@@ -182,10 +200,18 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
                     "seller_id": f"seller-{index}",
                     "seller_name": f"Seller {index}",
                     "price": str(1000 + index * 50),
+                    "currency": "UAH",
+                    "currency_raw": "UAH",
                     "age_hours": "1",
                     "match_confidence": "0.95",
                     "tier": "budget",
                     "tier_confidence": "0.95",
+                    "comparison_evidence": comparison_evidence_to_dict(
+                        verified_comparison_evidence(
+                            stable_seller_id=f"seller-{index}",
+                            source_record_id=f"obs-{index}",
+                        )
+                    ),
                 }
                 for index in range(5)
             ],

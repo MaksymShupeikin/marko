@@ -1,0 +1,905 @@
+schema: full_project_audit_claim_ledger
+schema_version: 2.0.0
+prompt_id: PROMPT_15_014
+prompt_revision: 2.0.0
+audit_run_id: AUDIT-20260718-115504-LOCAL
+audit_date: '2026-07-18'
+ledger_revision: 2
+repository:
+  physical_root: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  realpath: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  git_root: null
+  commit_sha: null
+  path_bound_fingerprint: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+claims:
+- claim_id: CLAIM-001
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: repository identity
+  statement: The audited checkout has no Git metadata; identity is path-bound to the named directory with runtime imports resolving into it.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 1
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.95
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-001-REF-1
+    kind: COMMAND
+    locator: CMD-001
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-001-REF-2
+    kind: COMMAND
+    locator: CMD-003
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-001
+  - CMD-003
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions:
+  - git init or directory move
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-002
+  material: true
+  claim_type: EXECUTION_RESULT
+  subject: pre-drift test suite
+  statement: Pre-drift state S1 passes 415 of 415 backend tests in 2.63 seconds (exit 0).
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 0.5
+    freshness: 0.5
+    independence: 0.5
+    weighted_quality: 0.775
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-002-REF-1
+    kind: COMMAND
+    locator: CMD-004
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-004
+  affected_component_ids:
+  - MARKO
+  - METIS
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions:
+  - any further modification of the tree
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-003
+  material: true
+  claim_type: EXECUTION_RESULT
+  subject: frozen snapshot S2 test suite
+  statement: Frozen snapshot S2 (12:08:15) reproducibly fails test_authenticated_evaluate_endpoint_returns_actionable_result (INSUFFICIENT_DATA instead of an actionable result); 414 pass.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 0.5
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.85
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-003-REF-1
+    kind: COMMAND
+    locator: CMD-013
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-013
+  affected_component_ids:
+  - METIS-COMPARABILITY
+  affected_gate_ids:
+  - METIS_PRODUCTION_GATE
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-004
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: concurrent modification
+  statement: Between 12:04 and 12:08 another process rewrote backend/src/metis/pricing/{__init__,types,engine,statistics}.py, added comparability.py, and created PROMPT_15_015 baseline artifacts; the 12:07 state contained an undefined name (F821).
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 0.5
+    representativeness: 1
+    freshness: 1
+    independence: 1
+    weighted_quality: 0.875
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-004-REF-1
+    kind: COMMAND
+    locator: CMD-010
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-004-REF-2
+    kind: CODE
+    locator: backend/src/metis/pricing/comparability.py:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-010
+  affected_component_ids: []
+  affected_gate_ids:
+  - AUDIT_REPORT_GATE
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-005
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: source-access gate
+  statement: 'Live Prom marketplace collection is fail-closed: NOT_PERMITTED default, PERMITTED_* requires a non-empty reference, and the gate is enforced at run creation, store sync, CLI, and before every physical HTTP attempt with no bypass path found.'
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 0.5
+    representativeness: 1
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.825
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-005-REF-1
+    kind: CODE
+    locator: backend/src/marko/services/source_access.py:55
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-005-REF-2
+    kind: CODE
+    locator: backend/src/marko/services/scrape_runtime.py:163
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-005-REF-3
+    kind: CODE
+    locator: backend/src/marko/cli.py:140
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-005-REF-4
+    kind: TEST
+    locator: backend/tests/test_source_access_and_security.py:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids:
+  - MARKO-SCRAPER-RUNTIME
+  affected_gate_ids:
+  - SOURCE_ACCESS
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-006
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: marko.pricing facade
+  statement: marko.pricing is a pure re-export facade over metis.pricing; no divergent duplicated pricing implementation exists.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E2
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 1
+    freshness: 1
+    independence: 0
+    weighted_quality: 0.9
+    evidence_cap: 50.0
+    confidence: 50
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-006-REF-1
+    kind: CODE
+    locator: backend/src/marko/pricing/__init__.py:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-007
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: test-suite architecture
+  statement: 'No test uses any database: there is no conftest.py, tenant isolation is asserted on compiled SQL text with recording mock sessions, and API tests run in-process with dependency overrides.'
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E2
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 1
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.95
+    evidence_cap: 50.0
+    confidence: 50
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-007-REF-1
+    kind: TEST
+    locator: backend/tests/test_tenant_authorization.py:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids:
+  - DB_RUNTIME_EVIDENCE
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-008
+  material: true
+  claim_type: EXECUTION_RESULT
+  subject: migration chain
+  statement: The 10-migration chain generates offline SQL from base to head (1422 lines) and back (535 lines) with exit 0, and the 31 model tables exactly match migration-created tables.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 0.5
+    freshness: 1
+    independence: 1
+    weighted_quality: 0.9
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-008-REF-1
+    kind: COMMAND
+    locator: CMD-005
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-008-REF-2
+    kind: COMMAND
+    locator: CMD-006
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-008-REF-3
+    kind: COMMAND
+    locator: CMD-011
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-005
+  - CMD-006
+  - CMD-011
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-009
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: evidence chain
+  statement: Raw scrape evidence is content-addressed (SHA-256), zlib-compressed, integrity-checked on read and replay, and a successful collection requires retained raw bytes; redelivery is fenced by leases, fencing tokens and delivery counters.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 0.5
+    representativeness: 1
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.825
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-009-REF-1
+    kind: CODE
+    locator: backend/src/marko/services/scrape_journal.py:36
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-009-REF-2
+    kind: CODE
+    locator: backend/src/marko/services/market_collection.py:885
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-009-REF-3
+    kind: TEST
+    locator: backend/tests/test_scraper_fencing.py:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-010
+  material: true
+  claim_type: EXECUTION_RESULT
+  subject: frontend checks
+  statement: Flutter test passes 21 of 21 (including below-cost warning-confirmation and 401 refresh-retry) and dart analyze reports no issues; flutter analyze itself crashed (tool failure, NOT_AVAILABLE).
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 0.5
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.85
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-010-REF-1
+    kind: COMMAND
+    locator: CMD-015
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-010-REF-2
+    kind: COMMAND
+    locator: CMD-016
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-014
+  - CMD-015
+  - CMD-016
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-011
+  material: true
+  claim_type: EXECUTION_RESULT
+  subject: governance validators
+  statement: The repository Section 15/16 validators accept both example manifests, and this audit's own footer and machine summary were built with and pass those validators.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 1
+    representativeness: 0.5
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.85
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-011-REF-1
+    kind: COMMAND
+    locator: CMD-008
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-011-REF-2
+    kind: COMMAND
+    locator: CMD-009
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids:
+  - CMD-008
+  - CMD-009
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-012
+  material: true
+  claim_type: FACT_FROM_REPO
+  subject: deploy hardening
+  statement: The production compose reference runs read-only, non-root (10001), no-new-privileges, loopback-bound, with required env vars, resource limits and docs disabled; backend and Flutter builder images are pinned.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E2
+  evidence_quality:
+    directness: 1
+    reproducibility: 0.5
+    representativeness: 1
+    freshness: 1
+    independence: 0
+    weighted_quality: 0.775
+    evidence_cap: 50.0
+    confidence: 50
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-012-REF-1
+    kind: CODE
+    locator: deploy/compose.production.yaml:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-012-REF-2
+    kind: CODE
+    locator: backend/Dockerfile:1
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-013
+  material: true
+  claim_type: INFERENCE
+  subject: production readiness
+  statement: 'No production or pilot claim is supportable: highest evidence anywhere is E3, critical evidence floor is E2, no runtime/database/load/backup evidence exists, and the source-access branch is closed.'
+  verdict: SUPPORTED
+  parent_claim_ids:
+  - CLAIM-002
+  - CLAIM-005
+  - CLAIM-007
+  - CLAIM-008
+  contradicts_claim_ids: []
+  evidence_level: E3
+  evidence_quality:
+    directness: 1
+    reproducibility: 0.5
+    representativeness: 1
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.825
+    evidence_cap: 75.0
+    confidence: 75
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-013-REF-1
+    kind: DOC
+    locator: docs/FULL_PROJECT_AUDIT_2026-07-18.md
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids:
+  - PRODUCTION_GATE
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: null
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-014
+  material: true
+  claim_type: UNKNOWN
+  subject: runtime database behavior
+  statement: Whether migrations, PostgreSQL-only SQL, Celery redelivery and tenant isolation behave correctly at runtime is unknown.
+  verdict: UNKNOWN
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E0
+  evidence_quality:
+    directness: 0
+    reproducibility: 0
+    representativeness: 0
+    freshness: 0
+    independence: 0
+    weighted_quality: 0.0
+    evidence_cap: 0.0
+    confidence: null
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-014-REF-1
+    kind: DOC
+    locator: docs/FULL_PROJECT_AUDIT_2026-07-18.md
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: Run the suite and migrations against PostgreSQL/Redis in Docker or CI
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: Runtime DB behavior?
+    impact_if_unresolved: null
+    resolution_method: Docker/CI integration run
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-015
+  material: true
+  claim_type: UNKNOWN
+  subject: unread first-party scope
+  statement: Defect status of 75 first-party files not deep-read in this run (most backend tests line-by-line, most Flutter pages, large docs, five scripts) is unknown.
+  verdict: UNKNOWN
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E0
+  evidence_quality:
+    directness: 0
+    reproducibility: 0
+    representativeness: 0
+    freshness: 0
+    independence: 0
+    weighted_quality: 0.0
+    evidence_cap: 0.0
+    confidence: null
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-015-REF-1
+    kind: DOC
+    locator: docs/FULL_PROJECT_AUDIT_SCOPE_INVENTORY_2026-07-18.yaml
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: Resume the audit on a frozen snapshot
+  type_payload:
+    owner: null
+    options: []
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: Unread scope defects?
+    impact_if_unresolved: null
+    resolution_method: Audit continuation
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+- claim_id: CLAIM-016
+  material: true
+  claim_type: BUSINESS_DECISION_REQUIRED
+  subject: source authorization
+  statement: The client must decide between recording a permitted Prom source with an auditable reference or operating on client exports and replay only.
+  verdict: SUPPORTED
+  parent_claim_ids: []
+  contradicts_claim_ids: []
+  evidence_level: E2
+  evidence_quality:
+    directness: 1
+    reproducibility: 0.5
+    representativeness: 1
+    freshness: 1
+    independence: 0.5
+    weighted_quality: 0.825
+    evidence_cap: 50.0
+    confidence: 50
+    rationale:
+      directness: anchored 0/0.5/1 per contract
+      reproducibility: command or file re-check
+      representativeness: unit/offline scope only unless stated
+      freshness: bound to frozen snapshot 12:08
+      independence: single evidence path unless command+code
+  source_refs:
+  - ref_id: CLAIM-016-REF-1
+    kind: DOC
+    locator: README.md
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  - ref_id: CLAIM-016-REF-2
+    kind: CODE
+    locator: .env.example
+    snapshot_ref: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+    sha256: null
+  command_ids: []
+  affected_component_ids: []
+  affected_gate_ids: []
+  valid_at: '2026-07-18T12:08:15+02:00'
+  expires_at: null
+  invalidation_conditions: []
+  unknown_resolution: null
+  type_payload:
+    owner: client
+    options:
+    - Record PERMITTED_* with auditable reference
+    - Export/replay-only operation
+    recommended_option: null
+    required_data: []
+    falsification_test: null
+    question: null
+    impact_if_unresolved: Live competitor branch of the product flow stays closed
+    resolution_method: null
+    earliest_applicable_stage: null
+  report_locations:
+  - docs/FULL_PROJECT_AUDIT_2026-07-18.md
+traceability:
+  material_claim_count: 16
+  material_claims_traced_or_explicit_unknown: 16
+  material_claim_coverage: 1.0
+  executable_material_claim_count: 5
+  reproducible_material_claim_count: 5
+  reproducible_claim_coverage: 1.0
+  material_evidence_ref_count: 29
+  used_material_evidence_ref_count: 29
+  reverse_trace_coverage: 1.0
+  duplicate_claim_ids: []
+  unresolved_contradictions: []

@@ -59,6 +59,21 @@ class RobustScaleMethod(str, Enum):
     QN = "qn"
 
 
+class EvidenceState(str, Enum):
+    """Four-valued evidence state; UNKNOWN is never treated as a match."""
+
+    MATCH = "MATCH"
+    CONFLICT = "CONFLICT"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class HardGateResult(str, Enum):
+    PASS = "PASS"
+    REJECT = "REJECT"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
 class PriorityScoreType(str, Enum):
     ECONOMIC_ESTIMATE = "economic_estimate"
     GROSS_UPLIFT_OPPORTUNITY = "gross_uplift_opportunity"
@@ -116,12 +131,55 @@ class TierClassification:
 
 
 @dataclass(frozen=True, slots=True)
+class DimensionEvidence:
+    state: EvidenceState
+    raw_value: str | None = None
+    normalized_value: str | None = None
+    evidence_refs: tuple[str, ...] = field(default_factory=tuple)
+    reason_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceProvenance:
+    source_type: str | None = None
+    source_record_id: str | None = None
+    raw_evidence_sha256: str | None = None
+    parser_contract_version: str | None = None
+    schema_version: str = "comparison-evidence-v1"
+    verified: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SellerIdentityEvidence:
+    stable_seller_id: str | None = None
+    identity_source: str | None = None
+    verified: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonEvidence:
+    """Immutable Marko -> Metis hard-comparability boundary."""
+
+    dimensions: Mapping[str, DimensionEvidence]
+    provenance: SourceProvenance
+    seller_identity: SellerIdentityEvidence
+    policy_id: str
+    policy_hash: str
+    retrieval_kind: str = "unknown"
+    seed_product_id: str | None = None
+    candidate_product_id: str | None = None
+    approved_not_applicable: tuple[str, ...] = field(default_factory=tuple)
+    hard_gate_result: HardGateResult = HardGateResult.MANUAL_REVIEW
+    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
 class CompetitorOffer:
     observation_id: str
-    seller_id: str
+    seller_id: str | None
     seller_name: str
     price: Decimal
-    currency: str
+    currency: str | None
     is_available: bool | None
     age_hours: Decimal
     match_confidence: Decimal
@@ -136,6 +194,10 @@ class CompetitorOffer:
     conflict_reason: str | None = None
     source: str = "unknown"
     listing_url: str | None = None
+    currency_raw: str | None = None
+    currency_inferred: bool = False
+    currency_evidence: str | None = None
+    comparison_evidence: ComparisonEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +283,25 @@ class RobustDispersionProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class ClusterDiagnostic:
+    """Deterministic log-price two-cluster diagnostic."""
+
+    version: str
+    available: bool
+    sample_size: int
+    min_cluster_size: int
+    split_index: int | None
+    objective_single: Decimal | None
+    objective_split: Decimal | None
+    improvement: Decimal | None
+    balance: Decimal | None
+    separation: Decimal | None
+    gap: Decimal | None
+    flagged: bool
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PricingPolicy:
     version: str = "pricing-v2"
     currency: str = "UAH"
@@ -238,6 +319,16 @@ class PricingPolicy:
     robust_dispersion_profile_version: str = "rc-scale-v1"
     robust_scale_correction_profile_version: str = "robustbase-modern-v1"
     robust_scale_max_cohort_size: int = 500
+    robust_cluster_diagnostic_version: str = "log-l1-two-cluster-v1"
+    robust_disagreement_threshold: Decimal = Decimal("1.0")
+    robust_cluster_improvement_threshold: Decimal = Decimal("0.60")
+    robust_cluster_balance_threshold: Decimal = Decimal("0.25")
+    robust_cluster_separation_threshold: Decimal = Decimal("3")
+    robust_cluster_gap_threshold: Decimal = Decimal("0.10")
+    robust_cluster_sigma_floor: Decimal = Decimal("0.01")
+    robust_cluster_min_size: int = 2
+    robust_baseline_policy_version: str = "pricing-v2"
+    robust_non_relaxation_enabled: bool = True
     freshness_half_life_hours: Decimal = Decimal("24")
     confidence_min: Decimal = Decimal("0.55")
     factor_floor: Decimal = Decimal("0.40")
@@ -286,7 +377,8 @@ class PricingPolicy:
         if selected_method is None:
             selected_method = (
                 RobustScaleMethod.QN
-                if self.version == "pricing-v3-robust-dispersion"
+                if self.version
+                in {"pricing-v3-robust-dispersion", "pricing-v3.1-heterogeneity-gated"}
                 else RobustScaleMethod.LEGACY_MAD
             )
         else:
@@ -312,6 +404,12 @@ class PricingPolicy:
             self.tier_confidence_min,
             self.source_confidence_min,
             self.max_dispersion,
+            self.robust_disagreement_threshold,
+            self.robust_cluster_improvement_threshold,
+            self.robust_cluster_balance_threshold,
+            self.robust_cluster_separation_threshold,
+            self.robust_cluster_gap_threshold,
+            self.robust_cluster_sigma_floor,
             self.freshness_half_life_hours,
             self.confidence_min,
             self.factor_floor,
@@ -353,6 +451,8 @@ class PricingPolicy:
             raise ValueError("reference_competitors must be positive")
         if self.robust_scale_max_cohort_size < 2:
             raise ValueError("robust_scale_max_cohort_size must be at least 2")
+        if self.robust_cluster_min_size < 2:
+            raise ValueError("robust_cluster_min_size must be at least 2")
         if self.min_category_pairs < 3 or self.min_global_pairs < 3:
             raise ValueError("calibration sample thresholds must be at least 3")
         if not isinstance(self.finite_sample_scale_correction, bool):
@@ -364,6 +464,8 @@ class PricingPolicy:
         positive = (
             self.max_age_hours,
             self.max_dispersion,
+            self.robust_cluster_separation_threshold,
+            self.robust_cluster_sigma_floor,
             self.freshness_half_life_hours,
             self.price_tick,
             self.mad_outlier_threshold,
@@ -399,6 +501,9 @@ class PricingPolicy:
             self.winsor_lower_quantile,
             self.winsor_upper_quantile,
             self.direct_kemp_ceiling_quantile,
+            self.robust_cluster_improvement_threshold,
+            self.robust_cluster_balance_threshold,
+            self.robust_cluster_gap_threshold,
         )
         if any(value < ZERO or value > ONE for value in bounded):
             raise ValueError("pricing policy probability values must be in [0, 1]")
@@ -436,7 +541,7 @@ class PricingPolicy:
 @dataclass(frozen=True, slots=True)
 class NormalizedOffer:
     observation_id: str
-    seller_id: str
+    seller_id: str | None
     seller_name: str
     tier: ProductTier
     raw_price: Decimal
@@ -455,6 +560,7 @@ class NormalizedOffer:
     is_direct_kemp: bool = False
     source: str = "unknown"
     listing_url: str | None = None
+    comparison_evidence: ComparisonEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,13 +614,26 @@ class PricingResult:
     robust_dispersion_profile_version: str = "rc-scale-v1"
     robust_scale_correction_profile_version: str = "robustbase-modern-v1"
     finite_sample_scale_correction: bool = True
+    automatic_eligible: bool = False
+    verified_seller_count: int = 0
+    comparability_policy_id: str = "auto-parts-comparability-v1"
+    comparability_policy_hash: str = ""
+    hard_gate_results: Mapping[str, int] = field(default_factory=dict)
+    failed_hard_gates: tuple[str, ...] = field(default_factory=tuple)
+    unknown_hard_fields: tuple[str, ...] = field(default_factory=tuple)
+    cluster_diagnostic: ClusterDiagnostic | None = None
+    robust_policy_fingerprint: Mapping[str, str] = field(default_factory=dict)
 
 
 __all__ = [
     "CalibrationPair",
     "CoefficientModel",
+    "ClusterDiagnostic",
+    "ComparisonEvidence",
     "CompetitorOffer",
     "ConfidenceAggregation",
+    "DimensionEvidence",
+    "EvidenceState",
     "ExcludedOffer",
     "NormalizedOffer",
     "PricingPolicy",
@@ -525,6 +644,9 @@ __all__ = [
     "RecommendationAction",
     "RobustDispersionProfile",
     "RobustScaleMethod",
+    "HardGateResult",
+    "SellerIdentityEvidence",
+    "SourceProvenance",
     "StockStatus",
     "TierClassification",
     "TierCoefficient",

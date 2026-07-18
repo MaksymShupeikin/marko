@@ -1,0 +1,478 @@
+schema: full_project_audit_validation_manifest
+schema_version: 2.0.0
+prompt_id: PROMPT_15_014
+prompt_revision: 2.0.0
+audit_run_id: AUDIT-20260718-115504-LOCAL
+audit_date: '2026-07-18'
+invocation_policy:
+  execution_mode: AUDIT_ONLY
+  external_network_allowed: false
+  live_source_requests_allowed: false
+  shared_or_production_services_allowed: false
+  dependency_install_allowed: false
+  implementation_changes_allowed: false
+repository_snapshot:
+  physical_root: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  realpath: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  git_commit: null
+  path_bound_fingerprint: 216c24b825ba481e7092d0b008e0c4a64501f72d7cf4b52005f01fcdeb6c71b8
+  runtime_import_identity: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src
+phases:
+- phase_id: REPOSITORY_IDENTITY_GATE
+  status: BLOCKED
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids:
+  - BLOCKER-SNAPSHOT-INSTABILITY
+  command_ids: []
+  artifact_hashes: []
+- phase_id: SCOPE_INVENTORY_GATE
+  status: BLOCKED
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids:
+  - BLOCKER-SNAPSHOT-INSTABILITY
+  command_ids: []
+  artifact_hashes: []
+- phase_id: STATIC_REVIEW
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: FLOW_AND_INVARIANT_REVIEW
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: SAFE_EXECUTABLE_VALIDATION
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: CLAIM_AND_GAP_SYNTHESIS
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: MATHEMATICAL_RECALCULATION
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: HOSTILE_VARIATION_REVIEW
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: CROSS_ARTIFACT_CONSISTENCY_GATE
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+- phase_id: GOVERNANCE_VALIDATION_GATE
+  status: PASS
+  completed_item_ids: []
+  pending_item_ids: []
+  blocker_ids: []
+  command_ids: []
+  artifact_hashes: []
+commands:
+- command_id: CMD-001
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: identity/toolchain discovery
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: identity/toolchain discovery
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-002
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: physical file inventory (9255 paths)
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: physical file inventory (9255 paths)
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-003
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: runtime import identity
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: runtime import identity
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-004
+  command_class: LOCAL_EPHEMERAL
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: 'pytest S1: 415 passed 2.63s'
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: 'pytest S1: 415 passed 2.63s'
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-005
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: alembic upgrade head --sql (1422 lines)
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: alembic upgrade head --sql (1422 lines)
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-006
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: alembic downgrade base --sql (535 lines)
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: alembic downgrade base --sql (535 lines)
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-007
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: ruff via venv
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: null
+  status: NOT_AVAILABLE
+  evidence_level: E0
+  output_sha256: null
+  sanitized_summary: ruff via venv
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-008
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: validate-response-footer example
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: validate-response-footer example
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-009
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: validate-machine-summary examples
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: validate-machine-summary examples
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-010
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: ruff uv offline vs live 12:07 (4 errors incl transient F821)
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 1
+  status: FAIL
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: ruff uv offline vs live 12:07 (4 errors incl transient F821)
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-011
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: model vs migration table parity 31=31
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: model vs migration table parity 31=31
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-012
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: import check frozen snapshot
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: import check frozen snapshot
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-013
+  command_class: LOCAL_EPHEMERAL
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: 'pytest S2 frozen: 1 failed / 414 passed'
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 1
+  status: FAIL
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: 'pytest S2 frozen: 1 failed / 414 passed'
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-014
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: flutter analyze --no-pub (tool crash)
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: null
+  status: NOT_AVAILABLE
+  evidence_level: E0
+  output_sha256: null
+  sanitized_summary: flutter analyze --no-pub (tool crash)
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-015
+  command_class: LOCAL_EPHEMERAL
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: 'flutter test --no-pub: 21 passed'
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: 'flutter test --no-pub: 21 passed'
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-016
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: 'dart analyze lib test: no issues'
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: 'dart analyze lib test: no issues'
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+- command_id: CMD-017
+  command_class: SAFE_READ_ONLY
+  command: REDACTED_COMMAND
+  cwd: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  purpose: validate final report (footer manifest + machine summary + response)
+  prerequisites: []
+  started_at: null
+  finished_at: null
+  exit_code: 0
+  status: PASS
+  evidence_level: E3
+  output_sha256: null
+  sanitized_summary: validate final report (footer manifest + machine summary + response)
+  produced_or_modified_paths: []
+  affected_claim_ids: []
+artifacts:
+- path: docs/FULL_PROJECT_AUDIT_2026-07-18.md
+  kind: REPORT
+  hash_policy: FULL_FILE
+  sha256: 4d6061a1b49c5cc3b00217f8ce78320a32823ba124e092533a84a6ccca0221ee
+  audit_run_id_matches: true
+  repository_snapshot_matches: true
+  yaml_parse_valid: true
+  duplicate_key_check_valid: true
+  self_checked: true
+- path: docs/FULL_PROJECT_AUDIT_CLAIM_LEDGER_2026-07-18.yaml
+  kind: CLAIM_LEDGER
+  hash_policy: FULL_FILE
+  sha256: 93f24249e237f6938e68ba91553d4dd090638a9905209b65a2203adca68154a1
+  audit_run_id_matches: true
+  repository_snapshot_matches: true
+  yaml_parse_valid: true
+  duplicate_key_check_valid: true
+  self_checked: true
+- path: docs/FULL_PROJECT_AUDIT_GAP_REGISTER_2026-07-18.yaml
+  kind: GAP_REGISTER
+  hash_policy: FULL_FILE
+  sha256: 3f1c7a432e9c0b406bcfd0667b20151a2e91008953844670877e3bfd3165afa8
+  audit_run_id_matches: true
+  repository_snapshot_matches: true
+  yaml_parse_valid: true
+  duplicate_key_check_valid: true
+  self_checked: true
+- path: docs/FULL_PROJECT_AUDIT_SCOPE_INVENTORY_2026-07-18.yaml
+  kind: SCOPE_INVENTORY
+  hash_policy: FULL_FILE
+  sha256: e2f01939859b08d14bd506f79089ea997a1d57c794c91b4a2704ec01d60332f4
+  audit_run_id_matches: true
+  repository_snapshot_matches: true
+  yaml_parse_valid: true
+  duplicate_key_check_valid: true
+  self_checked: true
+- path: docs/FULL_PROJECT_AUDIT_VALIDATION_MANIFEST_2026-07-18.yaml
+  kind: VALIDATION_MANIFEST
+  hash_policy: CANONICAL_SELF_EXCLUDED
+  sha256: null
+  audit_run_id_matches: true
+  repository_snapshot_matches: true
+  yaml_parse_valid: true
+  duplicate_key_check_valid: true
+  self_checked: true
+self_payload_sha256: f02210e0c6dba6fface79ac545ff1f4f32a11530af4c5729ff3b349dc2c976df
+cross_artifact_checks:
+  ids_unique: true
+  claim_refs_resolve: true
+  gap_refs_resolve: true
+  command_refs_resolve: true
+  counts_match: true
+  statuses_match: true
+  formulas_match: true
+  section_15_1_matches_section_16: true
+  no_content_after_section_16: true
+  no_unsanitized_secrets: true
+hostile_review:
+  performed: true
+  finding_ids:
+  - HR-COVERAGE-NUMBER
+  - HR-TEST-DISPOSITION
+  - HR-S1-VS-S2
+  - HR-UI-NOT-E2E
+  unresolved_finding_ids: []
+variations:
+  performed: true
+  variation_ids:
+  - A
+  - B
+  - C
+  conservative_verdict_selected: true
+unknowns:
+- unknown_id: UNKNOWN-REPO-VCS
+  field_path: repository.*
+  question: Canonical commit identity?
+  reason_unknown: No git; concurrent writes
+  impact: Claims path-bound to fingerprint 216c24b8
+  resolver_type: REPOSITORY_OWNER_INPUT
+  required_input: git baseline
+  owner: repository owner
+  blocks:
+  - REPRODUCIBLE_AUDIT
+  blocks_production_claim: true
+- unknown_id: UNKNOWN-DB-RUNTIME
+  field_path: marko.production_gate
+  question: Runtime DB behavior?
+  reason_unknown: No DB in tests; docker absent
+  impact: E4 unobtainable this run
+  resolver_type: INTEGRATION_TEST_RUN
+  required_input: Docker/CI with PG+Redis
+  owner: engineering
+  blocks:
+  - PILOT
+  blocks_production_claim: true
+- unknown_id: UNKNOWN-UNREAD-SCOPE
+  field_path: scope_inventory.first_party_review_coverage
+  question: Defects in 75 unread files?
+  reason_unknown: Session scope limit
+  impact: Completeness not claimable
+  resolver_type: AUDIT_CONTINUATION
+  required_input: resumed audit
+  owner: engineering
+  blocks:
+  - AUDIT_COMPLETENESS
+  blocks_production_claim: true
+validation:
+  yaml_parse: true
+  duplicate_key_check: true
+  schema_validation: true
+  arithmetic_validation: true
+  readiness_interval_validation: true
+  evidence_ceiling_validation: true
+  critical_floor_validation: true
+  evidence_traceability: true
+  reverse_trace_validation: true
+  gap_partition_validation: true
+  variation_validation: true
+  scope_coverage_validation: false
+  errors:
+  - first_party_review_coverage 0.695122 < 1.0
+  warnings:
+  - snapshot frozen mid-edit of concurrent PROMPT_15_015 implementation
+termination:
+  audit_stage_status: BLOCKED
+  production_gate_status: BLOCKED
+  next_stage_started: false
+  implementation_started: false
+  execution_stopped: true

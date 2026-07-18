@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:marko_client/core/api_client.dart';
 import 'package:marko_client/features/pricing/pricing_api.dart';
+import 'package:marko_client/features/pricing/pricing_models.dart';
 
 void main() {
   test('requests recommendations in economic-priority order', () async {
@@ -137,5 +138,36 @@ void main() {
     expect(replay.exactMatch, isTrue);
     expect(replay.contractVersion, 'recommendation-replay-v1');
     expect(replay.replayed['action'], 'RAISE');
+  });
+
+  test('preserves fail-closed comparability evidence in the UI model', () {
+    final evidence = RecommendationEvidence.fromJson({
+      'observation_id': 'obs-1',
+      'seller_name': 'Seller',
+      'title': 'Brake pad',
+      'brand': 'Bosch',
+      'url': 'https://fixture.invalid/obs-1',
+      'price': '100.00',
+      'currency': 'UAH',
+      'currency_raw': null,
+      'currency_inferred': false,
+      'match_confidence': '1',
+      'source_confidence': '1',
+      'age_hours': '0',
+      'tier': 'budget',
+      'tier_confidence': '1',
+      'is_dumping': false,
+      'exclusion_reason': 'MANUAL_MISSING_RAW_CURRENCY',
+      'observed_at': '2026-07-18T00:00:00Z',
+      'automatic_eligible': false,
+      'comparison_evidence': {
+        'hard_gate_result': 'MANUAL_REVIEW',
+        'reason_codes': ['MANUAL_MISSING_RAW_CURRENCY'],
+      },
+    });
+
+    expect(evidence.automaticEligible, isFalse);
+    expect(evidence.currencyRaw, isNull);
+    expect(evidence.comparisonEvidence?['hard_gate_result'], 'MANUAL_REVIEW');
   });
 }

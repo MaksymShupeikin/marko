@@ -1,0 +1,396 @@
+execution_ledger:
+  prompt_id: PROMPT_15_015
+  schema_version: "1.0.0"
+  generated_at: "2026-07-18"
+  steps:
+    - step_id: STEP_00
+      status: PASS
+      changed_files: []
+      commands:
+        - pwd
+        - git status --short
+      evidence_refs:
+        - docs/PROMPT_15_015_BASELINE_MANIFEST_2026-07-18.yaml
+      defects_found:
+        - nested_checkout_has_no_git_metadata
+      repairs_applied: []
+      variations_run:
+        - requested_path_equals_resolved_path
+      remaining_unknowns:
+        - git_commit_and_preexisting_dirty_paths_not_available
+
+    - step_id: STEP_01
+      status: PASS
+      changed_files:
+        - scripts/reproduce_prompt_15_015_baseline.py
+        - docs/PROMPT_15_015_BASELINE_REPRO_2026-07-18.json
+        - docs/PROMPT_15_015_AFTER_REPRO_2026-07-18.json
+      commands:
+        - >-
+          backend/.venv/bin/python scripts/reproduce_prompt_15_015_baseline.py
+          --expect after --output docs/PROMPT_15_015_AFTER_REPRO_2026-07-18.json
+      evidence_refs:
+        - docs/PROMPT_15_015_BASELINE_REPRO_2026-07-18.json
+        - docs/PROMPT_15_015_AFTER_REPRO_2026-07-18.json
+      defects_found:
+        - missing_hard_fields_previously_produced_RAISE_920
+        - old_robust_candidate_previously_produced_RAISE_92_for_two_clusters
+        - placeholder_production_template_previously_passed
+        - Docker_binary_initially_absent_then_resolved
+      repairs_applied:
+        - all_three_executable_software_reproductions_killed
+      variations_run:
+        - matching_missing_evidence
+        - balanced_two_cluster
+        - production_placeholder_template
+        - Docker_capability_probe
+      remaining_unknowns: []
+
+    - step_id: STEP_02
+      status: PASS
+      changed_files:
+        - backend/src/marko/governance/production_preflight.py
+        - backend/tests/test_production_preflight.py
+        - scripts/check_production_config.py
+        - deploy/.env.production.example
+        - docs/production_runbook.md
+      commands:
+        - backend/.venv/bin/pytest -q backend/tests/test_production_preflight.py
+        - >-
+          backend/.venv/bin/python scripts/check_production_config.py
+          --env-file deploy/.env.production.example --mode static --format json
+      evidence_refs:
+        - docs/PROMPT_15_015_PREFLIGHT_TEMPLATE_NEGATIVE_2026-07-18.json
+      defects_found:
+        - template_was_previously_accepted
+        - full_evidence_contract_did_not_require_all_E2E_safety_fields
+      repairs_applied:
+        - explicit_env_file_and_modes
+        - strict_placeholder_registry_and_permissions
+        - secret_safe_outputs
+        - exact_PASS_E2E_status_required
+        - duplicate_failure_matrix_and_cleanup_required_for_full
+      variations_run:
+        - P-001_through_P-025
+        - valid_static_config
+        - skipped_full_layers
+        - blocked_E2E_manifest
+        - secret_canaries
+      remaining_unknowns:
+        - reachable_production_like_endpoints
+
+    - step_id: STEP_03
+      status: PASS
+      changed_files:
+        - compose.e2e.yaml
+        - e2e/browser/Dockerfile
+        - e2e/browser/package.json
+        - e2e/browser/run.mjs
+        - backend/src/marko/e2e/fixture_seed.py
+        - backend/src/marko/e2e/fixtures/pricing_replay_v1.json
+        - backend/src/marko/e2e/probe.py
+        - scripts/run_prompt_15_015_e2e.py
+      commands:
+        - backend/.venv/bin/python scripts/run_prompt_15_015_e2e.py --validate-harness
+        - backend/.venv/bin/pytest -q backend/tests/test_prompt_15_015_e2e_contract.py
+      evidence_refs:
+        - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+      defects_found:
+        - no_disposable_real_service_E2E_harness
+      repairs_applied:
+        - unique_project_and_random_loopback_ports
+        - clean_migration_and_real_service_topology
+        - persisted_fixture_replay_with_zero_live_requests
+        - secret_canary_scan_and_scoped_cleanup
+      variations_run:
+        - harness_yaml_parse
+        - fixture_contract
+        - blocked_evidence_contract
+        - E2E_F01_through_E2E_F10_presence
+      remaining_unknowns: []
+
+    - step_id: STEP_04
+      status: PASS
+      changed_files:
+        - backend/src/metis/pricing/types.py
+        - backend/src/metis/pricing/comparability.py
+        - backend/src/metis/pricing/engine.py
+        - backend/src/marko/services/matching.py
+        - backend/src/marko/services/parser_models.py
+      commands:
+        - backend/.venv/bin/pytest -q backend/tests/test_comparability_contract.py
+      evidence_refs:
+        - docs/PROMPT_15_015_AFTER_REPRO_2026-07-18.json
+      defects_found:
+        - retrieval_confidence_could_substitute_for_missing_commercial_facts
+      repairs_applied:
+        - four_state_typed_dimension_evidence
+        - versioned_policy_and_hash
+        - exact_ID_non_bypass
+        - stable_seller_identity_and_raw_currency_gates
+        - source_provenance_binding
+      variations_run:
+        - fuzzy_sku_model
+        - unknown_conflict_not_applicable
+        - blank_alias_duplicate_seller
+        - missing_other_currency
+      remaining_unknowns: []
+
+    - step_id: STEP_05
+      status: PASS
+      changed_files:
+        - backend/migrations/versions/20260718_0011_comparability_and_robust_gates.py
+        - backend/src/marko/infrastructure/db/models.py
+        - backend/src/marko/services/market_collection.py
+        - backend/src/marko/services/decision_fingerprint.py
+        - backend/src/marko/services/recommendation_replay.py
+        - backend/src/marko/api/schemas/pricing.py
+        - backend/src/marko/api/routers/v1/pricing.py
+        - frontend/lib/features/pricing/pricing_models.dart
+        - frontend/lib/features/pricing/recommendations_page.dart
+      commands:
+        - backend/.venv/bin/pytest -q backend/tests/test_decision_fingerprint.py backend/tests/test_recommendation_replay.py backend/tests/test_pricing_api.py
+        - flutter test --no-pub
+      evidence_refs:
+        - backend/migrations/versions/20260718_0011_comparability_and_robust_gates.py
+      defects_found:
+        - dataclass_asdict_failed_on_immutable_mapping_evidence
+        - automatic_rows_lacked_database_fingerprint_requirement
+        - ineligible_recommendation_accept_path_needed_explicit_rejection
+      repairs_applied:
+        - additive_persistence_API_UI_and_replay_contract
+        - canonical_decision_fingerprint
+        - automatic_DB_constraints
+        - manual_override_audit_path_and_hidden_accept_action
+      variations_run:
+        - exact_replay
+        - evidence_tamper
+        - Unicode_Decimal_permutation_fingerprint
+        - legacy_missing_fields
+      remaining_unknowns:
+        - clean_PostgreSQL_runtime_migration
+
+    - step_id: STEP_06
+      status: PASS
+      changed_files:
+        - backend/tests/fixtures/comparability_gold_set_v1.json
+        - backend/src/metis/pricing/gold_set.py
+        - scripts/validate_comparability_gold_set.py
+        - scripts/run_comparability_mutation_probes.py
+        - backend/tests/test_comparability_gold_set.py
+      commands:
+        - >-
+          backend/.venv/bin/python scripts/validate_comparability_gold_set.py
+          --output docs/PROMPT_15_015_COMPARABILITY_GOLD_SET_REPORT_2026-07-18.json
+        - >-
+          backend/.venv/bin/python scripts/run_comparability_mutation_probes.py
+          --output docs/PROMPT_15_015_COMPARABILITY_MUTATION_REPORT_2026-07-18.json
+      evidence_refs:
+        - docs/PROMPT_15_015_COMPARABILITY_GOLD_SET_REPORT_2026-07-18.json
+        - docs/PROMPT_15_015_COMPARABILITY_MUTATION_REPORT_2026-07-18.json
+      defects_found:
+        - versioned_gold_set_and_matching_mutation_gate_missing
+      repairs_applied:
+        - train_calibration_test_leakage_contract
+        - safety_first_metrics
+        - seven_critical_mutations_all_killed
+      variations_run:
+        - 15_synthetic_adversarial_labeled_cases
+        - cross_split_leakage_mutation
+        - unsafe_budget_mutation
+      remaining_unknowns:
+        - representative_labels_and_business_release_policy
+
+    - step_id: STEP_07
+      status: PASS
+      changed_files:
+        - backend/src/metis/pricing/statistics.py
+        - backend/src/metis/pricing/engine.py
+        - backend/src/metis/pricing/types.py
+        - scripts/validate_robust_dispersion_decision_diff.py
+      commands:
+        - backend/.venv/bin/pytest -q backend/tests/test_robust_heterogeneity_gate.py
+        - backend/.venv/bin/python scripts/validate_robust_dispersion_decision_diff.py
+      evidence_refs:
+        - docs/PROMPT_15_015_ROBUST_DECISION_DIFF_2026-07-18.json
+      defects_found:
+        - low_Qn_did_not_prove_unimodality
+      repairs_applied:
+        - log_space_two_cluster_diagnostic
+        - estimator_disagreement_gate
+        - baseline_non_relaxation
+        - versioned_policy_fingerprint_and_reason_codes
+      variations_run:
+        - R-001_through_R-020
+      remaining_unknowns: []
+
+    - step_id: STEP_08
+      status: PASS
+      changed_files:
+        - scripts/run_robust_dispersion_mutation_probes.py
+        - scripts/benchmark_robust_dispersion.py
+      commands:
+        - >-
+          backend/.venv/bin/python scripts/run_robust_dispersion_mutation_probes.py
+          --output docs/PROMPT_15_015_ROBUST_MUTATION_REPORT_2026-07-18.json
+        - >-
+          backend/.venv/bin/python scripts/benchmark_robust_dispersion.py --repeats 5
+          --output docs/PROMPT_15_015_ROBUST_BENCHMARK_2026-07-18.json
+      evidence_refs:
+        - docs/PROMPT_15_015_ROBUST_MUTATION_REPORT_2026-07-18.json
+        - docs/PROMPT_15_015_ROBUST_BENCHMARK_2026-07-18.json
+      defects_found:
+        - cluster_gate_mutations_were_not_in_previous_mutation_set
+      repairs_applied:
+        - three_cluster_and_non_relaxation_mutations_added
+        - eleven_critical_mutations_all_killed
+      variations_run:
+        - threshold_epsilon
+        - permutations
+        - scale_x10
+        - cohort_sizes_10_to_500
+      remaining_unknowns:
+        - representative_latency_SLO
+
+    - step_id: STEP_09
+      status: PASS
+      changed_files:
+        - backend/src/marko/worker/async_runtime.py
+        - backend/src/marko/worker/tasks/pricing.py
+        - backend/src/marko/worker/tasks/import_store.py
+        - backend/src/marko/worker/tasks/system.py
+        - backend/src/marko/infrastructure/db/models.py
+        - backend/src/marko/services/market_collection.py
+        - backend/src/marko/core/config.py
+        - backend/src/marko/worker/celery_app.py
+        - backend/src/marko/api/routers/v1/health.py
+        - backend/src/marko/e2e/probe.py
+        - e2e/browser/run.mjs
+      commands:
+        - >-
+          backend/.venv/bin/python scripts/run_prompt_15_015_e2e.py
+          --evidence-output docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+      evidence_refs:
+        - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+      defects_found:
+        - Celery_async_database_sessions_crossed_closed_event_loops
+        - ORM_migration_currency_fields_drifted
+        - manifest_and_fingerprint_hash_serialization_failed
+        - killed_late_ack_task_was_not_redelivered_within_test_window
+        - readiness_network_failures_returned_500
+        - Flutter_canvas_text_was_not_located_through_semantics
+        - replay_logical_requests_were_miscounted_as_live_network_IO
+      repairs_applied:
+        - persistent_async_runner_per_worker_process
+        - ORM_and_hash_contract_alignment
+        - consistent_Celery_visibility_timeout
+        - readiness_fail_closed_503
+        - Flutter_semantics_plus_DOM_browser_locator
+        - physical_HTTP_attempt_accounting
+      variations_run:
+        - E2E_F01_through_E2E_F10_real_runtime
+        - ten_Playwright_browser_assertions
+        - exact_replay_and_tamper_rejection
+        - scoped_cleanup
+      remaining_unknowns: []
+
+    - step_id: STEP_10
+      status: PASS
+      changed_files:
+        - scripts/run_prompt_15_015_preflight_proof.py
+        - docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+      commands:
+        - >-
+          backend/.venv/bin/python scripts/run_prompt_15_015_preflight_proof.py
+          --e2e-evidence docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+          --output docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+      evidence_refs:
+        - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+        - docs/PROMPT_15_015_PREFLIGHT_FULL_RUNTIME_2026-07-18.json
+      defects_found:
+        - initial_disposable_CA_lacked_required_key_usage
+      repairs_applied:
+        - blocked_or_skipped_runtime_layers_cannot_pass_full_mode
+        - disposable_PostgreSQL_and_TLS_Redis_connectivity_proof
+      variations_run:
+        - static
+        - real_connectivity
+        - full_runtime_evidence
+      remaining_unknowns: []
+
+    - step_id: STEP_11
+      status: PASS
+      changed_files: []
+      commands:
+        - cd backend && .venv/bin/pytest -q
+        - /opt/anaconda3/bin/ruff check backend/src backend/tests scripts
+        - backend/.venv/bin/python -m compileall -q backend/src backend/tests scripts
+        - cd backend && .venv/bin/alembic -c alembic.ini heads
+        - cd backend && .venv/bin/alembic -c alembic.ini upgrade head --sql
+        - cd frontend && dart format --output=none --set-exit-if-changed lib test
+        - cd frontend && flutter test --no-pub
+        - flutter analyze --no-pub on exact_hash_ASCII_mirror
+        - cd frontend && flutter build web --release --no-pub
+      evidence_refs:
+        - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+      defects_found:
+        - native_analyzer_LSP_JSON_truncation_on_Unicode_checkout_path
+      repairs_applied:
+        - exact_hash_ASCII_mirror_used_for_analysis_only
+      variations_run:
+        - backend_full_regression
+        - frontend_format_test_analyze_build
+        - OpenAPI_additive_contract
+        - Alembic_single_head_and_offline_SQL
+      remaining_unknowns:
+        - native_Flutter_analyzer_Unicode_path_bug
+
+    - step_id: STEP_12
+      status: PASS
+      changed_files:
+        - docs/PROMPT_15_015_IMPLEMENTATION_REPORT_2026-07-18.md
+      commands:
+        - backend/.venv/bin/python scripts/run_comparability_mutation_probes.py
+        - backend/.venv/bin/python scripts/run_robust_dispersion_mutation_probes.py
+      evidence_refs:
+        - docs/PROMPT_15_015_IMPLEMENTATION_REPORT_2026-07-18.md
+        - docs/PROMPT_15_015_VARIATION_LEDGER_2026-07-18.yaml
+      defects_found:
+        - comparability_activation_initially_checked_only_boolean_flag
+        - full_preflight_initially_accepted_incomplete_E2E_evidence
+        - API_asdict_failed_on_mappingproxy
+        - automatic_database_constraint_did_not_require_fingerprint
+      repairs_applied:
+        - runtime_artifact_hash_required
+        - strict_full_E2E_evidence_fields
+        - typed_evidence_serializer
+        - fingerprint_database_constraint
+      variations_run:
+        - hostile_self_review_items_1_through_20
+      remaining_unknowns:
+        - runtime_items_requiring_Docker
+
+    - step_id: STEP_13
+      status: PASS
+      changed_files:
+        - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        - docs/PROMPT_15_015_VARIATION_LEDGER_2026-07-18.yaml
+        - docs/PROMPT_15_015_EXECUTION_LEDGER_2026-07-18.yaml
+        - docs/examples/end_of_response_prompt_15_015.yaml
+        - docs/examples/machine_readable_summary_prompt_15_015.yaml
+        - docs/PROMPT_15_015_FINAL_RESPONSE_2026-07-18.md
+      commands:
+        - validate-response-footer
+        - validate-machine-summary
+      evidence_refs:
+        - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        - docs/examples/end_of_response_prompt_15_015.yaml
+        - docs/examples/machine_readable_summary_prompt_15_015.yaml
+        - docs/PROMPT_15_015_FINAL_RESPONSE_2026-07-18.md
+      defects_found: []
+      repairs_applied: []
+      variations_run:
+        - independent_gate_precedence
+      remaining_unknowns:
+        - production_activation_data_and_policy
+        - E5_production_readiness_evidence

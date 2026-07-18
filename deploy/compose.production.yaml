@@ -32,6 +32,14 @@ x-backend-environment: &backend-environment
   PRICING_SCRAPER_MAX_SEARCH_PAGES: ${PRICING_SCRAPER_MAX_SEARCH_PAGES:-3}
   PRICING_SCRAPER_MAX_SELLERS: ${PRICING_SCRAPER_MAX_SELLERS:-10}
   PRICING_V3_ROBUST_DISPERSION_ENABLED: ${PRICING_V3_ROBUST_DISPERSION_ENABLED:-false}
+  PRICING_V3_ACTIVATION_ARTIFACT: ${PRICING_V3_ACTIVATION_ARTIFACT:-}
+  PRICING_V3_ACTIVATION_SHA256: ${PRICING_V3_ACTIVATION_SHA256:-}
+  PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED: ${PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED:-false}
+  PRICING_COMPARABILITY_ACTIVATION_ARTIFACT: ${PRICING_COMPARABILITY_ACTIVATION_ARTIFACT:-}
+  PRICING_COMPARABILITY_ACTIVATION_SHA256: ${PRICING_COMPARABILITY_ACTIVATION_SHA256:-}
+  E2E_AUTH_BYPASS: "false"
+  E2E_AUTH_TOKEN: ""
+  E2E_TASK_HOLD_SECONDS: "0"
   STORE_SYNC_WORKER_COUNT: ${STORE_SYNC_WORKER_CONCURRENCY:-2}
   STORE_SYNC_MAX_TASK_EXECUTIONS: ${STORE_SYNC_MAX_TASK_EXECUTIONS:-3}
   STORE_SYNC_ITEM_DEADLINE_SECONDS: ${STORE_SYNC_ITEM_DEADLINE_SECONDS:-3600}
@@ -45,6 +53,9 @@ x-backend-environment: &backend-environment
   SCRAPE_RAW_EVIDENCE_REPLAY_ENABLED: "true"
   SCRAPE_EVIDENCE_GC_BATCH_SIZE: ${SCRAPE_EVIDENCE_GC_BATCH_SIZE:-1000}
   SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS: ${SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS:-3600}
+  SCHEDULER_SINGLETON_LOCK_KEY: ${SCHEDULER_SINGLETON_LOCK_KEY:-marko:scheduler:singleton:v1}
+  SCHEDULER_SINGLETON_TTL_SECONDS: ${SCHEDULER_SINGLETON_TTL_SECONDS:-30}
+  SCHEDULER_SINGLETON_REFRESH_SECONDS: ${SCHEDULER_SINGLETON_REFRESH_SECONDS:-10}
   PYTHONDONTWRITEBYTECODE: "1"
 
 x-backend: &backend
@@ -112,12 +123,18 @@ services:
         "--loglevel=INFO",
         "--queues=celery,pricing-calculation",
         "--concurrency=${GENERAL_WORKER_CONCURRENCY:-1}",
+        "--hostname=general@%h",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
     mem_limit: ${GENERAL_WORKER_MEMORY_LIMIT:-1g}
     cpus: ${GENERAL_WORKER_CPU_LIMIT:-1.5}
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app marko.worker.celery_app:celery_app inspect ping --destination general@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
 
   store-sync-worker:
     <<: *backend
@@ -130,12 +147,18 @@ services:
         "--loglevel=INFO",
         "--queues=store-sync",
         "--concurrency=${STORE_SYNC_WORKER_CONCURRENCY:-2}",
+        "--hostname=store-sync@%h",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
     mem_limit: ${STORE_SYNC_WORKER_MEMORY_LIMIT:-1g}
     cpus: ${STORE_SYNC_WORKER_CPU_LIMIT:-1.5}
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app marko.worker.celery_app:celery_app inspect ping --destination store-sync@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
 
   pricing-worker:
     <<: *backend
@@ -148,23 +171,22 @@ services:
         "--loglevel=INFO",
         "--queues=pricing",
         "--concurrency=${PRICING_WORKER_CONCURRENCY:-1}",
+        "--hostname=pricing@%h",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
     mem_limit: ${PRICING_WORKER_MEMORY_LIMIT:-1g}
     cpus: ${PRICING_WORKER_CPU_LIMIT:-1.5}
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app marko.worker.celery_app:celery_app inspect ping --destination pricing@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
 
   scheduler:
     <<: *backend
-    command:
-      [
-        "celery",
-        "--app",
-        "marko.worker.celery_app:celery_app",
-        "beat",
-        "--loglevel=INFO",
-      ]
+    command: ["python", "-m", "marko.worker.beat_singleton"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -181,6 +203,8 @@ services:
         FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?FIREBASE_PROJECT_ID is required}
         FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:?FIREBASE_MESSAGING_SENDER_ID is required}
         FIREBASE_WEB_APP_ID: ${FIREBASE_WEB_APP_ID:?FIREBASE_WEB_APP_ID is required}
+        E2E_MODE: "false"
+        E2E_AUTH_TOKEN: ""
     ports:
       - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
@@ -191,3 +215,8 @@ services:
       - no-new-privileges:true
     mem_limit: ${FRONTEND_MEMORY_LIMIT:-256m}
     cpus: ${FRONTEND_CPU_LIMIT:-0.5}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
