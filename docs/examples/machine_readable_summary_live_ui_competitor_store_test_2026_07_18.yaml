@@ -1,0 +1,369 @@
+schema:
+  name: metis_marko_machine_readable_stage_summary
+  version: 1.1.0
+  generated_at: "2026-07-18T19:45:11+02:00"
+  report_id: REPORT-LIVE-UI-COMPETITOR-STORE-TEST-2026-07-18
+  audit_id: VALIDATION-LIVE-UI-COMPETITOR-STORE-TEST-2026-07-18
+stage:
+  id: LIVE_UI_COMPETITOR_STORE_TEST_2026_07_18
+  title: LIVE UI COMPETITOR STORE TEST
+  status: FAIL
+  status_reason: The live browser test deterministically failed at store registration because the outbox event was built with a null SyncRun UUID.
+  acceptance_criteria_passed: false
+  audit_complete: true
+  production_ready: false
+  secondary_findings: []
+  evidence_refs:
+    - Computer Use Safari session against http://localhost:8080
+    - docker compose logs api db at 2026-07-18T17:40:54Z
+    - backend/src/marko/services/stores.py
+    - backend/src/marko/repositories/stores.py
+repository:
+  audit_root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  audit_root_realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  topology: UNKNOWN
+  git_commit: null
+  dirty_before_audit: null
+  identity_verified: false
+  runtime_import_identity: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src"
+  components:
+    metis:
+      root: backend/src/metis
+      realpath: null
+      repository_top_level: null
+      git_commit: null
+      branch: null
+      detached_head: null
+      dirty_before_audit: null
+      identity_verified: false
+      runtime_import_path: null
+      evidence_refs: []
+    marko:
+      root: backend/src/marko
+      realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko"
+      repository_top_level: null
+      git_commit: null
+      branch: null
+      detached_head: null
+      dirty_before_audit: null
+      identity_verified: false
+      runtime_import_path: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/src/marko"
+      evidence_refs:
+        - backend/src/marko
+  duplicate_copies: []
+  unresolved_identity_conflicts:
+    - NO_GIT_METADATA
+metis:
+  weighted_readiness: null
+  readiness_interval: {lower: null, upper: null}
+  readiness_scale: "0_100"
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  critical_floor: null
+  evidence_level: null
+  evidence_level_semantics: CRITICAL_EVIDENCE_FLOOR
+  highest_evidence_level: null
+  unknown_weight: null
+  critical_unknown_count: null
+  engineering_weights_approved: false
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+      - METIS_NOT_IN_SCOPE_OF_UI_TEST
+  dimension_weights: {implementation: 0.20, verification: 0.15, integration: 0.15, auditability: 0.15, operations: 0.15, security: 0.10, documentation: 0.10}
+  capabilities: []
+  critical_capability_ids: []
+  strongest_domains: []
+  missing_critical_domains: []
+  evidence_refs: []
+  maturity_class: UNKNOWN
+marko:
+  weighted_readiness: null
+  readiness_interval: {lower: null, upper: null}
+  readiness_scale: "0_100"
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  critical_floor: null
+  evidence_level: null
+  evidence_level_semantics: CRITICAL_EVIDENCE_FLOOR
+  highest_evidence_level: null
+  unknown_weight: null
+  critical_unknown_count: null
+  engineering_weights_approved: false
+  production_eligible: false
+  production_gate:
+    status: FAIL
+    passed_gates:
+      - LOCAL_UI_LOADS
+      - AUTHENTICATED_NAVIGATION
+      - LIVE_PROM_FIRST_PAGE_PARSE
+    failed_gates:
+      - LIVE_STORE_CONNECTION_DISPATCH
+    blocked_gates:
+      - POST_SYNC_PRODUCT_AND_RECOMMENDATION_FLOW
+    unknown_gates: []
+  dimension_weights: {implementation: 0.20, verification: 0.15, integration: 0.15, auditability: 0.15, operations: 0.15, security: 0.10, documentation: 0.10}
+  capabilities: []
+  critical_capability_ids: []
+  strongest_domains: []
+  missing_critical_domains: []
+  evidence_refs:
+    - frontend/lib/features/stores/stores_controller.dart
+    - backend/src/marko/services/stores.py
+    - backend/src/marko/services/scraper_outbox.py
+  maturity_class: INTEGRATED_PRODUCT_SHELL
+  existing_scraper:
+    located: VERIFIED
+    physical_path: backend/src/marko/parsers/prom
+    entry_point: marko.parsers.prom.gateway.PromGateway
+    entry_point_verified: VERIFIED
+    input_contract_verified: VERIFIED
+    output_contract_verified: VERIFIED
+    runtime_reverified: VERIFIED
+    single_request_verified: VERIFIED
+    small_batch_verified: VERIFIED
+    batch_ready: BLOCKED
+    parallel_safe: UNKNOWN
+    timeout_bounded: VERIFIED
+    retry_safe: UNKNOWN
+    idempotent: UNKNOWN
+    queue_integrated: PARTIAL
+    dead_letter_integrated: UNKNOWN
+    raw_storage_integrated: UNKNOWN
+    structured_storage_integrated: BLOCKED
+    metis_evidence_integrated: UNKNOWN
+    replayable: UNKNOWN
+    observable: PARTIAL
+    load_tested: NOT_VERIFIED
+    production_proven: NOT_VERIFIED
+    capacity:
+      measured: false
+      unique_urls: null
+      arrival_rate_urls_per_second: null
+      worker_service_rate_urls_per_second: null
+      active_workers: null
+      average_attempts_per_unique_url: null
+      effective_worker_service_rate: null
+      total_capacity_urls_per_second: null
+      utilization_rho: null
+      queue_backlog: null
+      queue_stability: NOT_MEASURED
+      estimated_drain_seconds: null
+      success_rate: null
+      retry_amplification: null
+      latency_p50_seconds: null
+      latency_p95_seconds: null
+      latency_p99_seconds: null
+      raw_storage_bytes: null
+      structured_storage_bytes: null
+      memory_peak_bytes: null
+      cpu_average_percent: null
+    evidence_refs:
+      - backend/src/marko/parsers/prom/gateway.py
+      - backend/src/marko/parsers/prom/parser.py
+      - docker compose exec api PromGateway one-page runtime check
+  reusable_as_is: []
+  adapt_before_reuse: []
+  reference_only: []
+  do_not_port: []
+  unknown_reuse_state: []
+  evaluated_component_ids: []
+  reuse_partition_valid: null
+combined_system:
+  maturity_class: PARTIAL_INTEGRATION
+  end_to_end_flow_verified: PARTIAL
+  end_to_end_evidence_level: E3
+  trace_coverage: null
+  verified_trace_coverage: null
+  integrated_trace_coverage: null
+  last_verified_node: LIVE_PROM_FIRST_PAGE_PARSE
+  first_unverified_node: STORE_SYNC_WORKER_COMPLETION
+  first_broken_transition: STORE_REGISTRATION_TO_OUTBOX_DISPATCH
+  production_eligible: false
+  production_gate:
+    status: FAIL
+    passed_gates:
+      - UI_LOAD
+      - AUTH_SESSION
+      - PROM_PARSE
+    failed_gates:
+      - STORE_REGISTRATION_TO_OUTBOX_DISPATCH
+    blocked_gates:
+      - PRODUCT_PERSISTENCE
+      - COMPARISON_AND_RECOMMENDATION_UI
+    unknown_gates: []
+  recommendation_contract:
+    explainable: UNKNOWN
+    auditable: UNKNOWN
+    reproducible: UNKNOWN
+    insufficient_data_abstention: UNKNOWN
+    manual_review_routing: UNKNOWN
+  evidence_refs:
+    - Computer Use Safari session against http://localhost:8080
+    - docker compose logs api db at 2026-07-18T17:40:54Z
+gaps:
+  p0:
+    - gap_id: GAP-P0-SYNC-RUN-ID-NONE
+      system: MARKO
+      capability_id: STORE_SYNC_DISPATCH
+      title: SyncRun UUID is unavailable during outbox construction
+      description: The repository adds a new SyncRun without flushing it and the service immediately uses sync_run.id as the outbox aggregate identity and task argument.
+      gap_type: INTEGRATION_GAP
+      priority: P0
+      severity: 5
+      likelihood: 5
+      detection_difficulty: 2
+      dependency_centrality: 3
+      rpn: 150
+      normalized_rpn: 39.839572192513366
+      affected_invariants:
+        - every outbox event has a stable aggregate identity
+        - store creation returns a durable queued job
+      blocks:
+        - LIVE_STORE_CONNECTION_DISPATCH
+        - POST_SYNC_PRODUCT_AND_RECOMMENDATION_FLOW
+      evidence_refs:
+        - backend/src/marko/services/stores.py
+        - backend/src/marko/repositories/stores.py
+        - docker compose logs api db at 2026-07-18T17:40:54Z
+      owner_type: backend engineering
+      remediation_class: flush or explicitly assign SyncRun UUID before outbox construction plus real PostgreSQL integration coverage
+      acceptance_evidence_required: E3
+  p1:
+    - gap_id: GAP-P1-PROM-SUBDOMAIN-URL-NORMALIZATION
+      system: MARKO
+      capability_id: SELLER_URL_NORMALIZATION
+      title: Public Prom seller subdomains are rejected by the form
+      description: The UI requests a public Prom store link but accepts only prom.ua and www.prom.ua hosts, rejecting the seller URLs users normally copy.
+      gap_type: PARTIAL_IMPLEMENTATION
+      priority: P1
+      severity: 3
+      likelihood: 4
+      detection_difficulty: 3
+      dependency_centrality: 2
+      rpn: 72
+      normalized_rpn: 18.98395721925134
+      affected_invariants:
+        - valid public seller identity can be onboarded
+      blocks:
+        - INTUITIVE_COMPETITOR_ONBOARDING
+      evidence_refs:
+        - frontend/lib/features/stores/stores_controller.dart
+        - Computer Use Safari validation attempt
+      owner_type: frontend and backend engineering
+      remediation_class: canonical seller URL resolver and aligned validation copy
+      acceptance_evidence_required: E3
+  p2: []
+  p3: []
+  priority_partition_valid: true
+  duplicate_gap_ids: []
+  critical_dependency_chain:
+    - GAP-P0-SYNC-RUN-ID-NONE
+    - STORE_SYNC_WORKER_COMPLETION
+    - POST_SYNC_PRODUCT_AND_RECOMMENDATION_FLOW
+business_decisions_required: []
+source_access_states: []
+engineering_assumptions: []
+future_hypotheses: []
+unknowns:
+  - unknown_id: UNKNOWN-PROJECT-WIDE-READINESS
+    field_path: metis.*
+    question: What is the current project-wide production readiness outside the tested onboarding path?
+    reason_unknown: The request was limited to live website and competitor-store testing.
+    impact: This report makes no project-wide production readiness score.
+    resolver_type: PROJECT_STATE_AUDIT
+    required_input: Representative full-system production evidence
+    owner: engineering
+    blocks:
+      - PROJECT_WIDE_PRODUCTION_CLAIM
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-REPOSITORY-SNAPSHOT
+    field_path: repository.*
+    question: Which canonical Git commit owns this workspace?
+    reason_unknown: The tested workspace is not a Git worktree.
+    impact: The reproduced failure is path-bound rather than commit-bound.
+    resolver_type: REPOSITORY_OWNER_INPUT
+    required_input: Canonical repository identity
+    owner: repository maintainer
+    blocks:
+      - AUDITED_RELEASE
+    target_stage: RELEASE_PROVENANCE
+  - unknown_id: UNKNOWN-MARKO-READINESS-SCORE
+    field_path: marko.*
+    question: What is Marko's complete weighted readiness and critical evidence floor?
+    reason_unknown: The live test assessed one onboarding path rather than every readiness capability.
+    impact: Marko readiness values remain null even though the tested path has a confirmed failure.
+    resolver_type: PROJECT_STATE_AUDIT
+    required_input: Full capability inventory and evidence-scored readiness assessment
+    owner: engineering
+    blocks:
+      - MARKO_WEIGHTED_READINESS_CLAIM
+    target_stage: PROJECT_READINESS_ASSESSMENT
+  - unknown_id: UNKNOWN-COMBINED-TRACE-COVERAGE
+    field_path: combined_system.*
+    question: What fraction of the complete Marko to Metis trace is currently verified?
+    reason_unknown: The live path stopped at store-registration dispatch before products or recommendations existed.
+    impact: Trace coverage ratios remain null.
+    resolver_type: END_TO_END_REVALIDATION
+    required_input: Passing store sync, comparison, and recommendation trace evidence
+    owner: engineering
+    blocks:
+      - COMPLETE_E2E_TRACE_CLAIM
+    target_stage: STORE_SYNC_DISPATCH_REPAIR_AND_REVALIDATION
+next_stage:
+  id: STORE_SYNC_DISPATCH_REPAIR_AND_REVALIDATION
+  title: STORE SYNC DISPATCH REPAIR AND REVALIDATION
+  objective: Ensure SyncRun has a stable UUID before outbox creation, cover the transaction with real PostgreSQL integration tests, rebuild, and repeat the browser flow.
+  why_it_is_next: It repairs the first deterministic break in competitor onboarding and unlocks all downstream UI checks.
+  required_inputs:
+    - Canonical Pilot-avto and PROFParts seller URLs
+    - Healthy local Docker Compose stack
+    - Current PostgreSQL schema and store-sync worker
+  expected_outputs:
+    - A SyncRun identity fix must be created.
+    - A real PostgreSQL store-registration integration test must be created.
+    - A passing browser revalidation report must be created.
+  acceptance_criteria:
+    - POST /api/v1/stores returns 202 with non-null store_id and sync_run_id.
+    - The outbox aggregate_id and task_args contain the exact SyncRun UUID.
+    - Each tested store completes a sync with product_count greater than zero.
+  stop_condition: STOP_GATE_STORE_SYNC_DISPATCH_REPAIR_AND_REVALIDATION with no automatic continuation
+  client_decisions_required: []
+  started: false
+  new_direct_instruction_required: true
+validation:
+  yaml_parse: true
+  duplicate_key_check: true
+  schema_validation: true
+  required_field_validation: true
+  enum_validation: true
+  type_validation: true
+  arithmetic_validation: true
+  readiness_interval_validation: true
+  evidence_ceiling_validation: true
+  critical_floor_validation: true
+  stop_gate_consistency: true
+  production_gate_consistency: true
+  reuse_partition_validation: true
+  gap_partition_validation: true
+  evidence_traceability: true
+  reverse_trace_validation: true
+  variation_validation: true
+  hostile_review: true
+  errors: []
+  warnings:
+    - PROJECT_WIDE_READINESS_NOT_ASSESSED
+    - REPOSITORY_SNAPSHOT_NOT_GIT_BOUND
+    - STORE_REGISTRATION_INTEGRATION_TEST_MISSING
+    - EMPTY_CATEGORY_VERIFIED:business_decisions_required
+    - EMPTY_CATEGORY_VERIFIED:source_access_states
+    - EMPTY_CATEGORY_VERIFIED:marko.reuse_partition
+termination:
+  stop_gate_key: STOP_GATE_LIVE_UI_COMPETITOR_STORE_TEST_2026_07_18
+  stop_gate_value: FAIL
+  stage_status_matches_stop_gate: true
+  next_stage_started: false
+  execution_stopped: true
+  no_content_after_summary: true

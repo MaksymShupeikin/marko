@@ -1,13 +1,16 @@
 """FastAPI application factory."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
 from marko.core.config import get_settings
 from marko.services.source_access import SourceAccessBlocked
+from marko.services.cost_privacy import privacy_safe_validation_errors
 
 from .router import api_router
 
@@ -76,6 +79,16 @@ def create_app() -> FastAPI:
                     "reference": exc.reference,
                 }
             },
+        )
+
+    @application.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        _request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": privacy_safe_validation_errors(exc.errors())},
         )
 
     @application.get("/", include_in_schema=False)

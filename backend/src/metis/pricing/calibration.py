@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
@@ -29,24 +30,70 @@ class _CalibrationPoint:
 def calibration_dataset_hash(
     pairs: Iterable[CalibrationPair], *, exclude_oe_norm: str | None = None
 ) -> str:
-    """Hash the independent paired-OE dataset, not raw listing order."""
-    grouped = _deduplicated_points(pairs, exclude_oe_norm=exclude_oe_norm)
-    canonical = [
-        {
-            "category": category,
-            "tier": tier.value,
-            "oe_norm": point.oe_norm,
-            "log_ratio": _decimal_text(point.log_ratio),
-            "quality_weight": _decimal_text(point.weight),
-        }
-        for (category, tier), points in sorted(
-            grouped.items(), key=lambda item: (item[0][0], item[0][1].value)
+    """Hash values and immutable identity evidence, independent of input order."""
+
+    excluded_oe = _normalized_oe(exclude_oe_norm)
+    canonical = []
+    for pair in pairs:
+        oe_norm = _normalized_oe(pair.oe_norm)
+        if not oe_norm or oe_norm == excluded_oe:
+            continue
+        evidence = [
+            _canonical_identity_evidence(item) for item in pair.identity_evidence
+        ]
+        evidence.sort(
+            key=lambda item: (
+                str(item.get("observation_id") or ""),
+                str(item.get("role") or ""),
+            )
         )
-        for point in sorted(points, key=lambda value: value.oe_norm)
-    ]
+        canonical.append(
+            {
+                "category": pair.category.strip(),
+                "tier": pair.tier.value,
+                "oe_norm": oe_norm,
+                "tier_price": _decimal_text(pair.tier_price),
+                "reference_price": _decimal_text(pair.reference_price),
+                "quality_weight": _decimal_text(pair.quality_weight),
+                "tier_observation_ids": sorted(pair.tier_observation_ids),
+                "reference_observation_ids": sorted(pair.reference_observation_ids),
+                "identity_evidence": evidence,
+            }
+        )
+    canonical.sort(
+        key=lambda item: (
+            item["category"],
+            item["tier"],
+            item["oe_norm"],
+            json.dumps(
+                item["identity_evidence"], sort_keys=True, separators=(",", ":")
+            ),
+        )
+    )
     return hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _canonical_identity_evidence(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError("calibration identity evidence must be a mapping")
+    return {
+        str(key): _canonical_scalar(item)
+        for key, item in sorted(value.items(), key=lambda entry: str(entry[0]))
+    }
+
+
+def _canonical_scalar(value: object) -> object:
+    if value is None or isinstance(value, bool | int | str):
+        return value
+    if isinstance(value, Decimal):
+        return _decimal_text(value)
+    if isinstance(value, list | tuple):
+        return [_canonical_scalar(item) for item in value]
+    if isinstance(value, Mapping):
+        return _canonical_identity_evidence(value)
+    return str(value)
 
 
 def fit_simple_coefficients(

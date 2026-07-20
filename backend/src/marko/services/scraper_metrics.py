@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -18,6 +19,7 @@ from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
     MarketObservation,
     ObservationTierClassification,
+    OfferProcessingOutcome,
     PriceObservation,
     PricingRecommendation,
     PricingRun,
@@ -34,6 +36,12 @@ from marko.infrastructure.db.models import (
 )
 from marko.infrastructure.db.session import engine
 from marko.services.pricing_runs import PricingRunNotFoundError
+from marko.services.identity_health import (
+    IDENTITY_HEALTH_POLICY_VERSION,
+    IdentityHealthSnapshot,
+    IdentityHealthThresholds,
+    evaluate_identity_health,
+)
 from marko.services.scrape_journal import evidence_coverage_ratio
 from marko.services.scraper_scaling import (
     AttemptMetricSample,
@@ -117,9 +125,9 @@ async def get_store_sync_scraper_metrics(
         task_executions_total=len(executions),
     )
     queue_depth, oldest_age = await _store_queue_health(session, now)
-    terminal_worker_seconds = sum(
-        _execution_wall_ms(execution) for execution in executions
-    ) / 1000
+    terminal_worker_seconds = (
+        sum(_execution_wall_ms(execution) for execution in executions) / 1000
+    )
     source_budget = 1 / max(
         settings.pricing_collection_min_interval_seconds,
         0.001,
@@ -136,9 +144,7 @@ async def get_store_sync_scraper_metrics(
             average_http_attempts_per_item=retry.http_attempts_per_item,
             source_request_budget_per_second=source_budget,
             average_database_writes_per_item=float(run.scrape_database_writes),
-            database_write_capacity_per_second=(
-                database_write_capacity_per_second
-            ),
+            database_write_capacity_per_second=(database_write_capacity_per_second),
             queue_capacity_items_per_second=queue_capacity_items_per_second,
             success_probability=success_probability,
             backlog=queue_depth,
@@ -164,9 +170,7 @@ async def get_store_sync_scraper_metrics(
     request_outcomes = Counter(
         (request.request_kind, request.outcome) for request in requests
     )
-    request_kind_by_id = {
-        request.id: request.request_kind for request in requests
-    }
+    request_kind_by_id = {request.id: request.request_kind for request in requests}
     attempt_outcomes = Counter(
         (
             request_kind_by_id.get(attempt.logical_request_id, "unknown"),
@@ -195,9 +199,7 @@ async def get_store_sync_scraper_metrics(
             session,
             sync_run_id=run.id,
             execution_no=(
-                run.scrape_task_executions
-                if run.scrape_task_executions > 0
-                else None
+                run.scrape_task_executions if run.scrape_task_executions > 0 else None
             ),
         )
     )
@@ -209,15 +211,12 @@ async def get_store_sync_scraper_metrics(
         warnings.append("database_capacity_not_configured")
     if queue_capacity_items_per_second is None:
         warnings.append("broker_capacity_not_configured")
-    warnings.append(
-        "database_write_count_excludes_uninstrumented_transaction_updates"
-    )
+    warnings.append("database_write_count_excludes_uninstrumented_transaction_updates")
     if not storage["index_and_database_overhead_measured"]:
         warnings.append("storage_index_and_database_overhead_unmeasured")
     if (
         run.scrape_state == "succeeded"
-        and storage["structured_snapshot_count"]
-        != run.scrape_products_persisted
+        and storage["structured_snapshot_count"] != run.scrape_products_persisted
     ):
         warnings.append("structured_snapshot_count_mismatch")
     resource_metrics = _resource_dependency_metrics(
@@ -248,9 +247,7 @@ async def get_store_sync_scraper_metrics(
         "item_lifecycle": {
             "scrape_items_submitted_total": 1,
             "scrape_items_valid_total": 1,
-            "scrape_items_deduplicated_total": (
-                run.scrape_deduplicated_submissions
-            ),
+            "scrape_items_deduplicated_total": (run.scrape_deduplicated_submissions),
             "scrape_items_terminal_total": {
                 "success": int(run.scrape_state == "succeeded"),
                 "failed": int(run.scrape_state in {"failed", "cancelled"}),
@@ -313,9 +310,7 @@ async def get_store_sync_scraper_metrics(
             "scrape_oldest_item_age_seconds": oldest_age,
             "scrape_worker_slots": {
                 "configured": settings.store_sync_worker_count,
-                "busy": sum(
-                    execution.outcome == "running" for execution in executions
-                ),
+                "busy": sum(execution.outcome == "running" for execution in executions),
             },
             "scrape_task_executions_total": _counter_rows(
                 execution_outcomes,
@@ -379,8 +374,7 @@ async def get_store_sync_scraper_metrics(
             ),
             terminal_failure_total=reconciliation.failed,
             duplicate_total=(
-                run.scrape_deduplicated_submissions
-                + run.scrape_duplicate_products
+                run.scrape_deduplicated_submissions + run.scrape_duplicate_products
             ),
             throughput_per_minute=_per_minute(
                 reconciliation.success,
@@ -388,17 +382,13 @@ async def get_store_sync_scraper_metrics(
             ),
             latency=end_to_end_latency,
             retry_amplification=retry.http_attempts_per_item,
-            structured_completeness=float(
-                run.scrape_structured_completeness or 0
-            ),
+            structured_completeness=float(run.scrape_structured_completeness or 0),
             raw_storage_bytes=storage["raw_unique_bytes"],
             queue_depth=queue_depth,
             oldest_job_age=oldest_age,
             worker_count=max(1, settings.store_sync_worker_count),
             elapsed_seconds=elapsed_seconds,
-            execution_wall_ms=sum(
-                _execution_wall_ms(row) for row in executions
-            ),
+            execution_wall_ms=sum(_execution_wall_ms(row) for row in executions),
             memory_peak=resource_metrics["process_resident_memory_bytes"],
             cpu_average=resource_metrics["process_cpu_utilization"] * 100,
         ),
@@ -494,9 +484,7 @@ async def get_pricing_run_scraper_metrics(
             (
                 await session.scalars(
                     select(ScrapeHttpAttempt)
-                    .where(
-                        ScrapeHttpAttempt.logical_request_id.in_(request_ids)
-                    )
+                    .where(ScrapeHttpAttempt.logical_request_id.in_(request_ids))
                     .order_by(
                         ScrapeHttpAttempt.logical_request_id,
                         ScrapeHttpAttempt.attempt_no,
@@ -557,20 +545,15 @@ async def get_pricing_run_scraper_metrics(
         valid_total=len(targets),
         queued=sum(target.status == "queued" for target in targets),
         running=sum(target.status == "collecting" for target in targets),
-        retry_wait=sum(
-            target.status == "retryable_failure" for target in targets
-        ),
+        retry_wait=sum(target.status == "retryable_failure" for target in targets),
         success=sum(target.status == "succeeded" for target in targets),
         failed=sum(
-            target.status in {"terminal_failure", "cancelled"}
-            for target in targets
+            target.status in {"terminal_failure", "cancelled"} for target in targets
         ),
     )
     queue_depth = reconciliation.queued + reconciliation.retry_wait
     nonterminal_backlog = (
-        reconciliation.queued
-        + reconciliation.running
-        + reconciliation.retry_wait
+        reconciliation.queued + reconciliation.running + reconciliation.retry_wait
     )
     oldest_age = max(
         (
@@ -586,12 +569,15 @@ async def get_pricing_run_scraper_metrics(
         for target in targets
         if target.status in {"succeeded", "terminal_failure", "cancelled"}
     }
-    terminal_worker_seconds = sum(
-        _execution_wall_ms(attempt)
-        for attempt in task_executions
-        if attempt.scrape_target_id in terminal_target_ids
-        and attempt.status != "duplicate"
-    ) / 1000
+    terminal_worker_seconds = (
+        sum(
+            _execution_wall_ms(attempt)
+            for attempt in task_executions
+            if attempt.scrape_target_id in terminal_target_ids
+            and attempt.status != "duplicate"
+        )
+        / 1000
+    )
     source_budget = 1 / max(
         settings.pricing_collection_min_interval_seconds,
         0.001,
@@ -604,9 +590,7 @@ async def get_pricing_run_scraper_metrics(
         http_attempts,
         task_attempts,
     )
-    p_success = (
-        reconciliation.success / terminal_count if terminal_count else 0.0
-    )
+    p_success = reconciliation.success / terminal_count if terminal_count else 0.0
     if terminal_count and terminal_worker_seconds > 0:
         mean_terminal_worker_time = terminal_worker_seconds / terminal_count
         capacity = calculate_derived_capacity(
@@ -619,9 +603,7 @@ async def get_pricing_run_scraper_metrics(
             average_database_writes_per_item=(
                 database_writes / len(targets) if targets else 0.0
             ),
-            database_write_capacity_per_second=(
-                database_write_capacity_per_second
-            ),
+            database_write_capacity_per_second=(database_write_capacity_per_second),
             queue_capacity_items_per_second=queue_capacity_items_per_second,
             success_probability=p_success,
             backlog=nonterminal_backlog,
@@ -639,9 +621,7 @@ async def get_pricing_run_scraper_metrics(
     request_outcomes = Counter(
         (request.request_kind, request.outcome) for request in requests
     )
-    request_kind_by_id = {
-        request.id: request.request_kind for request in requests
-    }
+    request_kind_by_id = {request.id: request.request_kind for request in requests}
     http_attempt_outcomes = Counter(
         (
             request_kind_by_id.get(attempt.logical_request_id, "unknown"),
@@ -677,6 +657,95 @@ async def get_pricing_run_scraper_metrics(
         database_probe_latency_seconds=database_latency,
         outbox=dispatch_health,
     )
+    identity_spine, identity_health = await _pricing_identity_spine(
+        session,
+        run.id,
+        targets,
+    )
+    previous_run_id = await session.scalar(
+        select(PricingRun.id)
+        .where(
+            PricingRun.workspace_id == run.workspace_id,
+            PricingRun.created_at < run.created_at,
+        )
+        .order_by(PricingRun.created_at.desc(), PricingRun.id.desc())
+        .limit(1)
+    )
+    baseline_health: IdentityHealthSnapshot | None = None
+    if previous_run_id is not None:
+        previous_targets = list(
+            (
+                await session.scalars(
+                    select(ScrapeTarget).where(
+                        ScrapeTarget.pricing_run_id == previous_run_id
+                    )
+                )
+            ).all()
+        )
+        _, baseline_health = await _pricing_identity_spine(
+            session,
+            previous_run_id,
+            previous_targets,
+        )
+    health_thresholds = IdentityHealthThresholds(
+        parser_schema_changed_alert_count=(
+            settings.pricing_parser_schema_changed_alert_count
+        ),
+        parser_schema_changed_critical_rate=(
+            settings.pricing_parser_schema_changed_critical_rate
+        ),
+        offer_internal_failure_alert_count=(
+            settings.pricing_offer_internal_failure_alert_count
+        ),
+        evidence_accounting_error_critical_count=(
+            settings.pricing_evidence_accounting_error_critical_count
+        ),
+        verified_oe_drop_warning_delta=(
+            settings.pricing_verified_oe_drop_warning_delta
+        ),
+        source_confidence_p50_drop_warning_delta=(
+            settings.pricing_source_confidence_p50_drop_warning_delta
+        ),
+    )
+    identity_spine["health"] = {
+        "policy_version": IDENTITY_HEALTH_POLICY_VERSION,
+        "baseline_run_id": (
+            str(previous_run_id) if previous_run_id is not None else None
+        ),
+        "current": identity_health.as_dict(),
+        "baseline": baseline_health.as_dict() if baseline_health else None,
+        "thresholds": {
+            "parser_schema_changed_alert_count": (
+                health_thresholds.parser_schema_changed_alert_count
+            ),
+            "parser_schema_changed_critical_rate": format(
+                health_thresholds.parser_schema_changed_critical_rate,
+                "f",
+            ),
+            "offer_internal_failure_alert_count": (
+                health_thresholds.offer_internal_failure_alert_count
+            ),
+            "evidence_accounting_error_critical_count": (
+                health_thresholds.evidence_accounting_error_critical_count
+            ),
+            "verified_oe_drop_warning_delta": format(
+                health_thresholds.verified_oe_drop_warning_delta,
+                "f",
+            ),
+            "source_confidence_p50_drop_warning_delta": format(
+                health_thresholds.source_confidence_p50_drop_warning_delta,
+                "f",
+            ),
+        },
+        "alerts": [
+            alert.as_dict()
+            for alert in evaluate_identity_health(
+                identity_health,
+                health_thresholds,
+                baseline=baseline_health,
+            )
+        ],
+    }
     return {
         "generated_at": now,
         "scope_id": run.id,
@@ -689,13 +758,21 @@ async def get_pricing_run_scraper_metrics(
                 "max_task_executions": (
                     settings.pricing_collection_max_task_executions
                 ),
-                "max_http_attempts": (
-                    settings.pricing_scraper_http_max_attempts
-                ),
+                "max_http_attempts": (settings.pricing_scraper_http_max_attempts),
                 "max_search_pages": settings.pricing_scraper_max_search_pages,
                 "max_sellers": settings.pricing_scraper_max_sellers,
                 "global_min_interval": (
                     settings.pricing_collection_min_interval_seconds
+                ),
+                "identity_health_policy_version": IDENTITY_HEALTH_POLICY_VERSION,
+                "parser_schema_changed_critical_rate": (
+                    settings.pricing_parser_schema_changed_critical_rate
+                ),
+                "verified_oe_drop_warning_delta": (
+                    settings.pricing_verified_oe_drop_warning_delta
+                ),
+                "source_confidence_p50_drop_warning_delta": (
+                    settings.pricing_source_confidence_p50_drop_warning_delta
                 ),
             }
         ),
@@ -745,8 +822,7 @@ async def get_pricing_run_scraper_metrics(
                     max(
                         0.0,
                         (
-                            _aware(target.first_started_at)
-                            - _aware(target.created_at)
+                            _aware(target.first_started_at) - _aware(target.created_at)
                         ).total_seconds(),
                     )
                     for target in targets
@@ -819,9 +895,7 @@ async def get_pricing_run_scraper_metrics(
                 session,
                 target_ids,
             ),
-            "scrape_raw_evidence_bytes_total": (
-                legacy_metrics.raw_storage_bytes
-            ),
+            "scrape_raw_evidence_bytes_total": (legacy_metrics.raw_storage_bytes),
             "scrape_database_writes_total": database_writes,
         },
         "rates": {
@@ -849,6 +923,7 @@ async def get_pricing_run_scraper_metrics(
         },
         "storage": storage,
         "resources_dependencies": resource_metrics,
+        "identity_spine": identity_spine,
         "compatibility_metrics": _compatibility_metrics(
             item_kind="comparison_job",
             unique_urls_total=legacy_metrics.unique_urls_total,
@@ -856,8 +931,7 @@ async def get_pricing_run_scraper_metrics(
             attempts_total=len(http_attempts),
             success_total=reconciliation.success,
             retryable_failure_total=sum(
-                attempt.outcome == "retryable_failure"
-                for attempt in http_attempts
+                attempt.outcome == "retryable_failure" for attempt in http_attempts
             ),
             terminal_failure_total=reconciliation.failed,
             duplicate_total=legacy_metrics.duplicate_total,
@@ -868,17 +942,13 @@ async def get_pricing_run_scraper_metrics(
                 "p99": legacy_metrics.latency_p99,
             },
             retry_amplification=retry.http_attempts_per_item,
-            structured_completeness=(
-                legacy_metrics.structured_completeness
-            ),
+            structured_completeness=(legacy_metrics.structured_completeness),
             raw_storage_bytes=storage["raw_unique_bytes"],
             queue_depth=queue_depth,
             oldest_job_age=oldest_age,
             worker_count=max(1, settings.pricing_collection_worker_count),
             elapsed_seconds=elapsed_seconds,
-            execution_wall_ms=sum(
-                row.wall_time_ms for row in task_attempts
-            ),
+            execution_wall_ms=sum(row.wall_time_ms for row in task_attempts),
             memory_peak=resource_metrics["process_resident_memory_bytes"],
             cpu_average=resource_metrics["process_cpu_utilization"] * 100,
         ),
@@ -1039,9 +1109,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     metric(
         "database_probe_latency_seconds",
         resources["database_probe_latency_seconds"],
-        available=str(
-            resources["database_probe_latency_seconds"] is not None
-        ).lower(),
+        available=str(resources["database_probe_latency_seconds"] is not None).lower(),
     )
     metric(
         "database_transaction_latency_seconds",
@@ -1102,10 +1170,7 @@ async def _store_queue_health(
         ).all()
     )
     oldest = max(
-        (
-            max(0.0, (now - _aware(run.created_at)).total_seconds())
-            for run in active
-        ),
+        (max(0.0, (now - _aware(run.created_at)).total_seconds()) for run in active),
         default=0.0,
     )
     return len(active), round(oldest, 3)
@@ -1130,9 +1195,7 @@ async def _store_storage(
     observations = list(
         (
             await session.scalars(
-                select(PriceObservation).where(
-                    PriceObservation.sync_run_id == run.id
-                )
+                select(PriceObservation).where(PriceObservation.sync_run_id == run.id)
             )
         ).all()
     )
@@ -1204,8 +1267,7 @@ async def _pricing_storage(
         else []
     )
     structured_bytes = sum(
-        target.structured_size_bytes + target.metadata_size_bytes
-        for target in targets
+        target.structured_size_bytes + target.metadata_size_bytes for target in targets
     )
     observations = list(
         (
@@ -1225,8 +1287,7 @@ async def _pricing_storage(
                 select(RawMarketCapture)
                 .join(
                     PricingRunItem,
-                    PricingRunItem.id
-                    == RawMarketCapture.pricing_run_item_id,
+                    PricingRunItem.id == RawMarketCapture.pricing_run_item_id,
                 )
                 .where(PricingRunItem.pricing_run_id == run_id)
             )
@@ -1243,8 +1304,7 @@ async def _pricing_storage(
                 )
                 .join(
                     PricingRunItem,
-                    PricingRunItem.id
-                    == MarketObservation.pricing_run_item_id,
+                    PricingRunItem.id == MarketObservation.pricing_run_item_id,
                 )
                 .where(PricingRunItem.pricing_run_id == run_id)
             )
@@ -1284,9 +1344,7 @@ async def _pricing_storage(
     observation_bytes += sum(
         _json_bytes(
             {
-                "market_observation_id": str(
-                    row.market_observation_id
-                ),
+                "market_observation_id": str(row.market_observation_id),
                 "tier": row.tier,
                 "tier_confidence": str(row.tier_confidence),
                 "is_used": row.is_used,
@@ -1379,6 +1437,120 @@ async def _raw_blob_sizes_for_requests(
     return int(raw), int(stored)
 
 
+async def _pricing_identity_spine(
+    session: AsyncSession,
+    run_id: UUID,
+    targets: list[ScrapeTarget],
+) -> tuple[dict[str, Any], IdentityHealthSnapshot]:
+    outcome_counts = Counter(
+        {
+            code: int(count)
+            for code, count in (
+                await session.execute(
+                    select(
+                        OfferProcessingOutcome.outcome_code,
+                        func.count(OfferProcessingOutcome.id),
+                    )
+                    .join(
+                        PricingRunItem,
+                        PricingRunItem.id == OfferProcessingOutcome.pricing_run_item_id,
+                    )
+                    .where(PricingRunItem.pricing_run_id == run_id)
+                    .group_by(OfferProcessingOutcome.outcome_code)
+                )
+            ).all()
+        }
+    )
+    observation_rows = list(
+        (
+            await session.execute(
+                select(
+                    MarketObservation.oe_verification_status,
+                    MarketObservation.source_confidence,
+                )
+                .join(
+                    PricingRunItem,
+                    PricingRunItem.id == MarketObservation.pricing_run_item_id,
+                )
+                .where(PricingRunItem.pricing_run_id == run_id)
+            )
+        ).all()
+    )
+    verification_counts = Counter(status for status, _ in observation_rows)
+    confidence_values = sorted(
+        Decimal(str(confidence)) for _, confidence in observation_rows
+    )
+    confidence_p50 = _decimal_median(confidence_values)
+    parser_schema_changed = sum(
+        target.error_category == "parser_schema_changed" for target in targets
+    )
+    accounting_errors = sum(
+        "EVIDENCE_ACCOUNTING_ERROR" in (target.reason_codes or []) for target in targets
+    )
+    internal_failures = outcome_counts.get("FAILED_INTERNAL_PROCESSING", 0)
+    retrieved = sum(outcome_counts.values())
+    observations_persisted = outcome_counts.get("OBSERVATION_PERSISTED", 0)
+    rejected = retrieved - observations_persisted - internal_failures
+    empty_results = sum(
+        isinstance(target.payload, dict)
+        and isinstance(target.payload.get("output"), dict)
+        and target.payload["output"].get("acquisition_outcome") == "EMPTY_SEARCH_RESULT"
+        for target in targets
+    )
+    verified = verification_counts.get("VERIFIED_EXACT", 0) + verification_counts.get(
+        "VERIFIED_CROSS",
+        0,
+    )
+    health = IdentityHealthSnapshot(
+        parsed_pages=sum(
+            target.parse_status in {"SUCCEEDED", "FAILED"} for target in targets
+        ),
+        parser_schema_changed=parser_schema_changed,
+        offer_internal_failures=internal_failures,
+        evidence_accounting_errors=accounting_errors,
+        observations=len(observation_rows),
+        verified_observations=verified,
+        source_confidence_p50=confidence_p50,
+    )
+    return (
+        {
+            "pricing_query_only_targets_total": sum(
+                target.input_kind == "query" for target in targets
+            ),
+            "pricing_product_seed_targets_total": sum(
+                target.input_kind == "product_seed" for target in targets
+            ),
+            "prom_empty_search_result_total": empty_results,
+            "prom_parser_schema_changed_total": parser_schema_changed,
+            "offer_retrieved_total": retrieved,
+            "offer_observation_persisted_total": observations_persisted,
+            "offer_rejected_total": max(0, rejected),
+            "offer_internal_failure_total": internal_failures,
+            "offer_outcome_counts": dict(sorted(outcome_counts.items())),
+            "oe_verification_total": dict(sorted(verification_counts.items())),
+            "oe_verified_exact_total": verification_counts.get("VERIFIED_EXACT", 0),
+            "oe_verified_cross_total": verification_counts.get("VERIFIED_CROSS", 0),
+            "oe_unknown_total": verification_counts.get("UNKNOWN", 0),
+            "oe_conflict_total": verification_counts.get("CONFLICT", 0),
+            "oe_ambiguous_total": verification_counts.get("AMBIGUOUS", 0),
+            "evidence_accounting_error_total": accounting_errors,
+            "source_confidence_p50": (
+                format(confidence_p50, "f") if confidence_p50 is not None else None
+            ),
+        },
+        health,
+    )
+
+
+def _decimal_median(values: list[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    midpoint = len(values) // 2
+    if len(values) % 2:
+        return values[midpoint]
+    return (values[midpoint - 1] + values[midpoint]) / Decimal("2")
+
+
 async def _pricing_database_writes(
     session: AsyncSession,
     run_id: UUID,
@@ -1399,6 +1571,17 @@ async def _pricing_database_writes(
         or 0
     )
     observations = await _count_run_observations(session, run_id)
+    outcomes = int(
+        await session.scalar(
+            select(func.count(OfferProcessingOutcome.id))
+            .join(
+                PricingRunItem,
+                PricingRunItem.id == OfferProcessingOutcome.pricing_run_item_id,
+            )
+            .where(PricingRunItem.pricing_run_id == run_id)
+        )
+        or 0
+    )
     classifications = int(
         await session.scalar(
             select(func.count(ObservationTierClassification.id))
@@ -1422,6 +1605,7 @@ async def _pricing_database_writes(
         + len(http_attempts)
         + captures
         + observations
+        + outcomes
         + classifications
     )
 
@@ -1485,11 +1669,7 @@ async def _pricing_evidence_coverage(
                     ScrapeHttpRequest.execution_no,
                     ScrapeHttpRequest.outcome,
                     ScrapeHttpRequest.evidence_blob_id,
-                ).where(
-                    ScrapeHttpRequest.scrape_target_id.in_(
-                        succeeded_target_ids
-                    )
-                )
+                ).where(ScrapeHttpRequest.scrape_target_id.in_(succeeded_target_ids))
             )
         ).all()
     )
@@ -1518,6 +1698,9 @@ def _target_offer_count(target: ScrapeTarget) -> int:
     output = target.payload.get("output")
     if not isinstance(output, dict):
         return 0
+    records = output.get("records")
+    if isinstance(records, list):
+        return len(records)
     offers = output.get("offers")
     return len(offers) if isinstance(offers, list) else 0
 
@@ -1555,8 +1738,7 @@ def _resource_dependency_metrics(
         "outbox_terminal_failed": outbox.terminal_failed,
         "outbox_oldest_pending_age_seconds": outbox.oldest_pending_age_seconds,
         "object_storage_write_latency_seconds": None,
-        "request_rate_wait_seconds": sum(row.rate_wait_ms for row in requests)
-        / 1000,
+        "request_rate_wait_seconds": sum(row.rate_wait_ms for row in requests) / 1000,
     }
 
 
@@ -1581,10 +1763,7 @@ def _execution_wall_ms(row: Any) -> int:
         return 0
     return max(
         0,
-        round(
-            (_aware(finished_at) - _aware(started_at)).total_seconds()
-            * 1000
-        ),
+        round((_aware(finished_at) - _aware(started_at)).total_seconds() * 1000),
     )
 
 

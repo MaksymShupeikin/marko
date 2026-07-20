@@ -31,9 +31,9 @@ class _CatalogContextDialog extends StatefulWidget {
 
 class _CatalogContextDialogState extends State<_CatalogContextDialog> {
   late String _status;
-  late bool _allowBelowCost;
   String? _error;
   late final TextEditingController _cost;
+  bool _clearCost = false;
   late final TextEditingController _quantity;
   late final TextEditingController _age;
   late final TextEditingController _monthlySales;
@@ -47,7 +47,6 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
   late final TextEditingController _priority;
   late final TextEditingController _liquidity;
   late final TextEditingController _urgency;
-  late final TextEditingController _floor;
   final _reason = TextEditingController(text: 'Ручное обновление контекста');
 
   @override
@@ -71,10 +70,8 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
           }.contains(widget.initialStatus)
         ? widget.initialStatus
         : 'unknown';
-    _allowBelowCost =
-        _status == 'dead_stock' && snapshot['allow_below_cost'] == true;
-    _cost = TextEditingController(text: _initialValue('cost'));
     _quantity = TextEditingController(text: _initialValue('stock_qty'));
+    _cost = TextEditingController();
     _age = TextEditingController(text: _initialValue('stock_age_days'));
     _monthlySales = TextEditingController(
       text: _initialValue('expected_units_sold'),
@@ -99,9 +96,8 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
       text: _initialValue('liquidity_target', fallback: '0'),
     );
     _urgency = TextEditingController(
-      text: _initialValue('urgency', fallback: '1'),
+      text: _initialValue('urgency', fallback: '0'),
     );
-    _floor = TextEditingController(text: _initialValue('below_cost_floor'));
   }
 
   @override
@@ -120,7 +116,6 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
     _priority.dispose();
     _liquidity.dispose();
     _urgency.dispose();
-    _floor.dispose();
     _reason.dispose();
     super.dispose();
   }
@@ -154,12 +149,44 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
                 ],
                 onChanged: (value) => setState(() {
                   _status = value ?? 'unknown';
-                  if (_status != 'dead_stock') _allowBelowCost = false;
                 }),
               ),
               const SizedBox(height: 12),
-              _NumberField(controller: _cost, label: 'Себестоимость, ₴'),
-              const SizedBox(height: 12),
+              if (_serverCostEnabled) ...[
+                MarkoInlineMessage(
+                  message: _costConfigured
+                      ? 'Себестоимость сохранена в зашифрованном виде. Текущее значение намеренно не возвращается из API; введите новое только для замены.'
+                      : 'Себестоимость будет зашифрована сервером AES-256-GCM. В API-ответах, расчётных snapshots и replay исходное значение не показывается.',
+                  tone: MarkoMessageTone.success,
+                ),
+                const SizedBox(height: 12),
+                _NumberField(
+                  controller: _cost,
+                  label: _costConfigured
+                      ? 'Новая себестоимость, UAH (не менять — пусто)'
+                      : 'Себестоимость, UAH',
+                  enabled: !_clearCost,
+                ),
+                if (_costConfigured)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _clearCost,
+                    title: const Text('Удалить сохранённую себестоимость'),
+                    subtitle: const Text(
+                      'Будет создана аудируемая запись удаления без раскрытия старого значения.',
+                    ),
+                    onChanged: (value) => setState(() {
+                      _clearCost = value ?? false;
+                      if (_clearCost) _cost.clear();
+                    }),
+                  ),
+              ] else
+                const MarkoInlineMessage(
+                  message:
+                      'Ввод себестоимости отключён: серверный encryption keyring не активирован.',
+                  tone: MarkoMessageTone.warning,
+                ),
+              const SizedBox(height: 14),
               Wrap(
                 spacing: 12,
                 runSpacing: 12,
@@ -257,29 +284,6 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _allowBelowCost,
-                title: const Text('Разрешить цену ниже себестоимости'),
-                subtitle: const Text(
-                  'Только для неликвида; решение попадёт в audit trail.',
-                ),
-                onChanged: _status == 'dead_stock'
-                    ? (value) => setState(() {
-                        _allowBelowCost = value ?? false;
-                      })
-                    : null,
-              ),
-              if (_allowBelowCost) ...[
-                const MarkoInlineMessage(
-                  message:
-                      'Укажите абсолютный нижний предел. Система не опустится ниже него.',
-                  tone: MarkoMessageTone.warning,
-                ),
-                const SizedBox(height: 10),
-                _NumberField(controller: _floor, label: 'Минимальная цена, ₴'),
-              ],
               const SizedBox(height: 12),
               TextField(
                 controller: _reason,
@@ -325,9 +329,10 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
     late final String? priority;
     late final String? liquidity;
     late final String? urgency;
-    late final String? floor;
     try {
-      cost = _optionalNumber(_cost.text, 'себестоимость');
+      cost = _serverCostEnabled && !_clearCost
+          ? _optionalMoney(_cost.text)
+          : null;
       quantity = _optionalNumber(_quantity.text, 'остаток', allowZero: true);
       age = _optionalNumber(_age.text, 'возраст', allowZero: true);
       monthlySales = _optionalNumber(
@@ -380,13 +385,8 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
         allowZero: true,
         max: 1,
       );
-      floor = _optionalNumber(_floor.text, 'минимальную цену', allowZero: true);
     } on FormatException catch (error) {
       setState(() => _error = error.message);
-      return;
-    }
-    if (_allowBelowCost && floor == null) {
-      setState(() => _error = 'Укажите минимальную цену');
       return;
     }
     if (_reason.text.trim().length < 3) {
@@ -395,11 +395,12 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
     }
     final payload = <String, dynamic>{
       'stock_status': _status,
-      'allow_below_cost': _allowBelowCost,
-      'below_cost_warning_confirmed': _allowBelowCost,
+      'allow_below_cost': false,
+      'below_cost_warning_confirmed': false,
       'reason': _reason.text.trim(),
     };
     if (cost != null) payload['cost'] = cost;
+    if (_clearCost) payload['clear_cost'] = true;
     if (quantity != null) payload['stock_qty'] = quantity;
     if (age != null) payload['stock_age_days'] = age;
     if (monthlySales != null) payload['expected_units_sold'] = monthlySales;
@@ -417,12 +418,34 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
     if (priority != null) payload['manual_priority'] = priority;
     if (liquidity != null) payload['liquidity_target'] = liquidity;
     if (urgency != null) payload['urgency'] = urgency;
-    if (_allowBelowCost && floor != null) payload['below_cost_floor'] = floor;
     Navigator.of(context).pop(payload);
   }
 
   String _initialValue(String key, {String fallback = ''}) {
     return widget.initialContext[key]?.toString() ?? fallback;
+  }
+
+  bool get _serverCostEnabled =>
+      widget.initialContext['cost_privacy_mode']?.toString() ==
+      'SERVER_SIDE_ENCRYPTED';
+
+  bool get _costConfigured => widget.initialContext['cost_configured'] == true;
+
+  String? _optionalMoney(String raw) {
+    final normalized = raw.trim().replaceAll(',', '.');
+    if (normalized.isEmpty) return null;
+    if (!RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(normalized)) {
+      throw const FormatException(
+        'Проверьте себестоимость: положительное число, максимум 2 знака после запятой',
+      );
+    }
+    final parsed = double.tryParse(normalized);
+    if (parsed == null || !parsed.isFinite || parsed <= 0) {
+      throw const FormatException(
+        'Проверьте себестоимость: значение должно быть больше нуля',
+      );
+    }
+    return normalized;
   }
 
   String? _optionalNumber(
@@ -450,15 +473,21 @@ class _CatalogContextDialogState extends State<_CatalogContextDialog> {
 }
 
 class _NumberField extends StatelessWidget {
-  const _NumberField({required this.controller, required this.label});
+  const _NumberField({
+    required this.controller,
+    required this.label,
+    this.enabled = true,
+  });
 
   final TextEditingController controller;
   final String label;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
+      enabled: enabled,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       decoration: InputDecoration(labelText: label),
     );

@@ -5,7 +5,7 @@ import 'package:marko_client/features/pricing/pricing_models.dart';
 import 'package:marko_client/features/pricing/recommendation_decision_dialog.dart';
 
 void main() {
-  testWidgets('below-cost decision requires an explicit warning confirmation', (
+  testWidgets('records a below-cost declaration without sending raw cost', (
     tester,
   ) async {
     Map<String, dynamic>? decision;
@@ -21,8 +21,8 @@ void main() {
       'stock_status': 'dead_stock',
       'context_snapshot': {
         'stock_status': 'dead_stock',
-        'cost': '1200',
-        'below_cost_floor': '700',
+        'cost_privacy_mode': 'UNDECIDED',
+        'cost_configured': false,
       },
       'calculation_trace': <String, dynamic>{},
       'action': 'LOWER',
@@ -67,19 +67,19 @@ void main() {
 
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('ниже себестоимости'), findsWidgets);
+    expect(find.textContaining('локальной себестоимости'), findsWidgets);
+    expect(find.textContaining('1200'), findsNothing);
 
-    await tester.tap(find.text('Записать'));
-    await tester.pumpAndSettle();
-    expect(find.text('Подтвердите цену ниже себестоимости'), findsOneWidget);
-    expect(decision, isNull);
-
-    await tester.tap(find.text('Явно подтверждаю цену ниже себестоимости'));
+    await tester.tap(
+      find.text('По моей локальной себестоимости эта цена убыточна'),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Записать'));
     await tester.pumpAndSettle();
 
     expect(decision?['allow_below_cost'], isTrue);
     expect(decision?['warning_confirmed'], isTrue);
+    expect(decision?.containsKey('cost'), isFalse);
+    expect(decision?.containsKey('below_cost_floor'), isFalse);
   });
 }

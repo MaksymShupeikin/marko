@@ -1,4 +1,5 @@
 """Store registration, synchronization, and catalog endpoints."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -24,6 +25,10 @@ from marko.services.stores import (
     queue_store_sync,
     register_store,
 )
+from marko.services.seller_url_resolver import (
+    PromSellerUrlError,
+    PromSellerUrlUnavailable,
+)
 from marko.worker.celery_app import celery_app
 
 router = APIRouter()
@@ -46,6 +51,16 @@ async def create_store(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
+        ) from exc
+    except PromSellerUrlError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "PROM_SELLER_URL_UNRESOLVED", "message": str(exc)},
+        ) from exc
+    except PromSellerUrlUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "PROM_SELLER_URL_UNAVAILABLE", "message": str(exc)},
         ) from exc
     return StoreSyncResponse(
         store_id=store_id,
@@ -76,7 +91,9 @@ async def get_store_details(
             workspace_id=current.workspace_id,
         )
     except StoreNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
     return StoreResponse(**store.__dict__)
 
 
@@ -98,7 +115,9 @@ async def sync_store(
             celery_app=celery_app,
         )
     except StoreNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
     except TaskDispatchError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -128,7 +147,9 @@ async def get_products(
             offset=offset,
         )
     except StoreNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
     return ProductPageResponse(
         items=[ProductResponse.model_validate(item) for item in page.items],
         total=page.total,

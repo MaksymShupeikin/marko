@@ -20,8 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from marko.core.config import Settings
 from marko.services.scraper_contract import (
+    AcquisitionInput,
     PROM_ADAPTER_VERSION,
     PROM_OUTPUT_SCHEMA_VERSION,
+    QueryInput,
     ScrapeInput,
 )
 from marko.services.source_access import source_access_status
@@ -348,9 +350,7 @@ class ScrapeResult(_StrictModel):
     captured_at: datetime | None = None
     parsed_at: datetime | None = None
     raw_capture_id: str | None = Field(default=None, max_length=160)
-    raw_content_sha256: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    raw_content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     parser_name: str = Field(min_length=1, max_length=160)
     parser_version: str = Field(min_length=1, max_length=160)
     parser_config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -370,16 +370,22 @@ class ScrapeResult(_StrictModel):
     def validate_cross_field_invariants(self) -> Self:
         if self.contract_version != SCRAPE_RESULT_CONTRACT_VERSION:
             raise ValueError("unsupported scrape result contract version")
-        raw_present = self.raw_capture_id is not None and self.raw_content_sha256 is not None
+        raw_present = (
+            self.raw_capture_id is not None and self.raw_content_sha256 is not None
+        )
         if (self.raw_capture_id is None) != (self.raw_content_sha256 is None):
             raise ValueError("raw capture id and hash must be present together")
         if self.acquisition_status == AcquisitionStatus.SUCCEEDED and not raw_present:
             raise ValueError("successful acquisition requires immutable raw evidence")
-        if self.evidence_status in {
-            EvidenceStatus.RAW_AVAILABLE,
-            EvidenceStatus.STRUCTURED_AVAILABLE,
-            EvidenceStatus.INGESTED,
-        } and not raw_present:
+        if (
+            self.evidence_status
+            in {
+                EvidenceStatus.RAW_AVAILABLE,
+                EvidenceStatus.STRUCTURED_AVAILABLE,
+                EvidenceStatus.INGESTED,
+            }
+            and not raw_present
+        ):
             raise ValueError("evidence status requires raw evidence identity")
         if self.parse_status in {ParseStatus.SUCCEEDED, ParseStatus.PARTIAL}:
             if not raw_present or self.parsed_at is None:
@@ -402,17 +408,20 @@ class ScrapeResult(_StrictModel):
                 or offer.price_amount_decimal is None
                 for offer in self.offers
             ):
-                raise ValueError("invalid or price-less offer cannot be downstream eligible")
+                raise ValueError(
+                    "invalid or price-less offer cannot be downstream eligible"
+                )
         if self.parse_status in {ParseStatus.PARTIAL, ParseStatus.FAILED}:
             if self.downstream_eligibility == DownstreamEligibility.ELIGIBLE:
                 raise ValueError("partial or failed parse must abstain downstream")
             if self.operator_action == OperatorAction.NONE:
-                raise ValueError("partial or failed parse requires review/replay/abstention")
+                raise ValueError(
+                    "partial or failed parse requires review/replay/abstention"
+                )
         for offer in self.offers:
             if raw_present and (
                 offer.evidence_fields.raw_capture_id != self.raw_capture_id
-                or offer.evidence_fields.raw_content_sha256
-                != self.raw_content_sha256
+                or offer.evidence_fields.raw_content_sha256 != self.raw_content_sha256
             ):
                 raise ValueError("offer evidence must point to the result raw capture")
         return self
@@ -521,7 +530,7 @@ def admit_prom_public_item(
     settings: Settings,
     freshness_generation: int = 0,
     now: datetime | None = None,
-) -> tuple[AdmissionDecision, ScrapeInput | None]:
+) -> tuple[AdmissionDecision, AcquisitionInput | None]:
     """Evaluate a public Prom item entirely on the trusted server side."""
 
     if request.source_type != SourceType.PROM_PUBLIC:
@@ -530,19 +539,37 @@ def admit_prom_public_item(
         AcquisitionMode.SINGLE_URL,
         AcquisitionMode.URL_BATCH,
         AcquisitionMode.COMPARISON_JOB,
+        AcquisitionMode.QUERY_BATCH,
         AcquisitionMode.SCHEDULED,
     }:
         raise ValueError("unsupported acquisition mode for public Prom admission")
-    if item.input_kind not in {InputKind.URL, InputKind.PRODUCT_SEED}:
-        raise ValueError("public Prom admission requires a URL/product seed")
-    query = item.metadata.get("query")
-    if not isinstance(query, str):
-        raise ValueError("public Prom item metadata.query is required")
-    scrape_input = ScrapeInput.build(
-        item.input_value,
-        query,
-        adapter_version=PROM_ADAPTER_VERSION,
-    )
+    if item.input_kind == InputKind.QUERY:
+        if request.acquisition_mode not in {
+            AcquisitionMode.COMPARISON_JOB,
+            AcquisitionMode.QUERY_BATCH,
+        }:
+            raise ValueError("query input requires comparison_job or query_batch mode")
+        language = item.metadata.get("language", "ua")
+        if not isinstance(language, str):
+            raise ValueError("public Prom query metadata.language must be a string")
+        scrape_input: AcquisitionInput = QueryInput.build(
+            item.input_value,
+            language=language,
+            adapter_version=PROM_ADAPTER_VERSION,
+        )
+        canonical_input = scrape_input.query
+    elif item.input_kind in {InputKind.URL, InputKind.PRODUCT_SEED}:
+        query = item.metadata.get("query")
+        if not isinstance(query, str):
+            raise ValueError("public Prom item metadata.query is required")
+        scrape_input = ScrapeInput.build(
+            item.input_value,
+            query,
+            adapter_version=PROM_ADAPTER_VERSION,
+        )
+        canonical_input = scrape_input.canonical_url
+    else:
+        raise ValueError("public Prom admission requires a URL, product seed, or query")
     access = source_access_status(settings)
     state = (
         SourcePolicyState.PERMITTED
@@ -560,18 +587,20 @@ def admit_prom_public_item(
     keys = build_idempotency_namespaces(
         request,
         item,
-        canonical_input=scrape_input.canonical_url,
+        canonical_input=canonical_input,
         source_lane=SourceLane.PUBLIC_COMPETITOR,
         policy_version=policy_fingerprint,
         freshness_generation=freshness_generation,
     )
-    admitted_at = _utc(now or datetime.now(UTC)) if access.live_collection_allowed else None
+    admitted_at = (
+        _utc(now or datetime.now(UTC)) if access.live_collection_allowed else None
+    )
     decision = AdmissionDecision(
         policy_decision_id=f"policy-{uuid4()}",
         source_policy_version=policy_fingerprint,
         source_policy_state=state,
         source_lane=SourceLane.PUBLIC_COMPETITOR,
-        canonical_input=scrape_input.canonical_url,
+        canonical_input=canonical_input,
         server_idempotency_keys=keys,
         admitted_at=admitted_at,
         rejection_reason_code=(None if admitted_at else "SOURCE_ACCESS_BLOCKED"),
@@ -583,7 +612,9 @@ def parser_contract_defaults() -> dict[str, str]:
     return {
         "parser_name": "marko.parsers.prom",
         "parser_version": PROM_ADAPTER_VERSION,
-        "parser_config_hash": build_parser_config_hash({"adapter": PROM_ADAPTER_VERSION}),
+        "parser_config_hash": build_parser_config_hash(
+            {"adapter": PROM_ADAPTER_VERSION}
+        ),
         "output_schema_version": PROM_OUTPUT_SCHEMA_VERSION,
     }
 

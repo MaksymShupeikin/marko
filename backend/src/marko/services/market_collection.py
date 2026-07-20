@@ -8,13 +8,14 @@ repeating a successful network collection.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Mapping
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
@@ -23,9 +24,11 @@ from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
     BrandTierRule,
     CatalogItem,
+    CrossLink,
     MarketObservation,
     MarketplaceStore,
     ObservationTierClassification,
+    OfferProcessingOutcome,
     PricingRecommendation,
     PricingRun,
     PricingRunItem,
@@ -43,17 +46,22 @@ from marko.parsers.prom.gateway import PromGateway
 from metis.pricing import (
     CalibrationPair,
     CoefficientModel,
+    CohortRole,
     CompetitorOffer,
-    DEFAULT_BRAND_TIERS,
     ProductTier,
     RecommendationAction,
     TierClassification,
     bind_persisted_provenance,
+    calibration_dataset_hash,
+    category_comparability_rule,
+    classify_condition,
     classify_tier,
     cluster_diagnostic_to_dict,
     comparison_evidence_from_dict,
     comparison_evidence_to_dict,
     HardGateResult,
+    extract_description_cross_candidates,
+    load_approved_brand_rules,
     normalize_brand,
     recommend_price,
     robust_dispersion_trace,
@@ -61,11 +69,37 @@ from metis.pricing import (
 from metis.pricing.statistics import median as decimal_median
 from metis.pricing.observability import pricing_event
 from marko.services.collection_guard import DistributedCollectionGuard
+from marko.services.catalog_costs import get_decrypted_catalog_cost
+from marko.services.calibration_eligibility import (
+    CALIBRATION_ELIGIBILITY_VERSION,
+    calibration_identity_record,
+    evaluate_calibration_eligibility,
+)
 from marko.services.decision_fingerprint import (
+    DECISION_FINGERPRINT_VERSION,
     build_decision_fingerprint_payload,
     canonical_sha256,
 )
 from marko.services.matching import PriceComparison
+from marko.services.offer_identity import (
+    ConfirmedCross,
+    OE_EXTRACTOR_VERSION,
+    OeVerificationStatus,
+    bind_oe_verification,
+    canonical_cross_identity_key,
+    evidence_items_to_dicts,
+    extract_oe_evidence,
+    verify_offer_identity,
+)
+from marko.services.offer_processing import (
+    EvidenceAccountingError,
+    OfferAccounting,
+    OfferOutcomeCode,
+    RejectedOffer,
+    assess_candidate_source,
+    process_offer_candidate,
+    safe_offer_sample,
+)
 from marko.services.pricing_runs import (
     build_pricing_context,
     activation_artifact_verified,
@@ -87,13 +121,16 @@ from marko.services.scrape_runtime import (
     scrape_execution,
 )
 from marko.services.scraper_contract import (
+    AcquisitionInput,
     AttemptMeasurement,
     AttemptResourceProbe,
     FrozenPromScraperAdapter,
+    PROM_ADAPTER_VERSION,
     ScrapeInput,
     ScrapeOutput,
     ScraperBoundaryError,
     ScraperErrorCode,
+    build_acquisition_input,
     classify_scraper_exception,
 )
 from marko.services.scraper_outbox import enqueue_dispatch
@@ -131,7 +168,7 @@ class CollectionClaim:
     fencing_token: int = 0
     execution_no: int = 0
     task_id: str | None = None
-    scrape_input: ScrapeInput | None = None
+    scrape_input: AcquisitionInput | None = None
     stored_output: ScrapeOutput | None = None
     terminal_error: ScraperBoundaryError | None = None
 
@@ -321,6 +358,7 @@ async def process_pricing_item(
         run_id=claim.run_id,
         run_item_id=run_item_id,
         catalog_item_id=claim.catalog_item_id,
+        product_url=claim.product_url,
         comparison=comparison,
     )
     return claim.run_id
@@ -415,7 +453,7 @@ async def _process_target_collection(claim: CollectionClaim) -> UUID:
 
 
 def _collect_target_output(
-    scrape_input: ScrapeInput,
+    scrape_input: AcquisitionInput,
     trace: ScrapeExecutionTrace,
 ) -> ScrapeOutput:
     settings = get_settings()
@@ -505,6 +543,33 @@ async def _claim_item(
     is_redelivery: bool,
 ) -> CollectionClaim | None:
     async with async_session_factory() as session:
+        preview = (
+            await session.execute(
+                select(
+                    PricingRunItem.id,
+                    PricingRunItem.scrape_target_id,
+                ).where(PricingRunItem.id == run_item_id)
+            )
+        ).one_or_none()
+        if preview is None:
+            raise PricingItemNotFoundError(
+                f"Pricing run item {run_item_id} does not exist"
+            )
+
+        target: ScrapeTarget | None = None
+        if preview.scrape_target_id is not None:
+            # All target-backed paths use the same lock order as evidence
+            # materialization: target first, dependent item second.  Locking
+            # the item first can deadlock when a redelivery races a worker
+            # that already owns the target and is inserting item-scoped rows.
+            target = await session.scalar(
+                select(ScrapeTarget)
+                .where(ScrapeTarget.id == preview.scrape_target_id)
+                .with_for_update()
+            )
+            if target is None:
+                raise PricingItemNotFoundError("Scrape target dependency is missing")
+
         item = await session.scalar(
             select(PricingRunItem)
             .where(PricingRunItem.id == run_item_id)
@@ -514,6 +579,8 @@ async def _claim_item(
             raise PricingItemNotFoundError(
                 f"Pricing run item {run_item_id} does not exist"
             )
+        if item.scrape_target_id != preview.scrape_target_id:
+            raise RuntimeError("Pricing run item target changed while acquiring locks")
         if item.status in {"calculated", "manual_review", "failed", "cancelled"}:
             return None
         if item.status not in {"queued", "collecting", "collected"}:
@@ -528,12 +595,13 @@ async def _claim_item(
             await session.commit()
             await finalize_pricing_run(run.id)
             return None
-        if item.scrape_target_id is not None:
+        if target is not None:
             return await _claim_target_item(
                 session,
                 item=item,
                 run=run,
                 catalog_item=catalog_item,
+                target=target,
                 task_id=task_id,
                 is_redelivery=is_redelivery,
             )
@@ -562,16 +630,10 @@ async def _claim_target_item(
     item: PricingRunItem,
     run: PricingRun,
     catalog_item: CatalogItem,
+    target: ScrapeTarget,
     task_id: str | None,
     is_redelivery: bool,
 ) -> CollectionClaim:
-    target = await session.scalar(
-        select(ScrapeTarget)
-        .where(ScrapeTarget.id == item.scrape_target_id)
-        .with_for_update()
-    )
-    if target is None:
-        raise PricingItemNotFoundError("Scrape target dependency is missing")
     now = datetime.now(UTC)
 
     if target.status == "succeeded" and target.payload is not None:
@@ -771,9 +833,11 @@ async def _claim_target_item(
         )
 
     try:
-        scrape_input = ScrapeInput.build(
-            target.original_url,
-            target.query,
+        scrape_input = build_acquisition_input(
+            target.input_kind,
+            target.query if target.input_kind == "query" else target.original_url,
+            query=target.query,
+            language="ua",
             adapter_version=target.adapter_version,
         )
     except ScraperBoundaryError as exc:
@@ -1052,6 +1116,7 @@ async def _persist_target_failure(
             )
             raw_parse_failure = raw_bytes > 0 and error.code in {
                 ScraperErrorCode.PARSE_CONTRACT,
+                ScraperErrorCode.PARSER_SCHEMA_CHANGED,
                 ScraperErrorCode.SERIALIZATION,
             }
             target.execution_status = (
@@ -1109,6 +1174,14 @@ async def _persist_target_failure(
                 delivery_no=claim.delivery_no,
                 error_category=error.code.value,
             )
+            if error.code == ScraperErrorCode.PARSER_SCHEMA_CHANGED:
+                pricing_event(
+                    "prom_parser_schema_changed_total",
+                    pricing_run_id=str(claim.run_id),
+                    scrape_target_id=str(target.id),
+                    source_type=target.source_type,
+                    value=1,
+                )
             return True
     except Exception:
         trace.restore_completed_requests(completed_requests)
@@ -1214,6 +1287,16 @@ async def _refresh_target_attempt_measurement(
 
 
 async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
+    """Atomically materialize evidence and persist a typed accounting failure."""
+
+    try:
+        await _materialize_target_evidence_transaction(scrape_target_id)
+    except EvidenceAccountingError as exc:
+        await _mark_evidence_accounting_error(scrape_target_id, exc)
+        raise
+
+
+async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> None:
     """Fan one immutable target output into item-scoped Metis evidence."""
 
     async with async_session_factory() as session:
@@ -1264,15 +1347,16 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
             session,
             run.workspace_id,
         )
-        offers = output.comparison_payload.get("offers")
-        if not isinstance(offers, list):
-            raise ScraperBoundaryError(
-                ScraperErrorCode.SERIALIZATION,
-                "Stored target offers are not a list",
-                retryable=False,
-            )
+        records = output.candidate_records
         observed_at = target.finished_at or datetime.now(UTC)
         materialized = 0
+        materialized_capture_ids: list[UUID] = []
+        aggregate_accounting = OfferAccounting(
+            retrieved=0,
+            observations_persisted=0,
+            rejected=0,
+            internal_failures=0,
+        )
         for run_item, catalog_item in rows:
             if run_item.status in {
                 "calculated",
@@ -1281,6 +1365,7 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                 "cancelled",
             }:
                 continue
+            item_accounting: OfferAccounting | None = None
             existing_capture = await session.scalar(
                 select(RawMarketCapture).where(
                     RawMarketCapture.pricing_run_item_id == run_item.id,
@@ -1317,41 +1402,282 @@ async def _materialize_target_evidence(scrape_target_id: UUID) -> None:
                 )
                 session.add(capture)
                 await session.flush()
-                await _persist_payload_observations(
+                materialized_capture_ids.append(capture.id)
+                confirmed_crosses = await _load_confirmed_crosses(
+                    session,
+                    run=run,
+                    catalog_item=catalog_item,
+                )
+                accounting = await _persist_payload_observations(
                     session,
                     run=run,
                     run_item=run_item,
                     catalog_item=catalog_item,
                     capture=capture,
-                    offers=offers,
+                    offers=list(records),
                     owned_sellers=owned_sellers,
                     brand_tiers=brand_tiers,
                     brand_confidence=brand_confidence,
                     observed_at=observed_at,
                     source_type=target.source_type,
+                    confirmed_crosses=confirmed_crosses,
+                )
+                _validate_offer_accounting(
+                    accounting,
+                    pricing_run_id=run.id,
+                    pricing_run_item_id=run_item.id,
+                )
+                item_accounting = accounting
+                aggregate_accounting = OfferAccounting(
+                    retrieved=aggregate_accounting.retrieved + accounting.retrieved,
+                    observations_persisted=(
+                        aggregate_accounting.observations_persisted
+                        + accounting.observations_persisted
+                    ),
+                    rejected=aggregate_accounting.rejected + accounting.rejected,
+                    internal_failures=(
+                        aggregate_accounting.internal_failures
+                        + accounting.internal_failures
+                    ),
                 )
                 materialized += 1
-            run_item.status = "classified"
-            run_item.error = None
+            item_failed = bool(
+                item_accounting is not None and item_accounting.internal_failures > 0
+            )
+            run_item.status = "failed" if item_failed else "classified"
+            run_item.error = (
+                "FAILED_INTERNAL_PROCESSING in retained offer batch"
+                if item_failed
+                else None
+            )
+            run_item.finished_at = datetime.now(UTC) if item_failed else None
             run_item.checkpoint = {
-                "stage": "classified",
+                "stage": (
+                    "partial_materialization_failed" if item_failed else "classified"
+                ),
                 "scrape_target_id": str(target.id),
                 "content_sha256": target.content_sha256,
-                "offers": len(offers),
+                "offers": len(records),
+                "offer_accounting": accounting.as_dict()
+                if existing_capture is None
+                else {},
                 "at": datetime.now(UTC).isoformat(),
             }
         target.evidence_status = "INGESTED"
-        target.downstream_eligibility = "UNKNOWN"
-        target.operator_action = "NO_RECOMMENDATION"
+        if aggregate_accounting.internal_failures:
+            target.status = "terminal_failure"
+            target.execution_status = "TERMINAL_FAILED"
+            target.downstream_eligibility = "INELIGIBLE"
+            target.operator_action = "MANUAL_REVIEW_REQUIRED"
+            target.reason_codes = ["OFFER_INTERNAL_FAILURE_PARTIAL"]
+            target.error_category = "OFFER_INTERNAL_FAILURE_PARTIAL"
+            target.error_detail = (
+                f"{aggregate_accounting.internal_failures} candidate(s) failed "
+                "inside enrichment"
+            )
+        else:
+            target.downstream_eligibility = "UNKNOWN"
+            target.operator_action = "NO_RECOMMENDATION"
+        _validate_offer_accounting(
+            aggregate_accounting,
+            pricing_run_id=run.id,
+            pricing_run_item_id=None,
+        )
         await session.commit()
+        if materialized_capture_ids:
+            outcome_rows = list(
+                (
+                    await session.execute(
+                        select(
+                            OfferProcessingOutcome.outcome_code,
+                            func.count(OfferProcessingOutcome.id),
+                        )
+                        .where(
+                            OfferProcessingOutcome.raw_market_capture_id.in_(
+                                materialized_capture_ids
+                            )
+                        )
+                        .group_by(OfferProcessingOutcome.outcome_code)
+                    )
+                ).all()
+            )
+            for outcome_code, count in outcome_rows:
+                pricing_event(
+                    "offer_outcomes_total",
+                    pricing_run_id=str(run.id),
+                    scrape_target_id=str(target.id),
+                    outcome_code=outcome_code,
+                    value=int(count),
+                )
+                if outcome_code == OfferOutcomeCode.OBSERVATION_PERSISTED.value:
+                    pricing_event(
+                        "offer_observation_persisted_total",
+                        pricing_run_id=str(run.id),
+                        value=int(count),
+                    )
+                elif outcome_code == OfferOutcomeCode.FAILED_INTERNAL_PROCESSING.value:
+                    pricing_event(
+                        "offer_internal_failure_total",
+                        pricing_run_id=str(run.id),
+                        reason=outcome_code,
+                        value=int(count),
+                    )
+                else:
+                    pricing_event(
+                        "offer_rejected_total",
+                        pricing_run_id=str(run.id),
+                        reason=outcome_code,
+                        value=int(count),
+                    )
+            observation_rows = list(
+                (
+                    await session.execute(
+                        select(
+                            MarketObservation.oe_verification_status,
+                            MarketObservation.automatic_eligible,
+                            MarketObservation.source_confidence,
+                            MarketObservation.oe_evidence,
+                        ).where(
+                            MarketObservation.raw_capture_id.in_(
+                                materialized_capture_ids
+                            )
+                        )
+                    )
+                ).all()
+            )
+            for (
+                oe_status,
+                automatic_eligible,
+                source_confidence,
+                oe_evidence,
+            ) in observation_rows:
+                pricing_event(
+                    "oe_verification_total",
+                    pricing_run_id=str(run.id),
+                    status=oe_status,
+                    value=1,
+                )
+                status_metric = {
+                    OeVerificationStatus.VERIFIED_EXACT.value: "oe_verified_exact_total",
+                    OeVerificationStatus.VERIFIED_CROSS.value: "oe_verified_cross_total",
+                    OeVerificationStatus.UNKNOWN.value: "oe_unknown_total",
+                    OeVerificationStatus.CONFLICT.value: "oe_conflict_total",
+                    OeVerificationStatus.AMBIGUOUS.value: "oe_ambiguous_total",
+                }.get(oe_status)
+                if status_metric is not None:
+                    pricing_event(
+                        status_metric,
+                        pricing_run_id=str(run.id),
+                        value=1,
+                    )
+                for evidence_item in (
+                    oe_evidence if isinstance(oe_evidence, list) else []
+                ):
+                    if isinstance(evidence_item, Mapping):
+                        pricing_event(
+                            "oe_extraction_total",
+                            pricing_run_id=str(run.id),
+                            source_kind=str(
+                                evidence_item.get("source_kind") or "UNKNOWN"
+                            ),
+                            value=1,
+                        )
+                pricing_event(
+                    (
+                        "automatic_eligible_total"
+                        if automatic_eligible
+                        else "automatic_ineligible_total"
+                    ),
+                    pricing_run_id=str(run.id),
+                    value=1,
+                )
+                pricing_event(
+                    "source_confidence_bucket",
+                    pricing_run_id=str(run.id),
+                    bucket=_source_confidence_bucket(source_confidence),
+                    value=1,
+                )
+        if not records:
+            pricing_event(
+                "prom_empty_search_result_total",
+                pricing_run_id=str(run.id),
+                scrape_target_id=str(target.id),
+                input_kind=target.input_kind,
+                value=1,
+            )
+        pricing_event(
+            "offer_retrieved_total",
+            pricing_run_id=str(run.id),
+            scrape_target_id=str(target.id),
+            value=aggregate_accounting.retrieved,
+        )
         pricing_event(
             "scrape_target_materialized",
             pricing_run_id=str(run.id),
             scrape_target_id=str(target.id),
             dependent_items=len(rows),
             newly_materialized_items=materialized,
-            offers=len(offers),
+            offers=len(records),
+            offer_retrieved_total=aggregate_accounting.retrieved,
+            offer_observation_persisted_total=(
+                aggregate_accounting.observations_persisted
+            ),
+            offer_rejected_total=aggregate_accounting.rejected,
+            offer_internal_failure_total=aggregate_accounting.internal_failures,
         )
+
+
+async def _mark_evidence_accounting_error(
+    scrape_target_id: UUID,
+    error: EvidenceAccountingError,
+) -> None:
+    """Fail closed after the materialization transaction has rolled back."""
+
+    async with async_session_factory() as session:
+        target = await session.scalar(
+            select(ScrapeTarget)
+            .where(ScrapeTarget.id == scrape_target_id)
+            .with_for_update()
+        )
+        if target is None:
+            return
+        now = datetime.now(UTC)
+        target.status = "terminal_failure"
+        target.execution_status = "TERMINAL_FAILED"
+        target.acquisition_status = "SUCCEEDED"
+        target.parse_status = "SUCCEEDED"
+        target.evidence_status = "RAW_AVAILABLE"
+        target.downstream_eligibility = "INELIGIBLE"
+        target.operator_action = "REPLAY_REQUIRED"
+        target.reason_codes = ["EVIDENCE_ACCOUNTING_ERROR"]
+        target.error_category = "EVIDENCE_ACCOUNTING_ERROR"
+        target.error_detail = str(error)[:4000]
+        target.owner_task_id = None
+        target.lease_expires_at = None
+        target.finished_at = now
+        items = list(
+            (
+                await session.scalars(
+                    select(PricingRunItem).where(
+                        PricingRunItem.scrape_target_id == target.id,
+                        PricingRunItem.status.notin_(
+                            ("calculated", "manual_review", "cancelled")
+                        ),
+                    )
+                )
+            ).all()
+        )
+        for item in items:
+            item.status = "failed"
+            item.error = f"EVIDENCE_ACCOUNTING_ERROR: {error}"[:4000]
+            item.finished_at = now
+            item.checkpoint = {
+                "stage": "evidence_accounting_failed",
+                "scrape_target_id": str(target.id),
+                "reason": "EVIDENCE_ACCOUNTING_ERROR",
+                "at": now.isoformat(),
+            }
+        await session.commit()
 
 
 async def _verified_raw_evidence_manifest(
@@ -1403,6 +1729,153 @@ async def _verified_raw_evidence_manifest(
     ]
 
 
+async def _load_confirmed_crosses(
+    session,
+    *,
+    run: PricingRun,
+    catalog_item: CatalogItem,
+) -> tuple[ConfirmedCross, ...]:
+    """Load only explicit, one-hop CONFIRMED cross decisions for this run."""
+
+    rows = list(
+        (
+            await session.scalars(
+                select(CrossLink).where(
+                    CrossLink.workspace_id == run.workspace_id,
+                    CrossLink.pricing_run_id == run.id,
+                    CrossLink.our_oem_norm == catalog_item.oe_norm,
+                    CrossLink.validation_status == "CONFIRMED",
+                )
+            )
+        ).all()
+    )
+    result: list[ConfirmedCross] = []
+    for row in rows:
+        raw_confidence = row.validation_details.get("confidence", "0.90")
+        try:
+            confidence = Decimal(str(raw_confidence))
+        except (InvalidOperation, TypeError, ValueError):
+            confidence = Decimal("0.90")
+        if not confidence.is_finite() or not Decimal("0") <= confidence <= Decimal("1"):
+            confidence = Decimal("0.90")
+        result.append(
+            ConfirmedCross(
+                search_oe_norm=row.our_oem_norm,
+                candidate_oe_norm=row.extracted_oem_norm,
+                canonical_identity_key=canonical_cross_identity_key(
+                    row.our_oem_norm,
+                    row.extracted_oem_norm,
+                ),
+                confidence=confidence,
+                cross_link_id=str(row.id),
+            )
+        )
+    return tuple(result)
+
+
+def _offer_payload_sha256(raw_offer: Any) -> str | None:
+    """Return a deterministic identity for one candidate without hiding bad JSON."""
+
+    try:
+        payload = json.dumps(
+            raw_offer,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _candidate_raw_manifest(
+    capture: RawMarketCapture,
+    *,
+    source_record_id: str,
+) -> dict[str, str]:
+    """Bind a candidate to the verified retained-HTTP manifest for its capture.
+
+    The current parser output does not expose a page number for every product.
+    Therefore the smallest truthful immutable lineage unit is the complete,
+    ordered HTTP manifest stored by ``_materialize_target_evidence``.  Its hash
+    is recomputed here; a missing or inconsistent manifest deliberately yields
+    an empty hash and can never verify OE identity or source provenance.
+    """
+
+    capture_payload = getattr(capture, "payload", None)
+    payload = capture_payload if isinstance(capture_payload, Mapping) else {}
+    raw_evidence = payload.get("raw_evidence")
+    expected_hash = str(payload.get("raw_manifest_sha256") or "").casefold()
+    verified_hash = ""
+    if isinstance(raw_evidence, list) and raw_evidence:
+        actual_hash = canonical_sha256(raw_evidence)
+        entries_valid = all(
+            isinstance(entry, Mapping)
+            and len(str(entry.get("raw_content_sha256") or "")) == 64
+            and set(str(entry.get("raw_content_sha256") or "").casefold()).issubset(
+                set("0123456789abcdef")
+            )
+            for entry in raw_evidence
+        )
+        if entries_valid and actual_hash == expected_hash:
+            verified_hash = actual_hash
+    return {
+        "source_record_id": source_record_id,
+        "raw_capture_id": str(capture.id),
+        "raw_content_sha256": verified_hash,
+    }
+
+
+def _offer_outcome(
+    *,
+    run_item: PricingRunItem,
+    capture: RawMarketCapture,
+    raw_offer_index: int,
+    outcome_code: OfferOutcomeCode,
+    stage: str,
+    reason_codes: tuple[str, ...],
+    payload_sha256: str | None,
+    safe_sample: dict[str, Any],
+    market_observation_id: UUID | None = None,
+    source_listing_id: str | None = None,
+) -> OfferProcessingOutcome:
+    return OfferProcessingOutcome(
+        pricing_run_item_id=run_item.id,
+        raw_market_capture_id=capture.id,
+        market_observation_id=market_observation_id,
+        source_listing_id=source_listing_id,
+        raw_offer_index=raw_offer_index,
+        outcome_code=outcome_code.value,
+        stage=stage,
+        reason_codes=list(reason_codes),
+        payload_sha256=payload_sha256,
+        safe_sample=safe_sample,
+    )
+
+
+def _validate_offer_accounting(
+    accounting: OfferAccounting,
+    *,
+    pricing_run_id: UUID,
+    pricing_run_item_id: UUID | None,
+) -> None:
+    try:
+        accounting.validate()
+    except ValueError:
+        pricing_event(
+            "evidence_accounting_error_total",
+            pricing_run_id=str(pricing_run_id),
+            pricing_run_item_id=(
+                str(pricing_run_item_id)
+                if pricing_run_item_id is not None
+                else "aggregate"
+            ),
+            value=1,
+        )
+        raise
+
+
 async def _persist_payload_observations(
     session,
     *,
@@ -1416,114 +1889,349 @@ async def _persist_payload_observations(
     brand_confidence: dict[str, Decimal],
     observed_at: datetime,
     source_type: str,
-) -> None:
-    for raw_offer in offers:
-        if not isinstance(raw_offer, Mapping):
-            continue
-        try:
-            price = Decimal(str(raw_offer.get("price"))).quantize(Decimal("0.01"))
-            match_confidence = Decimal(str(raw_offer.get("match_score"))).quantize(
-                Decimal("0.0001")
-            )
-        except Exception:
-            continue
-        if price <= 0 or not Decimal("0") <= match_confidence <= Decimal("1"):
-            continue
-        seller_id = str(raw_offer.get("seller_id") or "").strip()[:255]
-        title = str(raw_offer.get("name") or "")
-        brand = _optional_string(raw_offer.get("brand"))
-        classification = classify_tier(
-            brand=brand,
-            title=title,
-            description=None,
-            brand_tiers=brand_tiers,
+    confirmed_crosses: tuple[ConfirmedCross, ...] = (),
+) -> OfferAccounting:
+    policy = (
+        policy_from_dict(run.policy_config) if hasattr(run, "policy_config") else None
+    )
+    persisted = 0
+    rejected = 0
+    failed = 0
+    persisted_listing_ids: set[str] = set()
+    for raw_offer_index, raw_offer in enumerate(offers):
+        payload_sha256 = _offer_payload_sha256(raw_offer)
+        processed = process_offer_candidate(
+            raw_offer,
+            fallback_index=raw_offer_index,
         )
-        normalized_brand = normalize_brand(brand)
-        if (
-            normalized_brand in brand_confidence
-            and "EXACT_BRAND_RULE" in classification.reasons
-        ):
-            classification = TierClassification(
-                tier=classification.tier,
-                confidence=brand_confidence[normalized_brand],
-                is_used=classification.is_used,
-                is_kemp=classification.is_kemp,
-                exclusion_reason=classification.exclusion_reason,
-                reasons=classification.reasons + ("WORKSPACE_BRAND_CONFIDENCE",),
-                method_version=classification.method_version,
+        if isinstance(processed, RejectedOffer):
+            session.add(
+                _offer_outcome(
+                    run_item=run_item,
+                    capture=capture,
+                    raw_offer_index=processed.raw_offer_index,
+                    outcome_code=processed.outcome_code,
+                    stage="validation",
+                    reason_codes=processed.reason_codes,
+                    payload_sha256=payload_sha256,
+                    safe_sample=dict(processed.safe_sample),
+                )
             )
-        source_listing_id = _payload_source_listing_id(raw_offer, price)
-        currency_raw = _optional_string(raw_offer.get("currency"))
+            rejected += 1
+            continue
+
+        candidate = processed
+        if candidate.source_listing_id in persisted_listing_ids:
+            session.add(
+                _offer_outcome(
+                    run_item=run_item,
+                    capture=capture,
+                    raw_offer_index=candidate.raw_offer_index,
+                    outcome_code=OfferOutcomeCode.REJECTED_SCHEMA_MISMATCH,
+                    stage="validation",
+                    reason_codes=("DUPLICATE_SOURCE_LISTING_ID",),
+                    payload_sha256=payload_sha256,
+                    safe_sample=safe_offer_sample(
+                        raw_offer,
+                        raw_offer_index=candidate.raw_offer_index,
+                    ),
+                    source_listing_id=candidate.source_listing_id,
+                )
+            )
+            rejected += 1
+            continue
+        product = candidate.product
         try:
             upstream_evidence = comparison_evidence_from_dict(
-                raw_offer.get("comparison_evidence")
-                if isinstance(raw_offer.get("comparison_evidence"), Mapping)
+                candidate.upstream_comparison_evidence
+            )
+        except (TypeError, ValueError):
+            session.add(
+                _offer_outcome(
+                    run_item=run_item,
+                    capture=capture,
+                    raw_offer_index=candidate.raw_offer_index,
+                    outcome_code=OfferOutcomeCode.REJECTED_SCHEMA_MISMATCH,
+                    stage="validation",
+                    reason_codes=("COMPARISON_EVIDENCE_SCHEMA_INVALID",),
+                    payload_sha256=payload_sha256,
+                    safe_sample=safe_offer_sample(
+                        raw_offer,
+                        raw_offer_index=candidate.raw_offer_index,
+                    ),
+                )
+            )
+            rejected += 1
+            continue
+
+        try:
+            seller_id = str(product.get("seller_id") or "").strip()[:255]
+            title = str(product.get("name") or product.get("title") or "")
+            brand = _optional_string(product.get("brand"))
+            source_listing_id = candidate.source_listing_id
+            description = _optional_string(product.get("description"))
+            condition_raw = _optional_string(
+                product.get("condition") or product.get("condition_raw")
+            )
+            condition_assessment = classify_condition(
+                title=title,
+                description=description,
+                explicit_condition=condition_raw,
+            )
+            classification = classify_tier(
+                brand=brand,
+                title=title,
+                description=description,
+                condition=condition_raw,
+                brand_tiers=brand_tiers,
+            )
+            normalized_brand = normalize_brand(brand)
+            if (
+                normalized_brand in brand_confidence
+                and "EXACT_BRAND_RULE" in classification.reasons
+            ):
+                classification = TierClassification(
+                    tier=classification.tier,
+                    confidence=brand_confidence[normalized_brand],
+                    is_used=classification.is_used,
+                    is_kemp=classification.is_kemp,
+                    exclusion_reason=classification.exclusion_reason,
+                    reasons=classification.reasons + ("WORKSPACE_BRAND_CONFIDENCE",),
+                    method_version=classification.method_version,
+                )
+            currency_raw = _optional_string(product.get("currency"))
+            currency = _currency_code(currency_raw)
+            raw_manifest = _candidate_raw_manifest(
+                capture,
+                source_record_id=source_listing_id,
+            )
+            evidence_source = dict(product)
+            if candidate.upstream_comparison_evidence is not None:
+                evidence_source["comparison_evidence"] = dict(
+                    candidate.upstream_comparison_evidence
+                )
+            oe_items = extract_oe_evidence(evidence_source, raw_manifest)
+            verification = verify_offer_identity(
+                catalog_item.oe_norm,
+                oe_items,
+                confirmed_crosses,
+                legacy_without_reenrichment=bool(
+                    isinstance(raw_offer, Mapping)
+                    and raw_offer.get("legacy_unverified")
+                ),
+            )
+            parser_contract_verified = bool(
+                str(run.parser_version).strip() == PROM_ADAPTER_VERSION
+                and str(getattr(capture, "parser_version", "")).strip()
+                == PROM_ADAPTER_VERSION
+            )
+            source_assessment = assess_candidate_source(
+                candidate,
+                raw_capture_verified=bool(raw_manifest["raw_content_sha256"]),
+                parser_contract_verified=parser_contract_verified,
+            )
+            comparison_evidence = bind_persisted_provenance(
+                upstream_evidence,
+                stable_seller_id=seller_id or None,
+                source_type=source_type,
+                source_record_id=source_listing_id,
+                raw_evidence_sha256=str(raw_manifest["raw_content_sha256"]),
+                parser_contract_version=(
+                    run.parser_version if parser_contract_verified else ""
+                ),
+                currency_raw=currency_raw,
+                currency_normalized=currency,
+                required_currency="UAH",
+                category=catalog_item.category,
+                condition_state=condition_assessment.state.value,
+            )
+            comparison_evidence = replace(
+                comparison_evidence,
+                retrieval_kind=candidate.retrieval_kind,
+            )
+            comparison_evidence = bind_oe_verification(
+                comparison_evidence,
+                verification,
+                seller_id=seller_id or None,
+                currency_raw=currency_raw,
+                currency_normalized=currency,
+                required_currency="UAH",
+                category=catalog_item.category,
+            )
+            url, url_absence_reason = _validated_listing_url(product.get("url"))
+            is_owned = seller_id in owned_sellers
+            cohort_role = _initial_cohort_role(classification, is_owned=is_owned)
+            cross_candidates = [
+                asdict(cross_candidate)
+                for cross_candidate in extract_description_cross_candidates(
+                    description,
+                    source_observation_id=source_listing_id,
+                )
+            ]
+            seller_verified = bool(
+                seller_id and comparison_evidence.seller_identity.verified
+            )
+            provenance_verified = bool(
+                raw_manifest["raw_content_sha256"]
+                and comparison_evidence.provenance.verified
+                and parser_contract_verified
+            )
+            source_threshold = (
+                policy.source_confidence_min if policy is not None else Decimal("0.50")
+            )
+            automatic_eligible = bool(
+                verification.verified
+                and comparison_evidence.hard_gate_result == HardGateResult.PASS
+                and seller_verified
+                and provenance_verified
+                and currency_raw
+                and currency == "UAH"
+                and source_assessment.value >= source_threshold
+            )
+            selected_cross = next(
+                (
+                    cross
+                    for cross in confirmed_crosses
+                    if verification.status == OeVerificationStatus.VERIFIED_CROSS
+                    and cross.candidate_oe_norm == verification.verified_matched_oe_norm
+                ),
+                None,
+            )
+            cross_link_id = (
+                UUID(selected_cross.cross_link_id)
+                if selected_cross is not None and selected_cross.cross_link_id
                 else None
             )
-        except ValueError:
-            upstream_evidence = None
-        comparison_evidence = bind_persisted_provenance(
-            upstream_evidence,
-            stable_seller_id=seller_id or None,
-            source_type=source_type,
-            source_record_id=source_listing_id,
-            raw_evidence_sha256=capture.content_sha256,
-            parser_contract_version=run.parser_version,
-            currency_raw=currency_raw,
-            currency_normalized=_currency_code(currency_raw),
-            required_currency="UAH",
-        )
-        observation = MarketObservation(
-            pricing_run_item_id=run_item.id,
-            catalog_item_id=catalog_item.id,
-            raw_capture_id=capture.id,
-            source=source_type,
-            source_listing_id=source_listing_id,
-            seller_id=seller_id,
-            seller_name=str(raw_offer.get("seller_name") or "Unknown seller")[:255],
-            url=str(raw_offer.get("url") or ""),
-            title=title,
-            description=None,
-            brand_raw=brand,
-            matched_oe_norm=catalog_item.oe_norm,
-            price=price,
-            currency=_currency_code(currency_raw),
-            currency_raw=currency_raw,
-            currency_inferred=False,
-            is_available=_availability(
-                _optional_bool(raw_offer.get("is_available")),
-                _optional_string(raw_offer.get("presence")),
-            ),
-            match_confidence=match_confidence,
-            source_confidence=Decimal("1"),
-            parser_version=run.parser_version,
-            evidence_contract_version="comparison-evidence-v1",
-            comparability_policy_id=comparison_evidence.policy_id,
-            comparability_policy_hash=comparison_evidence.policy_hash,
-            comparison_evidence=comparison_evidence_to_dict(comparison_evidence),
-            seller_identity_verified=(comparison_evidence.seller_identity.verified),
-            source_provenance_verified=comparison_evidence.provenance.verified,
-            automatic_eligible=(
-                comparison_evidence.hard_gate_result == HardGateResult.PASS
-            ),
-            observed_at=observed_at,
-        )
-        session.add(observation)
-        await session.flush()
-        session.add(
-            ObservationTierClassification(
+            observation = MarketObservation(
+                pricing_run_item_id=run_item.id,
+                catalog_item_id=catalog_item.id,
+                raw_capture_id=capture.id,
+                source=source_type,
+                source_listing_id=source_listing_id,
+                seller_id=seller_id,
+                seller_name=str(product.get("seller_name") or "Unknown seller")[:255],
+                url=url,
+                url_absence_reason=url_absence_reason,
+                title=title,
+                description=description,
+                description_available=description is not None,
+                condition_raw=condition_raw,
+                condition_state=condition_assessment.state.value,
+                condition_reason_codes=list(condition_assessment.reason_codes),
+                cross_candidates=cross_candidates,
+                brand_raw=brand,
+                matched_oe_norm=verification.verified_matched_oe_norm,
+                search_oe_norm=catalog_item.oe_norm,
+                extracted_oe_norms=list(verification.extracted_oe_norms),
+                verified_matched_oe_norm=verification.verified_matched_oe_norm,
+                comparison_identity_key=verification.comparison_identity_key,
+                oe_verification_status=verification.status.value,
+                oe_evidence=evidence_items_to_dicts(oe_items),
+                oe_extractor_version=OE_EXTRACTOR_VERSION,
+                oe_reenriched_at=None,
+                oe_reenrichment_error_code=None,
+                canonical_category_id=category_comparability_rule(
+                    catalog_item.category
+                ).policy_key,
+                price=candidate.price,
+                currency=currency,
+                currency_raw=currency_raw,
+                currency_inferred=False,
+                is_available=_availability(
+                    _optional_bool(product.get("is_available")),
+                    _optional_string(product.get("presence")),
+                ),
+                match_confidence=verification.confidence,
+                source_confidence=source_assessment.value,
+                source_confidence_factors=dict(source_assessment.factors),
+                source_confidence_method_version=source_assessment.method_version,
+                parser_version=run.parser_version,
+                evidence_contract_version="comparison-evidence-v2",
+                comparability_policy_id=comparison_evidence.policy_id,
+                comparability_policy_hash=comparison_evidence.policy_hash,
+                comparison_evidence=comparison_evidence_to_dict(comparison_evidence),
+                comparability_hard_gate_result=(
+                    comparison_evidence.hard_gate_result.value
+                ),
+                calibration_exclusion_codes=[],
+                seller_identity_verified=seller_verified,
+                source_provenance_verified=provenance_verified,
+                automatic_eligible=automatic_eligible,
+                via_cross=(verification.status == OeVerificationStatus.VERIFIED_CROSS),
+                cross_link_id=cross_link_id,
+                observed_at=observed_at,
+            )
+            tier_record = ObservationTierClassification(
                 market_observation_id=observation.id,
                 tier=classification.tier.value,
                 tier_confidence=classification.confidence,
                 is_used=classification.is_used,
                 is_kemp=classification.is_kemp,
-                is_owned=seller_id in owned_sellers,
+                is_owned=is_owned,
                 is_dumping=False,
+                cohort_role=cohort_role.value,
                 exclusion_reason=classification.exclusion_reason,
                 reason_codes=list(classification.reasons),
                 method_version=classification.method_version,
             )
+        except Exception as exc:
+            session.add(
+                _offer_outcome(
+                    run_item=run_item,
+                    capture=capture,
+                    raw_offer_index=candidate.raw_offer_index,
+                    outcome_code=OfferOutcomeCode.FAILED_INTERNAL_PROCESSING,
+                    stage="internal",
+                    reason_codes=(f"INTERNAL_{type(exc).__name__.upper()}",),
+                    payload_sha256=payload_sha256,
+                    safe_sample=safe_offer_sample(
+                        raw_offer,
+                        raw_offer_index=candidate.raw_offer_index,
+                    ),
+                )
+            )
+            failed += 1
+            continue
+
+        session.add(observation)
+        await session.flush()
+        tier_record.market_observation_id = observation.id
+        session.add(tier_record)
+        session.add(
+            _offer_outcome(
+                run_item=run_item,
+                capture=capture,
+                raw_offer_index=candidate.raw_offer_index,
+                outcome_code=OfferOutcomeCode.OBSERVATION_PERSISTED,
+                stage="persistence",
+                reason_codes=(
+                    verification.status.value,
+                    *source_assessment.reason_codes,
+                ),
+                payload_sha256=payload_sha256,
+                safe_sample=safe_offer_sample(
+                    raw_offer,
+                    raw_offer_index=candidate.raw_offer_index,
+                ),
+                market_observation_id=observation.id,
+                source_listing_id=source_listing_id,
+            )
         )
+        persisted_listing_ids.add(source_listing_id)
+        persisted += 1
+
+    accounting = OfferAccounting(
+        retrieved=len(offers),
+        observations_persisted=persisted,
+        rejected=rejected,
+        internal_failures=failed,
+    )
+    _validate_offer_accounting(
+        accounting,
+        pricing_run_id=run.id,
+        pricing_run_item_id=run_item.id,
+    )
+    return accounting
 
 
 async def _mark_target_group_classified(
@@ -1645,35 +2353,41 @@ async def _persist_comparison(
     run_id: UUID,
     run_item_id: UUID,
     catalog_item_id: UUID,
+    product_url: str,
     comparison: PriceComparison,
 ) -> None:
-    payload = comparison.as_dict()
-    canonical = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
-    content_hash = hashlib.sha256(canonical.encode()).hexdigest()
     observed_at = datetime.now(UTC)
     async with async_session_factory() as session:
-        existing = await session.scalar(
-            select(RawMarketCapture).where(
-                RawMarketCapture.pricing_run_item_id == run_item_id,
-                RawMarketCapture.content_sha256 == content_hash,
-            )
-        )
-        if existing is not None:
-            return
         run = await session.get(PricingRun, run_id)
         item = await session.get(CatalogItem, catalog_item_id)
         run_item = await session.get(PricingRunItem, run_item_id)
         if run is None or item is None or run_item is None:
             raise PricingItemNotFoundError("Pricing run dependencies disappeared")
+        scrape_input = ScrapeInput.build(
+            product_url,
+            comparison.query,
+            adapter_version=run.parser_version,
+        )
+        output = ScrapeOutput.from_comparison(scrape_input, comparison)
+        existing = await session.scalar(
+            select(RawMarketCapture).where(
+                RawMarketCapture.pricing_run_item_id == run_item_id,
+                RawMarketCapture.content_sha256 == output.content_sha256,
+            )
+        )
+        if existing is not None:
+            return
         capture = RawMarketCapture(
             pricing_run_item_id=run_item_id,
             source="prom",
             capture_kind="parser_output",
-            payload=payload,
-            content_sha256=content_hash,
+            payload=output.payload,
+            content_sha256=output.content_sha256,
             parser_version=run.parser_version,
+            raw_size_bytes=0,
+            structured_size_bytes=output.structured_size_bytes,
+            metadata_size_bytes=output.metadata_size_bytes,
+            structured_completeness=Decimal(str(output.structured_completeness)),
             captured_at=observed_at,
         )
         session.add(capture)
@@ -1695,104 +2409,40 @@ async def _persist_comparison(
         brand_tiers, brand_confidence = await _load_brand_rules(
             session, run.workspace_id
         )
-        for offer in comparison.offers:
-            product = offer.product
-            if offer.price <= 0:
-                continue
-            source_listing_id = _source_listing_id(product.id, product.url, offer.price)
-            seller_id = (
-                str(product.seller_id).strip()[:255]
-                if product.seller_id is not None
-                else ""
+        records = [
+            (
+                {**record, "legacy_unverified": True}
+                if isinstance(record, Mapping)
+                else record
             )
-            classification = classify_tier(
-                brand=product.brand,
-                title=product.name or "",
-                description=None,
-                brand_tiers=brand_tiers,
-            )
-            normalized_brand = normalize_brand(product.brand)
-            if (
-                normalized_brand in brand_confidence
-                and "EXACT_BRAND_RULE" in classification.reasons
-            ):
-                classification = TierClassification(
-                    tier=classification.tier,
-                    confidence=brand_confidence[normalized_brand],
-                    is_used=classification.is_used,
-                    is_kemp=classification.is_kemp,
-                    exclusion_reason=classification.exclusion_reason,
-                    reasons=classification.reasons + ("WORKSPACE_BRAND_CONFIDENCE",),
-                    method_version=classification.method_version,
-                )
-            comparison_evidence = bind_persisted_provenance(
-                offer.comparison_evidence,
-                stable_seller_id=seller_id or None,
-                source_type="prom",
-                source_record_id=source_listing_id,
-                raw_evidence_sha256=capture.content_sha256,
-                parser_contract_version=run.parser_version,
-                currency_raw=product.currency,
-                currency_normalized=_currency_code(product.currency),
-                required_currency="UAH",
-            )
-            observation = MarketObservation(
-                pricing_run_item_id=run_item_id,
-                catalog_item_id=catalog_item_id,
-                raw_capture_id=capture.id,
-                source="prom",
-                source_listing_id=source_listing_id,
-                seller_id=seller_id,
-                seller_name=(product.seller_name or "Unknown seller")[:255],
-                url=product.url or "",
-                title=product.name or "",
-                description=None,
-                brand_raw=product.brand,
-                matched_oe_norm=item.oe_norm,
-                price=Decimal(str(offer.price)).quantize(Decimal("0.01")),
-                currency=_currency_code(product.currency),
-                currency_raw=product.currency,
-                currency_inferred=False,
-                is_available=_availability(product.is_available, product.presence),
-                match_confidence=Decimal(str(offer.match.score)),
-                source_confidence=Decimal("1"),
-                parser_version=run.parser_version,
-                evidence_contract_version="comparison-evidence-v1",
-                comparability_policy_id=comparison_evidence.policy_id,
-                comparability_policy_hash=comparison_evidence.policy_hash,
-                comparison_evidence=comparison_evidence_to_dict(comparison_evidence),
-                seller_identity_verified=(comparison_evidence.seller_identity.verified),
-                source_provenance_verified=comparison_evidence.provenance.verified,
-                automatic_eligible=(
-                    comparison_evidence.hard_gate_result == HardGateResult.PASS
-                ),
-                observed_at=observed_at,
-            )
-            session.add(observation)
-            await session.flush()
-            is_owned = seller_id in owned_sellers
-            session.add(
-                ObservationTierClassification(
-                    market_observation_id=observation.id,
-                    tier=classification.tier.value,
-                    tier_confidence=classification.confidence,
-                    is_used=classification.is_used,
-                    is_kemp=classification.is_kemp,
-                    is_owned=is_owned,
-                    # Dumping is determined against independent reference/normalized
-                    # market cohorts later.  The customer's current price must not
-                    # label an otherwise valid KEMP observation as dumping.
-                    is_dumping=False,
-                    exclusion_reason=classification.exclusion_reason,
-                    reason_codes=list(classification.reasons),
-                    method_version=classification.method_version,
-                )
-            )
+            for record in output.candidate_records
+        ]
+        accounting = await _persist_payload_observations(
+            session,
+            run=run,
+            run_item=run_item,
+            catalog_item=item,
+            capture=capture,
+            offers=records,
+            owned_sellers=owned_sellers,
+            brand_tiers=brand_tiers,
+            brand_confidence=brand_confidence,
+            observed_at=observed_at,
+            source_type="prom_legacy_untraced",
+            confirmed_crosses=(),
+        )
+        _validate_offer_accounting(
+            accounting,
+            pricing_run_id=run.id,
+            pricing_run_item_id=run_item.id,
+        )
         run_item.status = "classified"
         run_item.checkpoint = {
             "stage": "classified",
             "capture_id": str(capture.id),
-            "offers": len(comparison.offers),
+            "offers": len(records),
+            "offer_accounting": accounting.as_dict(),
+            "legacy_unverified": True,
             "at": observed_at.isoformat(),
         }
         await session.commit()
@@ -1801,8 +2451,9 @@ async def _persist_comparison(
 async def _load_brand_rules(
     session, workspace_id: UUID
 ) -> tuple[dict[str, ProductTier], dict[str, Decimal]]:
-    tiers = dict(DEFAULT_BRAND_TIERS)
-    confidence: dict[str, Decimal] = {}
+    configured = load_approved_brand_rules(get_settings().pricing_brand_tiers_path)
+    tiers = dict(configured.tiers)
+    confidence = dict(configured.confidence)
     records = list(
         (
             await session.scalars(
@@ -2045,6 +2696,17 @@ async def mark_run_calculating(run_id: UUID, *, task_id: str | None) -> None:
 async def _derive_calibration_pairs(
     session, run_id: UUID, policy
 ) -> list[CalibrationPair]:
+    # Market observations are append-only. The database trigger permits this
+    # transaction to update only the derived exclusion-code trace.
+    await session.execute(
+        select(
+            func.set_config(
+                "marko.calibration_evaluation",
+                CALIBRATION_ELIGIBILITY_VERSION,
+                True,
+            )
+        )
+    )
     rows = list(
         (
             await session.execute(
@@ -2082,31 +2744,48 @@ async def _derive_calibration_pairs(
         tuple[str, str],
         list[tuple[CatalogItem, MarketObservation, ObservationTierClassification]],
     ] = {}
+    exclusion_counts: dict[str, int] = {}
+    exact_groups: set[tuple[str, str]] = set()
+    confirmed_cross_groups: set[tuple[str, str]] = set()
+    eligible_count = 0
     for item, observation, classification in latest.values():
-        age_hours = Decimal(
-            str(max(0.0, (now - observation.observed_at).total_seconds()) / 3600)
+        decision = evaluate_calibration_eligibility(
+            item,
+            observation,
+            classification,
+            policy,
+            now,
         )
-        tier = ProductTier(classification.tier)
-        if (
-            observation.price <= 0
-            or observation.currency.upper() != policy.currency
-            or observation.is_available is not True
-            or age_hours > policy.max_age_hours
-            or observation.match_confidence < policy.match_confidence_min
-            or classification.tier_confidence < policy.tier_confidence_min
-            or observation.source_confidence < policy.source_confidence_min
-            or classification.is_used
-            or classification.is_owned
-            or tier == ProductTier.UNKNOWN
-            or classification.exclusion_reason == "TIER_CONFLICT"
-        ):
+        observation.calibration_exclusion_codes = list(decision.exclusion_codes)
+        if not decision.eligible:
+            for reason in decision.exclusion_codes:
+                exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+                pricing_event(
+                    "calibration_observation_excluded_total",
+                    pricing_run_id=str(run_id),
+                    reason=reason,
+                    value=1,
+                )
             continue
-        grouped.setdefault((item.category, item.oe_norm.strip().upper()), []).append(
-            (item, observation, classification)
+        eligible_count += 1
+        group_key = (
+            (observation.canonical_category_id or "").strip(),
+            (observation.comparison_identity_key or "").strip(),
         )
+        grouped.setdefault(group_key, []).append((item, observation, classification))
+        if (
+            observation.oe_verification_status
+            == OeVerificationStatus.VERIFIED_EXACT.value
+        ):
+            exact_groups.add(group_key)
+        elif (
+            observation.oe_verification_status
+            == OeVerificationStatus.VERIFIED_CROSS.value
+        ):
+            confirmed_cross_groups.add(group_key)
 
     result: list[CalibrationPair] = []
-    for (category, oe_norm), observations in grouped.items():
+    for (category, identity_key), observations in grouped.items():
         representatives: dict[
             tuple[ProductTier, str],
             tuple[CatalogItem, MarketObservation, ObservationTierClassification],
@@ -2128,8 +2807,7 @@ async def _derive_calibration_pairs(
         reference_rows = [
             row
             for row in deduplicated
-            if ProductTier(row[2].tier) in {ProductTier.KEMP, ProductTier.BUDGET}
-            and not row[2].is_dumping
+            if ProductTier(row[2].tier) == ProductTier.KEMP and not row[2].is_dumping
         ]
         direct_kemp_rows = [
             row
@@ -2177,7 +2855,7 @@ async def _derive_calibration_pairs(
             )
             result.append(
                 CalibrationPair(
-                    oe_norm=oe_norm,
+                    oe_norm=identity_key,
                     category=category,
                     tier=tier,
                     tier_price=tier_price,
@@ -2189,8 +2867,57 @@ async def _derive_calibration_pairs(
                     reference_observation_ids=tuple(
                         sorted(str(row[1].id) for row in reference_rows)
                     ),
+                    identity_evidence=tuple(
+                        sorted(
+                            (
+                                *(
+                                    calibration_identity_record(
+                                        row[1], row[2], role="tier"
+                                    )
+                                    for row in tier_rows
+                                ),
+                                *(
+                                    calibration_identity_record(
+                                        row[1], row[2], role="reference"
+                                    )
+                                    for row in reference_rows
+                                ),
+                            ),
+                            key=lambda value: (
+                                value["observation_id"],
+                                value["role"],
+                            ),
+                        )
+                    ),
                 )
             )
+    dataset_hash = calibration_dataset_hash(result)
+    run = await session.get(PricingRun, run_id)
+    if run is None:
+        raise PricingItemNotFoundError(str(run_id))
+    considered = len(latest)
+    excluded = considered - eligible_count
+    if considered != eligible_count + excluded:
+        raise RuntimeError("CALIBRATION_ACCOUNTING_ERROR")
+    run.calibration_accounting = {
+        "observations_considered": considered,
+        "eligible_observations": eligible_count,
+        "excluded_observations": excluded,
+        "exclusion_counts_by_reason": dict(sorted(exclusion_counts.items())),
+        "exact_oe_groups": len(exact_groups),
+        "confirmed_cross_groups": len(confirmed_cross_groups),
+        "category_tier_pairs": len(result),
+        "dataset_hash": dataset_hash,
+    }
+    pricing_event(
+        "calibration_accounting",
+        pricing_run_id=str(run_id),
+        observations_considered=considered,
+        eligible_observations=eligible_count,
+        excluded_observations=excluded,
+        category_tier_pairs=len(result),
+        dataset_hash=dataset_hash,
+    )
     return result
 
 
@@ -2327,10 +3054,16 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             _domain_offer(observation, classification, now)
             for observation, classification in latest.values()
         ]
+        settings = get_settings()
         override = await get_latest_override(session, catalog_item.id)
         context = build_pricing_context(catalog_item, override)
+        configured_cost = await get_decrypted_catalog_cost(
+            session,
+            workspace_id=run.workspace_id,
+            catalog_item_id=catalog_item.id,
+            settings=settings,
+        )
         policy = policy_from_dict(run.policy_config)
-        settings = get_settings()
         require_activated_run_policy(
             policy,
             robust_v3_enabled=settings.pricing_v3_robust_dispersion_enabled,
@@ -2359,6 +3092,8 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 result,
                 action=RecommendationAction.MANUAL_REVIEW,
                 recommended_price=None,
+                absolute_recommended_change=None,
+                percentage_recommended_change=None,
                 action_gates_passed=False,
                 automatic_eligible=False,
                 confidence_grade="MANUAL",
@@ -2372,6 +3107,11 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     )
                 ),
             )
+        recommended_price_below_cost = (
+            result.recommended_price < configured_cost
+            if result.recommended_price is not None and configured_cost is not None
+            else None
+        )
         applied_versions = sorted(
             {
                 coefficient.coefficient_version or coefficient.method_version
@@ -2385,7 +3125,9 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "currency": context.currency,
             "current_price": str(context.current_price),
             "stock_status": context.stock_status.value,
-            "cost": str(context.cost) if context.cost is not None else None,
+            "cost_privacy_mode": settings.cost_privacy_mode,
+            "cost_configured": configured_cost is not None,
+            "recommended_price_below_cost": recommended_price_below_cost,
             "stock_qty": str(context.stock_qty)
             if context.stock_qty is not None
             else None,
@@ -2419,24 +3161,12 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "liquidity_target": str(context.liquidity_target),
             "urgency": str(context.urgency),
             "manual_priority": str(context.manual_priority),
-            "allow_below_cost": context.allow_below_cost,
-            "below_cost_floor": str(context.below_cost_floor)
-            if context.below_cost_floor is not None
-            else None,
-            "below_cost_authorization_id": context.below_cost_authorization_id,
-            "below_cost_authorized_by": context.below_cost_authorized_by,
-            "below_cost_authorized_at": (
-                context.below_cost_authorized_at.isoformat()
-                if context.below_cost_authorized_at
-                else None
-            ),
-            "below_cost_reason": context.below_cost_reason,
-            "below_cost_warning_confirmed": context.below_cost_warning_confirmed,
-            "comparability_contract_version": "comparison-evidence-v1",
+            "comparability_contract_version": "comparison-evidence-v2",
         }
         robust_diagnostic = cluster_diagnostic_to_dict(result.cluster_diagnostic)
         calculation_trace = {
-            "replay_contract_version": "recommendation-replay-v3",
+            "replay_contract_version": "recommendation-replay-v5",
+            "decision_fingerprint_version": DECISION_FINGERPRINT_VERSION,
             "calculated_at": now.isoformat(),
             "catalog_snapshot_id": str(run.import_batch_id),
             "pricing_run_id": str(run.id),
@@ -2455,7 +3185,7 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "robust_diagnostic": robust_diagnostic,
             "robust_policy_fingerprint": dict(result.robust_policy_fingerprint),
             "comparability": {
-                "contract_version": "comparison-evidence-v1",
+                "contract_version": "comparison-evidence-v2",
                 "policy_id": result.comparability_policy_id,
                 "policy_hash": result.comparability_policy_hash,
                 "automatic_eligible": result.automatic_eligible,
@@ -2480,6 +3210,10 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             else None,
             "market_counts": {
                 "raw": result.raw_competitor_count,
+                "target_market": result.target_market_count,
+                "kemp_reference": result.kemp_reference_count,
+                "owned_store": result.owned_store_count,
+                "rejected": result.rejected_count,
                 "unique_sellers": result.unique_seller_count,
                 "clean": result.clean_competitor_count,
                 "effective": str(result.effective_competitor_count),
@@ -2514,8 +3248,23 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     "age_hours": str(offer.age_hours),
                     "source": offer.source,
                     "listing_url": offer.listing_url,
+                    "cohort_role": offer.cohort_role.value,
                 }
                 for offer in result.evidence
+            ],
+            "kemp_reference_offers": [
+                {
+                    "observation_id": offer.observation_id,
+                    "seller_id": offer.seller_id,
+                    "seller_name": offer.seller_name,
+                    "tier": offer.tier.value,
+                    "raw_price": str(offer.raw_price),
+                    "normalized_price": str(offer.normalized_price),
+                    "listing_url": offer.listing_url,
+                    "cohort_role": offer.cohort_role.value,
+                    "target_effect": "NOT_IN_TARGET_MEDIAN",
+                }
+                for offer in result.kemp_reference_evidence
             ],
             "tier_coefficients": [
                 {
@@ -2553,6 +3302,7 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     "tier": excluded.tier.value if excluded.tier else None,
                     "reason": excluded.reason,
                     "stage": excluded.stage,
+                    "cohort_role": excluded.cohort_role.value,
                 }
                 for excluded in result.excluded
             ],
@@ -2612,6 +3362,10 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             raw_competitor_count=result.raw_competitor_count,
             unique_seller_count=result.unique_seller_count,
             clean_competitor_count=result.clean_competitor_count,
+            target_market_count=result.target_market_count,
+            kemp_reference_count=result.kemp_reference_count,
+            owned_store_count=result.owned_store_count,
+            rejected_count=result.rejected_count,
             effective_competitor_count=result.effective_competitor_count,
             dispersion=result.dispersion,
             outlier_method=result.outlier_method,
@@ -2634,15 +3388,21 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             priority_score=result.priority_score,
             priority_score_type=result.priority_score_type.value,
             review_priority=result.review_priority,
+            absolute_recommended_change=result.absolute_recommended_change,
+            percentage_recommended_change=result.percentage_recommended_change,
             reason_codes=list(result.reasons),
             evidence_observation_ids=[
                 offer.observation_id for offer in result.evidence
+            ],
+            kemp_reference_observation_ids=[
+                offer.observation_id for offer in result.kemp_reference_evidence
             ],
             excluded_observations=[
                 {
                     "observation_id": excluded.observation_id,
                     "reason": excluded.reason,
                     "stage": excluded.stage,
+                    "cohort_role": excluded.cohort_role.value,
                 }
                 for excluded in result.excluded
             ],
@@ -2742,6 +3502,17 @@ def _domain_offer(
     now: datetime,
 ) -> CompetitorOffer:
     age_seconds = max(0.0, (now - observation.observed_at).total_seconds())
+    condition_assessment = classify_condition(
+        title=observation.title,
+        description=observation.description,
+        explicit_condition=observation.condition_raw,
+    )
+    derived_used = condition_assessment.is_used or observation.condition_state in {
+        "USED_OR_REFURBISHED",
+        "CONFLICT",
+    }
+    condition_unknown = condition_assessment.state.value == "UNKNOWN"
+    derived_kemp = normalize_brand(observation.brand_raw) == "KEMP"
     return CompetitorOffer(
         observation_id=str(observation.id),
         seller_id=observation.seller_id,
@@ -2761,17 +3532,23 @@ def _domain_offer(
         tier=ProductTier(classification.tier),
         tier_confidence=classification.tier_confidence,
         source_confidence=observation.source_confidence,
-        is_used=classification.is_used,
-        is_kemp=classification.is_kemp,
+        is_used=classification.is_used or derived_used,
+        is_kemp=classification.is_kemp or derived_kemp,
         is_owned=classification.is_owned,
         is_dumping=classification.is_dumping,
-        severe_conflict=classification.exclusion_reason == "TIER_CONFLICT",
-        conflict_reason=classification.exclusion_reason,
+        severe_conflict=(
+            classification.exclusion_reason == "TIER_CONFLICT" or condition_unknown
+        ),
+        conflict_reason=(
+            classification.exclusion_reason
+            or ("CONDITION_UNKNOWN" if condition_unknown else None)
+        ),
         source=observation.source,
         listing_url=observation.url,
         comparison_evidence=comparison_evidence_from_dict(
             observation.comparison_evidence
         ),
+        cohort_role=CohortRole(classification.cohort_role),
     )
 
 
@@ -3103,6 +3880,19 @@ def _currency_code(value: str | None) -> str:
     return normalized.upper()[:3]
 
 
+def _source_confidence_bucket(value: Decimal) -> str:
+    confidence = Decimal(str(value))
+    if confidence <= 0:
+        return "zero"
+    if confidence < Decimal("0.50"):
+        return "below_0_50"
+    if confidence < Decimal("0.80"):
+        return "0_50_to_0_80"
+    if confidence < Decimal("1"):
+        return "0_80_to_below_1"
+    return "one"
+
+
 def _availability(explicit: bool | None, presence: str | None) -> bool | None:
     if explicit is not None:
         return explicit
@@ -3112,6 +3902,22 @@ def _availability(explicit: bool | None, presence: str | None) -> bool | None:
     if value in {"unavailable", "out_of_stock", "нет в наличии"}:
         return False
     return None
+
+
+def _initial_cohort_role(
+    classification: TierClassification,
+    *,
+    is_owned: bool,
+) -> CohortRole:
+    if is_owned:
+        return CohortRole.OWNED_STORE
+    if classification.is_used:
+        return CohortRole.USED_REJECTED
+    if classification.is_kemp:
+        return CohortRole.KEMP_REFERENCE
+    if classification.exclusion_reason:
+        return CohortRole.MANUAL_REVIEW
+    return CohortRole.TARGET_MARKET
 
 
 def _aware_datetime(value: datetime) -> datetime:
@@ -3125,6 +3931,19 @@ def _optional_string(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _validated_listing_url(value: Any) -> tuple[str, str | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        return "", "SOURCE_URL_NOT_AVAILABLE"
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return "", "INVALID_URL_PROTOCOL"
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+        return "", "INVALID_URL_PROTOCOL"
+    return raw, None
 
 
 def _optional_bool(value: Any) -> bool | None:

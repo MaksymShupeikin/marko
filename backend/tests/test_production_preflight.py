@@ -59,11 +59,7 @@ def _write(
 
 
 def _reason_codes(result) -> set[str]:
-    return {
-        reason
-        for check in result.checks
-        for reason in check.reason_codes
-    }
+    return {reason for check in result.checks for reason in check.reason_codes}
 
 
 def _static_variation(case_id: str, values: dict[str, str]):
@@ -78,15 +74,23 @@ def _static_variation(case_id: str, values: dict[str, str]):
     elif case_id == "P-004":
         values["API_DOCS_ENABLED"] = "true"
     elif case_id == "P-005":
-        values["DATABASE_URL"] = "postgresql+asyncpg://user:secret@db.example.com:5432/marko"
+        values["DATABASE_URL"] = (
+            "postgresql+asyncpg://user:secret@db.example.com:5432/marko"
+        )
     elif case_id == "P-006":
-        values["DATABASE_URL"] = "postgresql+asyncpg://USER:PASSWORD@db.prod.marko.internal:5432/marko"
+        values["DATABASE_URL"] = (
+            "postgresql+asyncpg://USER:PASSWORD@db.prod.marko.internal:5432/marko"
+        )
     elif case_id == "P-007":
-        values["DATABASE_URL"] = "postgresql+asyncpg://marko:secret@PRIVATE_POSTGRES_HOST:5432/marko"
+        values["DATABASE_URL"] = (
+            "postgresql+asyncpg://marko:secret@PRIVATE_POSTGRES_HOST:5432/marko"
+        )
     elif case_id == "P-008":
         values["CELERY_BROKER_URL"] = "rediss://marko:secret@PRIVATE_REDIS_HOST:6380/0"
     elif case_id == "P-009":
-        values["CELERY_BROKER_URL"] = "redis://marko:secret@redis.prod.marko.internal:6379/0"
+        values["CELERY_BROKER_URL"] = (
+            "redis://marko:secret@redis.prod.marko.internal:6379/0"
+        )
     elif case_id == "P-010":
         values["ALLOWED_HOSTS"] = "api.example.com"
     elif case_id == "P-011":
@@ -179,9 +183,17 @@ def _e2e_evidence(**overrides) -> dict:
 @pytest.mark.parametrize(
     ("case_id", "override", "expected_reason"),
     (
-        ("P-019", {"clean_migration_passed": False}, "PREFLIGHT_DATABASE_SCHEMA_FAILED"),
+        (
+            "P-019",
+            {"clean_migration_passed": False},
+            "PREFLIGHT_DATABASE_SCHEMA_FAILED",
+        ),
         ("P-021", {"celery_workers_passed": False}, "PREFLIGHT_CELERY_WORKERS_FAILED"),
-        ("P-022", {"scheduler_singleton_passed": False}, "PREFLIGHT_SCHEDULER_SINGLETON_FAILED"),
+        (
+            "P-022",
+            {"scheduler_singleton_passed": False},
+            "PREFLIGHT_SCHEDULER_SINGLETON_FAILED",
+        ),
     ),
 )
 def test_full_evidence_negative_matrix(

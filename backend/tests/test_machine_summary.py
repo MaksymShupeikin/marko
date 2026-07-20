@@ -357,7 +357,10 @@ def valid_payload() -> dict[str, Any]:
                 "assumption_id": "ASSUMPTION-READINESS-WEIGHTS",
                 "statement": "Default engineering readiness weights apply.",
                 "rationale": "No approved business weights exist.",
-                "affected_fields": ["metis.weighted_readiness", "marko.weighted_readiness"],
+                "affected_fields": [
+                    "metis.weighted_readiness",
+                    "marko.weighted_readiness",
+                ],
                 "impact_if_false": "Readiness bounds must be recalculated.",
                 "validation_method": "Obtain business approval.",
                 "required_by_stage": "PRODUCTION_VALIDATION",
@@ -480,13 +483,16 @@ def test_gap_rpn_and_reuse_score_formulas() -> None:
     rpn, normalized = calculate_gap_rpn(5, 5, 5, 3)
     assert rpn == 375
     assert normalized == 100
-    assert calculate_reuse_score(
-        functional_fit=1,
-        metis_invariant_compatibility=1,
-        data_model_compatibility=1,
-        verification_strength=1,
-        adaptation_cost=0,
-    ) == 100
+    assert (
+        calculate_reuse_score(
+            functional_fit=1,
+            metis_invariant_compatibility=1,
+            data_model_compatibility=1,
+            verification_strength=1,
+            adaptation_cost=0,
+        )
+        == 100
+    )
 
 
 def test_capacity_math_distinguishes_stable_and_overloaded_queue() -> None:
@@ -683,9 +689,7 @@ def test_measured_overloaded_queue_requires_unstable_and_null_drain() -> None:
             "cpu_average_percent": 50.0,
         }
     )
-    payload["validation"]["warnings"] = [
-        "SCRAPER_UTILIZATION_ABOVE_ENGINEERING_TARGET"
-    ]
+    payload["validation"]["warnings"] = ["SCRAPER_UTILIZATION_ABOVE_ENGINEERING_TARGET"]
 
     assert validate_summary(summary_from(payload)) == ()
 
@@ -814,6 +818,63 @@ def test_no_go_requires_decision_successor() -> None:
     assert "NO_GO_NEXT_STAGE_INVALID" in issue_codes(payload)
 
 
+def _passing_p0_identity_spine() -> dict[str, Any]:
+    return {
+        "query_only_supported": True,
+        "sentinel_url_occurrences_runtime": 0,
+        "identity_fields_separated": True,
+        "legacy_rows_marked_unverified": True,
+        "calibration_requires_automatic_eligible": True,
+        "calibration_requires_hard_gate_pass": True,
+        "calibration_requires_verified_oe": True,
+        "empty_vs_schema_drift_distinguished": True,
+        "offer_accounting_conservation_verified": True,
+        "unconditional_source_confidence_one_occurrences": 0,
+        "replay_network_requests": 0,
+        "postgresql_migration_verified": True,
+        "full_suite": {"passed": 762, "failed": 0, "skipped": 4},
+        "remaining_blockers": [],
+    }
+
+
+def test_p0_identity_spine_extension_accepts_closed_gate() -> None:
+    payload = valid_payload()
+    payload["p0_identity_spine"] = _passing_p0_identity_spine()
+
+    assert validate_summary(summary_from(payload)) == ()
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    [
+        (("query_only_supported",), False),
+        (("sentinel_url_occurrences_runtime",), 1),
+        (("replay_network_requests",), 1),
+        (("full_suite", "failed"), 1),
+        (("full_suite", "passed"), 0),
+        (("remaining_blockers",), ["P0 remains open"]),
+    ],
+)
+def test_p0_identity_spine_extension_rejects_pass_contradictions(
+    field_path: tuple[str, ...],
+    bad_value: object,
+) -> None:
+    payload = valid_payload()
+    extension = _passing_p0_identity_spine()
+    target: dict[str, Any] = extension
+    for key in field_path[:-1]:
+        target = target[key]
+    target[field_path[-1]] = bad_value
+    payload["p0_identity_spine"] = extension
+
+    codes = issue_codes(payload)
+    assert codes & {
+        "P0_IDENTITY_SPINE_PASS_CONTRADICTION",
+        "P0_IDENTITY_SPINE_FULL_SUITE_EMPTY",
+        "P0_IDENTITY_SPINE_BLOCKERS_REMAIN",
+    }
+
+
 def _footer_for_summary() -> EndOfResponse:
     payload = valid_footer_payload()
     payload["stage_result"]["stage"]["id"] = "PROMPT_15_013_IMPLEMENTATION"
@@ -844,7 +905,9 @@ def test_combined_response_rejects_content_after_yaml_and_status_drift() -> None
     payload["termination"]["stop_gate_value"] = "FAIL"
     summary = summary_from(payload)
     footer = _footer_for_summary()
-    response = f"{render_footer(footer)}\n\n{render_machine_summary_block(summary)}\nextra"
+    response = (
+        f"{render_footer(footer)}\n\n{render_machine_summary_block(summary)}\nextra"
+    )
 
     codes = {issue.code for issue in validate_machine_response(response)}
     assert "CONTENT_AFTER_MACHINE_SUMMARY" in codes

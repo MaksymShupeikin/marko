@@ -1,4 +1,5 @@
 """Similarity scoring and cross-seller offer matching."""
+
 from __future__ import annotations
 
 import re
@@ -25,10 +26,29 @@ from metis.pricing import (
 )
 
 # Tokens carrying no discriminative value for product-name similarity.
-_STOPWORDS: frozenset[str] = frozenset({
-    "для", "від", "до", "та", "і", "в", "на", "з", "по", "the", "for", "and",
-    "шт", "уп", "грн", "оригінал", "новий", "нова", "нове",
-})
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "для",
+        "від",
+        "до",
+        "та",
+        "і",
+        "в",
+        "на",
+        "з",
+        "по",
+        "the",
+        "for",
+        "and",
+        "шт",
+        "уп",
+        "грн",
+        "оригінал",
+        "новий",
+        "нова",
+        "нове",
+    }
+)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _MIN_TOKEN_LENGTH = 2  # drop single-character noise tokens
 _MAX_QUERY_TOKENS = 8  # longest search phrase, in tokens, built from a product name
@@ -58,9 +78,9 @@ def _token_similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
 # Antonym groups: parts differing only by one of these are NOT the same item.
 # Each group lists mutually-exclusive "sides" as token prefixes (ua + ru forms).
 _ANTONYM_GROUPS: tuple[tuple[frozenset[str], ...], ...] = (
-    (frozenset({"лів", "лев"}), frozenset({"прав"})),   # лівий / правий (left / right)
-    (frozenset({"перед"}), frozenset({"задн"})),        # передній / задній (front / rear)
-    (frozenset({"верхн"}), frozenset({"нижн"})),        # верхній / нижній (upper / lower)
+    (frozenset({"лів", "лев"}), frozenset({"прав"})),  # лівий / правий (left / right)
+    (frozenset({"перед"}), frozenset({"задн"})),  # передній / задній (front / rear)
+    (frozenset({"верхн"}), frozenset({"нижн"})),  # верхній / нижній (upper / lower)
 )
 
 
@@ -93,7 +113,9 @@ def brands_compatible(seed: str | None, cand: str | None) -> bool:
 
 
 def build_search_query(product: Product) -> str:
-    """A focused search phrase from the product name (+ brand if informative)."""
+    """Use exact OE first; only fall back to a focused name/brand phrase."""
+    if normalize_oe(product.oe_raw):
+        return str(product.oe_raw).strip()
     tokens = normalize_tokens(product.name)[:_MAX_QUERY_TOKENS]
     query = " ".join(tokens) if tokens else (product.name or "")
     brand = _norm_brand(product.brand)
@@ -105,7 +127,8 @@ def build_search_query(product: Product) -> str:
 @dataclass(frozen=True)
 class Match:
     """Why a candidate is considered the same/similar product, with a score."""
-    kind: str   # "model" | "sku" | "fuzzy"
+
+    kind: str  # "oe" | "model" | "sku" | "fuzzy"
     score: float
 
 
@@ -113,18 +136,20 @@ def match_offer(seed: Product, cand: Product, threshold: float) -> Match | None:
     """Retrieve a candidate without treating retrieval as comparability proof."""
     seed_tokens = normalize_tokens(seed.name)
     cand_tokens = normalize_tokens(cand.name)
-    if seed.brand and cand.brand and not brands_compatible(seed.brand, cand.brand):
-        return None
     if laterality_conflict(seed_tokens, cand_tokens):
         return None
+    seed_oe = normalize_oe(seed.oe_raw)
+    candidate_oe = normalize_oe(cand.oe_raw)
+    if seed_oe is not None and candidate_oe is not None:
+        if seed_oe != candidate_oe:
+            return None
+        return Match("oe", 1.0)
     # Exact IDs strengthen retrieval only. All hard fields are evaluated by
     # build_product_comparison_evidence before Metis pricing eligibility.
     if seed.model_id and cand.model_id and seed.model_id == cand.model_id:
         return Match("model", 1.0)
     if seed.sku and cand.sku and seed.sku == cand.sku:
         return Match("sku", 1.0)
-    if not brands_compatible(seed.brand, cand.brand):
-        return None
     score = _token_similarity(set(seed_tokens), set(cand_tokens))
     if score >= threshold:
         return Match("fuzzy", score)
@@ -143,6 +168,7 @@ def _price_value(product: Product) -> float | None:
 @dataclass(frozen=True)
 class Offer:
     """A single seller's matched offer for the seed product."""
+
     product: Product
     match: Match
     price: float
@@ -152,9 +178,10 @@ class Offer:
 @dataclass(frozen=True)
 class PriceComparison:
     """Result of comparing a seed product against offers from other sellers."""
+
     seed: SeedInfo
     query: str
-    offers: list[Offer]          # cheapest-per-seller, price-ascending, capped
+    offers: list[Offer]  # cheapest-per-seller, price-ascending, capped
     candidates_scanned: int
 
     @property
@@ -216,6 +243,9 @@ class PriceComparison:
             },
             "offers": [
                 {
+                    "product_id": offer.product.id,
+                    "sku": offer.product.sku,
+                    "model_id": offer.product.model_id,
                     "seller_name": offer.product.seller_name,
                     "seller_id": offer.product.seller_id,
                     "price": offer.price,
@@ -224,6 +254,9 @@ class PriceComparison:
                     "match_kind": offer.match.kind,
                     "match_score": offer.match.score,
                     "name": offer.product.name,
+                    "description": offer.product.description,
+                    "condition": offer.product.condition,
+                    "oe_raw": offer.product.oe_raw,
                     "brand": offer.product.brand,
                     "url": offer.product.url,
                     "automatic_eligible": (
@@ -242,6 +275,7 @@ class PriceComparison:
 @dataclass(frozen=True)
 class ComparisonParams:
     """How to run a comparison: the search query plus matching/limit knobs."""
+
     query: str
     threshold: float
     max_sellers: int
@@ -334,7 +368,9 @@ def build_product_comparison_evidence(
             evidence_refs=refs,
         ),
         "year_interval": _year_dimension(seed, candidate, refs),
-        "engine": categorical_dimension(seed.engine, candidate.engine, evidence_refs=refs),
+        "engine": categorical_dimension(
+            seed.engine, candidate.engine, evidence_refs=refs
+        ),
         "body_variant": categorical_dimension(
             seed.body_variant, candidate.body_variant, evidence_refs=refs
         ),
@@ -387,9 +423,7 @@ def build_product_comparison_evidence(
         policy_hash=COMPARABILITY_POLICY_HASH,
         retrieval_kind=retrieval_kind,
         seed_product_id=str(seed.id) if seed.id is not None else None,
-        candidate_product_id=(
-            str(candidate.id) if candidate.id is not None else None
-        ),
+        candidate_product_id=(str(candidate.id) if candidate.id is not None else None),
     )
     decision = evaluate_comparison_evidence(
         initial,

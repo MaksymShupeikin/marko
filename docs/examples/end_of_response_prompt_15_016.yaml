@@ -1,0 +1,282 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: PROMPT_15_016
+      title: YURI_V1_REQUIREMENTS_ALIGNMENT_AUDIT_AND_REMEDIATION
+      type: IMPLEMENTATION
+      scope_owner: Cross-cutting
+    status: BLOCKED
+    completed_scope:
+      - scope_item_id: SCOPE-YURI-V1-SEMANTICS
+        result: OE-first identity, downstream tier comparability, explicit cohorts, used exclusion, KEMP isolation, stock-age policy, abstention and manual decisions are implemented.
+        artifact_refs:
+          - backend/src/metis/pricing/engine.py
+          - backend/src/metis/pricing/comparability.py
+          - backend/src/marko/services/matching.py
+        evidence_refs:
+          - docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+          - docs/PROMPT_15_016_VARIATION_LEDGER_2026-07-18.yaml
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-PRIVACY-SAFE-BOUNDARY
+        result: Raw cost is fail-closed and recursively redacted while the privacy architecture is undecided; sunk cost is not a universal price floor.
+        artifact_refs:
+          - backend/src/marko/services/cost_privacy.py
+          - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+        evidence_refs:
+          - backend/tests/test_yuri_v1_contract.py
+          - frontend/test/pricing_below_cost_dialog_test.dart
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-PERSISTENCE-API-UI
+        result: Additive migration, V1-V4 replay, literal price-change sorting, evidence URLs, API contracts and operator UI are implemented.
+        artifact_refs:
+          - backend/migrations/versions/20260718_0012_yuri_v1_alignment.py
+          - backend/src/marko/services/pricing_runs.py
+          - frontend/lib/features/pricing/recommendations_page.dart
+        evidence_refs:
+          - docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-LOCAL-VERIFICATION
+        result: Backend, static checks, Flutter tests, migration, local Compose and isolated browser E2E pass at non-representative E4 evidence.
+        artifact_refs:
+          - docs/PROMPT_15_016_IMPLEMENTATION_REPORT_2026-07-18.md
+          - docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        evidence_refs:
+          - "command:581 backend tests passed"
+          - "command:22 Flutter tests passed"
+          - docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope:
+      - scope_item_id: SCOPE-COST-PRIVACY-SELECTION
+        reason: Yuri has not selected and accepted either LOCAL_DEVICE_ONLY or SERVER_SIDE_ENCRYPTED.
+        hard_required: true
+        external_dependency: true
+      - scope_item_id: SCOPE-REPRESENTATIVE-CATALOG-MEASUREMENT
+        reason: No real or approved anonymized Yuri workbook was supplied, so the claimed catalog ratios cannot be measured.
+        hard_required: true
+        external_dependency: true
+    strongest_verified_result:
+      claim_id: CLM-YURI-V1-LOCAL-E2E-PASS
+      result: The Yuri V1 synthetic catalog-to-manual-decision path passes through PostgreSQL, Redis, API, workers, served Flutter and exact replay with all named adversarial injections and browser assertions passing.
+      evidence_level: E4
+      evidence_refs:
+        - docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+        - docs/PROMPT_15_016_VARIATION_LEDGER_2026-07-18.yaml
+      reproduction_status: reproducible
+      limitations:
+        - Catalog and market evidence are synthetic or immutable replay rather than representative Yuri data.
+        - Zero live Prom requests were made and zero prices were automatically applied.
+    weakest_critical_area:
+      area_id: AREA-COST-PRIVACY-AND-REPRESENTATIVE-DATA
+      area: Cost privacy selection and representative client evidence
+      score: 20
+      evidence_level: E1
+      reason: The architecture decision and real client workbook require external owner input and cannot be inferred from local tests.
+      downstream_impact: The overall prompt, controlled-pilot and production gates remain blocked despite implementation PASS.
+      required_resolution: Yuri selects the privacy mode and supplies a real or approved anonymized representative workbook, followed by permission-safe representative replay validation.
+    evidence_quality:
+      highest_level: E4
+      critical_floor: E1
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: non_representative
+      limitations:
+        - The claimed 4,901-row client ratios were not measured.
+        - The checkout has no Git metadata, so implementation evidence is path-and-hash-bound.
+        - Native Flutter analysis is blocked by the Unicode checkout path; the identical source passed Dart analysis through an ASCII symlink.
+    production_implication:
+      state: PRODUCTION_BLOCKED
+      production_ready: false
+      evidence_level: E4
+      passed_hard_gates:
+        - YURI_V1_SEMANTICS
+        - TENANT_ISOLATION_LOCAL_E4
+        - POSITIVE_AND_ADVERSARIAL_E2E_NON_REPRESENTATIVE
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - COST_PRIVACY_DECISION
+        - REPRESENTATIVE_CLIENT_CATALOG
+        - REPRESENTATIVE_MARKET_REPLAY
+        - SOURCE_ACCESS_PERMISSION
+        - BACKUP_RESTORE
+        - OBSERVABILITY
+        - ROLLBACK
+        - CONTROLLED_PILOT
+      statement: The independent implementation passes, but the prompt and all pilot or production claims remain blocked by external hard gates.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0:
+      - id: BLK-P0-COST-PRIVACY-DECISION
+        priority: P0
+        category: business_decisions
+        description: Yuri has not selected the cost privacy architecture required by R-05.
+        blocked_scope:
+          - PROMPT_15_016
+          - cost input activation
+          - controlled pilot
+        affects_current_gate: true
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+        owner: Yuri and product owner
+        resolution_condition: Select LOCAL_DEVICE_ONLY or SERVER_SIDE_ENCRYPTED and accept the documented threat model and obligations.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P0-REPRESENTATIVE-CLIENT-CATALOG
+        priority: P0
+        category: data
+        description: No real or approved anonymized Yuri workbook is available for R-15 measurement.
+        blocked_scope:
+          - PROMPT_15_016
+          - representative catalog validation
+          - controlled pilot
+        affects_current_gate: true
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18.yaml
+          - docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+        owner: Yuri and data owner
+        resolution_condition: Supply the real export or an approved anonymized representative workbook and permit repeatable measurement.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    p1:
+      - id: BLK-P1-PRODUCTION-SOURCE-AUTHORITY
+        priority: P1
+        category: source_access
+        description: Local PERMITTED_LIMITED runtime configuration is not an immutable production-scope source authority artifact.
+        blocked_scope:
+          - production live Prom collection
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18.yaml
+        owner: source and product owners
+        resolution_condition: Record a current immutable permission or policy reference for the exact production collection scope.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPOSITORY-PROVENANCE
+        priority: P1
+        category: environment_reproducibility
+        description: The supplied physical checkout has no Git metadata and cannot be bound to a canonical commit.
+        blocked_scope:
+          - production-grade source provenance
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18.yaml
+        owner: repository maintainer
+        resolution_condition: Supply canonical repository and commit identity or a signed source snapshot.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions:
+      - BLK-P0-COST-PRIVACY-DECISION
+    source_access:
+      - BLK-P1-PRODUCTION-SOURCE-AUTHORITY
+    data:
+      - BLK-P0-REPRESENTATIVE-CLIENT-CATALOG
+    environment_reproducibility:
+      - BLK-P1-REPOSITORY-PROVENANCE
+    unknowns: []
+
+  next_stage:
+    id: YURI_DECISIONS_AND_REPRESENTATIVE_VALIDATION
+    title: YURI_DECISIONS_AND_REPRESENTATIVE_VALIDATION
+    why_it_is_next:
+      - Independent code remediation and non-representative E4 validation are complete; owner decisions and representative evidence are the first unresolved dependencies.
+    required_inputs:
+      - input_id: INPUT-COST-PRIVACY-SELECTION
+        description: Yuri's written selection of LOCAL_DEVICE_ONLY or SERVER_SIDE_ENCRYPTED and acceptance of the threat model
+        source: Yuri and product owner
+        required_state: selected, approved and versioned
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+      - input_id: INPUT-REPRESENTATIVE-CATALOG
+        description: Real Yuri export or approved anonymized representative workbook
+        source: Yuri and data owner
+        required_state: provenance-bound and approved for measurement
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18.yaml
+      - input_id: INPUT-REPRESENTATIVE-MARKET-REPLAY
+        description: Pinned permission-safe representative Prom snapshot with expected outcomes
+        source: product and data owners
+        required_state: permission-bound, immutable and review-labeled
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+    expected_artifacts:
+      - artifact_id: ART-COST-PRIVACY-DECISION
+        type: adr
+        purpose: Record the selected architecture, approval, threats, controls and migration implications.
+        required_fields:
+          - selected_mode
+          - owner_approval
+          - threat_model
+          - leakage_controls
+        temporal_state: PLANNED_NOT_STARTED
+      - artifact_id: ART-REPRESENTATIVE-YURI-VALIDATION
+        type: report
+        purpose: Measure real catalog coverage and validate the permission-safe representative market replay.
+        required_fields:
+          - catalog_provenance
+          - measured_ratios
+          - market_snapshot_hash
+          - requirement_results
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-COST-PRIVACY
+        predicate: One privacy mode is approved and its end-to-end leakage and recovery obligations pass without a silent fallback.
+        required_evidence: Approved ADR plus mode-specific executable tests
+        threshold: Every mode-specific hard gate passes
+      - id: AC-REPRESENTATIVE-DATA
+        predicate: The real or approved anonymized catalog and pinned market replay reproduce measured coverage and safe Yuri V1 outcomes.
+        required_evidence: Provenance-bound workbook measurements and immutable replay report
+        threshold: R-05 and R-15 pass with no representative-data blocker
+    stop_condition:
+      gate_key: STOP_GATE_YURI_DECISIONS_AND_REPRESENTATIVE_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required:
+      - decision_id: DECISION-PROMPT-15-016-COST-PRIVACY
+        question: Should Yuri's V1 cost data remain LOCAL_DEVICE_ONLY or use tenant-scoped SERVER_SIDE_ENCRYPTED storage?
+        alternatives:
+          - LOCAL_DEVICE_ONLY with derived declarations sent to the server
+          - SERVER_SIDE_ENCRYPTED with key management, audit and recovery controls
+        architecture_impact: Determines the input surface, persistence, key ownership, API contract, backup and deletion obligations.
+        blocking: true
+        default_forbidden: true
+        evidence_refs:
+          - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_PROMPT_15_016
+    primary_status: BLOCKED
+    secondary_findings:
+      - status: PASS
+        finding: Independent Yuri V1 implementation, regression, migration, variation and non-representative E4 E2E gates pass.
+        evidence_refs:
+          - docs/PROMPT_15_016_IMPLEMENTATION_REPORT_2026-07-18.md
+          - docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+    automatic_transition: false

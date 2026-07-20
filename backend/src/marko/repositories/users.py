@@ -24,9 +24,7 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
 async def get_user_by_firebase_uid(
     session: AsyncSession, firebase_uid: str
 ) -> User | None:
-    return await session.scalar(
-        select(User).where(User.firebase_uid == firebase_uid)
-    )
+    return await session.scalar(select(User).where(User.firebase_uid == firebase_uid))
 
 
 async def create_user(
@@ -97,7 +95,9 @@ async def create_workspace_member(
     return member
 
 
-async def ensure_default_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> None:
+async def ensure_default_workspace(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> None:
     statement = insert(Workspace).values(
         id=workspace_id,
         name="Development Workspace",

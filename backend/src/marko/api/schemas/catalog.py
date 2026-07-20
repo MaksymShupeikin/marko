@@ -1,4 +1,5 @@
 """API contracts for immutable XLSX catalog snapshots."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -57,7 +58,8 @@ class CatalogItemResponse(BaseModel):
     stock_qty: Decimal | None
     stock_age_days: Decimal | None
     expected_units_sold: Decimal | None
-    cost: Decimal | None
+    cost_configured: bool
+    cost_privacy_mode: str
     manual_priority: Decimal
     raw_row: dict[str, Any]
     created_at: datetime
@@ -68,4 +70,3 @@ class CatalogItemPageResponse(BaseModel):
     total: int
     limit: int
     offset: int
-

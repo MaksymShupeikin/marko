@@ -38,6 +38,7 @@ celery_app.conf.update(
         "marko.worker.calculate_pricing_item": {"queue": "pricing-calculation"},
         "marko.worker.finalize_pricing_collection": {"queue": "celery"},
         "marko.worker.start_pricing_run": {"queue": "celery"},
+        "marko.worker.re_enrich_market_observations": {"queue": "celery"},
         "marko.worker.cleanup_scrape_evidence": {"queue": "celery"},
         "marko.worker.reconcile_scrape_outbox": {"queue": "celery"},
     },

@@ -24,6 +24,7 @@ from marko.services.market_collection import (
     reset_pricing_item_for_retry,
 )
 from marko.services.scraper_outbox import publish_dispatch
+from marko.services.oe_reenrichment import re_enrich_retained_observations
 from marko.worker.async_runtime import run_async
 from marko.worker.celery_app import celery_app
 
@@ -153,6 +154,38 @@ def calculate_pricing_item_task(self, run_item_id: str) -> str:
             run_async(fail_pricing_item(item_id, exc))
             raise
         run_async(reset_pricing_calculation_for_retry(item_id, exc))
+        raise self.retry(exc=exc, countdown=min(120, 5 * (2**self.request.retries)))
+
+
+@celery_app.task(
+    name="marko.worker.re_enrich_market_observations",
+    bind=True,
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def re_enrich_market_observations_task(
+    self,
+    *,
+    batch_size: int | None = None,
+    dry_run: bool = True,
+    retry_failed: bool = False,
+) -> dict[str, object]:
+    """Re-enrich one bounded retained-evidence batch without network access."""
+
+    configured_size = get_settings().pricing_oe_reenrichment_batch_size
+    try:
+        report = run_async(
+            re_enrich_retained_observations(
+                batch_size=batch_size or configured_size,
+                dry_run=dry_run,
+                retry_failed=retry_failed,
+            )
+        )
+        return report.as_dict()
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            raise
         raise self.retry(exc=exc, countdown=min(120, 5 * (2**self.request.retries)))
 
 

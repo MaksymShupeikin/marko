@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -194,6 +195,35 @@ def test_dataset_order_does_not_change_hash_or_result() -> None:
     assert calibration_dataset_hash(pairs) == calibration_dataset_hash(reversed(pairs))
     assert forward.multiplier == reverse.multiplier
     assert forward.coefficient_version == reverse.coefficient_version
+
+
+def test_dataset_hash_changes_when_verified_identity_evidence_changes() -> None:
+    baseline = replace(
+        pair("OE-1", "brakes", "200"),
+        identity_evidence=(
+            {
+                "observation_id": "obs-1",
+                "comparison_identity_key": "OE-1",
+                "verified_matched_oe_norm": "OE-1",
+                "oe_verification_status": "VERIFIED_EXACT",
+                "comparability_policy_hash": "a" * 64,
+                "source_confidence_method_version": "source-confidence-v1",
+                "tier_method_version": "brand-tier-v1",
+                "price": "200",
+                "currency": "UAH",
+                "seller_id": "seller-1",
+                "observed_at": "2026-07-19T12:00:00+00:00",
+            },
+        ),
+    )
+    changed = replace(
+        baseline,
+        identity_evidence=(
+            {**baseline.identity_evidence[0], "observation_id": "obs-2"},
+        ),
+    )
+
+    assert calibration_dataset_hash([baseline]) != calibration_dataset_hash([changed])
 
 
 def test_quality_weights_reduce_effective_pair_count() -> None:

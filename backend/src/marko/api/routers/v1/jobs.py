@@ -1,4 +1,5 @@
 """Background job status endpoints."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -33,7 +34,9 @@ async def get_job(
             workspace_id=current.workspace_id,
         )
     except SyncRunNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
+        ) from exc
     return SyncRunResponse.model_validate(sync_run)
 
 
@@ -63,9 +66,7 @@ async def get_job_scrape_metrics(
             sync_run_id=sync_run_id,
             arrival_rate_items_per_second=arrival_rate_items_per_second,
             parallel_efficiency=parallel_efficiency,
-            database_write_capacity_per_second=(
-                database_write_capacity_per_second
-            ),
+            database_write_capacity_per_second=(database_write_capacity_per_second),
             queue_capacity_items_per_second=queue_capacity_items_per_second,
         )
     except SyncRunNotFoundError as exc:

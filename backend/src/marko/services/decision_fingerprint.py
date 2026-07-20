@@ -14,7 +14,9 @@ from typing import Any, Iterable, Mapping
 from metis.pricing import PricingResult, TierCoefficient, cluster_diagnostic_to_dict
 
 
-DECISION_FINGERPRINT_VERSION = "recommendation-decision-fingerprint-v1"
+DECISION_FINGERPRINT_V1 = "recommendation-decision-fingerprint-v1"
+DECISION_FINGERPRINT_V2 = "recommendation-decision-fingerprint-v2"
+DECISION_FINGERPRINT_VERSION = DECISION_FINGERPRINT_V2
 
 
 def build_decision_fingerprint_payload(
@@ -31,37 +33,89 @@ def build_decision_fingerprint_payload(
     build_identity: str,
     price_tick: Decimal,
     price_tick_version: str,
+    fingerprint_version: str = DECISION_FINGERPRINT_VERSION,
 ) -> dict[str, Any]:
+    if fingerprint_version not in {DECISION_FINGERPRINT_V1, DECISION_FINGERPRINT_V2}:
+        raise ValueError("Unsupported recommendation decision fingerprint version")
     observation_payload = []
     for observation in observations:
         evidence = getattr(observation, "comparison_evidence", None)
         if not isinstance(evidence, Mapping):
             evidence = None
-        observation_payload.append(
-            {
-                "observation_id": str(observation.id),
-                "raw_capture_id": (
-                    str(observation.raw_capture_id)
-                    if observation.raw_capture_id is not None
-                    else None
-                ),
-                "source": observation.source,
-                "source_listing_id": observation.source_listing_id,
-                "seller_id": observation.seller_id,
-                "price": observation.price,
-                "currency": observation.currency,
-                "currency_raw": observation.currency_raw,
-                "currency_inferred": observation.currency_inferred,
-                "observed_at": observation.observed_at,
-                "evidence_contract_version": observation.evidence_contract_version,
-                "comparability_policy_id": observation.comparability_policy_id,
-                "comparability_policy_hash": observation.comparability_policy_hash,
-                "seller_identity_verified": observation.seller_identity_verified,
-                "source_provenance_verified": observation.source_provenance_verified,
-                "automatic_eligible": observation.automatic_eligible,
-                "comparison_evidence": evidence,
-            }
-        )
+        observation_item = {
+            "observation_id": str(observation.id),
+            "raw_capture_id": (
+                str(observation.raw_capture_id)
+                if observation.raw_capture_id is not None
+                else None
+            ),
+            "source": observation.source,
+            "source_listing_id": observation.source_listing_id,
+            "search_oe_norm": getattr(observation, "search_oe_norm", None),
+            "extracted_oe_norms": getattr(observation, "extracted_oe_norms", []),
+            "verified_matched_oe_norm": getattr(
+                observation, "verified_matched_oe_norm", None
+            ),
+            "comparison_identity_key": getattr(
+                observation, "comparison_identity_key", None
+            ),
+            "oe_verification_status": getattr(
+                observation, "oe_verification_status", "LEGACY_UNVERIFIED"
+            ),
+            "oe_evidence": getattr(observation, "oe_evidence", []),
+            "oe_extractor_version": getattr(
+                observation, "oe_extractor_version", "legacy-unverified-v0"
+            ),
+            "seller_id": observation.seller_id,
+            "price": observation.price,
+            "currency": observation.currency,
+            "currency_raw": observation.currency_raw,
+            "currency_inferred": observation.currency_inferred,
+            "observed_at": observation.observed_at,
+            "evidence_contract_version": observation.evidence_contract_version,
+            "comparability_policy_id": observation.comparability_policy_id,
+            "comparability_policy_hash": observation.comparability_policy_hash,
+            "seller_identity_verified": observation.seller_identity_verified,
+            "source_provenance_verified": observation.source_provenance_verified,
+            "comparability_hard_gate_result": getattr(
+                observation,
+                "comparability_hard_gate_result",
+                "MANUAL_REVIEW",
+            ),
+            "source_confidence": getattr(
+                observation, "source_confidence", Decimal("0")
+            ),
+            "source_confidence_factors": getattr(
+                observation, "source_confidence_factors", {}
+            ),
+            "source_confidence_method_version": getattr(
+                observation,
+                "source_confidence_method_version",
+                "legacy-unverified-v0",
+            ),
+            "calibration_exclusion_codes": getattr(
+                observation, "calibration_exclusion_codes", []
+            ),
+            "automatic_eligible": observation.automatic_eligible,
+            "comparison_evidence": evidence,
+        }
+        if fingerprint_version == DECISION_FINGERPRINT_V1:
+            for key in (
+                "search_oe_norm",
+                "extracted_oe_norms",
+                "verified_matched_oe_norm",
+                "comparison_identity_key",
+                "oe_verification_status",
+                "oe_evidence",
+                "oe_extractor_version",
+                "comparability_hard_gate_result",
+                "source_confidence",
+                "source_confidence_factors",
+                "source_confidence_method_version",
+                "calibration_exclusion_codes",
+            ):
+                observation_item.pop(key)
+        observation_payload.append(observation_item)
     observation_payload.sort(key=lambda item: item["observation_id"])
     coefficient_payload = [
         {
@@ -86,7 +140,7 @@ def build_decision_fingerprint_payload(
     policy_hash = canonical_sha256(policy_config)
     return canonicalize(
         {
-            "fingerprint_version": DECISION_FINGERPRINT_VERSION,
+            "fingerprint_version": fingerprint_version,
             "input_context": context_snapshot,
             "observations": observation_payload,
             "eligible_observation_ids": sorted(
@@ -125,14 +179,16 @@ def build_decision_fingerprint_payload(
                 "sha256": policy_hash,
                 "config": policy_config,
             },
-            "robust_diagnostic": cluster_diagnostic_to_dict(
-                result.cluster_diagnostic
-            ),
+            "robust_diagnostic": cluster_diagnostic_to_dict(result.cluster_diagnostic),
             "robust_policy_fingerprint": result.robust_policy_fingerprint,
             "parser_contract": {
                 "parser_version": parser_version,
                 "classifier_version": classifier_version,
-                "comparison_evidence_contract": "comparison-evidence-v1",
+                "comparison_evidence_contract": (
+                    "comparison-evidence-v1"
+                    if fingerprint_version == DECISION_FINGERPRINT_V1
+                    else "comparison-evidence-v2"
+                ),
             },
             "build_identity": build_identity or "NOT_AVAILABLE",
             "rounding_policy": {
@@ -191,9 +247,9 @@ def canonicalize(value: Any) -> Any:
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
         }
     if isinstance(value, (set, frozenset)):
-        normalized = [canonicalize(item) for item in value]
+        normalized_items = [canonicalize(item) for item in value]
         return sorted(
-            normalized,
+            normalized_items,
             key=lambda item: json.dumps(
                 item,
                 sort_keys=True,
@@ -207,6 +263,8 @@ def canonicalize(value: Any) -> Any:
 
 
 __all__ = [
+    "DECISION_FINGERPRINT_V1",
+    "DECISION_FINGERPRINT_V2",
     "DECISION_FINGERPRINT_VERSION",
     "build_decision_fingerprint_payload",
     "canonical_json",

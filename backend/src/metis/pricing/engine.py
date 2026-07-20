@@ -26,11 +26,11 @@ from .statistics import (
     robust_price_dispersion,
     round_down_to_tick,
     round_to_tick,
-    round_up_to_tick,
     winsorize,
 )
 from .types import (
     CoefficientModel,
+    CohortRole,
     ClusterDiagnostic,
     CompetitorOffer,
     ConfidenceAggregation,
@@ -153,9 +153,81 @@ def _recommend_price_core(
         )
 
     eligible: list[NormalizedOffer] = []
+    kemp_reference: list[NormalizedOffer] = []
     excluded: list[ExcludedOffer] = []
     comparability_decisions: list[ComparabilityDecision] = []
+    owned_store_count = 0
     for offer in collected_offers:
+        if offer.is_owned or offer.cohort_role == CohortRole.OWNED_STORE:
+            owned_store_count += 1
+            excluded.append(
+                _excluded(
+                    offer,
+                    "OWNED_SELLER",
+                    "cohort_partition",
+                    CohortRole.OWNED_STORE,
+                )
+            )
+            continue
+        if offer.cohort_role == CohortRole.USED_REJECTED:
+            excluded.append(
+                _excluded(
+                    offer,
+                    "USED_OR_REFURBISHED",
+                    "cohort_partition",
+                    CohortRole.USED_REJECTED,
+                )
+            )
+            continue
+        if offer.cohort_role == CohortRole.DUMPING_DIAGNOSTIC:
+            excluded.append(
+                _excluded(
+                    offer,
+                    "KEMP_DUMPING",
+                    "cohort_partition",
+                    CohortRole.DUMPING_DIAGNOSTIC,
+                )
+            )
+            continue
+        if offer.cohort_role in {
+            CohortRole.MANUAL_REVIEW,
+            CohortRole.HARD_REJECTED,
+        }:
+            excluded.append(
+                _excluded(
+                    offer,
+                    "PERSISTED_COHORT_NOT_TARGET_ELIGIBLE",
+                    "cohort_partition",
+                    offer.cohort_role,
+                )
+            )
+            continue
+        if (
+            offer.is_kemp
+            or offer.tier == ProductTier.KEMP
+            or offer.cohort_role == CohortRole.KEMP_REFERENCE
+        ):
+            diagnostic_rejection = _kemp_reference_rejection(context, offer, policy)
+            if diagnostic_rejection is not None:
+                role = (
+                    CohortRole.USED_REJECTED
+                    if diagnostic_rejection == "USED_OR_REFURBISHED"
+                    else CohortRole.DUMPING_DIAGNOSTIC
+                    if diagnostic_rejection == "KEMP_DUMPING"
+                    else CohortRole.HARD_REJECTED
+                )
+                excluded.append(
+                    _excluded(offer, diagnostic_rejection, "kemp_reference", role)
+                )
+            else:
+                kemp_reference.append(
+                    _reference_offer(
+                        offer,
+                        ProductTier.KEMP,
+                        cohort_role=CohortRole.KEMP_REFERENCE,
+                    )
+                )
+            continue
         rejection, comparability = _hard_rejection(
             context,
             offer,
@@ -170,23 +242,25 @@ def _recommend_price_core(
                 if comparability is not None and not comparability.automatic_eligible
                 else "eligibility"
             )
-            excluded.append(_excluded(offer, rejection, stage))
-            continue
-
-        if offer.is_kemp or offer.tier == ProductTier.KEMP:
-            if offer.is_dumping:
-                excluded.append(_excluded(offer, "KEMP_DUMPING", "eligibility"))
-                continue
-            eligible.append(_reference_offer(offer, ProductTier.KEMP, is_kemp=True))
-            continue
-        if offer.tier == ProductTier.BUDGET:
-            eligible.append(_reference_offer(offer, ProductTier.BUDGET))
+            role = (
+                CohortRole.USED_REJECTED
+                if rejection == "USED_OR_REFURBISHED"
+                else CohortRole.MANUAL_REVIEW
+                if comparability is not None and not comparability.automatic_eligible
+                else CohortRole.HARD_REJECTED
+            )
+            excluded.append(_excluded(offer, rejection, stage, role))
             continue
 
         coefficient = coefficients.get((context.category, offer.tier))
         if coefficient is None or not coefficient.validated:
             excluded.append(
-                _excluded(offer, "UNVALIDATED_TIER_COEFFICIENT", "normalization")
+                _excluded(
+                    offer,
+                    "UNVALIDATED_TIER_COEFFICIENT",
+                    "normalization",
+                    CohortRole.MANUAL_REVIEW,
+                )
             )
             continue
         if coefficient.multiplier <= ZERO or not coefficient.multiplier.is_finite():
@@ -227,11 +301,10 @@ def _recommend_price_core(
                 source=offer.source,
                 listing_url=offer.listing_url,
                 comparison_evidence=offer.comparison_evidence,
+                cohort_role=CohortRole.TARGET_MARKET,
             )
         )
 
-    eligible, inferred_dumping = _exclude_inferred_kemp_dumping(eligible, policy)
-    excluded.extend(inferred_dumping)
     deduplicated, duplicates = _deduplicate_sellers(
         eligible, legacy_name_fallback=legacy_replay
     )
@@ -253,6 +326,8 @@ def _recommend_price_core(
             hard_gate_results=hard_gate_results,
             failed_hard_gates=failed_hard_gates,
             unknown_hard_fields=unknown_hard_fields,
+            kemp_reference=kemp_reference,
+            owned_store_count=owned_store_count,
         )
 
     selected_dispersion_method = (
@@ -272,6 +347,8 @@ def _recommend_price_core(
             hard_gate_results=hard_gate_results,
             failed_hard_gates=failed_hard_gates,
             unknown_hard_fields=unknown_hard_fields,
+            kemp_reference=kemp_reference,
+            owned_store_count=owned_store_count,
         )
 
     pre_clean_profile = robust_price_dispersion(
@@ -315,6 +392,8 @@ def _recommend_price_core(
             hard_gate_results=hard_gate_results,
             failed_hard_gates=failed_hard_gates,
             unknown_hard_fields=unknown_hard_fields,
+            kemp_reference=kemp_reference,
+            owned_store_count=owned_store_count,
         )
 
     prices = [offer.normalized_price for offer in cleaned]
@@ -433,6 +512,8 @@ def _recommend_price_core(
         "hard_gate_results": hard_gate_results,
         "failed_hard_gates": failed_hard_gates,
         "unknown_hard_fields": unknown_hard_fields,
+        "kemp_reference": kemp_reference,
+        "owned_store_count": owned_store_count,
     }
     if unique_count < policy.manual_review_below or not action_gates_pass:
         reasons.append("MANUAL_REVIEW_REQUIRED")
@@ -481,7 +562,10 @@ def _recommend_price_core(
 
 
 def _reference_offer(
-    offer: CompetitorOffer, tier: ProductTier, *, is_kemp: bool = False
+    offer: CompetitorOffer,
+    tier: ProductTier,
+    *,
+    cohort_role: CohortRole,
 ) -> NormalizedOffer:
     return NormalizedOffer(
         observation_id=offer.observation_id,
@@ -498,11 +582,35 @@ def _reference_offer(
         source_confidence=offer.source_confidence,
         coefficient_model=CoefficientModel.SIMPLE_MEDIAN,
         coefficient_version="reference-tier-v1",
-        is_direct_kemp=is_kemp,
+        is_direct_kemp=tier == ProductTier.KEMP,
         source=offer.source,
         listing_url=offer.listing_url,
         comparison_evidence=offer.comparison_evidence,
+        cohort_role=cohort_role,
     )
+
+
+def _kemp_reference_rejection(
+    context: ProductPricingContext,
+    offer: CompetitorOffer,
+    policy: PricingPolicy,
+) -> str | None:
+    """Validate a diagnostic KEMP lane without granting target-market authority."""
+
+    if not offer.price.is_finite() or offer.price <= ZERO:
+        return "NON_POSITIVE_PRICE"
+    if offer.is_used or offer.tier == ProductTier.USED:
+        return "USED_OR_REFURBISHED"
+    if offer.is_dumping:
+        return "KEMP_DUMPING"
+    currency = (offer.currency or "").strip().upper()
+    if currency != context.currency.strip().upper() or currency != policy.currency:
+        return "CURRENCY_MISMATCH"
+    if offer.is_available is not True:
+        return "NOT_AVAILABLE"
+    if offer.age_hours < ZERO or offer.age_hours > policy.max_age_hours:
+        return "STALE_SOURCE"
+    return None
 
 
 def _hard_rejection(
@@ -521,16 +629,14 @@ def _hard_rejection(
             currency_raw=offer.currency_raw,
             currency_normalized=offer.currency,
             required_currency=policy.currency,
+            category=context.category,
         )
         if not comparability.automatic_eligible:
             return comparability.reason_codes[0], comparability
     else:
         comparability = None
     currency = (offer.currency or "").strip().upper()
-    if (
-        currency != context.currency.strip().upper()
-        or currency != policy.currency
-    ):
+    if currency != context.currency.strip().upper() or currency != policy.currency:
         return "CURRENCY_MISMATCH", comparability
     if offer.is_available is not True:
         return "NOT_AVAILABLE", comparability
@@ -538,8 +644,6 @@ def _hard_rejection(
         return "STALE_SOURCE", comparability
     if offer.is_used or offer.tier == ProductTier.USED:
         return "USED_OR_REFURBISHED", comparability
-    if offer.is_owned:
-        return "OWNED_SELLER", comparability
     if offer.severe_conflict:
         return offer.conflict_reason or "COMMERCIAL_CONFLICT", comparability
     if offer.match_confidence < policy.match_confidence_min:
@@ -553,7 +657,12 @@ def _hard_rejection(
     return None, comparability
 
 
-def _excluded(offer: CompetitorOffer, reason: str, stage: str) -> ExcludedOffer:
+def _excluded(
+    offer: CompetitorOffer,
+    reason: str,
+    stage: str,
+    cohort_role: CohortRole = CohortRole.HARD_REJECTED,
+) -> ExcludedOffer:
     return ExcludedOffer(
         observation_id=offer.observation_id,
         reason=reason,
@@ -561,6 +670,7 @@ def _excluded(offer: CompetitorOffer, reason: str, stage: str) -> ExcludedOffer:
         raw_price=offer.price,
         tier=offer.tier,
         stage=stage,
+        cohort_role=cohort_role,
     )
 
 
@@ -573,9 +683,8 @@ def _deduplicate_sellers(
     excluded: list[ExcludedOffer] = []
     for offer in sorted(offers, key=lambda item: item.observation_id):
         stable_id = (offer.seller_id or "").strip()
-        key = (
-            stable_id
-            or (offer.seller_name.casefold().strip() if legacy_name_fallback else "")
+        key = stable_id or (
+            offer.seller_name.casefold().strip() if legacy_name_fallback else ""
         )
         if not key:
             excluded.append(
@@ -640,11 +749,7 @@ def _summarize_comparability(
     ]
     gates: dict[str, int] = {"comparability_contract": int(bool(verified))}
     gate_names = sorted(
-        {
-            name
-            for decision in verified
-            for name in decision.hard_gate_results
-        }
+        {name for decision in verified for name in decision.hard_gate_results}
     )
     for name in gate_names:
         gates[name] = int(
@@ -667,41 +772,6 @@ def _summarize_comparability(
         )
     )
     return dict(sorted(gates.items())), failed, unknown
-
-
-def _exclude_inferred_kemp_dumping(
-    offers: list[NormalizedOffer], policy: PricingPolicy
-) -> tuple[list[NormalizedOffer], list[ExcludedOffer]]:
-    """Infer dumping only from independent normalized market evidence.
-
-    Explicit source classifications remain authoritative.  For otherwise valid
-    direct KEMP offers, a price is called dumping only when at least three
-    independent direct-KEMP sellers provide their own robust comparison cohort.
-    Cross-tier prices and the customer's price never define this label.
-    """
-    benchmark_prices = [
-        offer.normalized_price for offer in offers if offer.is_direct_kemp
-    ]
-    if len(benchmark_prices) < 3:
-        return offers, []
-    floor = median(benchmark_prices) * policy.kemp_dumping_ratio
-    kept: list[NormalizedOffer] = []
-    excluded: list[ExcludedOffer] = []
-    for offer in offers:
-        if offer.is_direct_kemp and offer.normalized_price < floor:
-            excluded.append(
-                ExcludedOffer(
-                    observation_id=offer.observation_id,
-                    reason="KEMP_DUMPING",
-                    seller_id=offer.seller_id,
-                    raw_price=offer.raw_price,
-                    tier=offer.tier,
-                    stage="kemp_guardrail",
-                )
-            )
-        else:
-            kept.append(offer)
-    return kept, excluded
 
 
 def _clean_outliers(
@@ -850,26 +920,38 @@ def _raise_recommendation(
     cleaned_offers: list[NormalizedOffer],
     policy: PricingPolicy,
 ) -> tuple[RecommendationAction, Decimal | None, tuple[str, ...]]:
-    threshold = context.current_price * (ONE + policy.min_raise_threshold)
-    if fair_price <= threshold:
-        return RecommendationAction.HOLD, None, ("MARKET_NOT_ABOVE_RAISE_THRESHOLD",)
-    targets = [
-        fair_price * policy.safety_discount,
-        context.current_price * (ONE + policy.max_raise_step),
-    ]
-    if policy.lower_market_support_enabled:
-        targets.append(lower_bound)
-    direct_kemp_prices = [
-        offer.normalized_price for offer in cleaned_offers if offer.is_direct_kemp
-    ]
-    if direct_kemp_prices:
-        targets.append(
-            percentile(direct_kemp_prices, policy.direct_kemp_ceiling_quantile)
+    del cleaned_offers
+    raise_threshold = context.current_price * (ONE + policy.min_raise_threshold)
+    lower_threshold = context.current_price * (ONE - policy.min_lower_threshold)
+    if fair_price >= raise_threshold:
+        targets = [
+            fair_price * policy.safety_discount,
+            context.current_price * (ONE + policy.max_raise_step),
+        ]
+        if policy.lower_market_support_enabled:
+            targets.append(lower_bound)
+        recommended = round_down_to_tick(min(targets), policy.price_tick)
+        if recommended < context.current_price * (ONE + policy.min_action_change):
+            return (
+                RecommendationAction.HOLD,
+                None,
+                ("CONSERVATIVE_TARGET_NOT_ACTIONABLE",),
+            )
+        return RecommendationAction.RAISE, recommended, ("MARKET_SUPPORTS_RAISE",)
+    if fair_price <= lower_threshold:
+        recommended = round_to_tick(fair_price, policy.price_tick)
+        if recommended > context.current_price * (ONE - policy.min_action_change):
+            return (
+                RecommendationAction.HOLD,
+                None,
+                ("MARKET_CHANGE_BELOW_ACTION_THRESHOLD",),
+            )
+        return (
+            RecommendationAction.LOWER,
+            recommended,
+            ("FRESH_MARKET_SUPPORTS_LOWER",),
         )
-    recommended = round_down_to_tick(min(targets), policy.price_tick)
-    if recommended < context.current_price * (ONE + policy.min_action_change):
-        return RecommendationAction.HOLD, None, ("CONSERVATIVE_TARGET_NOT_ACTIONABLE",)
-    return RecommendationAction.RAISE, recommended, ("MARKET_SUPPORTS_RAISE",)
+    return RecommendationAction.HOLD, None, ("MARKET_WITHIN_ACTION_BAND",)
 
 
 def _clearance_recommendation(
@@ -877,67 +959,49 @@ def _clearance_recommendation(
     prices: list[Decimal],
     policy: PricingPolicy,
 ) -> tuple[RecommendationAction, Decimal | None, tuple[str, ...], Decimal | None]:
-    if context.allow_below_cost and context.stock_status != StockStatus.DEAD_STOCK:
-        return (
-            RecommendationAction.MANUAL_REVIEW,
-            None,
-            ("BELOW_COST_ONLY_FOR_DEAD_STOCK",),
-            None,
-        )
     lower_market = percentile(prices, policy.lower_market_quantile)
     base_beta = (
         policy.dead_stock_markdown_beta
         if context.stock_status == StockStatus.DEAD_STOCK
         else policy.stale_markdown_beta
     )
-    beta = clamp01(max(base_beta, context.liquidity_target))
+    threshold_days = (
+        policy.dead_stock_age_threshold_days
+        if context.stock_status == StockStatus.DEAD_STOCK
+        else policy.stale_age_threshold_days
+    )
+    half_life_days = (
+        policy.dead_stock_age_half_life_days
+        if context.stock_status == StockStatus.DEAD_STOCK
+        else policy.stale_age_half_life_days
+    )
+    reasons = [
+        "CLEARANCE_MARKDOWN",
+        "AGE_POLICY_ENGINEERING_ASSUMPTION",
+        f"AGE_POLICY_{policy.stock_age_policy_version}",
+    ]
+    if context.stock_age_days is None:
+        beta_age = ZERO
+        reasons.append("STOCK_AGE_UNKNOWN_BASE_POLICY_ONLY")
+    else:
+        excess_age = max(ZERO, context.stock_age_days - threshold_days)
+        beta_age = ONE - Decimal(
+            str(math.exp(-math.log(2) * float(excess_age / half_life_days)))
+        )
+    beta = clamp01(max(base_beta, beta_age, context.liquidity_target, context.urgency))
     target = (ONE - beta) * context.current_price + beta * min(
         context.current_price, lower_market
     )
-    if context.allow_below_cost:
-        missing_authorization = not all(
-            (
-                context.below_cost_floor is not None,
-                context.below_cost_authorization_id,
-                context.below_cost_authorized_by,
-                context.below_cost_authorized_at,
-                context.below_cost_reason,
-                context.below_cost_warning_confirmed,
-            )
-        )
-        if missing_authorization:
-            return (
-                RecommendationAction.MANUAL_REVIEW,
-                None,
-                ("MISSING_BELOW_COST_AUTHORIZATION",),
-                context.below_cost_floor,
-            )
-        floor = context.below_cost_floor
-    else:
-        if context.cost is None:
-            return RecommendationAction.MANUAL_REVIEW, None, ("MISSING_COST",), None
-        floor = context.cost * (ONE + policy.minimum_margin)
-    if floor is None or floor < ZERO:
-        return RecommendationAction.MANUAL_REVIEW, None, ("INVALID_PRICE_FLOOR",), floor
-
-    rounded_floor = round_up_to_tick(floor, policy.price_tick)
     rounded_target = round_to_tick(target, policy.price_tick)
-    recommended = min(context.current_price, max(rounded_floor, rounded_target))
+    recommended = min(context.current_price, rounded_target)
     if recommended > context.current_price * (ONE - policy.min_action_change):
         return (
             RecommendationAction.HOLD,
             None,
-            ("CLEARANCE_TARGET_NOT_ACTIONABLE",),
-            floor,
+            tuple(reasons + ["CLEARANCE_TARGET_NOT_ACTIONABLE"]),
+            None,
         )
-    reasons = ["CLEARANCE_MARKDOWN"]
-    if (
-        context.allow_below_cost
-        and context.cost is not None
-        and recommended < context.cost
-    ):
-        reasons.append("EXPLICIT_BELOW_COST_OVERRIDE")
-    return RecommendationAction.LOWER, recommended, tuple(reasons), floor
+    return RecommendationAction.LOWER, recommended, tuple(reasons), None
 
 
 def _priorities(
@@ -954,7 +1018,7 @@ def _priorities(
     Decimal | None,
     dict[str, str],
 ]:
-    urgency = max(ZERO, context.urgency)
+    urgency = context.urgency if context.urgency > ZERO else ONE
     manual_priority = max(ZERO, context.manual_priority)
     inputs: dict[str, str] = {}
 
@@ -1100,9 +1164,9 @@ def _age_weight(age_days: Decimal | None, policy: PricingPolicy) -> Decimal:
 
 
 def _cost_basis_inventory_value(context: ProductPricingContext) -> Decimal | None:
-    if context.cost is None or context.stock_qty is None:
-        return None
-    return context.cost * context.stock_qty
+    # Cost-dependent ranking is disabled until Yuri selects and approves a
+    # privacy architecture.  Retail inventory exposure remains available.
+    return None
 
 
 def _priced_result(
@@ -1139,6 +1203,8 @@ def _priced_result(
     hard_gate_results: Mapping[str, int],
     failed_hard_gates: tuple[str, ...],
     unknown_hard_fields: tuple[str, ...],
+    kemp_reference: list[NormalizedOffer],
+    owned_store_count: int,
 ) -> PricingResult:
     priority, score_type, review_priority, cost_basis, priority_inputs = _priorities(
         context,
@@ -1147,6 +1213,9 @@ def _priced_result(
         recommended_price,
         confidence,
         policy,
+    )
+    absolute_change, percentage_change = _recommended_change_metrics(
+        context.current_price, recommended_price
     )
     return PricingResult(
         sku=context.sku,
@@ -1199,6 +1268,13 @@ def _priced_result(
         unknown_hard_fields=unknown_hard_fields,
         cluster_diagnostic=cluster_diagnostic,
         robust_policy_fingerprint=_robust_policy_fingerprint(policy),
+        target_market_count=len(evidence),
+        kemp_reference_count=len(kemp_reference),
+        owned_store_count=owned_store_count,
+        rejected_count=len(excluded),
+        kemp_reference_evidence=tuple(kemp_reference),
+        absolute_recommended_change=absolute_change,
+        percentage_recommended_change=percentage_change,
     )
 
 
@@ -1221,7 +1297,10 @@ def _result_without_market_action(
     hard_gate_results: Mapping[str, int] | None = None,
     failed_hard_gates: tuple[str, ...] = (),
     unknown_hard_fields: tuple[str, ...] = (),
+    kemp_reference: list[NormalizedOffer] | None = None,
+    owned_store_count: int = 0,
 ) -> PricingResult:
+    kemp_reference = kemp_reference or []
     priority, score_type, review_priority, cost_basis, priority_inputs = _priorities(
         context, action, context.current_price, None, ZERO, policy
     )
@@ -1247,9 +1326,7 @@ def _result_without_market_action(
             dict.fromkeys(
                 (reason,)
                 + tuple(
-                    item.reason
-                    for item in excluded
-                    if item.stage == "comparability"
+                    item.reason for item in excluded if item.stage == "comparability"
                 )
             )
         ),
@@ -1285,6 +1362,11 @@ def _result_without_market_action(
         unknown_hard_fields=unknown_hard_fields,
         cluster_diagnostic=cluster_diagnostic,
         robust_policy_fingerprint=_robust_policy_fingerprint(policy),
+        target_market_count=len(evidence),
+        kemp_reference_count=len(kemp_reference),
+        owned_store_count=owned_store_count,
+        rejected_count=len(excluded),
+        kemp_reference_evidence=tuple(kemp_reference),
     )
     return _enforce_invariants(result, context)
 
@@ -1309,6 +1391,16 @@ def _empty_result(
     )
 
 
+def _recommended_change_metrics(
+    current_price: Decimal,
+    recommended_price: Decimal | None,
+) -> tuple[Decimal | None, Decimal | None]:
+    if recommended_price is None or current_price <= ZERO:
+        return None, None
+    absolute = abs(recommended_price - current_price)
+    return absolute, absolute / current_price
+
+
 def _robust_policy_fingerprint(policy: PricingPolicy) -> dict[str, str]:
     return {
         "policy_version": policy.version,
@@ -1316,9 +1408,7 @@ def _robust_policy_fingerprint(policy: PricingPolicy) -> dict[str, str]:
             policy.dispersion_method or RobustScaleMethod.LEGACY_MAD
         ).value,
         "profile_version": policy.robust_dispersion_profile_version,
-        "correction_profile_version": (
-            policy.robust_scale_correction_profile_version
-        ),
+        "correction_profile_version": (policy.robust_scale_correction_profile_version),
         "cluster_diagnostic_version": policy.robust_cluster_diagnostic_version,
         "disagreement": str(policy.robust_disagreement_threshold),
         "improvement": str(policy.robust_cluster_improvement_threshold),
@@ -1355,32 +1445,21 @@ def _enforce_invariants(
     ):
         issues.append("INVARIANT_LOWER_NOT_BELOW_CURRENT")
     if (
-        context.stock_status == StockStatus.FRESH
-        and result.action == RecommendationAction.LOWER
-    ):
-        issues.append("INVARIANT_FRESH_LOWER")
-    if (
         result.action in {RecommendationAction.RAISE, RecommendationAction.LOWER}
         and not result.action_gates_passed
     ):
         issues.append("INVARIANT_ACTION_WITHOUT_GATES")
-    if (
-        result.recommended_price is not None
-        and context.cost is not None
-        and result.recommended_price < context.cost
+    if any(offer.cohort_role != CohortRole.TARGET_MARKET for offer in result.evidence):
+        issues.append("INVARIANT_NON_TARGET_IN_FAIR_COHORT")
+    if any(
+        offer.cohort_role != CohortRole.KEMP_REFERENCE
+        for offer in result.kemp_reference_evidence
     ):
-        if not (
-            context.stock_status == StockStatus.DEAD_STOCK
-            and context.allow_below_cost
-            and context.below_cost_authorization_id
-            and context.below_cost_authorized_by
-            and context.below_cost_authorized_at
-            and context.below_cost_reason
-            and context.below_cost_warning_confirmed
-            and context.below_cost_floor is not None
-            and result.recommended_price >= context.below_cost_floor
-        ):
-            issues.append("INVARIANT_UNAUTHORIZED_BELOW_COST")
+        issues.append("INVARIANT_INVALID_KEMP_REFERENCE_ROLE")
+    target_ids = {offer.observation_id for offer in result.evidence}
+    kemp_ids = {offer.observation_id for offer in result.kemp_reference_evidence}
+    if target_ids & kemp_ids:
+        issues.append("INVARIANT_COHORT_OVERLAP")
     evidence_ids = [offer.observation_id for offer in result.evidence]
     if len(evidence_ids) != len(set(evidence_ids)):
         issues.append("INVARIANT_DUPLICATE_EVIDENCE")

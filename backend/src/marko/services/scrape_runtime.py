@@ -136,9 +136,7 @@ class ScrapeExecutionTrace:
                 request,
                 outcome="terminal_failure",
                 error_category="evidence_integrity",
-                error_detail=(
-                    "Replay evidence SHA-256 does not match the stored body"
-                ),
+                error_detail=("Replay evidence SHA-256 does not match the stored body"),
                 status_code=evidence.status_code,
             )
             raise ReplayIntegrityError(
@@ -265,10 +263,7 @@ class ScrapeExecutionTrace:
             request
             for request in self._completed
             if request.outcome not in {"success", "replayed"}
-            and (
-                request_kinds is None
-                or request.request_kind in request_kinds
-            )
+            and (request_kinds is None or request.request_kind in request_kinds)
         )
 
     def close(self) -> None:

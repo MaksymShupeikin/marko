@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import re
+import unicodedata
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
@@ -23,8 +24,8 @@ from .types import (
 )
 
 
-COMPARABILITY_CONTRACT_VERSION = "comparison-evidence-v1"
-COMPARABILITY_POLICY_ID = "auto-parts-comparability-v1"
+COMPARABILITY_CONTRACT_VERSION = "comparison-evidence-v2"
+COMPARABILITY_POLICY_ID = "yuri-v1-comparability-v2"
 COMPARABILITY_DIMENSIONS = (
     "oe_reference",
     "brand_manufacturer",
@@ -39,11 +40,85 @@ COMPARABILITY_DIMENSIONS = (
     "package_quantity",
     "currency_presence",
 )
-IDENTITY_DIMENSIONS = frozenset({"oe_reference", "brand_manufacturer"})
+IDENTITY_DIMENSIONS = frozenset({"oe_reference"})
+INFORMATIONAL_DIMENSIONS = frozenset({"brand_manufacturer"})
 RECOGNIZED_SOURCE_TYPES = frozenset(
     {"prom", "prom_public", "persisted_replay", "official_feed", "test_fixture"}
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryComparabilityRule:
+    policy_key: str
+    hard_required: frozenset[str]
+    conditional: frozenset[str]
+    automatic_action_allowed: bool
+
+
+_CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
+    {
+        "brake_pad": CategoryComparabilityRule(
+            policy_key="brake_pad",
+            hard_required=frozenset(
+                {"oe_reference", "position", "condition", "package_quantity"}
+            ),
+            conditional=frozenset(
+                {"fitment", "vehicle_generation", "year_interval", "engine", "side"}
+            ),
+            automatic_action_allowed=True,
+        ),
+        "shock_absorber": CategoryComparabilityRule(
+            policy_key="shock_absorber",
+            hard_required=frozenset({"oe_reference", "position", "side", "condition"}),
+            conditional=frozenset(
+                {
+                    "fitment",
+                    "vehicle_generation",
+                    "year_interval",
+                    "engine",
+                    "body_variant",
+                }
+            ),
+            automatic_action_allowed=True,
+        ),
+        "generic_unknown": CategoryComparabilityRule(
+            policy_key="generic_unknown",
+            hard_required=frozenset({"oe_reference", "condition"}),
+            conditional=frozenset(
+                set(COMPARABILITY_DIMENSIONS)
+                - {"oe_reference", "condition", "brand_manufacturer"}
+            ),
+            automatic_action_allowed=False,
+        ),
+    }
+)
+_CATEGORY_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "brakes": "brake_pad",
+        "brake": "brake_pad",
+        "brakepad": "brake_pad",
+        "brakepads": "brake_pad",
+        "brake_pad": "brake_pad",
+        "brake_pads": "brake_pad",
+        "гальмівніколодки": "brake_pad",
+        "тормозныеколодки": "brake_pad",
+        "shockabsorber": "shock_absorber",
+        "shockabsorbers": "shock_absorber",
+        "shock_absorber": "shock_absorber",
+        "амортизатор": "shock_absorber",
+        "амортизатори": "shock_absorber",
+    }
+)
+
+
+def category_comparability_rule(category: str | None) -> CategoryComparabilityRule:
+    normalized = unicodedata.normalize("NFKC", category or "").casefold().strip()
+    compact = "".join(character for character in normalized if character.isalnum())
+    policy_key = _CATEGORY_ALIASES.get(normalized) or _CATEGORY_ALIASES.get(compact)
+    return _CATEGORY_RULES.get(
+        policy_key or "generic_unknown", _CATEGORY_RULES["generic_unknown"]
+    )
 
 
 def _policy_payload() -> dict[str, Any]:
@@ -52,6 +127,16 @@ def _policy_payload() -> dict[str, Any]:
         "contract_version": COMPARABILITY_CONTRACT_VERSION,
         "required_dimensions": list(COMPARABILITY_DIMENSIONS),
         "approved_not_applicable": [],
+        "identity_dimensions": sorted(IDENTITY_DIMENSIONS),
+        "informational_dimensions": sorted(INFORMATIONAL_DIMENSIONS),
+        "category_rules": {
+            name: {
+                "hard_required": sorted(rule.hard_required),
+                "conditional": sorted(rule.conditional),
+                "automatic_action_allowed": rule.automatic_action_allowed,
+            }
+            for name, rule in sorted(_CATEGORY_RULES.items())
+        },
         "stable_seller_id_required": True,
         "raw_currency_required": True,
         "source_provenance_required": True,
@@ -61,9 +146,7 @@ def _policy_payload() -> dict[str, Any]:
 
 
 COMPARABILITY_POLICY_HASH = hashlib.sha256(
-    json.dumps(
-        _policy_payload(), sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    json.dumps(_policy_payload(), sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 
 
@@ -103,6 +186,7 @@ def evaluate_comparison_evidence(
     currency_raw: str | None,
     currency_normalized: str | None,
     required_currency: str,
+    category: str | None = None,
 ) -> ComparabilityDecision:
     """Evaluate every hard dimension; caller confidence is intentionally ignored."""
 
@@ -131,6 +215,11 @@ def evaluate_comparison_evidence(
         reasons.append("MANUAL_POLICY_NOT_APPROVED")
 
     approved_na = set(evidence.approved_not_applicable)
+    category_rule = category_comparability_rule(category)
+    gates["category_policy_mapped"] = int(category_rule.automatic_action_allowed)
+    if not category_rule.automatic_action_allowed:
+        failed.append("category_policy")
+        reasons.append("MANUAL_CATEGORY_POLICY_UNMAPPED")
     for name in COMPARABILITY_DIMENSIONS:
         dimension = evidence.dimensions.get(name)
         if dimension is None:
@@ -143,11 +232,17 @@ def evaluate_comparison_evidence(
         passed = state == EvidenceState.MATCH or (
             state == EvidenceState.NOT_APPLICABLE and name in approved_na
         )
-        gates[f"dimension:{name}"] = int(passed)
+        if name in INFORMATIONAL_DIMENSIONS:
+            gates[f"dimension:{name}:informational"] = 1
+            continue
+        required = name in category_rule.hard_required
+        gates[f"dimension:{name}"] = int(
+            passed if required else state != EvidenceState.CONFLICT
+        )
         if state == EvidenceState.CONFLICT:
             conflict_dimensions.append(name)
             failed.append(f"dimension:{name}")
-        elif not passed:
+        elif required and not passed:
             unknown.append(name)
             failed.append(f"dimension:{name}")
             reasons.append(_MISSING_REASON[name])
@@ -196,7 +291,9 @@ def evaluate_comparison_evidence(
         failed.append("currency_matches")
 
     if conflict_dimensions:
-        identity_conflict = any(item in IDENTITY_DIMENSIONS for item in conflict_dimensions)
+        identity_conflict = any(
+            item in IDENTITY_DIMENSIONS for item in conflict_dimensions
+        )
         reasons.insert(
             0,
             "REJECTED_IDENTITY_CONFLICT"
@@ -247,9 +344,10 @@ def verified_comparison_evidence(
             if isinstance(value, DimensionEvidence)
             else DimensionEvidence(state=EvidenceState(value))
         )
-    evidence_hash = raw_evidence_sha256 or hashlib.sha256(
-        source_record_id.encode("utf-8")
-    ).hexdigest()
+    evidence_hash = (
+        raw_evidence_sha256
+        or hashlib.sha256(source_record_id.encode("utf-8")).hexdigest()
+    )
     return ComparisonEvidence(
         dimensions=MappingProxyType(dimensions),
         provenance=SourceProvenance(
@@ -257,6 +355,7 @@ def verified_comparison_evidence(
             source_record_id=source_record_id,
             raw_evidence_sha256=evidence_hash,
             parser_contract_version=parser_contract_version,
+            schema_version=COMPARABILITY_CONTRACT_VERSION,
             verified=True,
         ),
         seller_identity=SellerIdentityEvidence(
@@ -321,7 +420,9 @@ def comparison_evidence_from_dict(
     provenance_raw = payload.get("provenance")
     seller_raw = payload.get("seller_identity")
     if not isinstance(provenance_raw, Mapping) or not isinstance(seller_raw, Mapping):
-        raise ValueError("comparison evidence provenance and seller_identity are required")
+        raise ValueError(
+            "comparison evidence provenance and seller_identity are required"
+        )
     return ComparisonEvidence(
         dimensions=MappingProxyType(dimensions),
         provenance=SourceProvenance(
@@ -369,6 +470,8 @@ def bind_persisted_provenance(
     currency_raw: str | None,
     currency_normalized: str | None,
     required_currency: str,
+    category: str | None = None,
+    condition_state: str | None = None,
 ) -> ComparisonEvidence:
     """Bind located immutable-record provenance without upgrading unknown facts."""
 
@@ -391,14 +494,42 @@ def bind_persisted_provenance(
             normalized_value=currency_normalized,
             evidence_refs=(source_record_id,),
         )
+    if condition_state is not None:
+        normalized_condition = condition_state.strip().upper()
+        dimensions["condition"] = DimensionEvidence(
+            state=(
+                EvidenceState.MATCH
+                if normalized_condition == "NEW"
+                else EvidenceState.CONFLICT
+                if normalized_condition in {"USED_OR_REFURBISHED", "CONFLICT"}
+                else EvidenceState.UNKNOWN
+            ),
+            raw_value=condition_state,
+            normalized_value=normalized_condition,
+            evidence_refs=(source_record_id,),
+        )
+    normalized_source_type = _optional_string(source_type)
+    normalized_source_record_id = _optional_string(source_record_id)
+    normalized_parser_version = _optional_string(parser_contract_version)
+    normalized_raw_hash = _optional_string(raw_evidence_sha256)
+    provenance_verified = bool(
+        normalized_source_type
+        and normalized_source_record_id
+        and normalized_parser_version
+        and normalized_raw_hash
+        and re.fullmatch(r"[0-9a-fA-F]{64}", normalized_raw_hash)
+    )
     initial = ComparisonEvidence(
         dimensions=MappingProxyType(dimensions),
         provenance=SourceProvenance(
-            source_type=source_type,
-            source_record_id=source_record_id,
-            raw_evidence_sha256=raw_evidence_sha256,
-            parser_contract_version=parser_contract_version,
-            verified=True,
+            source_type=normalized_source_type,
+            source_record_id=normalized_source_record_id,
+            raw_evidence_sha256=(
+                normalized_raw_hash.casefold() if normalized_raw_hash else None
+            ),
+            parser_contract_version=normalized_parser_version,
+            schema_version=COMPARABILITY_CONTRACT_VERSION,
+            verified=provenance_verified,
         ),
         seller_identity=SellerIdentityEvidence(
             stable_seller_id=stable_seller_id,
@@ -410,9 +541,7 @@ def bind_persisted_provenance(
         retrieval_kind=evidence.retrieval_kind if evidence else "unknown",
         seed_product_id=evidence.seed_product_id if evidence else None,
         candidate_product_id=evidence.candidate_product_id if evidence else None,
-        approved_not_applicable=(
-            evidence.approved_not_applicable if evidence else ()
-        ),
+        approved_not_applicable=(evidence.approved_not_applicable if evidence else ()),
     )
     decision = evaluate_comparison_evidence(
         initial,
@@ -420,6 +549,7 @@ def bind_persisted_provenance(
         currency_raw=currency_raw,
         currency_normalized=currency_normalized,
         required_currency=required_currency,
+        category=category,
     )
     return replace(
         initial,
@@ -429,12 +559,13 @@ def bind_persisted_provenance(
 
 
 def normalize_oe(value: str | None) -> str | None:
-    """Normalize only case and common separators; empty never becomes a valid OE."""
+    """Versioned exact OE normalization: NFKC, uppercase, non-alnum removal."""
 
     if value is None:
         return None
-    normalized = re.sub(r"[\s._/-]+", "", value).upper()
-    return normalized or None
+    normalized = unicodedata.normalize("NFKC", value).upper()
+    normalized = "".join(character for character in normalized if character.isalnum())
+    return normalized if len(normalized) >= 3 else None
 
 
 def categorical_dimension(
@@ -472,11 +603,13 @@ __all__ = [
     "COMPARABILITY_POLICY_HASH",
     "COMPARABILITY_POLICY_ID",
     "ComparabilityDecision",
+    "CategoryComparabilityRule",
     "categorical_dimension",
     "bind_persisted_provenance",
     "comparison_evidence_from_dict",
     "comparison_evidence_to_dict",
     "evaluate_comparison_evidence",
+    "category_comparability_rule",
     "normalize_oe",
     "verified_comparison_evidence",
 ]

@@ -28,7 +28,9 @@ from metis.pricing import (
     robust_dispersion_trace,
 )
 from marko.services.market_collection import _domain_offer
+from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.decision_fingerprint import (
+    DECISION_FINGERPRINT_V1,
     build_decision_fingerprint_payload,
     canonical_sha256,
 )
@@ -44,9 +46,17 @@ from metis.pricing.observability import pricing_event
 REPLAY_CONTRACT_V1 = "recommendation-replay-v1"
 REPLAY_CONTRACT_V2 = "recommendation-replay-v2"
 REPLAY_CONTRACT_V3 = "recommendation-replay-v3"
-REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V3
+REPLAY_CONTRACT_V4 = "recommendation-replay-v4"
+REPLAY_CONTRACT_V5 = "recommendation-replay-v5"
+REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V5
 SUPPORTED_REPLAY_CONTRACTS = frozenset(
-    {REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3}
+    {
+        REPLAY_CONTRACT_V1,
+        REPLAY_CONTRACT_V2,
+        REPLAY_CONTRACT_V3,
+        REPLAY_CONTRACT_V4,
+        REPLAY_CONTRACT_V5,
+    }
 )
 
 
@@ -152,7 +162,7 @@ async def replay_recommendation(
         replay_contract_version=replay_contract_version,
     )
     fingerprint_payload = build_decision_fingerprint_payload(
-        context_snapshot=recommendation.context_snapshot,
+        context_snapshot=privacy_safe_mapping(recommendation.context_snapshot),
         result=result,
         observations=[value[0] for value in latest.values()],
         policy_config=run.policy_config,
@@ -164,10 +174,14 @@ async def replay_recommendation(
         build_identity=str(trace.get("build_identity", "NOT_AVAILABLE")),
         price_tick=policy.price_tick,
         price_tick_version=policy.price_tick_version,
+        fingerprint_version=str(
+            trace.get("decision_fingerprint_version", DECISION_FINGERPRINT_V1)
+        ),
     )
     replayed_fingerprint = canonical_sha256(fingerprint_payload)
     if (
-        replay_contract_version == REPLAY_CONTRACT_V3
+        replay_contract_version
+        in {REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT_V5}
         and recommendation.decision_fingerprint
         and recommendation.decision_fingerprint != replayed_fingerprint
     ):
@@ -202,7 +216,11 @@ def context_from_snapshot(snapshot: Mapping[str, Any]) -> ProductPricingContext:
         stock_status=StockStatus(
             str(snapshot.get("stock_status", StockStatus.UNKNOWN.value))
         ),
-        cost=_optional_decimal(snapshot.get("cost")),
+        # Legacy snapshots may contain raw cost data.  The V1 privacy mode is
+        # intentionally undecided, so replay must not materialize it back into
+        # the active pricing context.  The pricing engine is market-evidence
+        # based and does not need either value for current recommendations.
+        cost=None,
         stock_qty=_optional_decimal(snapshot.get("stock_qty")),
         stock_age_days=_optional_decimal(snapshot.get("stock_age_days")),
         expected_units_sold=_optional_decimal(snapshot.get("expected_units_sold")),
@@ -223,7 +241,7 @@ def context_from_snapshot(snapshot: Mapping[str, Any]) -> ProductPricingContext:
             snapshot.get("manual_priority"), Decimal("1")
         ),
         allow_below_cost=bool(snapshot.get("allow_below_cost", False)),
-        below_cost_floor=_optional_decimal(snapshot.get("below_cost_floor")),
+        below_cost_floor=None,
         below_cost_authorization_id=_optional_string(
             snapshot.get("below_cost_authorization_id")
         ),
@@ -252,7 +270,7 @@ def compare_replayed_result(
     contract = replay_contract_version or str(
         trace.get("replay_contract_version", REPLAY_CONTRACT_V1)
     )
-    expected = {
+    expected: dict[str, Any] = {
         "action": stored.action,
         "current_price": _quantize(stored.current_price, "0.01"),
         "fair_price": _quantize(stored.fair_price, "0.01"),
@@ -282,7 +300,7 @@ def compare_replayed_result(
         "evidence_observation_ids": list(stored.evidence_observation_ids),
         "policy_version": stored.policy_version,
     }
-    actual = {
+    actual: dict[str, Any] = {
         "action": replayed.action.value,
         "current_price": _quantize(replayed.current_price, "0.01"),
         "fair_price": _quantize(replayed.fair_price, "0.01"),
@@ -314,7 +332,12 @@ def compare_replayed_result(
         ],
         "policy_version": replayed.policy_version,
     }
-    if contract in {REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3}:
+    if contract in {
+        REPLAY_CONTRACT_V2,
+        REPLAY_CONTRACT_V3,
+        REPLAY_CONTRACT_V4,
+        REPLAY_CONTRACT_V5,
+    }:
         stored_robust = trace.get("robust_dispersion", {})
         if not isinstance(stored_robust, Mapping):
             stored_robust = {}
@@ -356,31 +379,23 @@ def compare_replayed_result(
                 "robust_constants": replayed_robust["constants"],
             }
         )
-    if contract == REPLAY_CONTRACT_V3:
+    if contract in {REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT_V5}:
         stored_comparability = trace.get("comparability", {})
         if not isinstance(stored_comparability, Mapping):
             stored_comparability = {}
         expected.update(
             {
-                "automatic_eligible": stored_comparability.get(
-                    "automatic_eligible"
-                ),
+                "automatic_eligible": stored_comparability.get("automatic_eligible"),
                 "verified_seller_count": stored_comparability.get(
                     "verified_seller_count"
                 ),
                 "comparability_policy_id": stored_comparability.get("policy_id"),
                 "comparability_policy_hash": stored_comparability.get("policy_hash"),
                 "hard_gate_results": stored_comparability.get("hard_gates"),
-                "failed_hard_gates": stored_comparability.get(
-                    "failed_hard_gates"
-                ),
-                "unknown_hard_fields": stored_comparability.get(
-                    "unknown_hard_fields"
-                ),
+                "failed_hard_gates": stored_comparability.get("failed_hard_gates"),
+                "unknown_hard_fields": stored_comparability.get("unknown_hard_fields"),
                 "robust_diagnostic": trace.get("robust_diagnostic"),
-                "robust_policy_fingerprint": trace.get(
-                    "robust_policy_fingerprint"
-                ),
+                "robust_policy_fingerprint": trace.get("robust_policy_fingerprint"),
             }
         )
         actual.update(
@@ -395,9 +410,7 @@ def compare_replayed_result(
                 "robust_diagnostic": cluster_diagnostic_to_dict(
                     replayed.cluster_diagnostic
                 ),
-                "robust_policy_fingerprint": dict(
-                    replayed.robust_policy_fingerprint
-                ),
+                "robust_policy_fingerprint": dict(replayed.robust_policy_fingerprint),
             }
         )
     return {
@@ -519,6 +532,9 @@ __all__ = [
     "REPLAY_CONTRACT_VERSION",
     "REPLAY_CONTRACT_V1",
     "REPLAY_CONTRACT_V2",
+    "REPLAY_CONTRACT_V3",
+    "REPLAY_CONTRACT_V4",
+    "REPLAY_CONTRACT_V5",
     "RecommendationReplay",
     "RecommendationReplayUnavailable",
     "compare_replayed_result",

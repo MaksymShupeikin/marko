@@ -220,13 +220,9 @@ async def _claim_execution(
             select(SyncRun).where(SyncRun.id == sync_run_id).with_for_update()
         )
         if sync_run is None:
-            raise TerminalCatalogImportError(
-                f"Sync run {sync_run_id} does not exist"
-            )
+            raise TerminalCatalogImportError(f"Sync run {sync_run_id} does not exist")
         if sync_run.store_id is None:
-            raise TerminalCatalogImportError(
-                f"Sync run {sync_run_id} has no store"
-            )
+            raise TerminalCatalogImportError(f"Sync run {sync_run_id} has no store")
         if sync_run.scrape_state == "succeeded":
             return None
         if sync_run.scrape_state in {"failed", "cancelled"}:
@@ -250,8 +246,7 @@ async def _claim_execution(
             return None
         if (
             now >= deadline
-            or sync_run.scrape_task_executions
-            >= sync_run.scrape_max_task_executions
+            or sync_run.scrape_task_executions >= sync_run.scrape_max_task_executions
         ):
             sync_run.status = SyncStatus.failed
             sync_run.scrape_state = "failed"
@@ -267,12 +262,9 @@ async def _claim_execution(
 
         execution_no = sync_run.scrape_task_executions + 1
         redelivered = is_redelivery or execution_no > 1
-        expired_owner = (
-            sync_run.scrape_state == "running"
-            and (
-                sync_run.scrape_lease_expires_at is None
-                or _aware(sync_run.scrape_lease_expires_at) <= now
-            )
+        expired_owner = sync_run.scrape_state == "running" and (
+            sync_run.scrape_lease_expires_at is None
+            or _aware(sync_run.scrape_lease_expires_at) <= now
         )
         if redelivered or expired_owner:
             previous_running = list(
@@ -302,8 +294,7 @@ async def _claim_execution(
             fencing_token=fencing_token,
             is_redelivery=redelivered,
             redelivery_reason=(
-                redelivery_reason
-                or ("bounded_retry" if execution_no > 1 else None)
+                redelivery_reason or ("bounded_retry" if execution_no > 1 else None)
             ),
             outcome="running",
             started_at=now,
@@ -394,9 +385,7 @@ async def _persist_progress(
     try:
         async with async_session_factory() as session:
             sync_run = await session.scalar(
-                select(SyncRun)
-                .where(SyncRun.id == claim.sync_run_id)
-                .with_for_update()
+                select(SyncRun).where(SyncRun.id == claim.sync_run_id).with_for_update()
             )
             if sync_run is None:
                 raise TerminalCatalogImportError(str(claim.sync_run_id))
@@ -431,17 +420,13 @@ async def _persist_progress(
             sync_run.scrape_duplicate_products += product_stats.duplicates
             sync_run.scrape_catalog_pages += trace_stats.catalog_pages
             sync_run.scrape_database_writes += (
-                product_stats.database_writes
-                + trace_stats.database_writes
-                + 1
+                product_stats.database_writes + trace_stats.database_writes + 1
             )
-            sync_run.scrape_structured_completeness = (
-                _merge_structured_completeness(
-                    current=sync_run.scrape_structured_completeness,
-                    current_count=old_persisted,
-                    added_sum=product_stats.completeness_sum,
-                    added_count=product_stats.persisted,
-                )
+            sync_run.scrape_structured_completeness = _merge_structured_completeness(
+                current=sync_run.scrape_structured_completeness,
+                current_count=old_persisted,
+                added_sum=product_stats.completeness_sum,
+                added_count=product_stats.persisted,
             )
             sync_run.progress_current = sync_run.scrape_products_persisted
             sync_run.scrape_checkpoint = {
@@ -451,9 +436,7 @@ async def _persist_progress(
                 "logical_requests": trace_stats.logical_requests,
                 "physical_attempts": trace_stats.physical_attempts,
                 "last_request_sequence": (
-                    completed_requests[-1].sequence_no
-                    if completed_requests
-                    else None
+                    completed_requests[-1].sequence_no if completed_requests else None
                 ),
                 "at": datetime.now(UTC).isoformat(),
             }
@@ -476,9 +459,7 @@ async def _flush_trace_only(
     try:
         async with async_session_factory() as session:
             sync_run = await session.scalar(
-                select(SyncRun)
-                .where(SyncRun.id == claim.sync_run_id)
-                .with_for_update()
+                select(SyncRun).where(SyncRun.id == claim.sync_run_id).with_for_update()
             )
             if sync_run is None:
                 return
@@ -568,7 +549,7 @@ async def _persist_batch(
             continue
 
         price = parse_product_price(product)
-        currency = _currency_code(product.currency)
+        currency, currency_raw, currency_inferred = _currency_evidence(product.currency)
         payload = product.as_dict()
         canonical_payload = json.dumps(
             payload,
@@ -577,9 +558,7 @@ async def _persist_batch(
             ensure_ascii=False,
             allow_nan=False,
         ).encode()
-        completeness = _product_completeness(product).quantize(
-            Decimal("0.000001")
-        )
+        completeness = _product_completeness(product).quantize(Decimal("0.000001"))
         if listing is None:
             listing = Listing(
                 id=uuid4(),
@@ -629,6 +608,8 @@ async def _persist_batch(
                     sync_run_id=sync_run_id,
                     price=price,
                     currency=currency,
+                    currency_raw=currency_raw,
+                    currency_inferred=currency_inferred,
                     is_available=product.is_available,
                     observed_at=now,
                 ),
@@ -652,9 +633,7 @@ async def _finish_success(
 ) -> bool:
     async with async_session_factory() as session:
         sync_run = await session.scalar(
-            select(SyncRun)
-            .where(SyncRun.id == claim.sync_run_id)
-            .with_for_update()
+            select(SyncRun).where(SyncRun.id == claim.sync_run_id).with_for_update()
         )
         execution = await session.get(StoreSyncTaskExecution, claim.execution_id)
         store = await session.get(MarketplaceStore, claim.store_id)
@@ -719,9 +698,7 @@ async def _finish_failure(
 ) -> bool:
     async with async_session_factory() as session:
         sync_run = await session.scalar(
-            select(SyncRun)
-            .where(SyncRun.id == claim.sync_run_id)
-            .with_for_update()
+            select(SyncRun).where(SyncRun.id == claim.sync_run_id).with_for_update()
         )
         execution = await session.get(StoreSyncTaskExecution, claim.execution_id)
         if sync_run is None or execution is None:
@@ -747,9 +724,7 @@ async def _finish_failure(
             "error_category": error.code.value,
             "at": now.isoformat(),
         }
-        execution.outcome = (
-            "terminal_failure" if terminal else "retryable_failure"
-        )
+        execution.outcome = "terminal_failure" if terminal else "retryable_failure"
         execution.error_category = error.code.value
         execution.error_detail = str(error)[:4000]
         execution.wall_time_ms = measurement.wall_time_ms
@@ -844,12 +819,7 @@ async def fail_store_sync_task(
             if execution.wall_time_ms == 0:
                 execution.wall_time_ms = max(
                     0,
-                    round(
-                        (
-                            now - _aware(execution.started_at)
-                        ).total_seconds()
-                        * 1000
-                    ),
+                    round((now - _aware(execution.started_at)).total_seconds() * 1000),
                 )
         await session.commit()
         pricing_event(
@@ -967,6 +937,12 @@ def _currency_code(value: str | None) -> str:
         return "UAH"
     normalized = raw.upper()
     return normalized[:3] or "UAH"
+
+
+def _currency_evidence(value: str | None) -> tuple[str, str | None, bool]:
+    raw = value.strip() if value is not None else ""
+    currency_raw = raw or None
+    return _currency_code(currency_raw), currency_raw, currency_raw is None
 
 
 def _aware(value: datetime) -> datetime:

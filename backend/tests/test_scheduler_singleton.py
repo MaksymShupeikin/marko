@@ -61,4 +61,3 @@ def test_only_owner_can_renew_or_release_scheduler_lease() -> None:
     assert redis.ttl == 40
     assert release_lease(redis, key="scheduler", token="owner-a")
     assert redis.value is None
-

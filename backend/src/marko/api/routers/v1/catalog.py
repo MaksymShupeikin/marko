@@ -1,10 +1,20 @@
 """Authenticated catalog import and snapshot endpoints."""
+
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
@@ -14,6 +24,9 @@ from marko.api.schemas.catalog import (
     CatalogItemPageResponse,
     CatalogItemResponse,
 )
+from marko.core.config import get_settings
+from marko.services.catalog_costs import cost_configuration_map
+from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.xlsx_catalog import (
     MAX_XLSX_BYTES,
     CatalogImportError,
@@ -56,6 +69,7 @@ async def upload_catalog(
             content=content,
             explicit_mapping=explicit_mapping,
             sheet_name=sheet_name,
+            user_id=current.user.id,
         )
     except CatalogImportError as exc:
         raise HTTPException(
@@ -96,7 +110,9 @@ async def get_catalog_import(
         session, workspace_id=current.workspace_id, batch_id=batch_id
     )
     if batch is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Import not found"
+        )
     return CatalogImportResponse.model_validate(batch)
 
 
@@ -108,10 +124,16 @@ async def get_catalog_items(
     limit: Annotated[int, Query(ge=1, le=250)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CatalogItemPageResponse:
-    if batch_id is not None and await get_import_batch(
-        session, workspace_id=current.workspace_id, batch_id=batch_id
-    ) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import not found")
+    if (
+        batch_id is not None
+        and await get_import_batch(
+            session, workspace_id=current.workspace_id, batch_id=batch_id
+        )
+        is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Import not found"
+        )
     items, total = await list_catalog_items(
         session,
         workspace_id=current.workspace_id,
@@ -119,9 +141,36 @@ async def get_catalog_items(
         limit=limit,
         offset=offset,
     )
+    cost_state = await cost_configuration_map(
+        session,
+        workspace_id=current.workspace_id,
+        catalog_item_ids=(item.id for item in items),
+    )
     return CatalogItemPageResponse(
-        items=[CatalogItemResponse.model_validate(item) for item in items],
+        items=[
+            _catalog_item_response(
+                item,
+                cost_configured=cost_state.get(item.id, False),
+            )
+            for item in items
+        ],
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+def _catalog_item_response(
+    item: Any, *, cost_configured: bool = False
+) -> CatalogItemResponse:
+    public_fields = {
+        field: getattr(item, field)
+        for field in CatalogItemResponse.model_fields
+        if field not in {"cost_configured", "cost_privacy_mode", "raw_row"}
+    }
+    return CatalogItemResponse(
+        **public_fields,
+        cost_configured=cost_configured,
+        cost_privacy_mode=get_settings().cost_privacy_mode,
+        raw_row=privacy_safe_mapping(item.raw_row),
     )

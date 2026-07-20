@@ -13,10 +13,11 @@ from typing import Any, Literal, Mapping
 from uuid import UUID, uuid4
 
 from celery import Celery
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.core.config import get_settings
+from marko.core.config import Settings, get_settings
+from marko.core.cost_encryption import CostCiphertextError
 from marko.infrastructure.db.models import (
     CatalogImportBatch,
     CatalogItem,
@@ -30,6 +31,15 @@ from marko.infrastructure.db.models import (
     ScrapeTarget,
     TierCalibrationPairRecord,
     TierCoefficientRecord,
+)
+from marko.services.catalog_costs import (
+    add_cost_clear_record,
+    add_encrypted_cost_record,
+    get_decrypted_catalog_cost,
+)
+from marko.services.cost_privacy import (
+    CostPrivacyBlocked,
+    privacy_safe_mapping,
 )
 from metis.pricing import (
     CalibrationPair,
@@ -47,6 +57,7 @@ from metis.pricing.tiering import TIER_METHOD_VERSION
 from metis.pricing.observability import pricing_event
 from marko.services.scraper_contract import (
     PROM_ADAPTER_VERSION,
+    QueryInput,
     ScrapeInput,
     ScraperBoundaryError,
     ScraperErrorCode,
@@ -79,7 +90,6 @@ ACTIVE_RUN_STATUSES = (
 TERMINAL_RUN_ITEM_STATUSES = ("calculated", "manual_review", "failed", "cancelled")
 CATALOG_OVERRIDE_SNAPSHOT_FIELDS = (
     "stock_status",
-    "cost",
     "stock_qty",
     "stock_age_days",
     "expected_units_sold",
@@ -94,7 +104,6 @@ CATALOG_OVERRIDE_SNAPSHOT_FIELDS = (
     "liquidity_target",
     "urgency",
     "allow_below_cost",
-    "below_cost_floor",
     "below_cost_warning_confirmed",
 )
 
@@ -123,26 +132,26 @@ def _validate_decision_price(
     *,
     new_price: Decimal | None,
     cost: Decimal | None,
-    stock_status: str | None,
     approved_floor: Decimal | None,
     allow_below_cost: bool,
     warning_confirmed: bool,
 ) -> bool:
     """Validate the API-side below-cost boundary and return whether it applies."""
     is_below_cost = new_price is not None and cost is not None and new_price < cost
-    if not is_below_cost:
-        return False
-    if not allow_below_cost:
-        raise PricingRunError("Below-cost price requires explicit allow_below_cost")
-    if not warning_confirmed:
+    if allow_below_cost and not warning_confirmed:
         raise PricingRunError("Below-cost warning must be explicitly confirmed")
-    if stock_status != "dead_stock":
-        raise PricingRunError("Below-cost pricing is allowed only for dead_stock")
-    if approved_floor is None:
-        raise PricingRunError("Below-cost decision requires an approved floor")
-    if new_price < approved_floor:
+    if is_below_cost and not allow_below_cost:
+        raise PricingRunError("Below-cost price requires explicit allow_below_cost")
+    if (
+        is_below_cost
+        and approved_floor is not None
+        and new_price is not None
+        and new_price < approved_floor
+    ):
         raise PricingRunError("Decision price is below the approved below-cost floor")
-    return True
+    # With LOCAL_DEVICE_ONLY, the server receives only the operator's derived
+    # acknowledgement and cannot independently reconstruct the comparison.
+    return is_below_cost or (allow_below_cost and warning_confirmed)
 
 
 def policy_to_dict(policy: PricingPolicy) -> dict[str, Any]:
@@ -174,6 +183,7 @@ def policy_from_dict(config: Mapping[str, Any] | None) -> PricingPolicy:
     converted: dict[str, Any] = {}
     for name, raw in config.items():
         default = getattr(defaults, name)
+        value: Any
         try:
             if isinstance(default, Decimal):
                 value = Decimal(str(raw))
@@ -331,6 +341,7 @@ async def create_pricing_run(
     for catalog_item in catalog_items:
         raw_url = (catalog_item.product_url or "").strip() or None
         raw_query = catalog_item.oe_norm
+        input_kind = InputKind.PRODUCT_SEED if raw_url else InputKind.QUERY
         request = ScrapeRequest(
             contract_version=SCRAPE_REQUEST_CONTRACT_VERSION,
             request_id=str(run.id),
@@ -351,22 +362,32 @@ async def create_pricing_run(
             items=[
                 ScrapeRequestItem(
                     item_id=str(catalog_item.id),
-                    input_kind=InputKind.PRODUCT_SEED,
-                    input_value=raw_url or "invalid://missing-product-url",
+                    input_kind=input_kind,
+                    input_value=raw_url or raw_query,
                     priority=0,
                     client_item_reference=catalog_item.sku,
-                    metadata={"query": raw_query},
+                    metadata=({"query": raw_query} if raw_url else {"language": "ua"}),
                 )
             ],
         )
         rejected_reason: str | None = None
+        metadata_payload: dict[str, Any]
+        admitted_input: ScrapeInput | QueryInput | None = None
         try:
             if source_mode == "e2e_fixture_replay":
                 admission = None
-                admitted_input = ScrapeInput.build(
-                    raw_url,
-                    raw_query,
-                    adapter_version=PARSER_ADAPTER_VERSION,
+                admitted_input = (
+                    ScrapeInput.build(
+                        raw_url,
+                        raw_query,
+                        adapter_version=PARSER_ADAPTER_VERSION,
+                    )
+                    if raw_url
+                    else QueryInput.build(
+                        raw_query,
+                        language="ua",
+                        adapter_version=PARSER_ADAPTER_VERSION,
+                    )
                 )
             else:
                 admission, admitted_input = admit_prom_public_item(
@@ -381,11 +402,18 @@ async def create_pricing_run(
                         message="Trusted admission rejected the public source",
                         retryable=False,
                     )
+            if admitted_input is None:
+                raise ScraperBoundaryError(
+                    code=ScraperErrorCode.SERIALIZATION,
+                    message="Admission returned no scraper input",
+                    retryable=False,
+                )
             scrape_input = admitted_input
         except (ScraperBoundaryError, ValueError) as exc:
             input_hash = fallback_input_hash(
                 raw_url,
                 raw_query,
+                input_kind=input_kind.value,
                 adapter_version=PARSER_ADAPTER_VERSION,
             )
             canonical_url = None
@@ -393,6 +421,7 @@ async def create_pricing_run(
             normalized_query = " ".join(raw_query.strip().upper().split())
             metadata_payload = {
                 "adapter_version": PARSER_ADAPTER_VERSION,
+                "input_kind": input_kind.value,
                 "product_url": raw_url,
                 "query": normalized_query,
                 "input_hash": input_hash,
@@ -414,8 +443,8 @@ async def create_pricing_run(
             )
         else:
             input_hash = scrape_input.input_hash
-            canonical_url = scrape_input.canonical_url
-            product_key = scrape_input.product_key
+            canonical_url = getattr(scrape_input, "canonical_url", None)
+            product_key = getattr(scrape_input, "product_key", None)
             normalized_query = scrape_input.query
             metadata_payload = scrape_input.as_dict()
             if admission is None:
@@ -454,6 +483,7 @@ async def create_pricing_run(
                 original_url=raw_url,
                 canonical_url=canonical_url,
                 product_key=product_key,
+                input_kind=input_kind.value,
                 query=normalized_query,
                 input_hash=input_hash,
                 adapter_version=PARSER_ADAPTER_VERSION,
@@ -461,15 +491,11 @@ async def create_pricing_run(
                 parser_name=parser_contract["parser_name"],
                 parser_config_hash=parser_contract["parser_config_hash"],
                 output_schema_version=parser_contract["output_schema_version"],
-                execution_status=(
-                    "TERMINAL_FAILED" if rejected_reason else "QUEUED"
-                ),
+                execution_status=("TERMINAL_FAILED" if rejected_reason else "QUEUED"),
                 acquisition_status=("BLOCKED" if rejected_reason else "NOT_STARTED"),
                 parse_status="NOT_STARTED",
                 evidence_status="NONE",
-                downstream_eligibility=(
-                    "INELIGIBLE" if rejected_reason else "UNKNOWN"
-                ),
+                downstream_eligibility=("INELIGIBLE" if rejected_reason else "UNKNOWN"),
                 operator_action="NO_RECOMMENDATION",
                 reason_codes=([rejected_reason] if rejected_reason else []),
                 max_task_executions=max(
@@ -551,6 +577,20 @@ async def create_pricing_run(
         ),
         duplicates=max(0, run.total_items - len(targets_by_hash)),
         policy_version=run.policy_version,
+    )
+    target_counts = {
+        kind: sum(1 for target in targets_by_hash.values() if target.input_kind == kind)
+        for kind in (InputKind.QUERY.value, InputKind.PRODUCT_SEED.value)
+    }
+    pricing_event(
+        "pricing_query_only_targets_total",
+        pricing_run_id=str(run.id),
+        value=target_counts[InputKind.QUERY.value],
+    )
+    pricing_event(
+        "pricing_product_seed_targets_total",
+        pricing_run_id=str(run.id),
+        value=target_counts[InputKind.PRODUCT_SEED.value],
     )
     return run
 
@@ -634,7 +674,6 @@ def _merge_catalog_override_snapshot(
         for field in CATALOG_OVERRIDE_SNAPSHOT_FIELDS
     }
     if not snapshot["allow_below_cost"]:
-        snapshot["below_cost_floor"] = None
         snapshot["below_cost_warning_confirmed"] = False
     return snapshot
 
@@ -646,6 +685,7 @@ async def add_catalog_item_override(
     user_id: UUID,
     catalog_item_id: UUID,
     values: Mapping[str, Any],
+    settings: Settings | None = None,
 ) -> CatalogItemOverride:
     item = await session.scalar(
         select(CatalogItem).where(
@@ -658,6 +698,7 @@ async def add_catalog_item_override(
     allowed = {
         "stock_status",
         "cost",
+        "clear_cost",
         "stock_qty",
         "stock_age_days",
         "expected_units_sold",
@@ -672,25 +713,44 @@ async def add_catalog_item_override(
         "liquidity_target",
         "urgency",
         "allow_below_cost",
-        "below_cost_floor",
         "below_cost_warning_confirmed",
         "reason",
     }
     if set(values) - allowed:
         raise PricingRunError("Unknown catalog override fields")
+    if values.get("cost") is not None and values.get("clear_cost") is True:
+        raise PricingRunError("cost and clear_cost cannot be submitted together")
     reason = str(values.get("reason", "")).strip()
     if not reason:
         raise PricingRunError("Override reason is required")
     previous = await get_latest_override(session, catalog_item_id)
     snapshot = _merge_catalog_override_snapshot(values, previous)
     allow_below_cost = bool(snapshot["allow_below_cost"])
-    below_floor = snapshot["below_cost_floor"]
-    if allow_below_cost and below_floor is None:
-        raise PricingRunError("below_cost_floor is required for below-cost override")
     if allow_below_cost and not snapshot["below_cost_warning_confirmed"]:
         raise PricingRunError("below-cost warning confirmation is required")
-    if allow_below_cost and snapshot["stock_status"] != "dead_stock":
-        raise PricingRunError("Below-cost pricing is allowed only for dead_stock")
+    selected = settings or get_settings()
+    try:
+        if values.get("cost") is not None:
+            add_encrypted_cost_record(
+                session,
+                workspace_id=workspace_id,
+                catalog_item_id=catalog_item_id,
+                user_id=user_id,
+                cost=values["cost"],
+                reason=reason,
+                settings=selected,
+            )
+        elif values.get("clear_cost") is True:
+            add_cost_clear_record(
+                session,
+                workspace_id=workspace_id,
+                catalog_item_id=catalog_item_id,
+                user_id=user_id,
+                reason=reason,
+                settings=selected,
+            )
+    except (CostCiphertextError, CostPrivacyBlocked) as exc:
+        raise PricingRunError(str(exc)) from exc
     override = CatalogItemOverride(
         catalog_item_id=catalog_item_id,
         user_id=user_id,
@@ -723,7 +783,9 @@ def build_pricing_context(
         current_price=item.current_price,
         currency=item.currency,
         stock_status=stock_status,
-        cost=latest("cost", item.cost),
+        # Legacy plaintext values may still exist, but are outside the active
+        # V1 data flow until the cost privacy ADR is approved.
+        cost=None,
         stock_qty=latest("stock_qty", item.stock_qty),
         stock_age_days=latest("stock_age_days", item.stock_age_days),
         expected_units_sold=latest("expected_units_sold", item.expected_units_sold),
@@ -739,16 +801,9 @@ def build_pricing_context(
             "conversion_rate_proxy", item.conversion_rate_proxy
         ),
         liquidity_target=latest("liquidity_target", Decimal("0")),
-        urgency=latest("urgency", Decimal("1")),
+        urgency=latest("urgency", Decimal("0")),
         manual_priority=latest("manual_priority", item.manual_priority),
         allow_below_cost=override.allow_below_cost if override else False,
-        below_cost_floor=override.below_cost_floor if override else None,
-        below_cost_authorization_id=(str(override.id) if override else None),
-        below_cost_authorized_by=(
-            str(override.user_id) if override and override.user_id else None
-        ),
-        below_cost_authorized_at=(override.created_at if override else None),
-        below_cost_reason=(override.reason if override else None),
         below_cost_warning_confirmed=(
             override.below_cost_warning_confirmed if override else False
         ),
@@ -855,6 +910,7 @@ async def persist_run_calibration_pairs(
             quality_weight=pair.quality_weight,
             tier_observation_ids=list(pair.tier_observation_ids),
             reference_observation_ids=list(pair.reference_observation_ids),
+            identity_evidence=[dict(item) for item in pair.identity_evidence],
             dataset_hash=dataset_hash,
         )
         for pair in pairs
@@ -890,6 +946,7 @@ async def load_run_calibration_pairs(
             quality_weight=record.quality_weight,
             tier_observation_ids=tuple(record.tier_observation_ids),
             reference_observation_ids=tuple(record.reference_observation_ids),
+            identity_evidence=tuple(dict(item) for item in record.identity_evidence),
         )
         for record in records
     ]
@@ -1130,25 +1187,7 @@ async def list_recommendations(
         .where(*conditions)
     )
     total = int(await session.scalar(count_statement) or 0)
-    if sort == "review_priority" or queue == "review":
-        order = [PricingRecommendation.review_priority.desc()]
-    elif sort == "newest" or queue == "hold":
-        order = [PricingRecommendation.computed_at.desc()]
-    elif queue == "all":
-        score_type_group = case(
-            (PricingRecommendation.action == "RAISE", 1),
-            (PricingRecommendation.priority_score_type == "clearance_priority", 2),
-            (
-                PricingRecommendation.action.in_(
-                    ("MANUAL_REVIEW", "INSUFFICIENT_DATA")
-                ),
-                3,
-            ),
-            else_=4,
-        )
-        order = [score_type_group, PricingRecommendation.priority_score.desc()]
-    else:
-        order = [PricingRecommendation.priority_score.desc()]
+    order = _recommendation_sort_order(sort)
     rows = list(
         (
             await session.execute(
@@ -1157,13 +1196,48 @@ async def list_recommendations(
                     CatalogItem, CatalogItem.id == PricingRecommendation.catalog_item_id
                 )
                 .where(*conditions)
-                .order_by(*order, PricingRecommendation.id)
+                .order_by(*order, PricingRecommendation.id.asc())
                 .limit(limit)
                 .offset(offset)
             )
         ).all()
     )
     return [(row[0], row[1]) for row in rows], total, run_id
+
+
+def _recommendation_sort_order(sort: str) -> list[Any]:
+    """Return literal, unit-homogeneous ordering independent of queue filters."""
+    if sort == "ABSOLUTE_RECOMMENDED_CHANGE":
+        return [
+            PricingRecommendation.absolute_recommended_change.desc().nullslast(),
+            PricingRecommendation.confidence.desc(),
+            PricingRecommendation.computed_at.desc(),
+        ]
+    elif sort == "PERCENT_RECOMMENDED_CHANGE":
+        return [
+            PricingRecommendation.percentage_recommended_change.desc().nullslast(),
+            PricingRecommendation.confidence.desc(),
+            PricingRecommendation.computed_at.desc(),
+        ]
+    elif sort == "EXPECTED_GROSS_UPLIFT":
+        return [
+            PricingRecommendation.priority_score.desc(),
+            PricingRecommendation.confidence.desc(),
+            PricingRecommendation.computed_at.desc(),
+        ]
+    elif sort == "CLEARANCE_CAPITAL_LOCK":
+        return [
+            PricingRecommendation.priority_score.desc(),
+            PricingRecommendation.computed_at.desc(),
+        ]
+    elif sort == "REVIEW_PRIORITY":
+        return [
+            PricingRecommendation.review_priority.desc(),
+            PricingRecommendation.computed_at.desc(),
+        ]
+    elif sort == "NEWEST":
+        return [PricingRecommendation.computed_at.desc()]
+    raise PricingRunError(f"Unknown recommendation sort: {sort}")
 
 
 async def get_recommendation(
@@ -1191,9 +1265,6 @@ async def get_recommendation_evidence(
     recommendation, _ = await get_recommendation(
         session, workspace_id=workspace_id, recommendation_id=recommendation_id
     )
-    evidence_ids = [UUID(value) for value in recommendation.evidence_observation_ids]
-    if not evidence_ids:
-        return []
     rows = list(
         (
             await session.execute(
@@ -1206,7 +1277,6 @@ async def get_recommendation_evidence(
                 .where(
                     MarketObservation.pricing_run_item_id
                     == recommendation.pricing_run_item_id,
-                    MarketObservation.id.in_(evidence_ids),
                 )
                 .order_by(
                     MarketObservation.id,
@@ -1265,6 +1335,15 @@ async def override_observation_tier(
         is_dumping=(current.is_dumping if current else False)
         if tier == ProductTier.KEMP
         else False,
+        cohort_role=(
+            "OWNED_STORE"
+            if current and current.is_owned
+            else "USED_REJECTED"
+            if tier == ProductTier.USED
+            else "KEMP_REFERENCE"
+            if tier == ProductTier.KEMP
+            else "TARGET_MARKET"
+        ),
         exclusion_reason="USED_OR_REFURBISHED" if tier == ProductTier.USED else None,
         reason_codes=["MANUAL_OVERRIDE", reason.strip()],
         method_version="manual-tier-override-v1",
@@ -1288,7 +1367,7 @@ async def add_recommendation_decision(
     warning_confirmed: bool,
     reason: str,
 ) -> RecommendationDecision:
-    recommendation, item = await get_recommendation(
+    recommendation, _ = await get_recommendation(
         session, workspace_id=workspace_id, recommendation_id=recommendation_id
     )
     if decision not in {"accepted", "rejected", "overridden"}:
@@ -1307,20 +1386,20 @@ async def add_recommendation_decision(
         warning_confirmed = False
     if not reason.strip():
         raise PricingRunError("Decision reason is required")
-    latest_override = await get_latest_override(session, item.id)
-    cost = (
-        latest_override.cost
-        if latest_override and latest_override.cost is not None
-        else item.cost
-    )
-    approved_floor_raw = recommendation.context_snapshot.get("below_cost_floor")
-    approved_floor = (
-        Decimal(str(approved_floor_raw)) if approved_floor_raw is not None else None
-    )
+    settings = get_settings()
+    try:
+        cost = await get_decrypted_catalog_cost(
+            session,
+            workspace_id=workspace_id,
+            catalog_item_id=recommendation.catalog_item_id,
+            settings=settings,
+        )
+    except (CostCiphertextError, CostPrivacyBlocked) as exc:
+        raise PricingRunError(str(exc)) from exc
+    approved_floor = None
     is_below_cost = _validate_decision_price(
         new_price=new_price,
         cost=cost,
-        stock_status=recommendation.context_snapshot.get("stock_status"),
         approved_floor=approved_floor,
         allow_below_cost=allow_below_cost,
         warning_confirmed=warning_confirmed,
@@ -1332,16 +1411,16 @@ async def add_recommendation_decision(
         decision=decision,
         old_price=recommendation.current_price,
         new_price=new_price,
-        cost_snapshot=cost,
+        cost_snapshot=None,
         recommended_price_snapshot=recommendation.recommended_price,
-        approved_floor=approved_floor,
+        approved_floor=None,
         allow_below_cost=allow_below_cost,
         reason=reason.strip(),
         warning_confirmed=is_below_cost and warning_confirmed,
         warning_confirmed_at=decided_at
         if is_below_cost and warning_confirmed
         else None,
-        context_snapshot=recommendation.context_snapshot,
+        context_snapshot=privacy_safe_mapping(recommendation.context_snapshot),
         policy_version=recommendation.policy_version,
         decided_at=decided_at,
     )
@@ -1355,7 +1434,7 @@ async def add_recommendation_decision(
             user_id=str(user_id),
             decision=decision,
             new_price=str(new_price),
-            approved_floor=str(approved_floor),
+            cost_privacy_mode=settings.cost_privacy_mode,
         )
     if decision == "overridden":
         pricing_event(

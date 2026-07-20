@@ -236,10 +236,7 @@ def wilson_confidence_interval(
     center = (estimate + z2 / (2 * sample_size)) / denominator
     margin = (
         z_score
-        * math.sqrt(
-            estimate * (1 - estimate) / sample_size
-            + z2 / (4 * sample_size**2)
-        )
+        * math.sqrt(estimate * (1 - estimate) / sample_size + z2 / (4 * sample_size**2))
         / denominator
     )
     return BinomialConfidenceInterval(
@@ -596,13 +593,9 @@ def parallel_efficiency(
         raise ValueError("worker count must be at least one")
     if measured_capacity_at_c < 0 or not math.isfinite(measured_capacity_at_c):
         raise ValueError("measured capacity must be finite and non-negative")
-    if measured_capacity_at_one <= 0 or not math.isfinite(
-        measured_capacity_at_one
-    ):
+    if measured_capacity_at_one <= 0 or not math.isfinite(measured_capacity_at_one):
         raise ValueError("single-worker capacity must be finite and positive")
-    measured = measured_capacity_at_c / (
-        worker_count * measured_capacity_at_one
-    )
+    measured = measured_capacity_at_c / (worker_count * measured_capacity_at_one)
     return round(min(1.0, measured), 8)
 
 
@@ -712,9 +705,7 @@ def required_capacity_plan(
         raise ValueError("assumed parallel efficiency must be in (0, 1]")
     required = peak_logical_items / completion_slo_seconds
     workers = math.ceil(
-        required
-        * mean_terminal_item_time_seconds
-        / assumed_parallel_efficiency
+        required * mean_terminal_item_time_seconds / assumed_parallel_efficiency
     )
     checks = tuple(
         None if capacity is None else required <= capacity
@@ -898,9 +889,7 @@ def aggregate_collection_metrics(
     if arrival_rate_urls_per_second < 0:
         raise ValueError("arrival rate must be non-negative")
     now = _aware_utc(now or datetime.now(UTC))
-    unique_urls = {
-        target.canonical_url for target in targets if target.canonical_url
-    }
+    unique_urls = {target.canonical_url for target in targets if target.canonical_url}
     success_targets = [target for target in targets if target.status == "succeeded"]
     failed_targets = [
         target for target in targets if target.status == "terminal_failure"
@@ -911,9 +900,7 @@ def aggregate_collection_metrics(
         target for target in targets if target.status == "retryable_failure"
     ]
     network_attempts = [attempt for attempt in attempts if attempt.network_attempted]
-    task_executions = [
-        attempt for attempt in attempts if attempt.status != "duplicate"
-    ]
+    task_executions = [attempt for attempt in attempts if attempt.status != "duplicate"]
     duplicate_input_total = sum(
         max(0, target.dependent_items - 1) for target in targets
     )
@@ -984,9 +971,7 @@ def aggregate_collection_metrics(
     if queued_targets or running_targets or retry_targets:
         ended_at = now
     elapsed_seconds = max(0.0, (ended_at - started_at).total_seconds())
-    throughput = (
-        60 * len(success_targets) / elapsed_seconds if elapsed_seconds else 0.0
-    )
+    throughput = 60 * len(success_targets) / elapsed_seconds if elapsed_seconds else 0.0
     completeness = [
         target.structured_completeness
         for target in success_targets
@@ -1005,16 +990,12 @@ def aggregate_collection_metrics(
         if attempt.wall_time_ms > 0
     )
     worker_utilization_raw = (
-        busy_seconds / (worker_count * elapsed_seconds)
-        if elapsed_seconds
-        else 0.0
+        busy_seconds / (worker_count * elapsed_seconds) if elapsed_seconds else 0.0
     )
     wall_ms = sum(max(0, attempt.wall_time_ms) for attempt in occupancy_attempts)
     cpu_ms = sum(max(0, attempt.cpu_time_ms) for attempt in occupancy_attempts)
     raw_total = sum(max(0, target.raw_size_bytes) for target in targets)
-    structured_total = sum(
-        max(0, target.structured_size_bytes) for target in targets
-    )
+    structured_total = sum(max(0, target.structured_size_bytes) for target in targets)
     metadata_total = sum(max(0, target.metadata_size_bytes) for target in targets)
     unique_inputs = len(targets)
     retry = calculate_retry_amplification(
@@ -1148,17 +1129,14 @@ def _capacity_result(
     ]
     maximum = max(utilizations) if utilizations else None
     unknown_required_capacity = model_kind == "derived" and any(
-        value is None
-        for value in (source_budget, database_budget, queue_capacity)
+        value is None for value in (source_budget, database_budget, queue_capacity)
     )
     stable = (
         not unknown_required_capacity
         and terminal_capacity > arrival_rate
         and all(value < 1 for value in utilizations)
     )
-    target_met = bool(
-        stable and maximum is not None and maximum <= target
-    )
+    target_met = bool(stable and maximum is not None and maximum <= target)
     no_arrivals = (
         backlog / terminal_capacity
         if terminal_capacity > 0 and not unknown_required_capacity
@@ -1166,10 +1144,7 @@ def _capacity_result(
     )
     with_arrivals = (
         backlog / (terminal_capacity - arrival_rate)
-        if (
-            terminal_capacity > arrival_rate
-            and not unknown_required_capacity
-        )
+        if (terminal_capacity > arrival_rate and not unknown_required_capacity)
         else None
     )
     warnings: list[str] = []
@@ -1251,9 +1226,7 @@ def _validate_capacity_common(
         raise ValueError("worker count must be at least one")
     if not 0 < efficiency <= 1 or not math.isfinite(efficiency):
         raise ValueError("parallel efficiency must be finite and in (0, 1]")
-    if not 0 <= success_probability <= 1 or not math.isfinite(
-        success_probability
-    ):
+    if not 0 <= success_probability <= 1 or not math.isfinite(success_probability):
         raise ValueError("success probability must be finite and in [0, 1]")
     if backlog < 0:
         raise ValueError("backlog must be non-negative")

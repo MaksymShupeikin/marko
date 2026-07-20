@@ -18,7 +18,7 @@ from .comparability import evaluate_comparison_evidence, verified_comparison_evi
 from .types import DimensionEvidence, EvidenceState, HardGateResult
 
 
-GOLD_SET_SCHEMA_VERSION = "comparability-gold-set-v1"
+GOLD_SET_SCHEMA_VERSION = "comparability-gold-set-v2"
 _ALLOWED_SPLITS = frozenset({"train", "calibration", "test"})
 _ALLOWED_LABELS = frozenset({"comparable", "conflict", "insufficient"})
 _ALLOWED_RETRIEVAL_KINDS = frozenset({"fuzzy", "sku", "model"})
@@ -198,10 +198,14 @@ def _contract_errors(payload: Mapping[str, Any]) -> list[str]:
             errors.append(f"GOLD_SET_INVALID_SPLIT:{case_id}")
         if raw_case.get("gold_label") not in _ALLOWED_LABELS:
             errors.append(f"GOLD_SET_INVALID_LABEL:{case_id}")
-        if raw_case.get("expected_result") not in {item.value for item in HardGateResult}:
+        if raw_case.get("expected_result") not in {
+            item.value for item in HardGateResult
+        }:
             errors.append(f"GOLD_SET_INVALID_EXPECTED_RESULT:{case_id}")
         if raw_case.get("retrieval_kind") not in _ALLOWED_RETRIEVAL_KINDS:
             errors.append(f"GOLD_SET_INVALID_RETRIEVAL_KIND:{case_id}")
+        if not str(raw_case.get("category", "")).strip():
+            errors.append(f"GOLD_SET_MISSING_CATEGORY:{case_id}")
         mutation = raw_case.get("mutation")
         if (
             not isinstance(mutation, Mapping)
@@ -270,11 +274,13 @@ def _evaluate_case(case: Mapping[str, Any]) -> dict[str, Any]:
         currency_raw=currency_raw,
         currency_normalized=currency_normalized,
         required_currency="UAH",
+        category=str(case["category"]),
     )
     return {
         "case_id": case_id,
         "split": case["split"],
         "retrieval_kind": case["retrieval_kind"],
+        "category": case["category"],
         "gold_label": case["gold_label"],
         "expected_result": case["expected_result"],
         "actual_result": decision.hard_gate_result.value,

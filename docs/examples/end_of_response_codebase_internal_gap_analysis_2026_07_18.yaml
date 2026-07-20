@@ -1,0 +1,253 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: CODEBASE_INTERNAL_GAP_ANALYSIS_2026_07_18
+      title: CODEBASE INTERNAL GAP ANALYSIS
+      type: REVIEW
+      scope_owner: Combined
+
+    status: PASS
+
+    completed_scope:
+      - scope_item_id: SCOPE-CURRENT-INTERNAL-PATH
+        result: The current parser, comparability, tiering, E2E, tenant, metrics, and operations paths were traced in the supplied workspace.
+        artifact_refs:
+          - backend/src/marko/services/parser_models.py
+          - backend/src/metis/pricing/comparability.py
+          - backend/src/metis/pricing/tiering.py
+          - backend/src/marko/e2e/fixture_seed.py
+        evidence_refs:
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+          - docs/PROMPT_15_015_E2E_EVIDENCE_2026-07-18.yaml
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-PRIORITIZED-REMEDIATION
+        result: Remaining internal work was separated into pilot-critical semantic work, production hardening, and deferred capabilities.
+        artifact_refs:
+          - docs/examples/machine_readable_summary_codebase_internal_gap_analysis_2026_07_18.yaml
+        evidence_refs:
+          - backend/src/marko/services/parser_models.py
+          - backend/src/metis/pricing/comparability.py
+          - docs/METIS_CONFORMAL_STAGE_0_AUDIT_2026-07-17.md
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+
+    incomplete_scope: []
+
+    strongest_verified_result:
+      claim_id: CLM-INFRASTRUCTURE-FOUNDATION
+      result: The frozen-parser boundary, queue and retry controls, raw evidence and replay, robust pricing core, abstention, manual review, and local E2E foundation already exist.
+      evidence_level: E3
+      evidence_refs:
+        - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        - docs/PROMPT_15_015_IMPLEMENTATION_REPORT_2026-07-18.md
+      reproduction_status: reproducible
+      limitations:
+        - Current E2E evidence is fixture-backed and primarily proves safe abstention.
+        - Representative production data and measured production load are not established.
+
+    weakest_critical_area:
+      area_id: AREA-REAL-DATA-SEMANTICS
+      area: Real-data comparison evidence and actionable recommendation path
+      score: 25
+      evidence_level: E3
+      reason: Strict comparability requires twelve verified dimensions while the normal frozen parser boundary may leave post-parse enrichment fields absent; the E2E seed injects verified comparison evidence.
+      downstream_impact: Real Prom candidates are likely to abstain or enter manual review instead of producing a trustworthy RAISE, HOLD, or LOWER recommendation.
+      required_resolution: Implement a provenance-preserving post-parser evidence enricher and prove a positive recommendation path without synthetic verified evidence.
+
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E2
+      material_claim_coverage: 0.9
+      reproducible_claim_coverage: 0.8
+      freshness_status: verified
+      representative_scope: partial
+      limitations:
+        - No canonical Git commit identifies the supplied workspace.
+        - No representative live-data capacity or recovery run was repeated for this review.
+        - Current gold and E2E datasets are non-representative fixtures.
+
+    production_implication:
+      state: CONTROLLED_PILOT_BLOCKED
+      production_ready: false
+      evidence_level: E3
+      passed_hard_gates:
+        - LOCAL_COMPONENT_TESTS
+        - FIXTURE_E2E_ABSTENTION
+        - RAW_EVIDENCE_REPLAY
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - REAL_DATA_COMPARISON_EVIDENCE
+        - REPRESENTATIVE_CALIBRATION_DATA
+        - POSITIVE_BUSINESS_E2E
+        - TENANT_ISOLATION_INTEGRATION
+        - LOAD_RECOVERY_AND_OBSERVABILITY
+      statement: The review completed successfully, but the next code stage must convert safe fixture-backed abstention into a provenance-backed useful recommendation path before a controlled pilot claim.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-REAL-EVIDENCE-ENRICHMENT
+        priority: P1
+        category: data
+        description: Normal parser output does not reliably populate the twelve strict comparability dimensions with per-field provenance.
+        blocked_scope:
+          - useful real-data recommendation path
+          - controlled shadow pilot
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - backend/src/marko/services/parser_models.py
+          - backend/src/metis/pricing/comparability.py
+          - backend/src/marko/e2e/fixture_seed.py
+        owner: engineering
+        resolution_condition: Normal replay data produces verified comparison evidence from trusted catalog, candidate characteristics, and operator corrections without modifying parser internals.
+        can_agent_resolve_now: true
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPRESENTATIVE-CALIBRATION
+        priority: P1
+        category: data
+        description: Gold-set and calibration evidence is synthetic and too small to support activation thresholds.
+        blocked_scope:
+          - automatic recommendation eligibility
+          - production calibration claims
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+          - backend/src/metis/evaluation/gold_set.py
+        owner: product data and engineering
+        resolution_condition: A versioned representative labeled dataset with leakage-safe splits, adjudication, and release evidence passes activation thresholds.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPOSITORY-PROVENANCE
+        priority: P1
+        category: environment_reproducibility
+        description: The supplied workspace has no canonical Git metadata or CI-bound snapshot.
+        blocked_scope:
+          - reproducible releases
+          - audited rollback
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        owner: repository maintainer
+        resolution_condition: Establish the canonical Git repository, commit baseline, protected CI, and immutable release identity.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-SCALE-RECOVERY-PROOF
+        priority: P1
+        category: unknowns
+        description: Representative load, multi-host recovery, backup and restore, rollback, and operational alert delivery are not proven.
+        blocked_scope:
+          - production operations
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/production_runbook.md
+          - docs/PROMPT_15_015_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        owner: engineering and operations
+        resolution_condition: Execute and retain passing load, soak, restore, rollback, queue recovery, and alert-delivery evidence on the release candidate.
+        can_agent_resolve_now: true
+        risk_score: NOT_CALIBRATED
+    business_decisions: []
+    source_access: []
+    data:
+      - BLK-P1-REAL-EVIDENCE-ENRICHMENT
+      - BLK-P1-REPRESENTATIVE-CALIBRATION
+    environment_reproducibility:
+      - BLK-P1-REPOSITORY-PROVENANCE
+    unknowns:
+      - BLK-P1-SCALE-RECOVERY-PROOF
+
+  next_stage:
+    id: REAL_DATA_SEMANTIC_PIPELINE_IMPLEMENTATION
+    title: REAL DATA SEMANTIC PIPELINE IMPLEMENTATION
+    why_it_is_next:
+      - It closes the first broken business transition while preserving the frozen parser boundary.
+      - It is required before additional production hardening can make the product useful.
+    required_inputs:
+      - input_id: INPUT-FROZEN-PARSER-BOUNDARY
+        description: Current Prom parser input and output boundary plus immutable raw evidence
+        source: current workspace
+        required_state: existing parser internals remain frozen
+        currently_available: true
+        evidence_ref: backend/src/marko/services/parser_models.py
+      - input_id: INPUT-TRUSTED-CATALOG-IDENTITY
+        description: Catalog OE, category, brand, raw-row, and product identity fields available to the pricing run
+        source: catalog records and approved operator corrections
+        required_state: provenance can be attached to known fields while missing fitment remains explicit
+        currently_available: true
+        evidence_ref: backend/src/marko/infrastructure/db/models.py
+    expected_artifacts:
+      - artifact_id: ART-COMPARISON-EVIDENCE-ENRICHER
+        type: code
+        purpose: Must be created to enrich the frozen parser boundary with traceable comparison evidence.
+        required_fields:
+          - source
+          - normalized_value
+          - verification_state
+          - evidence_ref
+        temporal_state: PLANNED_NOT_STARTED
+      - artifact_id: ART-POSITIVE-BUSINESS-E2E
+        type: test
+        purpose: Must be created to prove normal replay can produce RAISE, HOLD, and LOWER plus safe abstention.
+        required_fields:
+          - normal_parser_boundary
+          - no_synthetic_verified_evidence
+          - decision_provenance
+          - cross_tenant_denial
+        temporal_state: PLANNED_NOT_STARTED
+      - artifact_id: ART-REPRESENTATIVE-GOLD-SET
+        type: dataset
+        purpose: Must be created for calibration and later activation decisions.
+        required_fields:
+          - immutable_manifest
+          - leakage_keys
+          - adjudication
+          - train_calibration_test_split
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-SEMANTIC-01
+        predicate: Normal replay produces verified per-field comparison evidence without parser-internal changes
+        required_evidence: focused boundary and provenance tests
+        threshold: 100% required dimensions are either traced or explicitly UNKNOWN
+      - id: AC-SEMANTIC-02
+        predicate: Positive business E2E reaches RAISE, HOLD, and LOWER while unsafe cases abstain
+        required_evidence: pinned PostgreSQL and Redis E2E report
+        threshold: all four decision branches pass with zero unsafe automatic decisions
+      - id: AC-SEMANTIC-03
+        predicate: Cross-tenant objects remain inaccessible across API and background-worker paths
+        required_evidence: real PostgreSQL two-workspace integration suite
+        threshold: 100% denial with no data disclosure
+    stop_condition:
+      gate_key: STOP_GATE_REAL_DATA_SEMANTIC_PIPELINE_IMPLEMENTATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_CODEBASE_INTERNAL_GAP_ANALYSIS_2026_07_18
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

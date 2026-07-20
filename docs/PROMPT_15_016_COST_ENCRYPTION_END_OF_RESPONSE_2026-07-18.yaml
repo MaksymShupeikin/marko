@@ -1,0 +1,220 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: PROMPT_15_016_COST_ENCRYPTION_IMPLEMENTATION
+      title: YURI_V1_SERVER_SIDE_ENCRYPTED_COST_IMPLEMENTATION
+      type: IMPLEMENTATION
+      scope_owner: Cross-cutting
+      parent_stage: PROMPT_15_016
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-COST-AUTHENTICATED-ENCRYPTION
+        result: Unit cost is persisted only as AES-256-GCM ciphertext with a fresh nonce, row and tenant bound associated data, external versioned keys and append-only SET or CLEAR records.
+        artifact_refs:
+          - backend/src/marko/core/cost_encryption.py
+          - backend/src/marko/services/catalog_costs.py
+          - backend/migrations/versions/20260718_0013_encrypted_catalog_cost.py
+        evidence_refs:
+          - backend/tests/test_cost_encryption.py
+          - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-COST-SAFE-API-UI
+        result: Manual set, replace, clear and below-cost confirmation are implemented without returning raw cost in catalog, recommendation, decision, replay or validation-error responses.
+        artifact_refs:
+          - backend/src/marko/api/schemas/pricing.py
+          - backend/src/marko/services/pricing_runs.py
+          - frontend/lib/features/pricing/catalog_context_dialog.dart
+          - frontend/lib/features/pricing/recommendation_decision_dialog.dart
+        evidence_refs:
+          - frontend/test/pricing_encrypted_cost_dialog_test.dart
+          - backend/tests/test_cost_encryption.py
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-COST-LOCAL-VERIFICATION
+        result: Backend, frontend, static, migration and local PostgreSQL rollback-only encrypted-cost proofs pass; no synthetic cost row or key material remains in evidence.
+        artifact_refs:
+          - scripts/prove_encrypted_cost_runtime.py
+          - docs/PROMPT_15_016_IMPLEMENTATION_REPORT_2026-07-18.md
+        evidence_refs:
+          - "command:590 backend tests passed"
+          - "command:25 Flutter tests passed"
+          - "command:RUNTIME_ENCRYPTED_COST_TRANSACTION_PASS"
+          - "command:database head 20260718_0013"
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope: []
+    strongest_verified_result:
+      claim_id: CLM-COST-POSTGRES-AUTHENTICATED-ROUNDTRIP
+      result: The real local PostgreSQL schema accepted an encrypted synthetic cost, application services authenticated and decrypted it, the latest-value query resolved it, and rollback left zero synthetic records.
+      evidence_level: E4
+      evidence_refs:
+        - scripts/prove_encrypted_cost_runtime.py
+        - backend/migrations/versions/20260718_0013_encrypted_catalog_cost.py
+        - "command:RUNTIME_ENCRYPTED_COST_TRANSACTION_PASS"
+      reproduction_status: reproducible
+      limitations:
+        - The proof used an ephemeral synthetic key and value in a rolled-back local transaction.
+        - A real deployment key and protected recovery drill were intentionally not fabricated.
+    weakest_critical_area:
+      area_id: AREA-COST-KEY-OPERATIONS
+      area: External production key provisioning and recovery
+      score: 50
+      evidence_level: E2
+      reason: Code-level rotation and old-key reads are tested, but no real production secret or protected backup and restore drill exists.
+      downstream_impact: The encrypted feature implementation passes, while production activation remains blocked.
+      required_resolution: Provision a real key through an approved secret boundary and complete rotation plus backup and restore validation without exposing key material.
+    evidence_quality:
+      highest_level: E4
+      critical_floor: E2
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: non_representative
+      limitations:
+        - No real Yuri cost value was used.
+        - The checkout has no Git metadata; evidence is path and runtime bound.
+        - Production secret custody and disaster recovery are not locally provable.
+    production_implication:
+      state: PRODUCTION_BLOCKED
+      production_ready: false
+      evidence_level: E4
+      passed_hard_gates:
+        - SERVER_SIDE_ENCRYPTED_IMPLEMENTATION
+        - LOCAL_POSTGRES_TRANSACTION_PROOF
+        - RAW_COST_RESPONSE_REDACTION
+        - MANUAL_BELOW_COST_CONFIRMATION
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - COST_KEY_PROVISIONING_AND_RECOVERY
+        - REPRESENTATIVE_CLIENT_CATALOG
+        - REPRESENTATIVE_MARKET_REPLAY
+        - SOURCE_ACCESS_PERMISSION
+        - CONTROLLED_PILOT
+      statement: The requested encryption implementation passes, but that does not provision a real secret or authorize pilot or production use.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-COST-KEY-OPERATIONS
+        priority: P1
+        category: environment_reproducibility
+        description: No real external deployment key or protected recovery drill is available.
+        blocked_scope:
+          - production cost input activation
+          - backup restore
+          - key rotation retirement
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+        owner: Operations owner
+        resolution_condition: Provision a non-repository key through the approved secret boundary and pass rotation plus recovery tests.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPRESENTATIVE-CATALOG
+        priority: P1
+        category: data
+        description: The real or approved anonymized Yuri catalog is unavailable for representative validation.
+        blocked_scope:
+          - representative Yuri validation
+          - controlled pilot
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+        owner: Yuri and data owner
+        resolution_condition: Supply a provenance-bound representative workbook approved for measurement.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-SOURCE-AUTHORITY
+        priority: P1
+        category: source_access
+        description: Production live Prom collection lacks an immutable scope-specific authority artifact.
+        blocked_scope:
+          - production live Prom collection
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        owner: Source and product owners
+        resolution_condition: Record current production-scope permission or policy evidence.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions: []
+    source_access:
+      - BLK-P1-SOURCE-AUTHORITY
+    data:
+      - BLK-P1-REPRESENTATIVE-CATALOG
+    environment_reproducibility:
+      - BLK-P1-COST-KEY-OPERATIONS
+    unknowns: []
+
+  next_stage:
+    id: COST_KEY_PROVISIONING_AND_RECOVERY_VALIDATION
+    title: COST_KEY_PROVISIONING_AND_RECOVERY_VALIDATION
+    why_it_is_next:
+      - Implementation and local encrypted persistence are complete; real secret custody and recovery are the first unverified encryption-specific transitions.
+    required_inputs:
+      - input_id: INPUT-APPROVED-COST-KEY-SECRET
+        description: A generated 256-bit cost key delivered through the approved secret boundary
+        source: Operations owner or secret manager
+        required_state: available to the target runtime without repository or evidence exposure
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+      - input_id: INPUT-RECOVERY-TARGET
+        description: A non-production backup and restore target with approved encrypted test data
+        source: Operations owner
+        required_state: isolated, recoverable and approved for a destructive recovery rehearsal
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+    expected_artifacts:
+      - artifact_id: ART-COST-KEY-RECOVERY-REPORT
+        type: report
+        purpose: Prove secret provisioning, old and new key rotation, backup restore and key-loss failure behavior.
+        required_fields:
+          - secret_boundary
+          - rotation_result
+          - restore_result
+          - key_loss_result
+          - no_key_disclosure_evidence
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-COST-KEY-PROVISIONING
+        predicate: The target runtime starts in SERVER_SIDE_ENCRYPTED mode while the key remains absent from source, database, logs and evidence.
+        required_evidence: Secret-manager configuration metadata plus redacted runtime probe
+        threshold: No raw key material or raw cost appears outside the authorized runtime boundary
+      - id: AC-COST-RECOVERY
+        predicate: Backup restore and key rotation preserve authorized reads, new writes use the active key, and retired-key behavior is explicit.
+        required_evidence: Reproducible non-production recovery and rotation report
+        threshold: Every positive and failure-path assertion passes
+    stop_condition:
+      gate_key: STOP_GATE_COST_KEY_PROVISIONING_AND_RECOVERY_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_PROMPT_15_016_COST_ENCRYPTION_IMPLEMENTATION
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

@@ -1,4 +1,5 @@
 """Schemas for stores, listings, and catalog synchronization."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from marko.services.parser_models import Seller
+from marko.services.seller_url_resolver import validate_prom_seller_input
 
 
 class StoreCreateRequest(BaseModel):
@@ -16,9 +17,7 @@ class StoreCreateRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_prom_store_url(cls, value: str) -> str:
-        normalized = value.strip()
-        Seller.from_url(normalized)
-        return normalized
+        return validate_prom_seller_input(value)
 
 
 class StoreResponse(BaseModel):

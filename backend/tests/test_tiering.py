@@ -1,10 +1,31 @@
 from decimal import Decimal
 
+import pytest
+
 from metis.pricing import ProductTier, classify_tier, normalize_brand
 
 
 def test_brand_normalization_is_exact_and_punctuation_insensitive() -> None:
     assert normalize_brand("Mercedes-Benz") == "MERCEDESBENZ"
+
+
+@pytest.mark.parametrize(
+    ("raw_brand", "expected"),
+    [
+        ("КЕМР", "KEMP"),
+        ("КЕМП", "KEMP"),
+        ("БОШ", "BOSCH"),
+        ("ФЕБИ", "FEBI"),
+    ],
+)
+def test_known_cyrillic_brand_aliases_normalize_to_latin(
+    raw_brand: str, expected: str
+) -> None:
+    assert normalize_brand(raw_brand) == expected
+
+
+def test_unknown_cyrillic_text_does_not_create_a_brand_rule() -> None:
+    assert normalize_brand("Аналог") == ""
 
 
 def test_used_marker_is_excluded_before_brand_tier() -> None:
@@ -24,14 +45,22 @@ def test_kemp_is_classified_as_separate_direct_tier() -> None:
 
 
 def test_exact_brand_rule_classifies_oes() -> None:
-    result = classify_tier(brand="Bosch", title="Новий датчик")
+    result = classify_tier(
+        brand="Bosch",
+        title="Новий датчик",
+        brand_tiers={"BOSCH": ProductTier.OES},
+    )
 
     assert result.tier == ProductTier.OES
     assert result.confidence == Decimal("0.95")
 
 
 def test_oem_text_conflicting_with_budget_brand_abstains() -> None:
-    result = classify_tier(brand="Ridex", title="Оригинал OEM датчик")
+    result = classify_tier(
+        brand="Ridex",
+        title="Оригинал OEM датчик",
+        brand_tiers={"RIDEX": ProductTier.BUDGET},
+    )
 
     assert result.tier == ProductTier.UNKNOWN
     assert result.exclusion_reason == "TIER_CONFLICT"
@@ -53,3 +82,10 @@ def test_unknown_brand_abstains_instead_of_guessing_budget() -> None:
 
     assert result.tier == ProductTier.UNKNOWN
     assert result.confidence == Decimal("0")
+
+
+def test_unapproved_engineering_brand_is_not_a_runtime_default() -> None:
+    result = classify_tier(brand="Bosch", title="Новий датчик")
+
+    assert result.tier == ProductTier.UNKNOWN
+    assert result.reasons == ("NO_TIER_EVIDENCE",)

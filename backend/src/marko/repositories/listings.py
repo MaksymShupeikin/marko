@@ -54,5 +54,7 @@ async def add_listing(session: AsyncSession, listing: Listing) -> None:
     session.add(listing)
 
 
-async def add_price_observation(session: AsyncSession, observation: PriceObservation) -> None:
+async def add_price_observation(
+    session: AsyncSession, observation: PriceObservation
+) -> None:
     session.add(observation)

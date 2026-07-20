@@ -16,6 +16,7 @@ from factories import comparison_with_prices, params, product, seed_info
 
 # normalize_tokens
 
+
 def test_normalize_tokens_none_returns_empty():
     assert normalize_tokens(None) == []
 
@@ -29,6 +30,7 @@ def test_normalize_tokens_lowercases():
 
 
 # _token_similarity
+
 
 def test_token_similarity_identical_is_one():
     assert _token_similarity({"a", "b"}, {"a", "b"}) == 1.0
@@ -48,6 +50,7 @@ def test_token_similarity_blends_jaccard_and_containment():
 
 # laterality_conflict
 
+
 def test_laterality_conflict_left_vs_right():
     assert laterality_conflict(["лівий"], ["правий"]) is True
 
@@ -66,6 +69,7 @@ def test_laterality_conflict_unspecified_is_false():
 
 # brands_compatible
 
+
 def test_brands_compatible_equal():
     assert brands_compatible("Bosch", "bosch") is True
 
@@ -80,6 +84,7 @@ def test_brands_compatible_different_brands():
 
 # match_offer
 
+
 def test_match_offer_model_id_exact():
     seed = product(id=1, **{"model": {"id": "M1"}})
     cand = product(id=2, name="геть інша назва", **{"model": {"id": "M1"}})
@@ -92,10 +97,10 @@ def test_match_offer_sku_exact():
     assert match_offer(seed, cand, 0.55).kind == "sku"
 
 
-def test_match_offer_exact_model_does_not_bypass_brand_conflict():
+def test_match_offer_exact_model_ignores_brand_as_identity_gate():
     seed = product(id=1, **{"model": {"id": "M1"}}, manufacturerInfo={"name": "Bosch"})
     cand = product(id=2, **{"model": {"id": "M1"}}, manufacturerInfo={"name": "Sachs"})
-    assert match_offer(seed, cand, 0.01) is None
+    assert match_offer(seed, cand, 0.01) == Match("model", 1.0)
 
 
 def test_match_offer_exact_sku_does_not_bypass_laterality_conflict():
@@ -122,13 +127,18 @@ def test_match_offer_rejects_laterality_conflict():
     assert match_offer(seed, cand, 0.10) is None
 
 
-def test_match_offer_rejects_brand_mismatch():
-    seed = product(id=1, name="Амортизатор задній правий", manufacturerInfo={"name": "Bosch"})
-    cand = product(id=2, name="Амортизатор задній правий", manufacturerInfo={"name": "Sachs"})
-    assert match_offer(seed, cand, 0.55) is None
+def test_match_offer_allows_brand_mismatch_to_reach_comparability():
+    seed = product(
+        id=1, name="Амортизатор задній правий", manufacturerInfo={"name": "Bosch"}
+    )
+    cand = product(
+        id=2, name="Амортизатор задній правий", manufacturerInfo={"name": "Sachs"}
+    )
+    assert match_offer(seed, cand, 0.55).kind == "fuzzy"
 
 
 # _price_value
+
 
 def test_price_value_from_price():
     assert _price_value(product(price="1234.5")) == 1234.5
@@ -148,24 +158,51 @@ def test_price_value_garbage_returns_none():
 
 # build_comparison
 
+
 def test_build_comparison_keeps_cheapest_per_seller():
-    seed = seed_info(id=1, name="Амортизатор задній правий", company={"id": 1, "name": "A"})
-    dear = product(id=2, name="Амортизатор задній правий", price="900", company={"id": 5, "name": "B"})
-    cheap = product(id=3, name="Амортизатор задній правий", price="700", company={"id": 5, "name": "B"})
+    seed = seed_info(
+        id=1, name="Амортизатор задній правий", company={"id": 1, "name": "A"}
+    )
+    dear = product(
+        id=2,
+        name="Амортизатор задній правий",
+        price="900",
+        company={"id": 5, "name": "B"},
+    )
+    cheap = product(
+        id=3,
+        name="Амортизатор задній правий",
+        price="700",
+        company={"id": 5, "name": "B"},
+    )
     comparison = build_comparison(seed, [dear, cheap], params())
     assert [o.price for o in comparison.offers] == [700.0]
 
 
 def test_build_comparison_skips_seed_own_seller():
-    seed = seed_info(id=1, name="Амортизатор задній правий", company={"id": 5, "name": "B"})
-    same_seller = product(id=2, name="Амортизатор задній правий", price="700", company={"id": 5, "name": "B"})
+    seed = seed_info(
+        id=1, name="Амортизатор задній правий", company={"id": 5, "name": "B"}
+    )
+    same_seller = product(
+        id=2,
+        name="Амортизатор задній правий",
+        price="700",
+        company={"id": 5, "name": "B"},
+    )
     assert build_comparison(seed, [same_seller], params()).offers == []
 
 
 def test_build_comparison_sorts_and_caps_max_sellers():
-    seed = seed_info(id=1, name="Амортизатор задній правий", company={"id": 1, "name": "A"})
+    seed = seed_info(
+        id=1, name="Амортизатор задній правий", company={"id": 1, "name": "A"}
+    )
     candidates = [
-        product(id=i, name="Амортизатор задній правий", price=str(price), company={"id": i, "name": f"S{i}"})
+        product(
+            id=i,
+            name="Амортизатор задній правий",
+            price=str(price),
+            company={"id": i, "name": f"S{i}"},
+        )
         for i, price in [(2, 900), (3, 500), (4, 700)]
     ]
     comparison = build_comparison(seed, candidates, params(max_sellers=2))
@@ -174,11 +211,16 @@ def test_build_comparison_sorts_and_caps_max_sellers():
 
 def test_build_comparison_counts_all_scanned():
     seed = seed_info(id=1, company={"id": 1, "name": "A"})
-    candidates = [product(id=2, name="нічого спільного", price="1", company={"id": 2, "name": "S"})]
+    candidates = [
+        product(
+            id=2, name="нічого спільного", price="1", company={"id": 2, "name": "S"}
+        )
+    ]
     assert build_comparison(seed, candidates, params()).candidates_scanned == 1
 
 
 # PriceComparison properties
+
 
 def test_comparison_stats_min_median_max():
     comp = comparison_with_prices([300, 500, 700])
@@ -197,12 +239,21 @@ def test_comparison_savings_vs_seed():
 
 def test_comparison_empty_stats_are_none():
     comp = comparison_with_prices([])
-    assert (comp.min_price, comp.median_price, comp.spread_pct, comp.cheapest) == (None, None, None, None)
+    assert (comp.min_price, comp.median_price, comp.spread_pct, comp.cheapest) == (
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 # build_search_query
 
+
 def test_build_query_truncates_tokens_and_prepends_brand():
-    p = product(name="один два три чотири п'ять шість сім вісім дев'ять", manufacturerInfo={"name": "Bosch"})
+    p = product(
+        name="один два три чотири п'ять шість сім вісім дев'ять",
+        manufacturerInfo={"name": "Bosch"},
+    )
     query = build_search_query(p)
     assert query.startswith("Bosch ") and len(query.split()) == _MAX_QUERY_TOKENS + 1

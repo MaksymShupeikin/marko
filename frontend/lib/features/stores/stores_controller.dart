@@ -5,6 +5,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'store_models.dart';
 import 'stores_api.dart';
 
+bool isSupportedPromStoreUrl(String rawUrl) {
+  final uri = Uri.tryParse(rawUrl.trim());
+  if (uri == null || uri.scheme.toLowerCase() != 'https' || uri.host.isEmpty) {
+    return false;
+  }
+  final host = uri.host.toLowerCase();
+  return host == 'prom.ua' ||
+      host == 'www.prom.ua' ||
+      host.endsWith('.prom.ua');
+}
+
 class StoresController extends AsyncNotifier<StoresState> {
   int _pollGeneration = 0;
 
@@ -29,14 +40,9 @@ class StoresController extends AsyncNotifier<StoresState> {
 
   Future<bool> addStore(String rawUrl) async {
     final url = rawUrl.trim();
-    final uri = Uri.tryParse(url);
-    if (uri == null ||
-        !uri.hasScheme ||
-        (uri.host != 'prom.ua' && uri.host != 'www.prom.ua')) {
+    if (!isSupportedPromStoreUrl(url)) {
       state = AsyncData(
-        _current.copyWith(
-          error: 'Введите корректную ссылку магазина на prom.ua',
-        ),
+        _current.copyWith(error: 'Введите HTTPS-ссылку магазина на prom.ua'),
       );
       return false;
     }

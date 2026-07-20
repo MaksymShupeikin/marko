@@ -183,8 +183,7 @@ async def publish_dispatch(
             error=event.last_error,
         )
     if event.status == "dispatching" and (
-        event.lease_expires_at is not None
-        and _utc(event.lease_expires_at) > current
+        event.lease_expires_at is not None and _utc(event.lease_expires_at) > current
     ):
         return _outcome(event, published=False, latency=None)
     if _utc(event.available_at) > current:

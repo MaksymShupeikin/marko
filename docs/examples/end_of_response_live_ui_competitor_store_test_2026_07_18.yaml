@@ -1,0 +1,221 @@
+end_of_response:
+  contract_version: "15.1"
+  stage_result:
+    stage:
+      id: LIVE_UI_COMPETITOR_STORE_TEST_2026_07_18
+      title: LIVE UI COMPETITOR STORE TEST
+      type: VALIDATION
+      scope_owner: Marko
+    status: FAIL
+    completed_scope:
+      - scope_item_id: SCOPE-LIVE-UI-NAVIGATION
+        result: The authenticated local Marko UI loaded and the Recommendations, Stores, Overview, and Catalog pages rendered their current empty states without navigation failure.
+        artifact_refs:
+          - frontend/lib/features/stores/stores_page.dart
+          - frontend/lib/features/dashboard/dashboard_page.dart
+          - frontend/lib/features/catalog/catalog_page.dart
+        evidence_refs:
+          - Computer Use Safari session against http://localhost:8080
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-COMPETITOR-DISCOVERY
+        result: Two current public Prom competitors were identified and canonical seller identities were recovered from live Prom search data.
+        artifact_refs:
+          - https://prom.ua/ua/c2257594-pilot-avto-avtozapchasti.html
+          - https://prom.ua/ua/c3325174-profparts.html
+        evidence_refs:
+          - https://pilot-avto.prom.ua/ua/
+          - https://profiparts-cs3325174.prom.ua/
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-PARSER-BLACK-BOX
+        result: The existing PromGateway parsed 29 first-page products from each competitor; the first Pilot-avto page contained 7 explicitly available products and the first PROFParts page contained 29.
+        artifact_refs:
+          - backend/src/marko/parsers/prom/gateway.py
+          - backend/src/marko/parsers/prom/parser.py
+        evidence_refs:
+          - docker compose exec api PromGateway one-page runtime check
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-UI-FAILURE-ROOT-CAUSE
+        result: The canonical Pilot-avto URL passed frontend validation, POST /api/v1/stores reached FastAPI, and the request failed with an outbox aggregate_id NOT NULL violation because sync_run.id was still None.
+        artifact_refs:
+          - frontend/lib/features/stores/stores_controller.dart
+          - backend/src/marko/services/stores.py
+          - backend/src/marko/repositories/stores.py
+          - backend/src/marko/services/scraper_outbox.py
+        evidence_refs:
+          - docker compose logs api db at 2026-07-18T17:40:54Z
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope:
+      - scope_item_id: SCOPE-END-TO-END-STORE-SYNC
+        reason: A real store cannot be persisted and dispatched because the outbox event is constructed before SyncRun receives its UUID.
+        hard_required: true
+        external_dependency: false
+      - scope_item_id: SCOPE-POST-SYNC-UI
+        reason: Product list, sync completion, comparison, and recommendation UI cannot be exercised until store creation succeeds.
+        hard_required: true
+        external_dependency: false
+    strongest_verified_result:
+      claim_id: CLM-LIVE-PROM-PARSER-WORKS
+      result: Live Prom HTML retrieval and the frozen parser boundary work for both tested competitor stores and return structured products with IDs, names, prices, currency, brand, SKU, and product URLs.
+      evidence_level: E3
+      evidence_refs:
+        - backend/src/marko/parsers/prom/gateway.py
+        - docker compose exec api PromGateway one-page runtime check
+      reproduction_status: reproducible
+      limitations:
+        - Only the first catalog page of each store was sampled.
+        - The queued batch and persistence path was not reachable because store registration failed.
+    weakest_critical_area:
+      area_id: AREA-STORE-SYNC-DISPATCH
+      area: Store registration to outbox dispatch transition
+      score: 0
+      evidence_level: E3
+      reason: stores_repo.create_sync_run adds but does not flush SyncRun, while _get_or_create_sync_run immediately reads sync_run.id to build the outbox event.
+      downstream_impact: Every new store connection can return HTTP 500 before the catalog job is queued, so the main competitor onboarding flow is unusable.
+      required_resolution: Assign or flush the SyncRun UUID before enqueue_dispatch, add a real PostgreSQL integration test for POST /api/v1/stores, rebuild, and repeat the browser flow.
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E2
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: partial
+      limitations:
+        - Two competitors and one browser were tested.
+        - XLSX import was not exercised because no test catalog file was supplied in this request.
+        - Existing focused unit tests pass but do not execute the real store-registration transaction.
+    production_implication:
+      state: DEVELOPMENT_ONLY
+      production_ready: false
+      evidence_level: E3
+      passed_hard_gates:
+        - LOCAL_UI_LOADS
+        - AUTHENTICATED_NAVIGATION
+        - LIVE_PROM_FIRST_PAGE_PARSE
+      failed_hard_gates:
+        - LIVE_STORE_CONNECTION_DISPATCH
+      blocked_hard_gates:
+        - POST_SYNC_PRODUCT_AND_RECOMMENDATION_FLOW
+      statement: The requested live test is complete and found a deterministic P0 defect; the current build cannot onboard a competitor store through the UI.
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0:
+      - id: BLK-P0-SYNC-RUN-ID-NONE
+        priority: P0
+        category: environment_reproducibility
+        description: The store registration transaction constructs the outbox event with aggregate_id and task_args derived from sync_run.id before SQLAlchemy has assigned the default UUID.
+        blocked_scope:
+          - connect competitor store
+          - dispatch catalog import
+          - populate products and recommendations
+        affects_current_gate: true
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - backend/src/marko/services/stores.py
+          - backend/src/marko/repositories/stores.py
+          - docker compose logs api db at 2026-07-18T17:40:54Z
+        owner: backend engineering
+        resolution_condition: POST /api/v1/stores returns 202 with non-null store_id and sync_run_id, creates a valid outbox row, and the worker consumes the job in a real PostgreSQL integration and browser test.
+        can_agent_resolve_now: true
+        risk_score: NOT_CALIBRATED
+    p1:
+      - id: BLK-P1-PROM-SUBDOMAIN-URL-REJECTED
+        priority: P1
+        category: environment_reproducibility
+        description: The Stores form rejects normal public seller links such as https://pilot-avto.prom.ua/ua/ even though the UI asks for a public Prom store link.
+        blocked_scope:
+          - intuitive competitor onboarding
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - frontend/lib/features/stores/stores_controller.dart
+          - Computer Use Safari validation attempt
+        owner: frontend and backend engineering
+        resolution_condition: Public Prom seller subdomains are resolved to canonical company URLs or the UI explicitly explains and accepts only canonical marketplace seller URLs.
+        can_agent_resolve_now: true
+        risk_score: NOT_CALIBRATED
+    business_decisions: []
+    source_access: []
+    data: []
+    environment_reproducibility:
+      - BLK-P0-SYNC-RUN-ID-NONE
+      - BLK-P1-PROM-SUBDOMAIN-URL-REJECTED
+    unknowns: []
+  next_stage:
+    id: STORE_SYNC_DISPATCH_REPAIR_AND_REVALIDATION
+    title: STORE SYNC DISPATCH REPAIR AND REVALIDATION
+    why_it_is_next:
+      - It repairs the first deterministic failure in the real competitor onboarding path.
+      - It unlocks the product, comparison, and recommendation UI tests that could not be reached.
+    required_inputs:
+      - input_id: INPUT-REPRODUCIBLE-PILOT-URL
+        description: Canonical Pilot-avto Prom seller URL
+        source: live Prom search data
+        required_state: URL remains publicly reachable
+        currently_available: true
+        evidence_ref: https://prom.ua/ua/c2257594-pilot-avto-avtozapchasti.html
+      - input_id: INPUT-LOCAL-STACK
+        description: Healthy local PostgreSQL, Redis, API, frontend, and store-sync worker stack
+        source: current Docker Compose runtime
+        required_state: required services remain healthy
+        currently_available: true
+        evidence_ref: docker compose ps
+    expected_artifacts:
+      - artifact_id: ART-SYNC-RUN-ID-FIX
+        type: code
+        purpose: Must ensure SyncRun has a stable UUID before outbox construction.
+        required_fields:
+          - non_null_sync_run_id
+          - valid_outbox_aggregate_id
+          - deterministic_task_args
+        temporal_state: PLANNED_NOT_STARTED
+      - artifact_id: ART-STORE-REGISTRATION-INTEGRATION-TEST
+        type: test
+        purpose: Must cover the real PostgreSQL transaction from authenticated POST through outbox publication.
+        required_fields:
+          - http_202
+          - sync_run_id
+          - outbox_row
+          - worker_consumption
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-STORE-SYNC-01
+        predicate: A canonical Prom competitor URL connects through the browser without an error banner
+        required_evidence: Computer Use browser replay plus API logs
+        threshold: POST returns 202 and UI enters queued or running state
+      - id: AC-STORE-SYNC-02
+        predicate: The outbox row contains the same non-null SyncRun UUID in aggregate_id, event_key, and task_args
+        required_evidence: PostgreSQL integration assertion
+        threshold: exact identity equality
+      - id: AC-STORE-SYNC-03
+        predicate: The store-sync worker persists products from both tested competitors
+        required_evidence: completed sync jobs and store product counts
+        threshold: product_count greater than zero for each store
+    stop_condition:
+      gate_key: STOP_GATE_STORE_SYNC_DISPATCH_REPAIR_AND_REVALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+  stop_gate:
+    key: STOP_GATE_LIVE_UI_COMPETITOR_STORE_TEST_2026_07_18
+    primary_status: FAIL
+    secondary_findings: []
+    automatic_transition: false

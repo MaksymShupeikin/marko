@@ -22,9 +22,7 @@ VERIFICATION_ENUMS = frozenset(
         "NOT_APPLICABLE",
     }
 )
-QUEUE_STABILITY_ENUMS = frozenset(
-    {"STABLE", "UNSTABLE", "UNKNOWN", "NOT_APPLICABLE"}
-)
+QUEUE_STABILITY_ENUMS = frozenset({"STABLE", "UNSTABLE", "UNKNOWN", "NOT_APPLICABLE"})
 CAPACITY_MODEL_ENUMS = frozenset(
     {"MEASURED_END_TO_END", "DERIVED_BOTTLENECK", "HYBRID", "UNKNOWN"}
 )
@@ -123,7 +121,10 @@ def validate_scraper_audit_summary(payload: Mapping[str, Any]) -> list[str]:
     if score is not None:
         if not _number(score) or not 0 <= float(score) <= 100:
             issues.append("readiness.weighted_score must be null or in [0, 100]")
-        elif evidence_level in EVIDENCE_CAP and float(score) > EVIDENCE_CAP[evidence_level]:
+        elif (
+            evidence_level in EVIDENCE_CAP
+            and float(score) > EVIDENCE_CAP[evidence_level]
+        ):
             issues.append("readiness.weighted_score exceeds evidence ceiling")
 
     capacity = _mapping(payload, "capacity_model", issues)
@@ -133,8 +134,13 @@ def validate_scraper_audit_summary(payload: Mapping[str, Any]) -> list[str]:
         issues.append("capacity_model.queue_stability is invalid")
     utilization = _mapping(capacity, "utilization", issues)
     if capacity.get("queue_stability") == "STABLE":
-        required = [utilization.get(name) for name in ("worker", "source", "database", "queue")]
-        if any(value is None or not _number(value) or float(value) >= 1 for value in required):
+        required = [
+            utilization.get(name) for name in ("worker", "source", "database", "queue")
+        ]
+        if any(
+            value is None or not _number(value) or float(value) >= 1
+            for value in required
+        ):
             issues.append("STABLE queue requires every required utilization below one")
     terminal_capacity = _mapping(capacity, "capacity_items_per_second", issues).get(
         "terminal"
@@ -146,7 +152,9 @@ def validate_scraper_audit_summary(payload: Mapping[str, Any]) -> list[str]:
         or arrival is None
         or float(terminal_capacity) <= float(arrival)
     ) and open_drain is not None:
-        issues.append("open-flow drain must be null when capacity is unknown/insufficient")
+        issues.append(
+            "open-flow drain must be null when capacity is unknown/insufficient"
+        )
 
     reconciliation = _mapping(payload, "reconciliation", issues)
     submitted = reconciliation.get("submitted")
@@ -156,9 +164,10 @@ def validate_scraper_audit_summary(payload: Mapping[str, Any]) -> list[str]:
     if all(value is not None for value in (submitted, admitted, dedup, rejected)):
         if submitted != admitted + dedup + rejected:
             issues.append("submitted must equal admitted + deduplicated + rejected")
-    if reconciliation.get("reconciled") is True and reconciliation.get(
-        "unaccounted_loss"
-    ) != 0:
+    if (
+        reconciliation.get("reconciled") is True
+        and reconciliation.get("unaccounted_loss") != 0
+    ):
         issues.append("reconciled=true requires unaccounted_loss=0")
 
     existing = _mapping(payload, "existing_scraper", issues)
@@ -209,7 +218,11 @@ def _mapping(
 
 
 def _number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 __all__ = [

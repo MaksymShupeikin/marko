@@ -81,9 +81,9 @@ async def persist_http_traces(
                 raw_evidence_bytes += len(trace.raw_body)
                 writes += 1
             evidence_blob = await session.scalar(
-                select(ScrapeEvidenceBlob).where(
-                    ScrapeEvidenceBlob.content_sha256 == trace.content_sha256
-                ).with_for_update(read=True, key_share=True)
+                select(ScrapeEvidenceBlob)
+                .where(ScrapeEvidenceBlob.content_sha256 == trace.content_sha256)
+                .with_for_update(read=True, key_share=True)
             )
             if evidence_blob is None:
                 raise EvidenceIntegrityError(
@@ -242,9 +242,7 @@ async def evidence_coverage_ratio(
         outcome in {"success", "replayed"} and blob_id is not None
         for outcome, blob_id in rows
     )
-    return (
-        Decimal(evidenced) / Decimal(len(rows))
-    ).quantize(Decimal("0.000001"))
+    return (Decimal(evidenced) / Decimal(len(rows))).quantize(Decimal("0.000001"))
 
 
 async def delete_orphaned_evidence_blobs(
@@ -261,8 +259,7 @@ async def delete_orphaned_evidence_blobs(
         .where(
             ~exists(
                 select(ScrapeHttpRequest.id).where(
-                    ScrapeHttpRequest.evidence_blob_id
-                    == ScrapeEvidenceBlob.id
+                    ScrapeHttpRequest.evidence_blob_id == ScrapeEvidenceBlob.id
                 )
             )
         )
@@ -270,9 +267,7 @@ async def delete_orphaned_evidence_blobs(
         .limit(limit)
     )
     result = await session.execute(
-        delete(ScrapeEvidenceBlob).where(
-            ScrapeEvidenceBlob.id.in_(orphan_ids)
-        )
+        delete(ScrapeEvidenceBlob).where(ScrapeEvidenceBlob.id.in_(orphan_ids))
     )
     await session.commit()
     return int(result.rowcount or 0)

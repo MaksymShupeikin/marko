@@ -177,12 +177,10 @@ def test_stage_id_normalization_and_gate_key(raw: str, normalized: str) -> None:
 def test_status_precedence_is_canonical() -> None:
     assert aggregate_status([StageStatus.PASS, StageStatus.FAIL]) is StageStatus.FAIL
     assert (
-        aggregate_status([StageStatus.FAIL, StageStatus.BLOCKED])
-        is StageStatus.BLOCKED
+        aggregate_status([StageStatus.FAIL, StageStatus.BLOCKED]) is StageStatus.BLOCKED
     )
     assert (
-        aggregate_status([StageStatus.BLOCKED, StageStatus.NO_GO])
-        is StageStatus.NO_GO
+        aggregate_status([StageStatus.BLOCKED, StageStatus.NO_GO]) is StageStatus.NO_GO
     )
 
 
@@ -310,9 +308,7 @@ def test_pass_cannot_hide_hard_incomplete_scope_or_missing_result() -> None:
             "external_dependency": False,
         }
     ]
-    payload["stage_result"]["strongest_verified_result"]["claim_id"] = (
-        "NONE_VERIFIED"
-    )
+    payload["stage_result"]["strongest_verified_result"]["claim_id"] = "NONE_VERIFIED"
     payload["stage_result"]["strongest_verified_result"]["evidence_refs"] = []
 
     assert {
@@ -351,9 +347,7 @@ def test_audit_can_pass_while_production_is_false() -> None:
     payload = valid_payload()
     payload["stage_result"]["stage"]["type"] = "AUDIT"
     payload["stage_result"]["stage"]["title"] = "PROJECT_STATE_AUDIT"
-    payload["stage_result"]["production_implication"]["state"] = (
-        "PRODUCTION_BLOCKED"
-    )
+    payload["stage_result"]["production_implication"]["state"] = "PRODUCTION_BLOCKED"
     payload["stage_result"]["production_implication"]["failed_hard_gates"] = [
         "DEPLOYMENT_NOT_PROVEN"
     ]
@@ -445,9 +439,7 @@ def test_fail_requires_observed_defect_e3_and_repair_successor() -> None:
             "external_dependency": False,
         }
     ]
-    payload["next_stage"]["id"] = (
-        "PROMPT_15_012_IMPLEMENTATION_REPAIR_OR_REVALIDATION"
-    )
+    payload["next_stage"]["id"] = "PROMPT_15_012_IMPLEMENTATION_REPAIR_OR_REVALIDATION"
     payload["next_stage"]["stop_condition"]["gate_key"] = (
         "STOP_GATE_PROMPT_15_012_IMPLEMENTATION_REPAIR_OR_REVALIDATION"
     )
@@ -484,9 +476,9 @@ def test_no_go_requires_reproducible_falsification_and_decision_successor() -> N
     assert validate_contract(contract_from(payload)) == ()
 
     invalid = deepcopy(payload)
-    invalid["stage_result"]["strongest_verified_result"][
-        "reproduction_status"
-    ] = "not_reproducible"
+    invalid["stage_result"]["strongest_verified_result"]["reproduction_status"] = (
+        "not_reproducible"
+    )
     assert "NO_GO_WITHOUT_REPRODUCIBLE_FALSIFICATION" in issue_codes(invalid)
 
 
@@ -500,9 +492,7 @@ def test_none_authorized_is_valid_when_next_stage_cannot_be_determined() -> None
             "acceptance_criteria": [],
         }
     )
-    payload["next_stage"]["stop_condition"]["gate_key"] = (
-        "STOP_GATE_NONE_AUTHORIZED"
-    )
+    payload["next_stage"]["stop_condition"]["gate_key"] = "STOP_GATE_NONE_AUTHORIZED"
 
     assert validate_contract(contract_from(payload)) == ()
 
@@ -527,12 +517,8 @@ def test_rendered_response_rejects_content_after_gate_and_duplicate_gate() -> No
     codes = {issue.code for issue in validate_rendered_footer(response)}
     assert "STOP_GATE_NOT_LAST" in codes
 
-    duplicate_only = (
-        "STOP_GATE_PROMPT_15_012_IMPLEMENTATION = PASS\n\n" f"{rendered}"
-    )
-    duplicate_codes = {
-        issue.code for issue in validate_rendered_footer(duplicate_only)
-    }
+    duplicate_only = f"STOP_GATE_PROMPT_15_012_IMPLEMENTATION = PASS\n\n{rendered}"
+    duplicate_codes = {issue.code for issue in validate_rendered_footer(duplicate_only)}
     assert "STOP_GATE_COUNT_INVALID" in duplicate_codes
 
 
@@ -576,9 +562,7 @@ def test_cli_validates_and_renders_manifest(
 
     assert cli_main(["--manifest", str(manifest_path), "--render"]) == 0
     rendered = capsys.readouterr().out
-    assert rendered.rstrip().endswith(
-        "STOP_GATE_PROMPT_15_012_IMPLEMENTATION = PASS"
-    )
+    assert rendered.rstrip().endswith("STOP_GATE_PROMPT_15_012_IMPLEMENTATION = PASS")
 
     assert cli_main(["--manifest", str(manifest_path), "--self-check"]) == 0
     self_check_output = capsys.readouterr().out

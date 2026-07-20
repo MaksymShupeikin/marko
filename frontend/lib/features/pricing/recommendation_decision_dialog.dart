@@ -35,7 +35,7 @@ class _RecommendationDecisionDialogState
     extends State<_RecommendationDecisionDialog> {
   late final TextEditingController _price;
   late final TextEditingController _reason;
-  bool _allowBelowCost = false;
+  bool _declareBelowCost = false;
   String? _error;
 
   @override
@@ -57,8 +57,7 @@ class _RecommendationDecisionDialogState
   @override
   Widget build(BuildContext context) {
     final target = _targetPrice;
-    final cost = _number(widget.recommendation.contextSnapshot['cost']);
-    final belowCost = target != null && cost != null && target < cost;
+    final encryptedCostConfigured = _encryptedCostConfigured;
     return AlertDialog(
       title: Text(_title(widget.decision)),
       content: SizedBox(
@@ -87,27 +86,48 @@ class _RecommendationDecisionDialogState
                   decoration: const InputDecoration(labelText: 'Ваша цена, ₴'),
                   onChanged: (_) => setState(() {
                     _error = null;
-                    _allowBelowCost = false;
+                    _declareBelowCost = false;
                   }),
                 ),
               ],
-              if (belowCost) ...[
+              if (widget.decision != 'rejected') ...[
                 const SizedBox(height: 14),
-                MarkoInlineMessage(
-                  message:
-                      'Цена ${_money(target)} ниже себестоимости ${_money(cost)}. Это разрешено только для неликвида и будет записано в журнал.',
-                  tone: MarkoMessageTone.warning,
-                ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: _allowBelowCost,
-                  title: const Text('Явно подтверждаю цену ниже себестоимости'),
-                  onChanged: widget.recommendation.stockStatus == 'dead_stock'
-                      ? (value) => setState(() {
-                          _allowBelowCost = value ?? false;
-                        })
-                      : null,
-                ),
+                if (_serverCostMode && !encryptedCostConfigured)
+                  const MarkoInlineMessage(
+                    message:
+                        'Для этой позиции себестоимость ещё не сохранена. Сервер не сможет проверить решение на убыточность.',
+                    tone: MarkoMessageTone.warning,
+                  ),
+                if (_recommendedPriceBelowCost)
+                  const MarkoInlineMessage(
+                    message:
+                        'Рекомендованная цена ниже сохранённой себестоимости. Для записи решения нужно явное подтверждение.',
+                    tone: MarkoMessageTone.warning,
+                  ),
+                if (!_serverCostMode || encryptedCostConfigured)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _declareBelowCost,
+                    title: Text(
+                      _serverCostMode
+                          ? 'Разрешаю ручное решение ниже зашифрованной себестоимости'
+                          : 'По моей локальной себестоимости эта цена убыточна',
+                    ),
+                    subtitle: Text(
+                      _serverCostMode
+                          ? 'Сервер проверит цену после отправки. Исходная себестоимость не возвращается в интерфейс или audit trail.'
+                          : 'Сумма себестоимости не отправляется в API; в audit trail попадёт только эта отметка.',
+                    ),
+                    onChanged: (value) => setState(() {
+                      _declareBelowCost = value ?? false;
+                    }),
+                  ),
+                if (_declareBelowCost)
+                  const MarkoInlineMessage(
+                    message:
+                        'Убыточная цена требует ручного решения и причины. Себестоимость не является жёстким floor.',
+                    tone: MarkoMessageTone.warning,
+                  ),
               ],
               const SizedBox(height: 14),
               TextField(
@@ -149,39 +169,42 @@ class _RecommendationDecisionDialogState
     return double.tryParse(_price.text.trim().replaceAll(',', '.'));
   }
 
+  bool get _serverCostMode =>
+      widget.recommendation.contextSnapshot['cost_privacy_mode']?.toString() ==
+      'SERVER_SIDE_ENCRYPTED';
+
+  bool get _encryptedCostConfigured =>
+      _serverCostMode &&
+      widget.recommendation.contextSnapshot['cost_configured'] == true;
+
+  bool get _recommendedPriceBelowCost =>
+      _encryptedCostConfigured &&
+      widget.recommendation.contextSnapshot['recommended_price_below_cost'] ==
+          true;
+
   void _submit() {
     final target = _targetPrice;
     if (widget.decision != 'rejected' && (target == null || target <= 0)) {
       setState(() => _error = 'Укажите положительную цену');
       return;
     }
+    if (widget.decision == 'accepted' &&
+        _recommendedPriceBelowCost &&
+        !_declareBelowCost) {
+      setState(
+        () => _error =
+            'Подтвердите ручное решение ниже зашифрованной себестоимости',
+      );
+      return;
+    }
     if (_reason.text.trim().length < 3) {
       setState(() => _error = 'Укажите причину решения');
       return;
     }
-    final cost = _number(widget.recommendation.contextSnapshot['cost']);
-    final belowCost = target != null && cost != null && target < cost;
-    if (belowCost && widget.recommendation.stockStatus != 'dead_stock') {
-      setState(
-        () => _error = 'Цена ниже себестоимости доступна только для неликвида',
-      );
-      return;
-    }
-    if (belowCost && !_allowBelowCost) {
-      setState(() => _error = 'Подтвердите цену ниже себестоимости');
-      return;
-    }
-    final floor = _number(
-      widget.recommendation.contextSnapshot['below_cost_floor'],
-    );
-    if (belowCost && floor != null && target < floor) {
-      setState(() => _error = 'Цена ниже утверждённого floor ${_money(floor)}');
-      return;
-    }
     final payload = <String, dynamic>{
       'decision': widget.decision,
-      'allow_below_cost': belowCost && _allowBelowCost,
-      'warning_confirmed': belowCost && _allowBelowCost,
+      'allow_below_cost': _declareBelowCost,
+      'warning_confirmed': _declareBelowCost,
       'reason': _reason.text.trim(),
     };
     if (widget.decision == 'overridden' && target != null) {
@@ -190,9 +213,6 @@ class _RecommendationDecisionDialogState
     Navigator.of(context).pop(payload);
   }
 }
-
-double? _number(dynamic value) =>
-    value == null ? null : double.tryParse(value.toString());
 
 String _money(double value) => '${value.toStringAsFixed(0)} ₴';
 

@@ -87,7 +87,7 @@ class _CatalogContent extends StatelessWidget {
                         ),
                         const SizedBox(height: 7),
                         Text(
-                          'Загрузите XLSX-экспорт. OE, цена и исходная строка будут сохранены.',
+                          'Загрузите экспорт Prom.ua или рабочий XLSX «Ввод Юрия».',
                           style: Theme.of(
                             context,
                           ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -114,7 +114,7 @@ class _CatalogContent extends StatelessWidget {
                 const SizedBox(height: 20),
                 const MarkoInlineMessage(
                   message:
-                      'Обязательны: OE/OEM, название, категория и цена. До 25 MB и 100 000 строк.',
+                      'Обязательны: OE/OEM, название, категория и цена. Статус, возраст запаса и продажи можно заполнить в ячейках. До 25 MB.',
                 ),
                 if (state.error != null) ...[
                   const SizedBox(height: 12),

@@ -1,4 +1,5 @@
 """Domain data models and the raw-to-Product mapping."""
+
 from __future__ import annotations
 
 import re
@@ -25,14 +26,15 @@ _FIELDS_PATH_MAP = {
     "measure_unit": "measureUnit",
     "category_id": "categoryId",
     "brand": "manufacturerInfo.name",
-    "model_id": "model.id",          # cross-seller model identity (may be absent)
-    "seller_id": "company.id",       # present in search results
+    "model_id": "model.id",  # cross-seller model identity (may be absent)
+    "seller_id": "company.id",  # present in search results
     "seller_name": "company.name",
     "seller_slug": "company.slug",
     "opinions_count": "productOpinionCounters.count",
     "opinions_rating": "productOpinionCounters.rating",
     "image": "imageAlt",
     "url_text": "urlText",
+    "description": "description",
     # Additive post-parse/enrichment boundary. The frozen network parser may
     # leave every field below absent; UNKNOWN is preserved downstream.
     "oe_raw": "comparisonEvidence.oeRaw",
@@ -46,6 +48,7 @@ _FIELDS_PATH_MAP = {
     "position": "comparisonEvidence.position",
     "condition": "comparisonEvidence.condition",
     "package_quantity": "comparisonEvidence.packageQuantity",
+    "characteristics": "characteristics",
 }
 
 # Raw keys used as fallbacks when the primary nested path is absent.
@@ -69,6 +72,7 @@ def get_nested(data: dict, path: str) -> Any:
 @dataclass(frozen=True)
 class Product:
     """Normalized product. Field order defines CSV column order."""
+
     id: int | None
     name: str | None
     sku: str | None
@@ -102,15 +106,27 @@ class Product:
     position: str | None
     condition: str | None
     package_quantity: int | None
+    characteristics: Any
+    description: str | None
     url: str | None  # calculated, not from map; kept last for CSV compatibility
 
     @classmethod
     def from_raw(cls, raw: dict, lang: str = "ua") -> Product:
         """Create a Product from a raw product object in the Apollo cache."""
-        values = {name: get_nested(raw, path) for name, path in _FIELDS_PATH_MAP.items()}
+        values = {
+            name: get_nested(raw, path) for name, path in _FIELDS_PATH_MAP.items()
+        }
         for name, raw_key in _FALLBACK_KEYS.items():
             if values[name] is None:
                 values[name] = raw.get(raw_key)
+        # Product-card responses currently expose the description under
+        # descriptionPlain/descriptionFull, while listing/search responses may
+        # still use description.  Keep the normalized boundary stable and
+        # prefer the plain-text representation for deterministic cross parsing.
+        if values["description"] is None:
+            values["description"] = raw.get("descriptionPlain") or raw.get(
+                "descriptionFull"
+            )
         values["url"] = cls._build_url(values["id"], values["url_text"], lang)
         return cls(**values)
 
@@ -124,6 +140,22 @@ class Product:
         return asdict(self)
 
     @classmethod
+    def from_normalized_snapshot(cls, snapshot: dict[str, Any]) -> Product:
+        """Restore an additive normalized snapshot without re-parsing Apollo keys.
+
+        Older retained snapshots can lack fields added to ``Product`` later.
+        Those fields remain ``None`` so downstream gates fail closed. Unknown
+        fields are rejected instead of being silently discarded as schema drift.
+        """
+
+        field_names = set(cls.field_names())
+        unknown = sorted(set(snapshot) - field_names)
+        if unknown:
+            raise ValueError(f"Unknown normalized Product fields: {unknown}")
+        values = {name: snapshot.get(name) for name in cls.field_names()}
+        return cls(**values)
+
+    @classmethod
     def field_names(cls) -> list[str]:
         """Column names in stable order for the CSV header."""
         return list(cls.__dataclass_fields__.keys())
@@ -132,6 +164,7 @@ class Product:
 @dataclass(frozen=True)
 class Seller:
     """Seller info parsed from a seller URL."""
+
     company_id: str
     slug: str
     lang: str
@@ -158,9 +191,11 @@ class Seller:
 @dataclass(frozen=True)
 class ListingPage:
     """Result of parsing one listing page."""
+
     products: list[Product]
     total: int | None
     lang: str
+    outcome: str = "RESULTS"
 
     @property
     def is_empty(self) -> bool:
@@ -170,6 +205,7 @@ class ListingPage:
 @dataclass(frozen=True)
 class SeedInfo:
     """The reference product to compare, plus prom.ua's own buyBox summary."""
+
     product: Product
     seller_count: int | None  # how many sellers offer this exact model (buyBox)
     min_price: float | None

@@ -1,0 +1,203 @@
+schema_version: "1.0.0"
+artifact_id: PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18
+prompt:
+  id: PROMPT_15_016
+  revision: "1.0.0"
+  execution_mode: AUDIT_REVIEW_IMPLEMENT_VERIFY
+  requested_on: "2026-07-18"
+repository:
+  requested_root: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  realpath: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  physical_tree_selected: true
+  git_top_level: NOT_AVAILABLE
+  git_commit_before: NOT_AVAILABLE
+  branch_before: NOT_AVAILABLE
+  dirty_paths_before:
+    status: NOT_AVAILABLE
+    reason: "The selected physical tree contains no .git metadata; no clean-worktree claim is made."
+  evidence_binding: PATH_AND_SHA256
+instructions:
+  applicable:
+    - path: AGENTS.md
+      sha256: 628bf7a59bda14e4c183fbf91aa03ea0a75c34c9289f7964134e603c5a02a6b9
+      scope: repository
+    - path: frontend/AGENTS.md
+      sha256: 5ae04007e9f347ab6885ad170fb8a7e312d7f33d4196d1910e1da09cf85654ee
+      scope: frontend
+    - path: docs/PROMPT_15_016_YURI_V1_REQUIREMENTS_ALIGNMENT_AUDIT_AND_REMEDIATION_MASTER_PROMPT.md
+      sha256: 6e74bc5b596ece39898d981ba622946a3357c9c25de94d751c334950b7a2b54e
+      scope: execution_contract
+toolchain:
+  host: "Darwin arm64"
+  shell: zsh
+  system_python: "3.14.3"
+  runtime_python: "3.13.9 packaged by Anaconda"
+  uv: "0.11.25"
+  flutter: "3.44.4 stable"
+  dart: "3.12.2"
+  docker_context: colima
+runtime_import_paths:
+  marko: backend/src/marko/__init__.py
+  metis: backend/src/metis/__init__.py
+database:
+  migration_head_before: "20260718_0011"
+source_access:
+  provider: prom_public_marketplace
+  host_test_process:
+    verdict: NOT_PERMITTED
+    reference_present: false
+    live_collection_allowed: false
+  local_compose_runtime:
+    verdict: PERMITTED_LIMITED
+    reference: local-dev-owner-accepted-2026-07-18
+    live_collection_allowed_by_runtime_config: true
+  execution_authority_live_requests: false
+  live_requests_performed: 0
+  note: "Runtime configuration did not broaden this prompt's authority; all verification used persisted replay or local fixtures."
+execution_authority:
+  read_current_checkout: true
+  run_safe_local_tests: true
+  edit_product_code: true
+  edit_tests: true
+  add_migrations: true
+  edit_api_and_flutter_contracts: true
+  create_local_fixture_and_replay_evidence: true
+  create_reports_and_manifests: true
+  live_prom_requests: false
+  source_access_policy_relaxation: false
+  automatic_price_writeback: false
+  parser_internal_changes: false
+  autopro_integration: false
+  tecdoc_or_full_cross_database: false
+  one_c_or_bas_integration: false
+  production_deploy: false
+  git_commit_or_push: false
+  destructive_data_operations: false
+inputs:
+  real_client_workbook: NOT_PROVIDED
+  representative_prom_replay: NOT_AVAILABLE
+  local_synthetic_replay_fixture: backend/src/marko/e2e/fixtures/pricing_replay_v1.json
+  cost_privacy_mode: UNDECIDED
+  stock_age_input_mode: MANUAL_STATUS_PLUS_OPTIONAL_AGE_DAYS
+  stock_age_input_requires_yuri_confirmation: true
+baseline:
+  backend_focused:
+    status: PASS
+    tests_passed: 183
+    tests_failed: 0
+    duration_seconds: 1.58
+  flutter_tests:
+    status: PASS
+    tests_passed: 22
+    tests_failed: 0
+  flutter_analyze:
+    status: BLOCKED_ENVIRONMENT
+    exit_code: 255
+    reason: "Flutter analysis server terminated while decoding a truncated LSP JSON message before reporting code diagnostics."
+pre_change_sha256:
+  parser_boundary:
+    backend/src/marko/parsers/prom/parser.py: 1856f717a7fa1933c98487260d1873f9f1f4d16058af0250019d3fcfb25a7b66
+    backend/src/marko/parsers/prom/gateway.py: 3c480c044701a189deb184324ccb59fbb7e0492997061cfe7def223e31ba88cb
+    backend/src/marko/services/parser_models.py: 0b2f1831f24056b97f8fb64b92aa21b36b1ab666b12a24c9380403250784a23a
+  backend_critical:
+    backend/src/marko/services/market_collection.py: 4f884dec01034759a6e63a3106952359ca40ffb13651bbc01d8af486d351f721
+    backend/src/marko/services/matching.py: 00b1f5e55153d2c6c1dfbf654015be86f3e73373e0d0a9af57972da34598ace2
+    backend/src/metis/pricing/comparability.py: 18e663f3929640273eab5ebdeff943d3977e501bde1afc82adbf353fe7318654
+    backend/src/metis/pricing/engine.py: dde2b04a6d15081c22f29b2b343cf139e4418228773636f5e7975727ecb459c1
+    backend/src/marko/services/pricing_runs.py: bc83459ac48b305bcb020fdff3dcf0a3e51900715c6e89f04a42b87fccd15975
+    backend/src/marko/infrastructure/db/models.py: 494d20bc8327a9f62abf98b80127672fdad17e94fca73aa8ef364d80e231fb21
+    backend/src/marko/api/schemas/pricing.py: 06ab0d47243aaa052c6790659761a185920d5c8fe80e9a5d1adf75dbc62ae443
+    backend/migrations/versions/20260718_0011_comparability_and_robust_gates.py: 04ad90b2ee5523316ebaa413ff90cde8b2ddac08790169f8fde1669997b55d1b
+  frontend_critical:
+    frontend/lib/features/pricing/pricing_models.dart: 2f2cfb35eef25c57f6b9e558b077a254ff0c92db5f0b321e76475682890e2d3b
+    frontend/lib/features/pricing/pricing_api.dart: f90f217929c7c9cac8adb53ddc0c440f9d3808457c5f5efc22ca0f2747bfaafa
+    frontend/lib/features/pricing/pricing_controller.dart: e0c21455a28aad4d9c7b59398d349f933223807840fb7c8b329a57f0594f3867
+    frontend/lib/features/pricing/recommendations_page.dart: 4ce2222460ac8acff357d15406dd85762a5a1d6aa9d2a823a74724bee70b52a4
+    frontend/lib/features/pricing/catalog_context_dialog.dart: 7e3ba76f24ce98ca63bd1927b54164cc39522b0680358e6835f62b89d6cd33d5
+    frontend/lib/features/pricing/recommendation_decision_dialog.dart: e6d9543e3f222fd403db76ecfd5030cd1a5bb1fdfebc2780c007f554536c35dc
+guardrails:
+  parser_boundary_frozen: true
+  live_prom_requests_performed: false
+  automatic_price_writeback_performed: false
+  secrets_or_raw_cost_in_manifest: false
+post_change:
+  migration_head: "20260718_0012"
+  cost_privacy_mode: UNDECIDED
+  real_client_workbook: NOT_PROVIDED
+  representative_market_data: NOT_AVAILABLE
+  implementation_status: PASS
+  requirements:
+    pass: 15
+    fail: 0
+    blocked: 2
+    blocked_ids: [R-05, R-15]
+  backend_verification:
+    full_pytest:
+      status: PASS
+      tests_passed: 581
+      tests_failed: 0
+      duration_seconds: 7.05
+    yuri_contract:
+      status: PASS
+      tests_passed: 40
+      tests_failed: 0
+      duration_seconds: 1.51
+    ruff: PASS
+    compileall: PASS
+  frontend_verification:
+    tests:
+      status: PASS
+      tests_passed: 22
+      tests_failed: 0
+    dart_analyze_ascii_symlink: PASS
+    flutter_analyze_unicode_checkout:
+      status: BLOCKED_ENVIRONMENT
+      exit_code: 255
+      reason: "Flutter analysis server emitted a truncated LSP JSON message on the Unicode checkout path; the same source passed Dart analysis through an ASCII symlink."
+  database_verification:
+    offline_alembic_head: "20260718_0012"
+    disposable_postgresql_upgrade: PASS
+    disposable_database_removed: true
+  governance_verification:
+    section_15_manifest: PASS
+    section_16_manifest: PASS
+    combined_final_response: PASS
+    yaml_unique_keys_and_round_trip: "PASS: 7/7 structured artifacts"
+  local_compose:
+    built_from_current_checkout: true
+    api_liveness: PASS
+    api_readiness: PASS
+    frontend_http: PASS
+    database_migration_head: "20260718_0012"
+    scheduler_singleton: PASS_AFTER_LEASE_EXPIRY
+  isolated_e2e:
+    status: PASS
+    evidence: docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+    evidence_level: E4_NON_REPRESENTATIVE
+    live_prom_requests: 0
+    automatic_price_applications: 0
+    run_id: 20260718T204534Z-05fa3ff1
+    browser_assertions: "10/10"
+    failure_injections: "10/10"
+    replay_decision_hash_equal: true
+    cleanup_complete: true
+  post_change_sha256:
+    frozen_parser:
+      backend/src/marko/parsers/prom/parser.py: 1856f717a7fa1933c98487260d1873f9f1f4d16058af0250019d3fcfb25a7b66
+      backend/src/marko/parsers/prom/gateway.py: 3c480c044701a189deb184324ccb59fbb7e0492997061cfe7def223e31ba88cb
+    implementation:
+      backend/src/marko/services/parser_models.py: 820df600964e5d531da02092240bb061b4f45c0a6c824bf6af693ca749bc023c
+      backend/src/marko/services/market_collection.py: 62d1f087afd5ac5d5a291abd49dbdc559035e9ca3563791af292dd9b608c08d1
+      backend/src/marko/services/matching.py: 992be757496d2487a215b9e91756f5888c3e452d7829eea92e82d5f56040f66f
+      backend/src/marko/services/cost_privacy.py: 409aa8335409b6c13ee1a7900fc90b04d22cdd4cde089f105152c9cbbb921e9d
+      backend/src/marko/services/pricing_runs.py: 96e4d3765ce5f313542d7823f17d81eea67c2e12c168303fe0e94e53c8245d82
+      backend/src/metis/pricing/engine.py: 4e2c726de606a62b036c94bd3ce0c7d076476c9286693b432d7e7d7d23c90e7e
+      backend/migrations/versions/20260718_0012_yuri_v1_alignment.py: 6fb4c924a3b056ca6d8bf3f509c55d5afb71a3ffdfabf0c568600428be825964
+      frontend/lib/features/pricing/pricing_models.dart: 6065d15e28571f86ccb39e31d963b6e46405741ec0b8bffa3b061b4696fe6490
+      frontend/lib/features/pricing/pricing_api.dart: 3816b95f642550b47dbde99b70584d6564be9456d8a63985a286f53e8d10c727
+      frontend/lib/features/pricing/recommendations_page.dart: 29cc529c0c9f15a1cb369e966bfb88d40ff7e1cb27f05b80d1e936e7a7000a31
+  terminal_boundaries:
+    controlled_pilot_ready: false
+    production_ready: false
+    first_unverified_transition: "representative client workbook -> catalog-ratio measurement"
+  git_commit_after: NOT_AVAILABLE

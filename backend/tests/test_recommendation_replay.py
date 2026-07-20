@@ -16,6 +16,8 @@ from metis.pricing import (
 from marko.services.recommendation_replay import (
     REPLAY_CONTRACT_V1,
     REPLAY_CONTRACT_V2,
+    REPLAY_CONTRACT_V5,
+    REPLAY_CONTRACT_VERSION,
     compare_replayed_result,
     context_from_snapshot,
 )
@@ -40,6 +42,7 @@ def _pricing_result():
             match_confidence=Decimal("0.95"),
             tier=ProductTier.BUDGET,
             tier_confidence=Decimal("0.95"),
+            source_confidence=Decimal("1"),
             currency_raw="UAH",
             comparison_evidence=verified_comparison_evidence(
                 stable_seller_id=f"seller-{index}",
@@ -110,8 +113,43 @@ def test_context_snapshot_rebuilds_frozen_pricing_input() -> None:
     assert context.sku == "SKU-1"
     assert context.current_price == Decimal("800.00")
     assert context.stock_status.value == "dead_stock"
-    assert context.below_cost_floor == Decimal("450")
+    assert context.cost is None
+    assert context.below_cost_floor is None
     assert context.below_cost_warning_confirmed is True
+
+
+def test_current_replay_contract_is_v5_and_compares_current_trace() -> None:
+    result = _pricing_result()
+    stored = _stored_recommendation(result)
+    stored.calculation_trace = {
+        "replay_contract_version": REPLAY_CONTRACT_V5,
+        "robust_dispersion": robust_dispersion_trace(
+            selected_method=result.dispersion_method,
+            pre_clean=result.pre_clean_dispersion_profile,
+            post_clean=result.dispersion_profile,
+        ),
+        "comparability": {
+            "automatic_eligible": result.automatic_eligible,
+            "verified_seller_count": result.verified_seller_count,
+            "policy_id": result.comparability_policy_id,
+            "policy_hash": result.comparability_policy_hash,
+            "hard_gates": dict(result.hard_gate_results),
+            "failed_hard_gates": list(result.failed_hard_gates),
+            "unknown_hard_fields": list(result.unknown_hard_fields),
+        },
+        "robust_diagnostic": None,
+        "robust_policy_fingerprint": dict(result.robust_policy_fingerprint),
+    }
+
+    assert REPLAY_CONTRACT_VERSION == REPLAY_CONTRACT_V5
+    mismatches = compare_replayed_result(
+        stored,
+        result,
+        replay_contract_version=REPLAY_CONTRACT_V5,
+    )
+    # The synthetic result has a diagnostic while this minimal frozen test
+    # trace intentionally does not.  All other V5 contract fields replay.
+    assert set(mismatches) <= {"robust_diagnostic"}
 
 
 def test_replay_comparator_detects_exact_match_and_drift() -> None:

@@ -1,4 +1,5 @@
 """Command-line access to the Prom parser and comparison engine."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,6 +12,7 @@ from typing import Any, Iterable
 from marko.parsers.prom import PromGateway, ScrapeConfig
 from marko.services.matching import Match, Offer, PriceComparison
 from marko.services.parser_models import Product
+from marko.services.scraper_contract import canonicalize_prom_product_url
 from marko.services.source_access import require_live_prom_marketplace_collection
 
 log = logging.getLogger(__name__)
@@ -72,9 +74,7 @@ def _match_marker(match: Match) -> str:
 def _offer_lines(index: int, offer: Offer, currency: str) -> list[str]:
     seller = (offer.product.seller_name or "—")[:32]
     presence = (
-        "в наявності"
-        if offer.product.is_available
-        else (offer.product.presence or "")
+        "в наявності" if offer.product.is_available else (offer.product.presence or "")
     )
     lines = [
         f"  {index:>2}. {offer.price:>10.0f} {currency}  "
@@ -153,6 +153,7 @@ def _scrape(args: argparse.Namespace) -> int:
 
 def _compare(args: argparse.Namespace) -> int:
     require_live_prom_marketplace_collection()
+    seed_url = canonicalize_prom_product_url(args.url)
     comparison = PromGateway(
         ScrapeConfig(
             delay=args.delay,
@@ -160,9 +161,9 @@ def _compare(args: argparse.Namespace) -> int:
             similarity_threshold=args.threshold,
             max_search_pages=args.max_search_pages,
         )
-    ).compare(args.url, query=args.query)
+    ).compare(seed_url, query=args.query)
     print(format_comparison(comparison))
-    if comparison.offers:
+    if comparison.offers or args.format == "json":
         path = Path(f"{args.output}.{args.format}")
         export_comparison(comparison, path, args.format)
         print(f"\nOK: {len(comparison.offers)} продавців -> {path}")

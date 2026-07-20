@@ -1,0 +1,228 @@
+schema_version: "1.0.0"
+artifact_id: PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18
+prompt_id: PROMPT_15_016
+generated_at: "2026-07-19T00:51:29+02:00"
+
+terminal_outcome:
+  primary_result: BLOCKED
+  implementation_stage: PASS
+  controlled_pilot_ready: false
+  production_ready: false
+  first_unverified_or_broken_transition: "measured client catalog -> permission-safe representative market replay"
+  stop_gate: BLOCKED
+  stop_gate_line: STOP_GATE_PROMPT_15_016 = BLOCKED
+
+repository_identity:
+  checkout: "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия"
+  git_commit: NOT_AVAILABLE
+  evidence_binding: PATH_AND_SHA256
+  note: "The physical checkout has no Git metadata; no commit or clean-worktree claim is made."
+
+stage_gates:
+  - gate_id: G-00
+    stage: "Repository identity, instructions and baseline"
+    status: PASS
+    evidence: docs/PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18.yaml
+  - gate_id: G-01
+    stage: "Requirements trace and hostile re-audit"
+    status: PASS
+    evidence: docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+  - gate_id: G-02
+    stage: "Pre-fix reproductions"
+    status: PASS
+    evidence: docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+  - gate_id: G-03
+    stage: "OE-first identity and comparability repair"
+    status: PASS
+    evidence: "R-01 and R-02 plus targeted contract tests"
+  - gate_id: G-04
+    stage: "Cohort role and KEMP isolation"
+    status: PASS
+    evidence: "R-10 plus KEMP price and forged-role metamorphic tests"
+  - gate_id: G-05
+    stage: "Description, condition and used exclusion"
+    status: PASS
+    evidence: "R-08 and R-09 plus additive-boundary tests"
+  - gate_id: G-06
+    stage: "Stock-age modes and sunk-cost policy"
+    status: PASS
+    evidence: "R-04 and R-13 plus monotonicity, dominance and missing-cost tests"
+  - gate_id: G-07
+    stage: "Cost privacy decision boundary"
+    status: PASS
+    independent_implementation: PASS_SERVER_SIDE_ENCRYPTED
+    evidence: docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+  - gate_id: G-08
+    stage: "Literal ranking and operator UX"
+    status: PASS
+    evidence: "R-03, R-06 and R-07 plus API/Flutter contract tests"
+  - gate_id: G-09
+    stage: "Persistence, migration, replay and backward compatibility"
+    status: PASS
+    evidence: "migrations 20260718_0012 and 20260718_0013, local PostgreSQL encrypted-cost transaction proof and exact V1-V4 replay"
+  - gate_id: G-10
+    stage: "Verification, variation and mutation"
+    status: PASS
+    evidence: docs/PROMPT_15_016_VARIATION_LEDGER_2026-07-18.yaml
+  - gate_id: G-11
+    stage: "Representative client and market evidence"
+    status: PARTIAL_CLIENT_CATALOG_PASS_MARKET_REPLAY_BLOCKED
+    evidence: docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+  - gate_id: G-12
+    stage: "Hostile self-review and final gates"
+    status: PASS_WITH_EXTERNAL_BLOCKERS
+    evidence: docs/PROMPT_15_016_IMPLEMENTATION_REPORT_2026-07-18.md
+
+requirements:
+  total: 17
+  pass: 17
+  fail: 0
+  blocked: 0
+  blocked_ids: []
+  trace: docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+
+technical_definition_of_done:
+  pre_fix_reproductions: PASS
+  product_code_fixed: PASS
+  contradictory_tests_replaced_or_extended: PASS
+  additive_migrations_valid: PASS
+  replay_backward_compatibility: PASS
+  backend_focused_tests: PASS
+  backend_full_tests: PASS
+  backend_static_analysis: PASS
+  flutter_tests: PASS
+  flutter_static_analysis: PASS_WITH_UNICODE_PATH_TOOLING_LIMITATION
+  targeted_mutations: PASS_14_OF_14_KILLED
+  frozen_parser_internal_change: false
+  live_prom_requests: 0
+  automatic_price_applications: 0
+  active_raw_cost_leakage_tests: PASS
+  report_manifest_consistency: PASS
+
+verification:
+  backend_full: "590 passed"
+  backend_yuri_contract: "40 passed in 1.51s"
+  ruff: PASS
+  compileall: PASS
+  flutter_tests: "25 passed"
+  dart_analyze: PASS
+  flutter_analyze_unicode_checkout: BLOCKED_ENVIRONMENT_EXIT_255
+  alembic_head: "20260718_0013"
+  disposable_database_upgrade: PASS
+  encrypted_cost_postgresql_transaction_proof: PASS_ROLLBACK_ZERO_SYNTHETIC_RECORDS
+  local_compose_api_live: PASS
+  local_compose_api_ready: PASS
+  local_compose_frontend_http: PASS
+  local_compose_database_head: "20260718_0013"
+  isolated_e2e:
+    status: PASS
+    evidence_level: E4_NON_REPRESENTATIVE
+    run_id: 20260718T204534Z-05fa3ff1
+    failure_injections: "10/10"
+    browser_assertions: "10/10"
+    exact_replay: true
+    live_prom_requests: 0
+    automatic_price_applications: 0
+    cleanup_complete: true
+  governance:
+    section_15_manifest: PASS
+    section_16_manifest: PASS
+    combined_final_response: PASS
+    yaml_unique_keys_and_round_trip: "PASS: 7/7"
+
+frozen_boundary:
+  parser_internals_modified: false
+  parser_sha256: 1856f717a7fa1933c98487260d1873f9f1f4d16058af0250019d3fcfb25a7b66
+  gateway_sha256: 3c480c044701a189deb184324ccb59fbb7e0492997061cfe7def223e31ba88cb
+
+production_hard_gates:
+  - gate_id: YURI_V1_SEMANTICS
+    status: PASS
+    evidence_level: E4_NON_REPRESENTATIVE
+  - gate_id: REPRESENTATIVE_CLIENT_CATALOG
+    status: PASS
+    owner: Yuri/data owner
+    evidence_level: E4_CLIENT_PROVIDED
+    evidence: docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+    source_sha256: 7871f6b20b21d96bbd7b5c2ea8c951c2144a6adec04acac5229261c2172e0e91
+  - gate_id: REPRESENTATIVE_MARKET_REPLAY
+    status: BLOCKED_DATA
+    owner: Product/data owner
+    required_input: "Pinned permission-safe representative Prom snapshot and expected outcomes"
+  - gate_id: SOURCE_ACCESS_PERMISSION
+    status: BLOCKED_AUTHORITY_EVIDENCE
+    owner: Source/product owner
+    required_input: "Immutable production-scope permission or policy reference"
+    note: "Local Compose reports PERMITTED_LIMITED, but this prompt performed zero live requests and that runtime setting is not production authority."
+  - gate_id: COST_PRIVACY_DECISION
+    status: PASS
+    owner: Yuri/product owner
+    selected_mode: SERVER_SIDE_ENCRYPTED
+    evidence: docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+  - gate_id: COST_KEY_PROVISIONING_AND_RECOVERY
+    status: BLOCKED_E5
+    owner: Operations owner
+    required_input: "Provision a real external key without committing it, then prove protected backup/restore and key recovery"
+  - gate_id: TENANT_ISOLATION
+    status: PASS_LOCAL_E4
+  - gate_id: BACKUP_RESTORE
+    status: BLOCKED_E5
+    owner: Operations owner
+    required_input: "Representative recovery drill"
+  - gate_id: OBSERVABILITY
+    status: BLOCKED_E5
+    owner: Operations owner
+    required_input: "Representative operational monitoring evidence and approved thresholds"
+  - gate_id: ROLLBACK
+    status: BLOCKED_E5
+    owner: Operations/product owners
+    required_input: "Approved rollback policy and representative drill"
+  - gate_id: POSITIVE_AND_ADVERSARIAL_E2E
+    status: PASS_NON_REPRESENTATIVE
+    evidence_level: E4_NON_REPRESENTATIVE
+
+business_decisions:
+  cost_privacy_mode:
+    status: APPROVED
+    owner: Yuri/product owner
+    selected: SERVER_SIDE_ENCRYPTED
+    current_enforcement: ENCRYPTED_MODE_FAIL_CLOSED_UNTIL_EXTERNAL_KEY_PROVISIONED
+    evidence: docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+  stock_age_input:
+    status: APPROVED
+    owner: Yuri/data owner
+    selected: MANUAL_STATUS_PLUS_OPTIONAL_AGE_DAYS
+    implemented_default: MANUAL_STATUS_PLUS_OPTIONAL_AGE_DAYS
+    alternative: ACQUISITION_DATE_IMPORT
+    evidence: docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+
+production_implication:
+  automatic_activation_enabled: false
+  controlled_pilot_authorized: false
+  production_deployment_authorized: false
+  representative_catalog_claim: true
+  representative_market_claim: false
+  reason: "At least one hard gate is blocked; hard-gate conjunction therefore evaluates to false regardless of local test success."
+
+next_authorized_action:
+  stage_id: PERMISSION_SAFE_PROM_REPLAY_VALIDATION
+  started: false
+  authorized: false
+  dependency_order:
+    - "Record immutable source permission or policy evidence"
+    - "Freeze a permission-safe representative market snapshot with expected outcomes"
+    - "Replay the 4,647 auto-admissible rows or an approved stratified subset"
+  stop_gate: STOP_GATE_PERMISSION_SAFE_PROM_REPLAY_VALIDATION
+
+evidence_bundle:
+  execution_manifest: docs/PROMPT_15_016_EXECUTION_MANIFEST_2026-07-18.yaml
+  requirements_trace: docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+  implementation_report: docs/PROMPT_15_016_IMPLEMENTATION_REPORT_2026-07-18.md
+  variation_ledger: docs/PROMPT_15_016_VARIATION_LEDGER_2026-07-18.yaml
+  e2e_evidence: docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+  cost_privacy_adr: docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+  representative_catalog_measurement: docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+  representative_catalog_metrics: .artifacts/yuri_catalog/YURI_CATALOG_MARKO_INPUT_V1.metrics.json
+  final_response: docs/PROMPT_15_016_COST_ENCRYPTION_FINAL_RESPONSE_2026-07-18.md
+  cost_encryption_footer_manifest: docs/PROMPT_15_016_COST_ENCRYPTION_END_OF_RESPONSE_2026-07-18.yaml
+  cost_encryption_machine_summary: docs/PROMPT_15_016_COST_ENCRYPTION_MACHINE_SUMMARY_2026-07-18.yaml

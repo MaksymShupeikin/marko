@@ -3,12 +3,14 @@ from __future__ import annotations
 from decimal import Decimal
 
 from metis.pricing import (
+    CoefficientModel,
     CompetitorOffer,
     PricingPolicy,
     ProductPricingContext,
     ProductTier,
     RecommendationAction,
     RobustScaleMethod,
+    TierCoefficient,
     recommend_price,
     verified_comparison_evidence,
 )
@@ -27,6 +29,7 @@ def _offer(index: int, price: str, *, seller_id: str | None = None) -> Competito
         match_confidence=Decimal("0.95"),
         tier=ProductTier.BUDGET,
         tier_confidence=Decimal("0.95"),
+        source_confidence=Decimal("1"),
         currency_raw="UAH",
         comparison_evidence=verified_comparison_evidence(
             stable_seller_id=seller_id or f"seller-{index}",
@@ -47,9 +50,29 @@ def _market(prices: tuple[str, ...]) -> list[CompetitorOffer]:
     return [_offer(index, price) for index, price in enumerate(prices)]
 
 
+BUDGET_COEFFICIENTS = {
+    ("brakes", ProductTier.BUDGET): TierCoefficient(
+        category="brakes",
+        tier=ProductTier.BUDGET,
+        multiplier=Decimal("1"),
+        model=CoefficientModel.SHRINKAGE,
+        method_version="robust-dispersion-test-v1",
+        coefficient_version="robust-dispersion-test-v1:synthetic",
+        sample_size=20,
+        effective_sample_size=Decimal("18"),
+        confidence=Decimal("0.95"),
+        validated=True,
+        log_effect=Decimal("0"),
+        interval_low=Decimal("0.9"),
+        interval_high=Decimal("1.1"),
+        dataset_hash="a" * 64,
+    )
+}
+
+
 def test_v2_scalar_dispersion_remains_exact_legacy_mad_path() -> None:
     prices = ("1000", "1050", "1100", "1150", "1200")
-    result = recommend_price(_context(), _market(prices), {})
+    result = recommend_price(_context(), _market(prices), BUDGET_COEFFICIENTS)
     center = Decimal("1100")
     expected = Decimal("1.4826") * mad(Decimal(value) for value in prices) / center
 
@@ -65,7 +88,7 @@ def test_v3_defaults_to_corrected_qn_while_fair_price_stays_median() -> None:
     result = recommend_price(
         _context(),
         _market(("1000", "1050", "1100", "1150", "1200")),
-        {},
+        BUDGET_COEFFICIENTS,
         policy=policy,
     )
 
@@ -80,7 +103,7 @@ def test_pre_and_post_profiles_expose_cleaning_without_changing_outlier_policy()
     None
 ):
     prices = ("1000", "1010", "1020", "1030", "1040", "1050", "1060", "10000")
-    result = recommend_price(_context(), _market(prices), {})
+    result = recommend_price(_context(), _market(prices), BUDGET_COEFFICIENTS)
 
     assert result.outlier_method == "iqr"
     assert result.pre_clean_dispersion_profile is not None
@@ -96,7 +119,7 @@ def test_profiles_are_built_after_seller_deduplication() -> None:
     offers = _market(("1000", "1050", "1100", "1150", "1200"))
     offers.append(_offer(99, "9999", seller_id="seller-0"))
 
-    result = recommend_price(_context(), offers, {})
+    result = recommend_price(_context(), offers, BUDGET_COEFFICIENTS)
 
     assert result.pre_clean_dispersion_profile is not None
     assert result.pre_clean_dispersion_profile.sample_size == 5
@@ -108,7 +131,7 @@ def test_small_n_keeps_descriptive_profile_but_never_enables_automatic_action() 
     result = recommend_price(
         _context(),
         _market(("1000", "1050", "1100")),
-        {},
+        BUDGET_COEFFICIENTS,
         policy=PricingPolicy(version="pricing-v3-robust-dispersion"),
     )
 
@@ -121,7 +144,9 @@ def test_small_n_keeps_descriptive_profile_but_never_enables_automatic_action() 
 def test_v3_partial_scale_degeneracy_is_fail_closed() -> None:
     prices = ("100", "100", "100", "100", "100", "105", "110", "115")
     policy = PricingPolicy(version="pricing-v3-robust-dispersion")
-    result = recommend_price(_context("80"), _market(prices), {}, policy=policy)
+    result = recommend_price(
+        _context("80"), _market(prices), BUDGET_COEFFICIENTS, policy=policy
+    )
 
     assert result.dispersion_profile is not None
     assert result.dispersion_profile.partial_scale_degeneracy is True
@@ -132,7 +157,7 @@ def test_v3_partial_scale_degeneracy_is_fail_closed() -> None:
 
 def test_v2_shadow_profile_does_not_change_legacy_partial_degeneracy_decision() -> None:
     prices = ("100", "100", "100", "100", "100", "105", "110", "115")
-    result = recommend_price(_context("80"), _market(prices), {})
+    result = recommend_price(_context("80"), _market(prices), BUDGET_COEFFICIENTS)
 
     assert result.dispersion_profile is not None
     assert result.dispersion_profile.partial_scale_degeneracy is True
@@ -142,7 +167,10 @@ def test_v2_shadow_profile_does_not_change_legacy_partial_degeneracy_decision() 
 def test_all_equal_v3_cohort_is_valid_zero_scale_not_false_degeneracy() -> None:
     policy = PricingPolicy(version="pricing-v3-robust-dispersion")
     result = recommend_price(
-        _context("80"), _market(("100", "100", "100", "100", "100")), {}, policy=policy
+        _context("80"),
+        _market(("100", "100", "100", "100", "100")),
+        BUDGET_COEFFICIENTS,
+        policy=policy,
     )
 
     assert result.dispersion_profile is not None
@@ -159,7 +187,7 @@ def test_capacity_guard_fails_closed_without_sampling_or_legacy_fallback() -> No
     result = recommend_price(
         _context(),
         _market(("1000", "1010", "1020", "1030", "1040", "1050")),
-        {},
+        BUDGET_COEFFICIENTS,
         policy=policy,
     )
 

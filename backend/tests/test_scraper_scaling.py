@@ -189,10 +189,7 @@ def test_derived_capacity_does_not_claim_stability_with_unknown_limits() -> None
 
     assert result.stable is False
     assert result.engineering_target_met is False
-    assert (
-        "subsystem_capacity_unknown_stability_not_proven"
-        in result.warnings
-    )
+    assert "subsystem_capacity_unknown_stability_not_proven" in result.warnings
 
 
 def test_storage_model_keeps_raw_and_structured_layers_separate() -> None:
@@ -294,7 +291,9 @@ def test_submission_cohort_reconciliation_accounts_for_every_admitted_item() -> 
     assert result.reconciled is True
 
 
-def test_submission_cohort_reconciliation_rejects_an_invalid_admission_equation() -> None:
+def test_submission_cohort_reconciliation_rejects_an_invalid_admission_equation() -> (
+    None
+):
     with pytest.raises(
         ValueError,
         match="submitted must equal deduplicated \\+ rejected \\+ admitted",
@@ -331,7 +330,9 @@ def test_submission_cohort_reconciliation_exposes_silent_loss() -> None:
     assert result.reconciled is False
 
 
-def test_wilson_interval_reports_uncertainty_without_normal_approximation_edges() -> None:
+def test_wilson_interval_reports_uncertainty_without_normal_approximation_edges() -> (
+    None
+):
     result = wilson_confidence_interval(successes=95, sample_size=100)
 
     assert result.estimate == 0.95

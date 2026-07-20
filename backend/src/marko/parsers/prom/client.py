@@ -1,4 +1,5 @@
 """HTTP client with retries and polite rate limiting."""
+
 from __future__ import annotations
 
 import logging
@@ -17,6 +18,7 @@ log = logging.getLogger(__name__)
 
 class HttpClient:
     """Wrapper around requests.Session with retries and rate limiting."""
+
     _RETRYABLE_STATUS = frozenset({408, 429})
 
     def __init__(self, config: ScrapeConfig) -> None:
@@ -195,7 +197,9 @@ class HttpClient:
                         ),
                         error_detail=str(last_error),
                     )
-                log.warning("HTTP %d (спроба %d) для %s", response.status_code, attempt, url)
+                log.warning(
+                    "HTTP %d (спроба %d) для %s", response.status_code, attempt, url
+                )
 
             if attempt < self._config.max_attempts:
                 backoff = (
@@ -233,10 +237,7 @@ class HttpClient:
         self._session.headers["User-Agent"] = random.choice(self._config.user_agents)
 
     def _is_retryable_status(self, status_code: int) -> bool:
-        return (
-            status_code in self._RETRYABLE_STATUS
-            or 500 <= status_code <= 599
-        )
+        return status_code in self._RETRYABLE_STATUS or 500 <= status_code <= 599
 
     def _backoff_seconds(self, attempt: int) -> float:
         cap = min(
@@ -262,7 +263,9 @@ class HttpClient:
         content_type = content_type.strip().casefold()
         if content_type not in self._config.allowed_content_types:
             self._close_response(response)
-            raise UnsafeResponse(f"Unsupported response content type: {content_type or 'none'}")
+            raise UnsafeResponse(
+                f"Unsupported response content type: {content_type or 'none'}"
+            )
         raw_length = self._content_length(response)
         if raw_length is not None and raw_length > self._config.max_response_bytes:
             self._close_response(response)
@@ -279,7 +282,9 @@ class HttpClient:
                 total += len(chunk)
                 if total > self._config.max_response_bytes:
                     self._close_response(response)
-                    raise UnsafeResponse("Decoded response exceeds configured byte limit")
+                    raise UnsafeResponse(
+                        "Decoded response exceeds configured byte limit"
+                    )
                 chunks.append(chunk)
             body = b"".join(chunks)
         if len(body) > self._config.max_response_bytes:

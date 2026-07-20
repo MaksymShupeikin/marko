@@ -54,9 +54,7 @@ class SourceAccessStatus:
 
 def source_access_status(settings: Settings | None = None) -> SourceAccessStatus:
     resolved = settings or get_settings()
-    reference = (
-        resolved.prom_marketplace_source_access_reference.strip() or None
-    )
+    reference = resolved.prom_marketplace_source_access_reference.strip() or None
     verdict = resolved.prom_marketplace_source_access_verdict
     return SourceAccessStatus(
         source="prom_public_marketplace",

@@ -1,4 +1,5 @@
 """Store registration, catalog job dispatch, and read models."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from marko.infrastructure.db.models import (
     WorkspaceStore,
 )
 from marko.core.config import get_settings
-from marko.services.parser_models import Seller
+from marko.services.seller_url_resolver import resolve_prom_seller
 from marko.services.source_access import require_live_prom_marketplace_collection
 from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
 
@@ -67,7 +68,7 @@ async def register_store(
     celery_app: Celery,
 ) -> tuple[UUID, SyncRun]:
     require_live_prom_marketplace_collection()
-    seller = Seller.from_url(url)
+    seller = await resolve_prom_seller(url)
     await users_repo.ensure_default_workspace(session, workspace_id)
 
     store_id = await stores_repo.upsert_marketplace_store(
@@ -181,7 +182,9 @@ async def _dispatch_sync_run(
 
 async def list_stores(session: AsyncSession, workspace_id: UUID) -> list[StoreView]:
     rows = await stores_repo.list_stores(session, workspace_id)
-    return [_store_view(store, kind, product_count) for store, kind, product_count in rows]
+    return [
+        _store_view(store, kind, product_count) for store, kind, product_count in rows
+    ]
 
 
 async def get_store(
@@ -203,7 +206,9 @@ async def list_store_products(
 ) -> ProductPage:
     await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
     total = await listings_repo.count_listings_for_store(session, store_id)
-    items = await listings_repo.list_listings_for_store(session, store_id, limit, offset)
+    items = await listings_repo.list_listings_for_store(
+        session, store_id, limit, offset
+    )
     return ProductPage(items=items, total=total, limit=limit, offset=offset)
 
 

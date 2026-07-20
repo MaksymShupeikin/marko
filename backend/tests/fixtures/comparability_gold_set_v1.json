@@ -1,7 +1,7 @@
 {
-  "schema_version": "comparability-gold-set-v1",
+  "schema_version": "comparability-gold-set-v2",
   "dataset_id": "marko-metis-comparability-adversarial",
-  "dataset_version": "1.0.0",
+  "dataset_version": "2.0.0",
   "created_at": "2026-07-18",
   "data_class": "synthetic_adversarial",
   "representative": false,
@@ -35,6 +35,7 @@
       "seller_family": "train-seller-a",
       "observed_period": "2026-Q1-train-a",
       "retrieval_kind": "fuzzy",
+      "category": "brakes",
       "gold_label": "comparable",
       "expected_result": "PASS",
       "mutation": {"kind": "none"}
@@ -47,6 +48,7 @@
       "seller_family": "train-seller-b",
       "observed_period": "2026-Q1-train-b",
       "retrieval_kind": "sku",
+      "category": "brakes",
       "gold_label": "conflict",
       "expected_result": "REJECT",
       "mutation": {"kind": "dimension_state", "dimension": "oe_reference", "state": "CONFLICT"}
@@ -59,9 +61,10 @@
       "seller_family": "train-seller-c",
       "observed_period": "2026-Q1-train-c",
       "retrieval_kind": "model",
+      "category": "brakes",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
-      "mutation": {"kind": "dimension_state", "dimension": "fitment", "state": "UNKNOWN"}
+      "mutation": {"kind": "dimension_state", "dimension": "position", "state": "UNKNOWN"}
     },
     {
       "case_id": "GS-TRAIN-004",
@@ -71,6 +74,7 @@
       "seller_family": "train-seller-d",
       "observed_period": "2026-Q1-train-d",
       "retrieval_kind": "fuzzy",
+      "category": "brakes",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
       "mutation": {"kind": "missing_raw_currency"}
@@ -83,6 +87,7 @@
       "seller_family": "train-seller-e",
       "observed_period": "2026-Q1-train-e",
       "retrieval_kind": "sku",
+      "category": "brakes",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
       "mutation": {"kind": "unverified_provenance"}
@@ -95,6 +100,7 @@
       "seller_family": "cal-seller-a",
       "observed_period": "2026-Q2-cal-a",
       "retrieval_kind": "sku",
+      "category": "shock_absorber",
       "gold_label": "comparable",
       "expected_result": "PASS",
       "mutation": {"kind": "none"}
@@ -107,6 +113,7 @@
       "seller_family": "cal-seller-b",
       "observed_period": "2026-Q2-cal-b",
       "retrieval_kind": "model",
+      "category": "shock_absorber",
       "gold_label": "conflict",
       "expected_result": "REJECT",
       "mutation": {"kind": "dimension_state", "dimension": "condition", "state": "CONFLICT"}
@@ -119,6 +126,7 @@
       "seller_family": "cal-seller-c",
       "observed_period": "2026-Q2-cal-c",
       "retrieval_kind": "fuzzy",
+      "category": "shock_absorber",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
       "mutation": {"kind": "missing_stable_seller_id"}
@@ -131,8 +139,9 @@
       "seller_family": "cal-seller-d",
       "observed_period": "2026-Q2-cal-d",
       "retrieval_kind": "sku",
-      "gold_label": "conflict",
-      "expected_result": "REJECT",
+      "category": "shock_absorber",
+      "gold_label": "comparable",
+      "expected_result": "PASS",
       "mutation": {"kind": "dimension_state", "dimension": "brand_manufacturer", "state": "CONFLICT"}
     },
     {
@@ -143,9 +152,10 @@
       "seller_family": "cal-seller-e",
       "observed_period": "2026-Q2-cal-e",
       "retrieval_kind": "model",
+      "category": "shock_absorber",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
-      "mutation": {"kind": "dimension_state", "dimension": "year_interval", "state": "UNKNOWN"}
+      "mutation": {"kind": "dimension_state", "dimension": "side", "state": "UNKNOWN"}
     },
     {
       "case_id": "GS-TEST-001",
@@ -155,6 +165,7 @@
       "seller_family": "test-seller-a",
       "observed_period": "2026-Q3-test-a",
       "retrieval_kind": "model",
+      "category": "brakes",
       "gold_label": "comparable",
       "expected_result": "PASS",
       "mutation": {"kind": "none"}
@@ -167,6 +178,7 @@
       "seller_family": "test-seller-b",
       "observed_period": "2026-Q3-test-b",
       "retrieval_kind": "sku",
+      "category": "brakes",
       "gold_label": "conflict",
       "expected_result": "REJECT",
       "mutation": {"kind": "dimension_state", "dimension": "side", "state": "CONFLICT"}
@@ -179,6 +191,7 @@
       "seller_family": "test-seller-c",
       "observed_period": "2026-Q3-test-c",
       "retrieval_kind": "fuzzy",
+      "category": "brakes",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
       "mutation": {"kind": "dimension_state", "dimension": "package_quantity", "state": "UNKNOWN"}
@@ -191,6 +204,7 @@
       "seller_family": "test-seller-d",
       "observed_period": "2026-Q3-test-d",
       "retrieval_kind": "model",
+      "category": "brakes",
       "gold_label": "insufficient",
       "expected_result": "MANUAL_REVIEW",
       "mutation": {"kind": "tampered_provenance_hash"}
@@ -203,6 +217,7 @@
       "seller_family": "test-seller-e",
       "observed_period": "2026-Q3-test-e",
       "retrieval_kind": "sku",
+      "category": "brakes",
       "gold_label": "conflict",
       "expected_result": "REJECT",
       "mutation": {"kind": "currency_conflict"}

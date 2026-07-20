@@ -33,6 +33,8 @@ class RecommendationsPage extends ConsumerWidget {
         onQueue: (queue) => ref
             .read(recommendationsControllerProvider.notifier)
             .setQueue(queue),
+        onSort: (sort) =>
+            ref.read(recommendationsControllerProvider.notifier).setSort(sort),
       ),
     );
   }
@@ -44,12 +46,14 @@ class _RecommendationsContent extends StatelessWidget {
     required this.onOpenCatalog,
     required this.onRefresh,
     required this.onQueue,
+    required this.onSort,
   });
 
   final RecommendationsState state;
   final VoidCallback? onOpenCatalog;
   final VoidCallback onRefresh;
   final ValueChanged<String> onQueue;
+  final ValueChanged<String> onSort;
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +90,7 @@ class _RecommendationsContent extends StatelessWidget {
                           ),
                           const SizedBox(height: 7),
                           Text(
-                            'Сначала — действие и экономический эффект. Ниже — доказательства и качество данных.',
+                            'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: colors.muted),
                           ),
@@ -114,7 +118,49 @@ class _RecommendationsContent extends StatelessWidget {
                     reviewCount: reviewCount,
                   ),
                   const SizedBox(height: 18),
-                  _QueueFilters(selected: state.queue, onSelected: onQueue),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 16,
+                    runSpacing: 12,
+                    children: [
+                      _QueueFilters(selected: state.queue, onSelected: onQueue),
+                      SizedBox(
+                        width: 310,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: state.sort,
+                          decoration: const InputDecoration(
+                            labelText: 'Сортировка',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'ABSOLUTE_RECOMMENDED_CHANGE',
+                              child: Text('Макс. изменение, ₴'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'PERCENT_RECOMMENDED_CHANGE',
+                              child: Text('Макс. изменение, %'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'EXPECTED_GROSS_UPLIFT',
+                              child: Text('Потенциал валовой маржи'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'CLEARANCE_CAPITAL_LOCK',
+                              child: Text('Замороженный капитал'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'REVIEW_PRIORITY',
+                              child: Text('Приоритет проверки'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) onSort(value);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 16),
                   if (recommendations.isEmpty)
                     _EmptyRecommendations(onOpenCatalog: onOpenCatalog)
@@ -241,11 +287,11 @@ class _QueueFilters extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const options = <(String, String)>[
+      ('all', 'Все'),
       ('raise', 'Недополученная маржа'),
       ('clearance', 'Высвобождение капитала'),
       ('review', 'Проверить вручную'),
       ('hold', 'Без изменения'),
-      ('all', 'Все по группам'),
     ];
     return Wrap(
       spacing: 8,
@@ -451,7 +497,14 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
       return '${_money(item.currentPrice)} — автоцена не сформирована';
     }
     if (target == null) return '${_money(item.currentPrice)} — без изменений';
-    return '${_money(item.currentPrice)} → ${_money(target)}';
+    final change =
+        item.absoluteRecommendedChange ?? (target - item.currentPrice).abs();
+    final percent =
+        item.percentageRecommendedChange ??
+        (item.currentPrice == 0 ? 0 : change / item.currentPrice);
+    final sign = target >= item.currentPrice ? '+' : '−';
+    return '${_money(item.currentPrice)} → ${_money(target)} · '
+        '$sign${_money(change)} (${(percent * 100).toStringAsFixed(1)}%)';
   }
 
   Future<void> _editContext() async {
@@ -630,15 +683,21 @@ class _MarketEvidenceList extends StatelessWidget {
             style: Theme.of(context).textTheme.bodySmall,
           );
         }
+        final laneItems = items.toList(growable: false)
+          ..sort(
+            (left, right) => _cohortRank(
+              left.cohortRole,
+            ).compareTo(_cohortRank(right.cohortRole)),
+          );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Предложения конкурентов',
+              'Evidence: целевой рынок, KEMP reference и исключения',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 10),
-            ...items.map((item) {
+            ...laneItems.map((item) {
               final normalized = normalizedOffers[item.observationId];
               final normalizedPrice =
                   double.tryParse(
@@ -650,11 +709,26 @@ class _MarketEvidenceList extends StatelessWidget {
                     normalized?['multiplier']?.toString() ?? '',
                   ) ??
                   item.multiplier;
+              final coefficientLine =
+                  normalizedPrice != null && multiplier != null
+                  ? 'KEMP-эквивалент: ${_money(normalizedPrice)} · '
+                        'm=${multiplier.toStringAsFixed(2)}'
+                  : 'Нормализация: не участвует';
+              final coefficientEvidence = item.coefficientModel == null
+                  ? 'Коэффициент: нет валидированного evidence'
+                  : '${item.coefficientModel} · coefficient confidence '
+                        '${((item.coefficientConfidence ?? 0) * 100).round()}%';
+              final listingUri = Uri.tryParse(item.url);
+              final listingIsOpenable =
+                  listingUri != null &&
+                  (listingUri.scheme == 'http' ||
+                      listingUri.scheme == 'https') &&
+                  listingUri.host.isNotEmpty;
               return InkWell(
-                onTap: item.url.isEmpty
+                onTap: !listingIsOpenable
                     ? null
                     : () => launchUrl(
-                        Uri.parse(item.url),
+                        listingUri,
                         mode: LaunchMode.externalApplication,
                       ),
                 borderRadius: BorderRadius.circular(8),
@@ -673,13 +747,45 @@ class _MarketEvidenceList extends StatelessWidget {
                             ),
                             const SizedBox(height: 2),
                             Text(
+                              '${item.cohortLabel} · ${item.targetEffect}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: item.affectsTargetMedian
+                                        ? colors.positive
+                                        : colors.warning,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            Text(
                               '${item.tierLabel} · match ${(item.matchConfidence * 100).round()}% · tier ${(item.tierConfidence * 100).round()}%',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             Text(
-                              '${item.coefficientModel} · coefficient confidence ${(item.coefficientConfidence * 100).round()}% · ${item.ageHours.toStringAsFixed(1)} ч.',
+                              '$coefficientEvidence · '
+                              '${item.ageHours == null ? 'возраст evidence не зафиксирован' : '${item.ageHours!.toStringAsFixed(1)} ч.'}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
+                            Text(
+                              'Состояние: ${item.conditionState}'
+                              '${item.conditionRaw == null ? '' : ' · ${item.conditionRaw}'}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            if (item.exclusionReason != null)
+                              Text(
+                                'Исключено: ${PricingRecommendation.reasonLabel(item.exclusionReason!)}',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: colors.negative),
+                              ),
+                            if (item.crossCandidates.isNotEmpty)
+                              Text(
+                                'Cross candidates: ${item.crossCandidates.length} · phase 2 · не automatic identity',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            if (item.url.isEmpty)
+                              Text(
+                                'URL: ${item.urlAbsenceReason ?? 'NOT_AVAILABLE'}',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
                             Text(
                               item.automaticEligible
                                   ? 'Сопоставимость: verified'
@@ -702,7 +808,7 @@ class _MarketEvidenceList extends StatelessWidget {
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           Text(
-                            'KEMP: ${_money(normalizedPrice)} · m=${multiplier.toStringAsFixed(2)}',
+                            coefficientLine,
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -792,9 +898,13 @@ class _Evidence extends StatelessWidget {
         ),
         _KeyValue(label: 'Приоритет', value: recommendation.priorityLabel),
         _KeyValue(
-          label: 'Evidence',
+          label: 'Evidence lanes',
           value:
-              '${recommendation.rawCompetitorCount} raw → ${recommendation.uniqueSellerCount} продавцов → ${recommendation.cleanCompetitorCount} clean',
+              '${recommendation.rawCompetitorCount} raw · '
+              '${recommendation.targetMarketCount} target · '
+              '${recommendation.kempReferenceCount} KEMP ref · '
+              '${recommendation.ownedStoreCount} owned · '
+              '${recommendation.rejectedCount} rejected',
         ),
         if (recommendation.sensitivity != null)
           _KeyValue(
@@ -1002,6 +1112,16 @@ class _LoadError extends StatelessWidget {
 }
 
 String _money(double value) => '${value.toStringAsFixed(0)} ₴';
+
+int _cohortRank(String role) => switch (role) {
+  'TARGET_MARKET' => 0,
+  'KEMP_REFERENCE' => 1,
+  'OWNED_STORE' => 2,
+  'USED_REJECTED' => 3,
+  'DUMPING_DIAGNOSTIC' => 4,
+  'MANUAL_REVIEW' => 5,
+  _ => 6,
+};
 
 String _factorLabel(String? value) => switch (value) {
   'coverage' => 'покрытие',

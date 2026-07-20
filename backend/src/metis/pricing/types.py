@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Mapping
+from typing import Any, Mapping
 
 
 ZERO = Decimal("0")
@@ -74,6 +74,25 @@ class HardGateResult(str, Enum):
     MANUAL_REVIEW = "MANUAL_REVIEW"
 
 
+class CohortRole(str, Enum):
+    """Mutually exclusive Yuri V1 observation lanes."""
+
+    TARGET_MARKET = "TARGET_MARKET"
+    KEMP_REFERENCE = "KEMP_REFERENCE"
+    OWNED_STORE = "OWNED_STORE"
+    USED_REJECTED = "USED_REJECTED"
+    DUMPING_DIAGNOSTIC = "DUMPING_DIAGNOSTIC"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+    HARD_REJECTED = "HARD_REJECTED"
+
+
+class ConditionState(str, Enum):
+    NEW = "NEW"
+    USED_OR_REFURBISHED = "USED_OR_REFURBISHED"
+    CONFLICT = "CONFLICT"
+    UNKNOWN = "UNKNOWN"
+
+
 class PriorityScoreType(str, Enum):
     ECONOMIC_ESTIMATE = "economic_estimate"
     GROSS_UPLIFT_OPPORTUNITY = "gross_uplift_opportunity"
@@ -95,6 +114,7 @@ class CalibrationPair:
     quality_weight: Decimal = ONE
     tier_observation_ids: tuple[str, ...] = field(default_factory=tuple)
     reference_observation_ids: tuple[str, ...] = field(default_factory=tuple)
+    identity_evidence: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +165,7 @@ class SourceProvenance:
     source_record_id: str | None = None
     raw_evidence_sha256: str | None = None
     parser_contract_version: str | None = None
-    schema_version: str = "comparison-evidence-v1"
+    schema_version: str = "comparison-evidence-v2"
     verified: bool = False
 
 
@@ -185,7 +205,10 @@ class CompetitorOffer:
     match_confidence: Decimal
     tier: ProductTier
     tier_confidence: Decimal
-    source_confidence: Decimal = ONE
+    # Missing provenance confidence is fail-closed. Complete synthetic or API
+    # inputs must opt in explicitly; persisted observations use the versioned
+    # source-confidence assessor.
+    source_confidence: Decimal = ZERO
     is_used: bool = False
     is_kemp: bool = False
     is_owned: bool = False
@@ -198,6 +221,7 @@ class CompetitorOffer:
     currency_inferred: bool = False
     currency_evidence: str | None = None
     comparison_evidence: ComparisonEvidence | None = None
+    cohort_role: CohortRole | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +236,7 @@ class ProductPricingContext:
     stock_age_days: Decimal | None = None
     expected_units_sold: Decimal | None = None
     liquidity_target: Decimal = ZERO
-    urgency: Decimal = ONE
+    urgency: Decimal = ZERO
     manual_priority: Decimal = ONE
     allow_below_cost: bool = False
     below_cost_floor: Decimal | None = None
@@ -339,11 +363,17 @@ class PricingPolicy:
     exclude_lower_tier_coefficients: bool = True
     kemp_dumping_ratio: Decimal = Decimal("0.85")
     min_raise_threshold: Decimal = Decimal("0.05")
+    min_lower_threshold: Decimal = Decimal("0.05")
     safety_discount: Decimal = Decimal("0.95")
     max_raise_step: Decimal = Decimal("0.15")
     min_action_change: Decimal = Decimal("0.02")
     stale_markdown_beta: Decimal = Decimal("0.50")
     dead_stock_markdown_beta: Decimal = ONE
+    stale_age_threshold_days: Decimal = Decimal("180")
+    dead_stock_age_threshold_days: Decimal = ZERO
+    stale_age_half_life_days: Decimal = Decimal("365")
+    dead_stock_age_half_life_days: Decimal = Decimal("180")
+    stock_age_policy_version: str = "yuri-v1-stock-age-assumption-v1"
     lower_market_quantile: Decimal = Decimal("0.25")
     minimum_margin: Decimal = ZERO
     price_tick: Decimal = ONE
@@ -418,11 +448,16 @@ class PricingPolicy:
             self.sensitivity_tolerance,
             self.kemp_dumping_ratio,
             self.min_raise_threshold,
+            self.min_lower_threshold,
             self.safety_discount,
             self.max_raise_step,
             self.min_action_change,
             self.stale_markdown_beta,
             self.dead_stock_markdown_beta,
+            self.stale_age_threshold_days,
+            self.dead_stock_age_threshold_days,
+            self.stale_age_half_life_days,
+            self.dead_stock_age_half_life_days,
             self.lower_market_quantile,
             self.minimum_margin,
             self.price_tick,
@@ -440,6 +475,8 @@ class PricingPolicy:
             self.age_weight_max,
             self.age_reference_days,
             self.sales_recency_half_life_days,
+            self.stale_age_half_life_days,
+            self.dead_stock_age_half_life_days,
         )
         if any(not value.is_finite() for value in decimal_fields):
             raise ValueError("pricing policy values must be finite")
@@ -479,6 +516,8 @@ class PricingPolicy:
             self.age_weight_max,
             self.age_reference_days,
             self.sales_recency_half_life_days,
+            self.stale_age_half_life_days,
+            self.dead_stock_age_half_life_days,
         )
         if any(value <= ZERO for value in positive):
             raise ValueError("positive pricing policy values must be greater than zero")
@@ -490,6 +529,7 @@ class PricingPolicy:
             self.factor_floor,
             self.kemp_dumping_ratio,
             self.min_raise_threshold,
+            self.min_lower_threshold,
             self.safety_discount,
             self.max_raise_step,
             self.min_action_change,
@@ -511,6 +551,17 @@ class PricingPolicy:
             raise ValueError("winsor quantiles must be strictly ordered")
         if self.minimum_margin < ZERO:
             raise ValueError("minimum_margin cannot be negative")
+        if (
+            self.stale_age_threshold_days < ZERO
+            or self.dead_stock_age_threshold_days < ZERO
+        ):
+            raise ValueError("stock age thresholds cannot be negative")
+        if self.dead_stock_markdown_beta < self.stale_markdown_beta:
+            raise ValueError("dead-stock base pressure cannot be below stale pressure")
+        if self.dead_stock_age_threshold_days > self.stale_age_threshold_days:
+            raise ValueError("dead-stock age threshold cannot exceed stale threshold")
+        if self.dead_stock_age_half_life_days > self.stale_age_half_life_days:
+            raise ValueError("dead-stock age half-life cannot exceed stale half-life")
         if self.age_weight_min < ZERO:
             raise ValueError("age_weight_min cannot be negative")
         if self.age_weight_min > self.age_weight_max:
@@ -561,6 +612,7 @@ class NormalizedOffer:
     source: str = "unknown"
     listing_url: str | None = None
     comparison_evidence: ComparisonEvidence | None = None
+    cohort_role: CohortRole = CohortRole.TARGET_MARKET
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,6 +623,7 @@ class ExcludedOffer:
     raw_price: Decimal | None = None
     tier: ProductTier | None = None
     stage: str = "eligibility"
+    cohort_role: CohortRole = CohortRole.HARD_REJECTED
 
 
 @dataclass(frozen=True, slots=True)
@@ -616,22 +669,31 @@ class PricingResult:
     finite_sample_scale_correction: bool = True
     automatic_eligible: bool = False
     verified_seller_count: int = 0
-    comparability_policy_id: str = "auto-parts-comparability-v1"
+    comparability_policy_id: str = "yuri-v1-comparability-v2"
     comparability_policy_hash: str = ""
     hard_gate_results: Mapping[str, int] = field(default_factory=dict)
     failed_hard_gates: tuple[str, ...] = field(default_factory=tuple)
     unknown_hard_fields: tuple[str, ...] = field(default_factory=tuple)
     cluster_diagnostic: ClusterDiagnostic | None = None
     robust_policy_fingerprint: Mapping[str, str] = field(default_factory=dict)
+    target_market_count: int = 0
+    kemp_reference_count: int = 0
+    owned_store_count: int = 0
+    rejected_count: int = 0
+    kemp_reference_evidence: tuple[NormalizedOffer, ...] = field(default_factory=tuple)
+    absolute_recommended_change: Decimal | None = None
+    percentage_recommended_change: Decimal | None = None
 
 
 __all__ = [
     "CalibrationPair",
     "CoefficientModel",
     "ClusterDiagnostic",
+    "CohortRole",
     "ComparisonEvidence",
     "CompetitorOffer",
     "ConfidenceAggregation",
+    "ConditionState",
     "DimensionEvidence",
     "EvidenceState",
     "ExcludedOffer",

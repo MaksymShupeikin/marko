@@ -1,4 +1,5 @@
 """Shared SQLAlchemy declarative base and timestamp mixin."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -21,4 +22,3 @@ class TimestampMixin:
         onupdate=func.now(),
         nullable=False,
     )
-

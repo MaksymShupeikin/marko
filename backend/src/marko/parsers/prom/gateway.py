@@ -1,4 +1,5 @@
 """Orchestrates catalog scraping and cross-seller price comparison."""
+
 from __future__ import annotations
 
 import logging
@@ -21,7 +22,8 @@ from .parser import parse_listing, parse_product_page, parse_search
 log = logging.getLogger(__name__)
 
 _PRODUCT_URL_RE = re.compile(
-    r"prom\.ua/(?:(?P<lang>[a-z]{2})/)?p(?P<product_id>\d+)-(?P<word>[\w-]+)\.html", re.I
+    r"prom\.ua/(?:(?P<lang>[a-z]{2})/)?p(?P<product_id>\d+)-(?P<word>[\w-]+)\.html",
+    re.I,
 )
 
 
@@ -34,8 +36,12 @@ class PromGateway:
     def scrape(self, seller_url: str, *, strict: bool = False) -> Iterator[Product]:
         """Lazily yield unique seller products, page by page."""
         seller = Seller.from_url(seller_url)
-        log.info("Продавець: company_id=%s slug=%s lang=%s",
-                 seller.company_id, seller.slug, seller.lang)
+        log.info(
+            "Продавець: company_id=%s slug=%s lang=%s",
+            seller.company_id,
+            seller.slug,
+            seller.lang,
+        )
 
         seen_products: set[tuple[str, str]] = set()
         with HttpClient(self._config) as client:
@@ -85,8 +91,12 @@ class PromGateway:
                 log.info("Сторінка %d порожня — кінець.", page_num)
                 return
 
-            log.info("Сторінка %d: %d товарів (total за сайтом: %s)",
-                     page_num, len(page.products), page.total)
+            log.info(
+                "Сторінка %d: %d товарів (total за сайтом: %s)",
+                page_num,
+                len(page.products),
+                page.total,
+            )
             yield page
             fetched += 1
             page_num += 1
@@ -116,6 +126,34 @@ class PromGateway:
 
     # -- Cross-seller price comparison --
 
+    def search(
+        self,
+        query: str,
+        *,
+        lang: str = "ua",
+        strict: bool = False,
+    ) -> Iterator[Product]:
+        """Yield raw Prom search results without inventing comparability.
+
+        This is an extraction-boundary operation for discovery/replay.  It
+        deliberately does not call ``build_comparison`` and therefore cannot
+        by itself authorize a price recommendation.
+        """
+
+        normalized_query = query.strip()
+        normalized_lang = lang.strip().casefold()
+        if not normalized_query:
+            raise ValueError("Prom search query must not be empty")
+        if not re.fullmatch(r"[a-z]{2}", normalized_lang):
+            raise ValueError(f"Unsupported Prom language: {lang!r}")
+        with HttpClient(self._config) as client:
+            yield from self._collect_candidates(
+                client,
+                normalized_query,
+                normalized_lang,
+                strict=strict,
+            )
+
     def compare(
         self,
         seed_url: str,
@@ -135,9 +173,15 @@ class PromGateway:
         with HttpClient(self._config) as client:
             seed = self._fetch_seed(client, seed_url, lang)
             search_query = query or build_search_query(seed.product)
-            log.info("Seed: %s | бренд=%s | model_id=%s | buyBox=%s продавців (%s–%s)",
-                     seed.product.name, seed.product.brand, seed.product.model_id,
-                     seed.seller_count, seed.min_price, seed.max_price)
+            log.info(
+                "Seed: %s | бренд=%s | model_id=%s | buyBox=%s продавців (%s–%s)",
+                seed.product.name,
+                seed.product.brand,
+                seed.product.model_id,
+                seed.seller_count,
+                seed.min_price,
+                seed.max_price,
+            )
             log.info("Пошуковий запит: %r", search_query)
 
             candidates = self._collect_candidates(
@@ -156,8 +200,11 @@ class PromGateway:
                 ),
             )
 
-        log.info("Порівняно продавців: %d (переглянуто кандидатів: %d)",
-                 len(comparison.offers), comparison.candidates_scanned)
+        log.info(
+            "Порівняно продавців: %d (переглянуто кандидатів: %d)",
+            len(comparison.offers),
+            comparison.candidates_scanned,
+        )
         return comparison
 
     def _fetch_seed(self, client: HttpClient, seed_url: str, lang: str) -> SeedInfo:
@@ -194,6 +241,10 @@ class PromGateway:
             if page.is_empty:
                 log.info("Пошукова сторінка %d порожня — кінець.", page_num)
                 return
-            log.info("Пошук, стор. %d: %d кандидатів (total: %s)",
-                     page_num, len(page.products), page.total)
+            log.info(
+                "Пошук, стор. %d: %d кандидатів (total: %s)",
+                page_num,
+                len(page.products),
+                page.total,
+            )
             yield from page.products

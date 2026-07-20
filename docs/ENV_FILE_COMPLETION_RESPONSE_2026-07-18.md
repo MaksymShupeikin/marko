@@ -1,0 +1,443 @@
+Готово. В корневом [.env](/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/.env) все перечисленные переменные присутствуют ровно по одному разу.
+
+Существующие значения я сохранил. Добавлен только отсутствовавший ключ:
+
+```dotenv
+FIREBASE_STORAGE_BUCKET=
+```
+
+Проверка `docker compose config --quiet` прошла. Значение bucket оставлено пустым, потому что конкретный Firebase Storage bucket вы не передавали.
+
+## Структурированный результат текущего этапа
+
+STAGE_RESULT:
+- stage:
+  - id: ENV_FILE_COMPLETION_2026_07_18
+  - title: ROOT ENV FILE COMPLETION
+  - type: IMPLEMENTATION
+  - scope owner: Marko
+- status: PASS
+- completed scope:
+  - [SCOPE-ENV-KEYS] The root .env contains every requested PostgreSQL, Redis, API, web, and Firebase key exactly once without changing existing configured values.
+    - artifacts: .env
+    - evidence: key-presence validation output
+  - [SCOPE-COMPOSE-PARSE] Docker Compose accepts the completed environment file.
+    - artifacts: compose.yaml
+    - evidence: docker compose config --quiet
+- strongest verified result:
+  - claim: [CLM-ENV-COMPLETE] All thirteen requested variables are present exactly once and Compose configuration validation passes.
+  - evidence level: E3
+  - evidence: .env, docker compose config --quiet
+  - reproduction status: reproducible
+  - limitations: Secret and Firebase values were not printed during verification., FIREBASE_STORAGE_BUCKET is present but remains empty until a real Firebase bucket is supplied.
+- weakest critical area:
+  - area: [AREA-FIREBASE-STORAGE-VALUE] Firebase storage bucket runtime value
+  - score/evidence floor: 50.0 / E2
+  - reason: The requested key is present, but no project-specific bucket value was provided.
+  - impact: Firebase Storage-dependent functionality will require the actual bucket identifier.
+  - required resolution: Set FIREBASE_STORAGE_BUCKET to the bucket value from Firebase project settings if Storage is used.
+- evidence quality:
+  - highest level: E3
+  - critical floor: E2
+  - material claim coverage: 1.00
+  - reproducible claim coverage: 1.00
+  - freshness status: verified
+  - representative scope: representative
+  - limitations: Validation covered environment structure and Compose parsing, not service restart.
+- production implication:
+  - state: DEVELOPMENT_ONLY
+  - production ready: false
+  - evidence level: E3
+  - passed hard gates: REQUESTED_ENV_KEYS_PRESENT, COMPOSE_CONFIG_VALID
+  - failed hard gates: NONE_VERIFIED
+  - blocked hard gates: PRODUCTION_SECRET_AND_FIREBASE_VALUE_VALIDATION
+  - statement: The requested local environment-file task is complete; no production-readiness claim is made.
+
+## Блокеры
+
+BLOCKERS:
+- P0:
+  - NONE_VERIFIED
+- P1:
+  - NONE_VERIFIED
+- business decisions:
+  - NONE_VERIFIED
+- source/access:
+  - NONE_VERIFIED
+- data:
+  - NONE_VERIFIED
+- environment/reproducibility:
+  - NONE_VERIFIED
+- unknowns:
+  - NONE_VERIFIED
+
+## Следующая часть
+
+NEXT_STAGE:
+- id: LOCAL_ENV_RUNTIME_VALIDATION
+- title: LOCAL ENV RUNTIME VALIDATION
+- why it is next:
+  - A service restart is the next independent check if runtime verification is requested.
+- required inputs:
+  - [INPUT-COMPLETED-ENV] Completed root environment file; source=current workspace; required_state=requested keys present and Compose config valid; available=true; evidence=.env
+- expected artifacts:
+  - [ART-RUNTIME-HEALTH-REPORT] report: должен быть создан; purpose=Must be created only if a local stack restart and health verification are requested.; required_fields=service, health, port
+- acceptance criteria:
+  - [AC-RUNTIME-01] predicate=Compose services start and expose healthy API and web endpoints; evidence=docker compose ps and endpoint health checks; threshold=all required services healthy
+- stop condition:
+  - gate key: STOP_GATE_LOCAL_ENV_RUNTIME_VALIDATION
+  - allowed states: PASS, FAIL, BLOCKED, NO_GO
+  - automatic transition: false
+- client decisions required:
+  - NONE_VERIFIED
+
+STOP_GATE_ENV_FILE_COMPLETION_2026_07_18 = PASS
+
+MACHINE_READABLE_SUMMARY:
+
+```yaml
+schema:
+  name: metis_marko_machine_readable_stage_summary
+  version: 1.1.0
+  generated_at: "2026-07-18T19:00:00+02:00"
+  report_id: REPORT-ENV-FILE-COMPLETION-2026-07-18
+  audit_id: VALIDATION-ENV-FILE-COMPLETION-2026-07-18
+stage:
+  id: ENV_FILE_COMPLETION_2026_07_18
+  title: ROOT ENV FILE COMPLETION
+  status: PASS
+  status_reason: Every requested environment key is present exactly once and Docker Compose configuration parsing succeeds.
+  acceptance_criteria_passed: true
+  audit_complete: true
+  production_ready: false
+  secondary_findings: []
+  evidence_refs:
+  - .env
+  - docker compose config --quiet
+repository:
+  audit_root: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  audit_root_realpath: /Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия
+  topology: UNKNOWN
+  git_commit: null
+  dirty_before_audit: null
+  identity_verified: false
+  runtime_import_identity: null
+  components:
+    metis:
+      root: backend/src/metis
+      realpath: null
+      repository_top_level: null
+      git_commit: null
+      branch: null
+      detached_head: null
+      dirty_before_audit: null
+      identity_verified: false
+      runtime_import_path: null
+      evidence_refs: []
+    marko:
+      root: backend/src/marko
+      realpath: null
+      repository_top_level: null
+      git_commit: null
+      branch: null
+      detached_head: null
+      dirty_before_audit: null
+      identity_verified: false
+      runtime_import_path: null
+      evidence_refs: []
+  duplicate_copies: []
+  unresolved_identity_conflicts:
+  - NO_GIT_METADATA
+metis:
+  weighted_readiness: null
+  readiness_interval:
+    lower: null
+    upper: null
+  readiness_scale: '0_100'
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  critical_floor: null
+  evidence_level: null
+  evidence_level_semantics: CRITICAL_EVIDENCE_FLOOR
+  highest_evidence_level: null
+  unknown_weight: null
+  critical_unknown_count: null
+  engineering_weights_approved: false
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+    - PROJECT_READINESS_NOT_ASSESSED
+  dimension_weights:
+    implementation: 0.2
+    verification: 0.15
+    integration: 0.15
+    auditability: 0.15
+    operations: 0.15
+    security: 0.1
+    documentation: 0.1
+  capabilities: []
+  critical_capability_ids: []
+  strongest_domains: []
+  missing_critical_domains: []
+  evidence_refs: []
+  maturity_class: UNKNOWN
+marko:
+  weighted_readiness: null
+  readiness_interval:
+    lower: null
+    upper: null
+  readiness_scale: '0_100'
+  score_basis: CONSERVATIVE_LOWER_BOUND
+  critical_floor: null
+  evidence_level: null
+  evidence_level_semantics: CRITICAL_EVIDENCE_FLOOR
+  highest_evidence_level: null
+  unknown_weight: null
+  critical_unknown_count: null
+  engineering_weights_approved: false
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+    - PROJECT_READINESS_NOT_ASSESSED
+  dimension_weights:
+    implementation: 0.2
+    verification: 0.15
+    integration: 0.15
+    auditability: 0.15
+    operations: 0.15
+    security: 0.1
+    documentation: 0.1
+  capabilities: []
+  critical_capability_ids: []
+  strongest_domains: []
+  missing_critical_domains: []
+  evidence_refs:
+  - .env
+  - compose.yaml
+  maturity_class: UNKNOWN
+  existing_scraper:
+    located: UNKNOWN
+    physical_path: null
+    entry_point: null
+    entry_point_verified: UNKNOWN
+    input_contract_verified: UNKNOWN
+    output_contract_verified: UNKNOWN
+    runtime_reverified: UNKNOWN
+    single_request_verified: UNKNOWN
+    small_batch_verified: UNKNOWN
+    batch_ready: UNKNOWN
+    parallel_safe: UNKNOWN
+    timeout_bounded: UNKNOWN
+    retry_safe: UNKNOWN
+    idempotent: UNKNOWN
+    queue_integrated: UNKNOWN
+    dead_letter_integrated: UNKNOWN
+    raw_storage_integrated: UNKNOWN
+    structured_storage_integrated: UNKNOWN
+    metis_evidence_integrated: UNKNOWN
+    replayable: UNKNOWN
+    observable: UNKNOWN
+    load_tested: UNKNOWN
+    production_proven: UNKNOWN
+    capacity:
+      measured: false
+      unique_urls: null
+      arrival_rate_urls_per_second: null
+      worker_service_rate_urls_per_second: null
+      active_workers: null
+      average_attempts_per_unique_url: null
+      effective_worker_service_rate: null
+      total_capacity_urls_per_second: null
+      utilization_rho: null
+      queue_backlog: null
+      queue_stability: NOT_MEASURED
+      estimated_drain_seconds: null
+      success_rate: null
+      retry_amplification: null
+      latency_p50_seconds: null
+      latency_p95_seconds: null
+      latency_p99_seconds: null
+      raw_storage_bytes: null
+      structured_storage_bytes: null
+      memory_peak_bytes: null
+      cpu_average_percent: null
+    evidence_refs: []
+  reusable_as_is: []
+  adapt_before_reuse: []
+  reference_only: []
+  do_not_port: []
+  unknown_reuse_state: []
+  evaluated_component_ids: []
+  reuse_partition_valid: null
+combined_system:
+  maturity_class: UNKNOWN
+  end_to_end_flow_verified: UNKNOWN
+  end_to_end_evidence_level: null
+  trace_coverage: null
+  verified_trace_coverage: null
+  integrated_trace_coverage: null
+  last_verified_node: ENV_FILE_COMPOSE_PARSE
+  first_unverified_node: SERVICE_RUNTIME_RESTART
+  first_broken_transition: null
+  production_eligible: false
+  production_gate:
+    status: NOT_EVALUATED
+    passed_gates: []
+    failed_gates: []
+    blocked_gates: []
+    unknown_gates:
+    - PROJECT_READINESS_NOT_ASSESSED
+  recommendation_contract:
+    explainable: UNKNOWN
+    auditable: UNKNOWN
+    reproducible: UNKNOWN
+    insufficient_data_abstention: UNKNOWN
+    manual_review_routing: UNKNOWN
+  evidence_refs:
+  - .env
+  - compose.yaml
+gaps:
+  p0: []
+  p1: []
+  p2: []
+  p3: []
+  priority_partition_valid: null
+  duplicate_gap_ids: []
+  critical_dependency_chain: []
+business_decisions_required: []
+source_access_states: []
+engineering_assumptions: []
+future_hypotheses: []
+unknowns:
+- unknown_id: UNKNOWN-REPOSITORY-SNAPSHOT
+  field_path: repository.*
+  question: Which canonical commit owns this workspace?
+  reason_unknown: No Git metadata is present.
+  impact: The change is path-bound.
+  resolver_type: REPOSITORY_OWNER_INPUT
+  required_input: Canonical repository identity
+  owner: repository maintainer
+  blocks:
+  - AUDITED_RELEASE
+  target_stage: RELEASE_PROVENANCE
+- unknown_id: UNKNOWN-METIS-READINESS
+  field_path: metis.*
+  question: What is current Metis readiness?
+  reason_unknown: The env-file task did not assess Metis readiness.
+  impact: No readiness score is claimed.
+  resolver_type: PROJECT_STATE_AUDIT
+  required_input: Representative project audit
+  owner: engineering
+  blocks:
+  - METIS_PRODUCTION_GATE
+  target_stage: PROJECT_READINESS_ASSESSMENT
+- unknown_id: UNKNOWN-MARKO-READINESS
+  field_path: marko.*
+  question: What is current Marko readiness?
+  reason_unknown: The env-file task did not assess Marko readiness.
+  impact: No readiness score is claimed.
+  resolver_type: PROJECT_STATE_AUDIT
+  required_input: Representative project audit
+  owner: engineering
+  blocks:
+  - MARKO_PRODUCTION_GATE
+  target_stage: PROJECT_READINESS_ASSESSMENT
+- unknown_id: UNKNOWN-COMBINED-READINESS
+  field_path: combined_system.*
+  question: Is the complete runtime production-ready?
+  reason_unknown: No service restart or readiness audit was requested.
+  impact: Production eligibility remains unassessed.
+  resolver_type: RUNTIME_AND_READINESS_VALIDATION
+  required_input: Runtime and representative production evidence
+  owner: engineering
+  blocks:
+  - COMBINED_PRODUCTION_GATE
+  target_stage: LOCAL_ENV_RUNTIME_VALIDATION
+- unknown_id: UNKNOWN-GAP-INVENTORY
+  field_path: gaps
+  question: What is the current project gap inventory?
+  reason_unknown: Gap analysis was outside this env-file task.
+  impact: Empty gap arrays do not mean no project gaps.
+  resolver_type: PROJECT_STATE_AUDIT
+  required_input: Authorized gap audit
+  owner: engineering
+  blocks:
+  - PRODUCTION_GAP_ASSERTION
+  target_stage: PROJECT_READINESS_ASSESSMENT
+- unknown_id: UNKNOWN-BUSINESS-DECISIONS
+  field_path: business_decisions_required
+  question: Which business decisions remain?
+  reason_unknown: Business decisions were outside this env-file task.
+  impact: Empty decisions do not mean no decisions remain.
+  resolver_type: CLIENT_DECISION_AUDIT
+  required_input: Approved decision register
+  owner: product owner
+  blocks:
+  - PRODUCTION_AUTHORIZATION
+  target_stage: PROJECT_READINESS_ASSESSMENT
+- unknown_id: UNKNOWN-SOURCE-ACCESS
+  field_path: source_access_states
+  question: What source permissions currently apply?
+  reason_unknown: Source access was outside this env-file task.
+  impact: No source-access claim is made.
+  resolver_type: SOURCE_ACCESS_REVIEW
+  required_input: Current source-access decision
+  owner: source authority
+  blocks:
+  - SOURCE_DEPENDENT_COLLECTION
+  target_stage: PROJECT_READINESS_ASSESSMENT
+next_stage:
+  id: LOCAL_ENV_RUNTIME_VALIDATION
+  title: LOCAL ENV RUNTIME VALIDATION
+  objective: Restart the local stack and verify service health if directly requested.
+  why_it_is_next: Compose parsing passed; runtime health is the next independent verification.
+  required_inputs:
+  - Completed root .env
+  - Working Docker context
+  expected_outputs:
+  - A runtime health report must be created.
+  acceptance_criteria:
+  - All required Compose services and API and web endpoints are healthy.
+  stop_condition: STOP_GATE_LOCAL_ENV_RUNTIME_VALIDATION with no automatic continuation
+  client_decisions_required: []
+  started: false
+  new_direct_instruction_required: true
+validation:
+  yaml_parse: true
+  duplicate_key_check: true
+  schema_validation: true
+  required_field_validation: true
+  enum_validation: true
+  type_validation: true
+  arithmetic_validation: true
+  readiness_interval_validation: true
+  evidence_ceiling_validation: true
+  critical_floor_validation: true
+  stop_gate_consistency: true
+  production_gate_consistency: true
+  reuse_partition_validation: true
+  gap_partition_validation: true
+  evidence_traceability: true
+  reverse_trace_validation: true
+  variation_validation: true
+  hostile_review: true
+  errors: []
+  warnings:
+  - PROJECT_READINESS_NOT_ASSESSED
+  - REPOSITORY_SNAPSHOT_NOT_GIT_BOUND
+termination:
+  stop_gate_key: STOP_GATE_ENV_FILE_COMPLETION_2026_07_18
+  stop_gate_value: PASS
+  stage_status_matches_stop_gate: true
+  next_stage_started: false
+  execution_stopped: true
+  no_content_after_summary: true
+```
+

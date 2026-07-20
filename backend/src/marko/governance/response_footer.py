@@ -341,9 +341,7 @@ _EVIDENCE_SCORE_CAP: dict[EvidenceLevel, float] = {
     EvidenceLevel.E5: 100,
 }
 _REQUIRED_BLOCKER_CATEGORIES = frozenset(BlockerCategory)
-_FINAL_GATE_RE = re.compile(
-    r"^STOP_GATE_([A-Z0-9_]+) = (PASS|FAIL|BLOCKED|NO_GO)$"
-)
+_FINAL_GATE_RE = re.compile(r"^STOP_GATE_([A-Z0-9_]+) = (PASS|FAIL|BLOCKED|NO_GO)$")
 _FINAL_GATE_LINE_RE = re.compile(
     r"^STOP_GATE_([A-Z0-9_]+) = (PASS|FAIL|BLOCKED|NO_GO)$",
     flags=re.MULTILINE,
@@ -426,7 +424,10 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
             "stage_result.status must equal stop_gate.primary_status",
         )
     aggregated = aggregate_status(
-        (stop_gate.primary_status, *(item.status for item in stop_gate.secondary_findings))
+        (
+            stop_gate.primary_status,
+            *(item.status for item in stop_gate.secondary_findings),
+        )
     )
     if aggregated != stop_gate.primary_status:
         add(
@@ -448,17 +449,20 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
             "next_stage.stop_condition.gate_key",
             f"expected {next_expected_key}",
         )
-    if (
-        len(next_stage.stop_condition.allowed_states) != len(StageStatus)
-        or set(next_stage.stop_condition.allowed_states) != set(StageStatus)
-    ):
+    if len(next_stage.stop_condition.allowed_states) != len(StageStatus) or set(
+        next_stage.stop_condition.allowed_states
+    ) != set(StageStatus):
         add(
             "NEXT_ALLOWED_STATES_INVALID",
             "next_stage.stop_condition.allowed_states",
             "the next stop condition must allow PASS, FAIL, BLOCKED, and NO_GO exactly once",
         )
     if not next_stage.why_it_is_next:
-        add("NEXT_REASON_MISSING", "next_stage.why_it_is_next", "at least one dependency reason is required")
+        add(
+            "NEXT_REASON_MISSING",
+            "next_stage.why_it_is_next",
+            "at least one dependency reason is required",
+        )
     next_stage_is_undetermined = next_stage.id == "NONE_AUTHORIZED"
     if next_stage_is_undetermined and next_stage.title != "AWAITING_REQUIRED_DECISION":
         add(
@@ -473,9 +477,17 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
             "a determined next stage must list its required inputs",
         )
     if not next_stage.expected_artifacts and not next_stage_is_undetermined:
-        add("NEXT_ARTIFACT_MISSING", "next_stage.expected_artifacts", "at least one future artifact is required")
+        add(
+            "NEXT_ARTIFACT_MISSING",
+            "next_stage.expected_artifacts",
+            "at least one future artifact is required",
+        )
     if not next_stage.acceptance_criteria and not next_stage_is_undetermined:
-        add("NEXT_ACCEPTANCE_MISSING", "next_stage.acceptance_criteria", "at least one testable criterion is required")
+        add(
+            "NEXT_ACCEPTANCE_MISSING",
+            "next_stage.acceptance_criteria",
+            "at least one testable criterion is required",
+        )
     unavailable_inputs = {
         item.input_id
         for item in next_stage.required_inputs
@@ -509,7 +521,10 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
             "stage_result.strongest_verified_result.evidence_refs",
             "a verified result requires evidence references",
         )
-    if _EVIDENCE_RANK[stage.evidence_quality.critical_floor] > _EVIDENCE_RANK[stage.evidence_quality.highest_level]:
+    if (
+        _EVIDENCE_RANK[stage.evidence_quality.critical_floor]
+        > _EVIDENCE_RANK[stage.evidence_quality.highest_level]
+    ):
         add(
             "EVIDENCE_FLOOR_ABOVE_MAX",
             "stage_result.evidence_quality",
@@ -570,19 +585,28 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
                 "stage_result.production_implication",
                 "production_ready=true forbids failed or blocked hard gates",
             )
-    if production.state == ProductionState.PRODUCTION_READY_PROVEN and production.production_ready is not True:
+    if (
+        production.state == ProductionState.PRODUCTION_READY_PROVEN
+        and production.production_ready is not True
+    ):
         add(
             "PRODUCTION_READY_FLAG_MISSING",
             "stage_result.production_implication.production_ready",
             "PRODUCTION_READY_PROVEN requires production_ready=true",
         )
-    if production.production_ready == "not_assessed" and production.state != ProductionState.NOT_ASSESSED:
+    if (
+        production.production_ready == "not_assessed"
+        and production.state != ProductionState.NOT_ASSESSED
+    ):
         add(
             "PRODUCTION_NOT_ASSESSED_STATE_MISMATCH",
             "stage_result.production_implication",
             "production_ready=not_assessed requires state NOT_ASSESSED",
         )
-    if production.state == ProductionState.NOT_ASSESSED and production.production_ready != "not_assessed":
+    if (
+        production.state == ProductionState.NOT_ASSESSED
+        and production.production_ready != "not_assessed"
+    ):
         add(
             "PRODUCTION_NOT_ASSESSED_FLAG_MISMATCH",
             "stage_result.production_implication",
@@ -608,10 +632,18 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
         add("DUPLICATE_BLOCKER_ID", "blockers", "blocker IDs must be unique")
     for index, blocker in enumerate(blockers.p0):
         if blocker.priority != BlockerPriority.P0:
-            add("BLOCKER_PRIORITY_MISMATCH", f"blockers.p0[{index}]", "P0 list requires priority P0")
+            add(
+                "BLOCKER_PRIORITY_MISMATCH",
+                f"blockers.p0[{index}]",
+                "P0 list requires priority P0",
+            )
     for index, blocker in enumerate(blockers.p1):
         if blocker.priority != BlockerPriority.P1:
-            add("BLOCKER_PRIORITY_MISMATCH", f"blockers.p1[{index}]", "P1 list requires priority P1")
+            add(
+                "BLOCKER_PRIORITY_MISMATCH",
+                f"blockers.p1[{index}]",
+                "P1 list requires priority P1",
+            )
         if blocker.affects_current_gate:
             add(
                 "P1_BLOCKS_CURRENT_GATE",
@@ -625,7 +657,11 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
                 f"blockers.all[{index}].blocked_scope",
                 "every blocker must identify blocked scope",
             )
-        if not (blocker.affects_current_gate or blocker.affects_next_stage or blocker.affects_production):
+        if not (
+            blocker.affects_current_gate
+            or blocker.affects_next_stage
+            or blocker.affects_production
+        ):
             add(
                 "BLOCKER_WITHOUT_IMPACT",
                 f"blockers.all[{index}]",
@@ -649,18 +685,42 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
 
     if blockers.overall == BlockerOverall.NONE_VERIFIED:
         if not blockers.assessment_complete:
-            add("NONE_WITHOUT_ASSESSMENT", "blockers.assessment_complete", "NONE_VERIFIED requires complete assessment")
+            add(
+                "NONE_WITHOUT_ASSESSMENT",
+                "blockers.assessment_complete",
+                "NONE_VERIFIED requires complete assessment",
+            )
         if blockers.assessed_categories != _REQUIRED_BLOCKER_CATEGORIES:
-            add("NONE_WITH_PARTIAL_CATEGORIES", "blockers.assessed_categories", "NONE_VERIFIED requires every category assessed")
+            add(
+                "NONE_WITH_PARTIAL_CATEGORIES",
+                "blockers.assessed_categories",
+                "NONE_VERIFIED requires every category assessed",
+            )
         if all_blockers or blockers.unknowns:
-            add("NONE_WITH_FINDINGS", "blockers", "NONE_VERIFIED forbids blockers and unknowns")
+            add(
+                "NONE_WITH_FINDINGS",
+                "blockers",
+                "NONE_VERIFIED forbids blockers and unknowns",
+            )
     elif blockers.overall == BlockerOverall.BLOCKERS_FOUND and not all_blockers:
-        add("BLOCKERS_FOUND_EMPTY", "blockers", "BLOCKERS_FOUND requires at least one blocker")
+        add(
+            "BLOCKERS_FOUND_EMPTY",
+            "blockers",
+            "BLOCKERS_FOUND requires at least one blocker",
+        )
     elif blockers.overall == BlockerOverall.UNKNOWN_NOT_ASSESSED:
         if blockers.assessment_complete and not blockers.unknowns:
-            add("UNKNOWN_WITH_COMPLETE_ASSESSMENT", "blockers", "UNKNOWN_NOT_ASSESSED requires incomplete assessment or unknowns")
+            add(
+                "UNKNOWN_WITH_COMPLETE_ASSESSMENT",
+                "blockers",
+                "UNKNOWN_NOT_ASSESSED requires incomplete assessment or unknowns",
+            )
     if blockers.unknowns and blockers.overall == BlockerOverall.NONE_VERIFIED:
-        add("UNKNOWNS_HIDDEN_BY_NONE", "blockers.unknowns", "unknowns forbid NONE_VERIFIED")
+        add(
+            "UNKNOWNS_HIDDEN_BY_NONE",
+            "blockers.unknowns",
+            "unknowns forbid NONE_VERIFIED",
+        )
 
     current_external_blockers = [
         blocker
@@ -671,34 +731,80 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
 
     if stage.status == StageStatus.PASS:
         if not stage.completed_scope:
-            add("PASS_WITHOUT_SCOPE", "stage_result.completed_scope", "PASS requires completed scope")
+            add(
+                "PASS_WITHOUT_SCOPE",
+                "stage_result.completed_scope",
+                "PASS requires completed scope",
+            )
         if hard_incomplete:
-            add("PASS_WITH_HARD_INCOMPLETE", "stage_result.incomplete_scope", "PASS forbids incomplete hard scope")
-        if strongest.claim_id == "NONE_VERIFIED" or _EVIDENCE_RANK[strongest.evidence_level] < 2:
-            add("PASS_WITHOUT_VERIFIED_RESULT", "stage_result.strongest_verified_result", "PASS requires an E2+ strongest result")
+            add(
+                "PASS_WITH_HARD_INCOMPLETE",
+                "stage_result.incomplete_scope",
+                "PASS forbids incomplete hard scope",
+            )
+        if (
+            strongest.claim_id == "NONE_VERIFIED"
+            or _EVIDENCE_RANK[strongest.evidence_level] < 2
+        ):
+            add(
+                "PASS_WITHOUT_VERIFIED_RESULT",
+                "stage_result.strongest_verified_result",
+                "PASS requires an E2+ strongest result",
+            )
         if blockers.p0:
             add("PASS_WITH_P0", "blockers.p0", "PASS forbids P0 blockers")
     elif stage.status == StageStatus.FAIL:
         if not hard_incomplete and not production.failed_hard_gates:
-            add("FAIL_WITHOUT_DEFECT", "stage_result", "FAIL requires an observed current-stage defect")
+            add(
+                "FAIL_WITHOUT_DEFECT",
+                "stage_result",
+                "FAIL requires an observed current-stage defect",
+            )
         if _EVIDENCE_RANK[stage.evidence_quality.highest_level] < 3:
-            add("FAIL_WITH_WEAK_EVIDENCE", "stage_result.evidence_quality", "FAIL requires focused executable E3+ evidence")
+            add(
+                "FAIL_WITH_WEAK_EVIDENCE",
+                "stage_result.evidence_quality",
+                "FAIL requires focused executable E3+ evidence",
+            )
         next_id = next_stage.id
         if "REPAIR" not in next_id and "REVALIDATION" not in next_id:
-            add("FAIL_NEXT_STAGE_INVALID", "next_stage.id", "FAIL must lead to repair or revalidation")
+            add(
+                "FAIL_NEXT_STAGE_INVALID",
+                "next_stage.id",
+                "FAIL must lead to repair or revalidation",
+            )
     elif stage.status == StageStatus.BLOCKED:
         if not current_external_blockers:
-            add("BLOCKED_WITHOUT_EXTERNAL_DEPENDENCY", "blockers", "BLOCKED requires an external current-gate blocker")
+            add(
+                "BLOCKED_WITHOUT_EXTERNAL_DEPENDENCY",
+                "blockers",
+                "BLOCKED requires an external current-gate blocker",
+            )
         if not unavailable_inputs:
-            add("BLOCKED_WITHOUT_MISSING_INPUT", "next_stage.required_inputs", "BLOCKED continuation requires an unavailable or unknown input")
+            add(
+                "BLOCKED_WITHOUT_MISSING_INPUT",
+                "next_stage.required_inputs",
+                "BLOCKED continuation requires an unavailable or unknown input",
+            )
     elif stage.status == StageStatus.NO_GO:
         if not production.failed_hard_gates:
-            add("NO_GO_WITHOUT_HARD_FAILURE", "stage_result.production_implication.failed_hard_gates", "NO_GO requires a failed hard gate")
-        if max(
-            _EVIDENCE_RANK[strongest.evidence_level],
-            _EVIDENCE_RANK[stage.weakest_critical_area.evidence_level],
-        ) < 3:
-            add("NO_GO_WITH_WEAK_EVIDENCE", "stage_result", "NO_GO requires E3+ falsification evidence")
+            add(
+                "NO_GO_WITHOUT_HARD_FAILURE",
+                "stage_result.production_implication.failed_hard_gates",
+                "NO_GO requires a failed hard gate",
+            )
+        if (
+            max(
+                _EVIDENCE_RANK[strongest.evidence_level],
+                _EVIDENCE_RANK[stage.weakest_critical_area.evidence_level],
+            )
+            < 3
+        ):
+            add(
+                "NO_GO_WITH_WEAK_EVIDENCE",
+                "stage_result",
+                "NO_GO requires E3+ falsification evidence",
+            )
         if strongest.reproduction_status != "reproducible":
             add(
                 "NO_GO_WITHOUT_REPRODUCIBLE_FALSIFICATION",
@@ -707,15 +813,31 @@ def validate_contract(contract: EndOfResponse) -> tuple[ValidationIssue, ...]:
             )
         allowed_tokens = ("DECISION", "ALTERNATIVE", "SCOPE_REVISION", "REPLACEMENT")
         if not any(token in next_stage.id for token in allowed_tokens):
-            add("NO_GO_NEXT_STAGE_INVALID", "next_stage.id", "NO_GO must lead to a decision, alternative, scope revision, or replacement")
+            add(
+                "NO_GO_NEXT_STAGE_INVALID",
+                "next_stage.id",
+                "NO_GO must lead to a decision, alternative, scope revision, or replacement",
+            )
         if "IMPLEMENTATION" in next_stage.id:
-            add("NO_GO_CONTINUES_REJECTED_APPROACH", "next_stage.id", "NO_GO cannot continue directly into implementation")
+            add(
+                "NO_GO_CONTINUES_REJECTED_APPROACH",
+                "next_stage.id",
+                "NO_GO cannot continue directly into implementation",
+            )
 
     if stage.stage.id == UNASSIGNED_STAGE_ID:
         if stage.status != StageStatus.BLOCKED:
-            add("UNASSIGNED_STAGE_NOT_BLOCKED", "stage_result.status", "missing stage identity requires BLOCKED")
+            add(
+                "UNASSIGNED_STAGE_NOT_BLOCKED",
+                "stage_result.status",
+                "missing stage identity requires BLOCKED",
+            )
         if MISSING_STAGE_ID_UNKNOWN not in blockers.unknowns:
-            add("MISSING_STAGE_UNKNOWN_NOT_RECORDED", "blockers.unknowns", "missing_stage_identity must be recorded")
+            add(
+                "MISSING_STAGE_UNKNOWN_NOT_RECORDED",
+                "blockers.unknowns",
+                "missing_stage_identity must be recorded",
+            )
 
     return tuple(issues)
 
@@ -905,9 +1027,17 @@ def validate_rendered_footer(
     )
     positions = [response.find(marker) for marker in required_markers]
     if any(position < 0 for position in positions):
-        add("FOOTER_SECTION_MISSING", "response", "STAGE_RESULT, BLOCKERS, and NEXT_STAGE are required")
+        add(
+            "FOOTER_SECTION_MISSING",
+            "response",
+            "STAGE_RESULT, BLOCKERS, and NEXT_STAGE are required",
+        )
     elif positions != sorted(positions):
-        add("FOOTER_SECTION_ORDER", "response", "required footer sections are out of order")
+        add(
+            "FOOTER_SECTION_ORDER",
+            "response",
+            "required footer sections are out of order",
+        )
 
     for marker in required_markers:
         if response.count(marker) > 1:
@@ -949,14 +1079,28 @@ def validate_rendered_footer(
         return tuple(issues)
     final_match = _FINAL_GATE_RE.fullmatch(nonempty[-1])
     if final_match is None:
-        add("STOP_GATE_NOT_LAST", "response", "the final non-empty line must be a canonical STOP_GATE assignment")
+        add(
+            "STOP_GATE_NOT_LAST",
+            "response",
+            "the final non-empty line must be a canonical STOP_GATE assignment",
+        )
     else:
         stage_match = re.search(r"^  - id: ([A-Z0-9_]+)$", response, flags=re.MULTILINE)
-        status_match = re.search(r"^- status: (PASS|FAIL|BLOCKED|NO_GO)$", response, flags=re.MULTILINE)
+        status_match = re.search(
+            r"^- status: (PASS|FAIL|BLOCKED|NO_GO)$", response, flags=re.MULTILINE
+        )
         if stage_match and final_match.group(1) != stage_match.group(1):
-            add("RENDERED_GATE_STAGE_MISMATCH", "response", "rendered stage id does not match final gate key")
+            add(
+                "RENDERED_GATE_STAGE_MISMATCH",
+                "response",
+                "rendered stage id does not match final gate key",
+            )
         if status_match and final_match.group(2) != status_match.group(1):
-            add("RENDERED_GATE_STATUS_MISMATCH", "response", "rendered status does not match final gate status")
+            add(
+                "RENDERED_GATE_STATUS_MISMATCH",
+                "response",
+                "rendered status does not match final gate status",
+            )
 
         gate_lines = tuple(_FINAL_GATE_LINE_RE.finditer(response))
         if len(gate_lines) != 1:
@@ -979,7 +1123,11 @@ def validate_rendered_footer(
         marker = "## Структурированный результат текущего этапа"
         start = response.find(marker)
         if start < 0:
-            add("CANONICAL_FOOTER_HEADING_MISSING", "response", "canonical footer heading is missing")
+            add(
+                "CANONICAL_FOOTER_HEADING_MISSING",
+                "response",
+                "canonical footer heading is missing",
+            )
         else:
             actual_footer = response[start:].strip()
             expected_footer = render_footer(expected_contract).strip()
@@ -1060,8 +1208,7 @@ def build_self_check(
             and not next_stage.authorized
             and not contract.stop_gate.automatic_transition
         ),
-        "next_stage_inputs_listed": bool(next_stage.required_inputs)
-        or none_authorized,
+        "next_stage_inputs_listed": bool(next_stage.required_inputs) or none_authorized,
         "next_stage_artifacts_are_future_artifacts": all(
             item.temporal_state == "PLANNED_NOT_STARTED"
             for item in next_stage.expected_artifacts

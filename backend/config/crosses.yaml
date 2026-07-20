@@ -1,0 +1,55 @@
+schema_version: metis-description-crosses-v1
+method_version: description-crosses-ab-v1
+
+extraction:
+  minimum_description_chars: 6
+  candidate_raw_max_chars: 40
+  alphanumeric_min_length: 6
+  alphanumeric_max_length: 14
+  numeric_min_length: 7
+  numeric_max_length: 11
+  context_chars_each_side: 80
+  explicit_marker_window_chars: 24
+  currency_context_chars: 12
+  engine_context_chars: 16
+  phone_min_digits: 10
+  phone_prefixes: ["0", "380"]
+  vin_length: 17
+  gtin_lengths: [8, 12, 13, 14]
+  year_min: 1900
+  year_max: 2099
+  token_delimiters: [" ", "/", ",", ";", "(", ")", "«", "»", "\"", "'", "\n", "\t"]
+  edge_strip_chars: ":=#!?№[]{}<>.+"
+  marker_delimiters:
+    ANALOG_MARKER: ["аналог"]
+    REPLACEMENT_MARKER: ["заміна"]
+    OE_MARKER: ["OE"]
+    OEM_MARKER: ["OEM"]
+    CROSS_MARKER: ["кросс"]
+  extraction_method_precedence:
+    - ANALOG_MARKER
+    - OE_MARKER
+    - OEM_MARKER
+    - REPLACEMENT_MARKER
+    - CROSS_MARKER
+    - UNMARKED
+  currency_markers: ["грн", "uah", "₴"]
+  engine_markers: ["tdi", "tsi", "л"]
+
+validation:
+  reject_price_ratio_min: "0.2"
+  reject_price_ratio_max: "5.0"
+  review_price_ratio_min: "0.4"
+  review_price_ratio_max: "3.0"
+  reciprocal_window_chars: 80
+  status_precedence: [CONFIRMED, REVIEW, REJECTED, UNKNOWN]
+
+stage_c:
+  minimum_approved_non_kemp_tiers: 1
+  via_cross_match_confidence_step: "0.15"
+  all_via_cross_max_confidence: MEDIUM
+
+reporting:
+  baseline_mean_offers: "2.53"
+  baseline_median_offers: "1.5"
+  weak_growth_ceiling: "3.5"

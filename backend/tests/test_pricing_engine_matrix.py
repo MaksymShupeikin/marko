@@ -48,6 +48,11 @@ def coefficient(
     )
 
 
+BUDGET_COEFFICIENTS = {
+    (CATEGORY, ProductTier.BUDGET): coefficient(ProductTier.BUDGET, "1")
+}
+
+
 def offer(
     index: int,
     price: str,
@@ -127,18 +132,18 @@ def test_exact_oem_normalization_2400_divided_by_2_4_is_1000() -> None:
     assert {item.multiplier for item in result.evidence} == {Decimal("2.4")}
 
 
-def test_kemp_and_budget_reference_tiers_use_multiplier_one() -> None:
+def test_kemp_reference_is_disjoint_from_budget_target_cohort() -> None:
     offers = [offer(index, str(1000 + 10 * index)) for index in range(4)]
     offers.append(offer(9, "1020", tier=ProductTier.KEMP))
 
-    result = recommend_price(context(), offers, {})
+    result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
-    assert result.competitor_count == 5
+    assert result.competitor_count == 4
+    assert result.target_market_count == 4
+    assert result.kemp_reference_count == 1
     assert all(item.multiplier == Decimal("1") for item in result.evidence)
-    assert {item.tier for item in result.evidence} == {
-        ProductTier.BUDGET,
-        ProductTier.KEMP,
-    }
+    assert {item.tier for item in result.evidence} == {ProductTier.BUDGET}
+    assert {item.tier for item in result.kemp_reference_evidence} == {ProductTier.KEMP}
 
 
 def test_lower_tier_multiplier_is_excluded_by_default() -> None:
@@ -175,7 +180,7 @@ def test_non_positive_multiplier_cannot_create_recommendation(multiplier: str) -
 def test_iqr_removes_extreme_low_outlier() -> None:
     prices = ("1", "1000", "1010", "1020", "1030", "1040", "1050", "1060")
 
-    result = recommend_price(context(), market(prices), {})
+    result = recommend_price(context(), market(prices), BUDGET_COEFFICIENTS)
 
     assert result.outlier_method == "iqr"
     assert result.fair_price == Decimal("1030")
@@ -187,7 +192,9 @@ def test_iqr_removes_extreme_low_outlier() -> None:
 
 def test_mad_filters_outlier_for_five_observations() -> None:
     result = recommend_price(
-        context(), market(("1000", "1010", "1020", "1030", "10000")), {}
+        context(),
+        market(("1000", "1010", "1020", "1030", "10000")),
+        BUDGET_COEFFICIENTS,
     )
 
     assert result.outlier_method == "mad"
@@ -198,7 +205,9 @@ def test_mad_filters_outlier_for_five_observations() -> None:
 
 def test_mad_zero_uses_absolute_tolerance_without_division_by_zero() -> None:
     result = recommend_price(
-        context(), market(("1000", "1000", "1000", "1000", "5000")), {}
+        context(),
+        market(("1000", "1000", "1000", "1000", "5000")),
+        BUDGET_COEFFICIENTS,
     )
 
     assert result.outlier_method == "mad"
@@ -208,7 +217,7 @@ def test_mad_zero_uses_absolute_tolerance_without_division_by_zero() -> None:
 
 
 def test_four_observations_are_descriptive_only() -> None:
-    result = recommend_price(context(), market()[:4], {})
+    result = recommend_price(context(), market()[:4], BUDGET_COEFFICIENTS)
 
     assert result.fair_price == Decimal("1075")
     assert result.action == RecommendationAction.MANUAL_REVIEW
@@ -237,7 +246,9 @@ def test_freshness_uses_true_half_life(age_hours: str, expected: str) -> None:
         confidence_min=Decimal("0"),
     )
 
-    result = recommend_price(context(), market(age_hours=age_hours), {}, policy=policy)
+    result = recommend_price(
+        context(), market(age_hours=age_hours), BUDGET_COEFFICIENTS, policy=policy
+    )
 
     assert result.factor_scores["freshness"] == pytest.approx(Decimal(expected))
 
@@ -245,7 +256,7 @@ def test_freshness_uses_true_half_life(age_hours: str, expected: str) -> None:
 def test_low_tier_confidence_blocks_all_automatic_actions() -> None:
     offers = market(tier_confidence=Decimal("0.59"))
 
-    result = recommend_price(context(), offers, {})
+    result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
     assert result.action == RecommendationAction.INSUFFICIENT_DATA
     assert all(item.reason == "LOW_TIER_CONFIDENCE" for item in result.excluded)
@@ -253,7 +264,9 @@ def test_low_tier_confidence_blocks_all_automatic_actions() -> None:
 
 def test_high_dispersion_blocks_action() -> None:
     result = recommend_price(
-        context(), market(("600", "800", "1000", "1400", "1800")), {}
+        context(),
+        market(("600", "800", "1000", "1400", "1800")),
+        BUDGET_COEFFICIENTS,
     )
 
     assert result.action == RecommendationAction.MANUAL_REVIEW
@@ -281,7 +294,7 @@ def test_insufficient_effective_sample_blocks_action() -> None:
         for index in range(1, 5)
     )
 
-    result = recommend_price(context(), offers, {})
+    result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
     assert result.effective_competitor_count < Decimal("3")
     assert result.action == RecommendationAction.MANUAL_REVIEW
@@ -289,7 +302,9 @@ def test_insufficient_effective_sample_blocks_action() -> None:
 
 
 def test_severe_data_health_issue_forces_zero_confidence_review() -> None:
-    result = recommend_price(context(severe_data_health_issue=True), market(), {})
+    result = recommend_price(
+        context(severe_data_health_issue=True), market(), BUDGET_COEFFICIENTS
+    )
 
     assert result.action == RecommendationAction.MANUAL_REVIEW
     assert result.confidence == Decimal("0")
@@ -298,42 +313,43 @@ def test_severe_data_health_issue_forces_zero_confidence_review() -> None:
 
 @pytest.mark.parametrize("age", ["0", "12", "24", "48", "72"])
 def test_confidence_is_always_bounded(age: str) -> None:
-    result = recommend_price(context(), market(age_hours=age), {})
+    result = recommend_price(context(), market(age_hours=age), BUDGET_COEFFICIENTS)
 
     assert Decimal("0") <= result.confidence <= Decimal("1")
 
 
-def test_direct_kemp_guardrail_cannot_increase_raise_target() -> None:
-    without_kemp = recommend_price(context(), market(), {})
+def test_direct_kemp_reference_cannot_change_raise_target() -> None:
+    without_kemp = recommend_price(context(), market(), BUDGET_COEFFICIENTS)
     with_kemp = recommend_price(
-        context(), market() + [offer(10, "1200", tier=ProductTier.KEMP)], {}
+        context(),
+        market() + [offer(10, "1200", tier=ProductTier.KEMP)],
+        BUDGET_COEFFICIENTS,
     )
 
     assert without_kemp.action == RecommendationAction.RAISE
     assert with_kemp.action == RecommendationAction.RAISE
-    assert with_kemp.recommended_price <= without_kemp.recommended_price
+    assert with_kemp.recommended_price == without_kemp.recommended_price
+    assert with_kemp.fair_price == without_kemp.fair_price
 
 
-def test_direct_kemp_dumping_is_inferred_only_from_kemp_cohort() -> None:
+def test_kemp_price_alone_does_not_infer_target_market_dumping() -> None:
     offers = market() + [
         offer(10, "1000", tier=ProductTier.KEMP),
         offer(11, "1020", tier=ProductTier.KEMP),
         offer(12, "500", tier=ProductTier.KEMP),
     ]
 
-    result = recommend_price(context(), offers, {})
+    result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
-    assert any(
-        item.observation_id == "obs-12" and item.reason == "KEMP_DUMPING"
-        for item in result.excluded
-    )
+    assert result.kemp_reference_count == 3
+    assert not any(item.observation_id == "obs-12" for item in result.excluded)
 
 
 def test_low_confidence_never_returns_raise_or_lower() -> None:
     policy = PricingPolicy(factor_floor=Decimal("0.75"))
     offers = market(match_confidence=Decimal("0.71"))
 
-    result = recommend_price(context(), offers, {}, policy=policy)
+    result = recommend_price(context(), offers, BUDGET_COEFFICIENTS, policy=policy)
 
     assert result.action not in {
         RecommendationAction.RAISE,
@@ -342,68 +358,91 @@ def test_low_confidence_never_returns_raise_or_lower() -> None:
     assert result.recommended_price is None
 
 
-def test_dead_stock_below_cost_requires_complete_authorization() -> None:
+def test_dead_stock_engine_is_independent_of_cost_authorization_metadata() -> None:
     incomplete = below_cost_authorization(below_cost_authorized_by=None)
+    complete = below_cost_authorization()
 
-    result = recommend_price(
-        context("1500", **incomplete), market(("500", "550", "600", "650", "700")), {}
+    first = recommend_price(
+        context("1500", **incomplete),
+        market(("500", "550", "600", "650", "700")),
+        BUDGET_COEFFICIENTS,
+    )
+    second = recommend_price(
+        context("1500", **complete),
+        market(("500", "550", "600", "650", "700")),
+        BUDGET_COEFFICIENTS,
     )
 
-    assert result.action == RecommendationAction.MANUAL_REVIEW
-    assert "MISSING_BELOW_COST_AUTHORIZATION" in result.reasons
-    assert result.action_gates_passed is False
+    assert first.action == second.action == RecommendationAction.LOWER
+    assert first.recommended_price == second.recommended_price
+    assert first.cost_floor is None
 
 
-def test_dead_stock_below_cost_requires_approved_floor() -> None:
+def test_missing_approved_floor_does_not_block_manual_market_candidate() -> None:
     incomplete = below_cost_authorization(below_cost_floor=None)
 
     result = recommend_price(
-        context("1500", **incomplete), market(("500", "550", "600", "650", "700")), {}
-    )
-
-    assert result.action == RecommendationAction.MANUAL_REVIEW
-    assert "MISSING_BELOW_COST_AUTHORIZATION" in result.reasons
-
-
-def test_recommended_price_cannot_cross_approved_floor() -> None:
-    result = recommend_price(
-        context("1500", **below_cost_authorization()),
+        context("1500", **incomplete),
         market(("500", "550", "600", "650", "700")),
-        {},
+        BUDGET_COEFFICIENTS,
     )
 
     assert result.action == RecommendationAction.LOWER
-    assert result.recommended_price == Decimal("700")
-    assert result.recommended_price >= result.cost_floor
+    assert result.recommended_price is not None
+    assert result.cost_floor is None
+
+
+def test_configured_cost_floor_does_not_replace_market_evidence() -> None:
+    result = recommend_price(
+        context("1500", **below_cost_authorization()),
+        market(("500", "550", "600", "650", "700")),
+        BUDGET_COEFFICIENTS,
+    )
+
+    assert result.action == RecommendationAction.LOWER
+    assert result.recommended_price is not None
+    assert result.cost_floor is None
+    assert result.recommended_price < Decimal("1200")
 
 
 def test_cost_never_changes_fair_market_price() -> None:
     cheap = recommend_price(
         context("1500", stock_status=StockStatus.STALE, cost=Decimal("500")),
         market(),
-        {},
+        BUDGET_COEFFICIENTS,
     )
     expensive = recommend_price(
         context("1500", stock_status=StockStatus.STALE, cost=Decimal("1400")),
         market(),
-        {},
+        BUDGET_COEFFICIENTS,
     )
 
     assert cheap.fair_price == expensive.fair_price == Decimal("1100")
 
 
 @pytest.mark.parametrize("current_price", ["500", "800", "1100", "1500", "2500"])
-def test_fresh_items_never_receive_automatic_markdown(current_price: str) -> None:
+def test_fresh_items_follow_market_in_both_directions(current_price: str) -> None:
     result = recommend_price(
-        context(current_price, stock_status=StockStatus.FRESH), market(), {}
+        context(current_price, stock_status=StockStatus.FRESH),
+        market(),
+        BUDGET_COEFFICIENTS,
     )
 
-    assert result.action != RecommendationAction.LOWER
+    if Decimal(current_price) < Decimal("1000"):
+        assert result.action == RecommendationAction.RAISE
+    elif Decimal(current_price) > Decimal("1200"):
+        assert result.action == RecommendationAction.LOWER
+    else:
+        assert result.action == RecommendationAction.HOLD
 
 
 def test_raise_priority_increases_with_expected_units() -> None:
-    low = recommend_price(context(expected_units_sold=Decimal("5")), market(), {})
-    high = recommend_price(context(expected_units_sold=Decimal("10")), market(), {})
+    low = recommend_price(
+        context(expected_units_sold=Decimal("5")), market(), BUDGET_COEFFICIENTS
+    )
+    high = recommend_price(
+        context(expected_units_sold=Decimal("10")), market(), BUDGET_COEFFICIENTS
+    )
 
     assert high.priority_score > low.priority_score
     assert high.priority_score_type == PriorityScoreType.GROSS_UPLIFT_OPPORTUNITY
@@ -411,10 +450,14 @@ def test_raise_priority_increases_with_expected_units() -> None:
 
 def test_raise_priority_decreases_with_confidence() -> None:
     fresh = recommend_price(
-        context(expected_units_sold=Decimal("10")), market(age_hours="0"), {}
+        context(expected_units_sold=Decimal("10")),
+        market(age_hours="0"),
+        BUDGET_COEFFICIENTS,
     )
     older = recommend_price(
-        context(expected_units_sold=Decimal("10")), market(age_hours="12"), {}
+        context(expected_units_sold=Decimal("10")),
+        market(age_hours="12"),
+        BUDGET_COEFFICIENTS,
     )
 
     assert fresh.recommended_price == older.recommended_price
@@ -429,14 +472,14 @@ def test_clearance_priority_increases_with_quantity_and_age() -> None:
             "1500", stock_qty=Decimal("1"), stock_age_days=Decimal("100"), **common
         ),
         market(),
-        {},
+        BUDGET_COEFFICIENTS,
     )
     large_old = recommend_price(
         context(
             "1500", stock_qty=Decimal("10"), stock_age_days=Decimal("730"), **common
         ),
         market(),
-        {},
+        BUDGET_COEFFICIENTS,
     )
 
     assert large_old.priority_score > small.priority_score
@@ -449,17 +492,21 @@ def test_dead_stock_ranks_above_equivalent_stale_stock() -> None:
         "stock_age_days": Decimal("500"),
     }
     stale = recommend_price(
-        context("1500", stock_status=StockStatus.STALE, **common), market(), {}
+        context("1500", stock_status=StockStatus.STALE, **common),
+        market(),
+        BUDGET_COEFFICIENTS,
     )
     dead = recommend_price(
-        context("1500", stock_status=StockStatus.DEAD_STOCK, **common), market(), {}
+        context("1500", stock_status=StockStatus.DEAD_STOCK, **common),
+        market(),
+        BUDGET_COEFFICIENTS,
     )
 
     assert dead.priority_score > stale.priority_score
 
 
 def test_missing_sales_uses_explicitly_labeled_proxy() -> None:
-    result = recommend_price(context(), market(), {})
+    result = recommend_price(context(), market(), BUDGET_COEFFICIENTS)
 
     assert result.priority_score_type == PriorityScoreType.GAP_CONFIDENCE_PROXY
     assert result.priority_inputs["unit"] == "DIMENSIONLESS_GAP_CONFIDENCE_PROXY"
@@ -477,7 +524,7 @@ def test_high_capital_low_confidence_dead_stock_gets_review_priority() -> None:
             stock_age_days=Decimal("800"),
         ),
         offers,
-        {},
+        BUDGET_COEFFICIENTS,
         policy=policy,
     )
     high = recommend_price(
@@ -489,7 +536,7 @@ def test_high_capital_low_confidence_dead_stock_gets_review_priority() -> None:
             stock_age_days=Decimal("800"),
         ),
         offers,
-        {},
+        BUDGET_COEFFICIENTS,
         policy=policy,
     )
 
@@ -498,7 +545,9 @@ def test_high_capital_low_confidence_dead_stock_gets_review_priority() -> None:
 
 def test_priority_scores_with_different_units_are_never_mislabeled() -> None:
     raise_result = recommend_price(
-        context(expected_units_sold=Decimal("10")), market(), {}
+        context(expected_units_sold=Decimal("10")),
+        market(),
+        BUDGET_COEFFICIENTS,
     )
     clearance_result = recommend_price(
         context(
@@ -509,7 +558,7 @@ def test_priority_scores_with_different_units_are_never_mislabeled() -> None:
             stock_age_days=Decimal("500"),
         ),
         market(),
-        {},
+        BUDGET_COEFFICIENTS,
     )
 
     assert raise_result.priority_score_type != clearance_result.priority_score_type
@@ -551,7 +600,7 @@ def test_realistic_scenario_f_weak_evidence_abstains() -> None:
         offer(2, "1800", age_hours="60"),
     ]
 
-    result = recommend_price(context(), offers, {})
+    result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
     assert result.action == RecommendationAction.MANUAL_REVIEW
     assert result.recommended_price is None

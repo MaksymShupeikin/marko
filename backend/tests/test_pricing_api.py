@@ -13,6 +13,7 @@ from marko.services.auth import AuthContext
 from marko.services.pricing_runs import (
     PricingRunError,
     _merge_catalog_override_snapshot,
+    _recommendation_sort_order,
     _validate_decision_price,
     activation_artifact_verified,
     policy_from_dict,
@@ -129,10 +130,20 @@ def test_catalog_override_is_a_cumulative_snapshot() -> None:
     )
 
     assert snapshot["stock_status"] == "stale"
-    assert snapshot["cost"] == Decimal("600")
+    assert "cost" not in snapshot
     assert snapshot["stock_qty"] == Decimal("10")
-    assert snapshot["below_cost_floor"] is None
+    assert "below_cost_floor" not in snapshot
     assert snapshot["below_cost_warning_confirmed"] is False
+
+
+def test_absolute_change_sort_is_literal_and_queue_independent() -> None:
+    order = _recommendation_sort_order("ABSOLUTE_RECOMMENDED_CHANGE")
+
+    assert "absolute_recommended_change" in str(order[0])
+    assert "priority_score" not in str(order[0])
+    assert "confidence" in str(order[1])
+    with pytest.raises(PricingRunError, match="Unknown recommendation sort"):
+        _recommendation_sort_order("priority")
 
 
 @pytest.mark.parametrize(
@@ -140,8 +151,6 @@ def test_catalog_override_is_a_cumulative_snapshot() -> None:
     [
         ({"allow_below_cost": False}, "explicit allow_below_cost"),
         ({"warning_confirmed": False}, "explicitly confirmed"),
-        ({"stock_status": "stale"}, "only for dead_stock"),
-        ({"approved_floor": None}, "approved floor"),
         ({"new_price": Decimal("600")}, "below the approved"),
     ],
 )
@@ -149,7 +158,6 @@ def test_decision_api_rejects_unsafe_below_cost_price(overrides, message) -> Non
     values = {
         "new_price": Decimal("850"),
         "cost": Decimal("1200"),
-        "stock_status": "dead_stock",
         "approved_floor": Decimal("700"),
         "allow_below_cost": True,
         "warning_confirmed": True,
@@ -165,12 +173,21 @@ def test_decision_api_accepts_authorized_below_cost_price() -> None:
         _validate_decision_price(
             new_price=Decimal("850"),
             cost=Decimal("1200"),
-            stock_status="dead_stock",
             approved_floor=Decimal("700"),
             allow_below_cost=True,
             warning_confirmed=True,
         )
         is True
+    )
+
+
+def test_below_cost_floor_is_optional_and_not_a_universal_market_floor() -> None:
+    assert _validate_decision_price(
+        new_price=Decimal("850"),
+        cost=Decimal("1200"),
+        approved_floor=None,
+        allow_below_cost=True,
+        warning_confirmed=True,
     )
 
 
@@ -206,6 +223,7 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
                     "match_confidence": "0.95",
                     "tier": "budget",
                     "tier_confidence": "0.95",
+                    "source_confidence": "1",
                     "comparison_evidence": comparison_evidence_to_dict(
                         verified_comparison_evidence(
                             stable_seller_id=f"seller-{index}",
@@ -214,6 +232,23 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
                     ),
                 }
                 for index in range(5)
+            ],
+            "coefficients": [
+                {
+                    "category": "brakes",
+                    "tier": "budget",
+                    "multiplier": "1",
+                    "model": "shrinkage",
+                    "method_version": "pricing-api-yuri-v1",
+                    "coefficient_version": "pricing-api-yuri-v1:synthetic",
+                    "sample_size": 20,
+                    "effective_sample_size": "18",
+                    "confidence": "0.95",
+                    "validated": True,
+                    "interval_low": "0.9",
+                    "interval_high": "1.1",
+                    "dataset_hash": "a" * 64,
+                }
             ],
         }
         async with AsyncClient(

@@ -50,11 +50,13 @@ def _load_fixture(path: Path) -> tuple[dict, bytes, str]:
     return payload, raw, hashlib.sha256(raw).hexdigest()
 
 
-def _target_output(target: ScrapeTarget, fixture: dict, fixture_hash: str) -> ScrapeOutput:
-    offers: list[dict] = []
-    for index, value in enumerate(fixture["offers"], start=1):
+def _target_output(
+    target: ScrapeTarget, fixture: dict, fixture_hash: str
+) -> ScrapeOutput:
+    records: list[dict] = []
+    for index, value in enumerate(fixture["offers"]):
         seller_id = str(value["seller_id"])
-        source_record_id = str(value.get("source_record_id") or f"fixture-{index}")
+        source_record_id = str(value.get("source_record_id") or f"fixture-{index + 1}")
         evidence = verified_comparison_evidence(
             stable_seller_id=seller_id,
             source_record_id=source_record_id,
@@ -63,45 +65,55 @@ def _target_output(target: ScrapeTarget, fixture: dict, fixture_hash: str) -> Sc
             source_type="persisted_replay",
             parser_contract_version=target.adapter_version,
         )
-        offers.append(
+        product = {
+            "product_id": int(value.get("product_id", index + 1)),
+            "seller_name": str(value.get("seller_name") or f"Seller {index + 1}"),
+            "seller_id": seller_id,
+            "price": str(value["price"]),
+            "currency": str(value.get("currency", "UAH")),
+            "presence": "available",
+            "is_available": True,
+            "name": str(value.get("name") or "E2E verified brake pad"),
+            "brand": str(value.get("brand") or "Bosch"),
+            "oe_raw": target.query,
+            "condition": "NEW",
+            "url": str(
+                value.get("url")
+                or f"https://prom.ua/ua/p{index + 1}-{source_record_id}.html"
+            ),
+        }
+        records.append(
             {
-                "product_id": int(value.get("product_id", index)),
-                "seller_name": str(value.get("seller_name") or f"Seller {index}"),
-                "seller_id": seller_id,
-                "price": str(value["price"]),
-                "currency": str(value.get("currency", "UAH")),
-                "presence": "available",
-                "is_available": True,
-                "match_kind": "fixture",
-                "match_score": 1.0,
-                "name": str(value.get("name") or "E2E verified brake pad"),
-                "brand": str(value.get("brand") or "Bosch"),
-                "url": str(
-                    value.get("url")
-                    or f"https://fixture.invalid/products/{source_record_id}"
-                ),
-                "automatic_eligible": True,
-                "comparison_evidence": comparison_evidence_to_dict(evidence),
+                "raw_offer_index": index,
+                "retrieval_kind": "fixture_replay",
+                "retrieval_score": None,
+                "product": product,
+                "upstream_comparison_evidence": comparison_evidence_to_dict(evidence),
             }
         )
-    prices = sorted(Decimal(item["price"]) for item in offers)
+    prices = sorted(Decimal(item["product"]["price"]) for item in records)
     output_payload = {
-        "seed": {"oe": target.query},
-        "query": target.query,
-        "candidates_scanned": len(offers),
-        "stats": {
-            "sellers_compared": len(offers),
-            "min_price": str(prices[0]),
-            "median_price": str(prices[len(prices) // 2]),
-            "max_price": str(prices[-1]),
+        "acquisition_outcome": "RESULTS",
+        "candidates_scanned": len(records),
+        "records": records,
+        "comparison_summary": {
+            "seed": {"oe": target.query},
+            "query": target.query,
+            "stats": {
+                "sellers_compared": len(records),
+                "min_price": str(prices[0]),
+                "median_price": str(prices[len(prices) // 2]),
+                "max_price": str(prices[-1]),
+            },
         },
-        "offers": offers,
     }
+    input_kind = str(getattr(target, "input_kind", "product_seed"))
     return ScrapeOutput.from_payload(
         {
             "schema_version": PROM_OUTPUT_SCHEMA_VERSION,
             "adapter_version": target.adapter_version,
             "input": {
+                "input_kind": input_kind,
                 "product_url": target.original_url,
                 "canonical_url": target.canonical_url,
                 "product_key": target.product_key,
@@ -122,8 +134,7 @@ async def seed_fixture_replay(
 ) -> dict[str, object]:
     settings = get_settings()
     if not (
-        settings.environment.strip().casefold() == "e2e"
-        and settings.e2e_auth_bypass
+        settings.environment.strip().casefold() == "e2e" and settings.e2e_auth_bypass
     ):
         raise E2eFixtureError("Fixture seeding is isolated to authenticated E2E mode")
     fixture, raw_fixture, fixture_hash = _load_fixture(fixture_path)

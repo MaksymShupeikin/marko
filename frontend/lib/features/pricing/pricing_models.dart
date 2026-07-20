@@ -27,6 +27,10 @@ class PricingRecommendation {
     required this.rawCompetitorCount,
     required this.uniqueSellerCount,
     required this.cleanCompetitorCount,
+    required this.targetMarketCount,
+    required this.kempReferenceCount,
+    required this.ownedStoreCount,
+    required this.rejectedCount,
     required this.effectiveCompetitorCount,
     required this.dispersion,
     required this.outlierMethod,
@@ -39,11 +43,11 @@ class PricingRecommendation {
     required this.comparabilityPolicyHash,
     required this.hardGateTrace,
     required this.robustDiagnostic,
-    required this.costFloor,
-    required this.costBasisInventoryValue,
     required this.priorityScore,
     required this.priorityScoreType,
     required this.reviewPriority,
+    required this.absoluteRecommendedChange,
+    required this.percentageRecommendedChange,
     required this.reasonCodes,
     required this.factorScores,
     required this.excludedObservations,
@@ -94,6 +98,13 @@ class PricingRecommendation {
       cleanCompetitorCount:
           (json['clean_competitor_count'] as num?)?.toInt() ??
           (json['competitor_count'] as num).toInt(),
+      targetMarketCount:
+          (json['target_market_count'] as num?)?.toInt() ??
+          (json['clean_competitor_count'] as num?)?.toInt() ??
+          0,
+      kempReferenceCount: (json['kemp_reference_count'] as num?)?.toInt() ?? 0,
+      ownedStoreCount: (json['owned_store_count'] as num?)?.toInt() ?? 0,
+      rejectedCount: (json['rejected_count'] as num?)?.toInt() ?? 0,
       effectiveCompetitorCount:
           _decimal(json['effective_competitor_count']) ??
           (json['competitor_count'] as num).toDouble(),
@@ -110,11 +121,13 @@ class PricingRecommendation {
       hardGateTrace:
           json['hard_gate_trace'] as Map<String, dynamic>? ?? const {},
       robustDiagnostic: json['robust_diagnostic'] as Map<String, dynamic>?,
-      costFloor: _decimal(json['cost_floor']),
-      costBasisInventoryValue: _decimal(json['cost_basis_inventory_value']),
       priorityScore: _decimal(json['priority_score']) ?? 0,
       priorityScoreType: json['priority_score_type'] as String,
       reviewPriority: _decimal(json['review_priority']) ?? 0,
+      absoluteRecommendedChange: _decimal(json['absolute_recommended_change']),
+      percentageRecommendedChange: _decimal(
+        json['percentage_recommended_change'],
+      ),
       reasonCodes: (json['reason_codes'] as List<dynamic>)
           .map((item) => item.toString())
           .toList(growable: false),
@@ -161,6 +174,10 @@ class PricingRecommendation {
   final int rawCompetitorCount;
   final int uniqueSellerCount;
   final int cleanCompetitorCount;
+  final int targetMarketCount;
+  final int kempReferenceCount;
+  final int ownedStoreCount;
+  final int rejectedCount;
   final double effectiveCompetitorCount;
   final double? dispersion;
   final String outlierMethod;
@@ -173,11 +190,11 @@ class PricingRecommendation {
   final String? comparabilityPolicyHash;
   final Map<String, dynamic> hardGateTrace;
   final Map<String, dynamic>? robustDiagnostic;
-  final double? costFloor;
-  final double? costBasisInventoryValue;
   final double priorityScore;
   final String priorityScoreType;
   final double reviewPriority;
+  final double? absoluteRecommendedChange;
+  final double? percentageRecommendedChange;
   final List<String> reasonCodes;
   final Map<String, double> factorScores;
   final List<Map<String, dynamic>> excludedObservations;
@@ -336,8 +353,15 @@ class RecommendationEvidence {
     required this.observationId,
     required this.sellerName,
     required this.title,
+    required this.description,
+    required this.descriptionAvailable,
+    required this.conditionRaw,
+    required this.conditionState,
+    required this.conditionReasonCodes,
+    required this.crossCandidates,
     required this.brand,
     required this.url,
+    required this.urlAbsenceReason,
     required this.price,
     required this.currency,
     required this.currencyRaw,
@@ -348,6 +372,8 @@ class RecommendationEvidence {
     required this.tier,
     required this.tierConfidence,
     required this.isDumping,
+    required this.cohortRole,
+    required this.targetEffect,
     required this.exclusionReason,
     required this.normalizedPrice,
     required this.multiplier,
@@ -364,26 +390,38 @@ class RecommendationEvidence {
       observationId: json['observation_id'] as String,
       sellerName: json['seller_name'] as String,
       title: json['title'] as String,
+      description: json['description'] as String?,
+      descriptionAvailable: json['description_available'] as bool? ?? false,
+      conditionRaw: json['condition_raw']?.toString(),
+      conditionState: json['condition_state']?.toString() ?? 'UNKNOWN',
+      conditionReasonCodes:
+          (json['condition_reason_codes'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString())
+              .toList(growable: false),
+      crossCandidates: (json['cross_candidates'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false),
       brand: json['brand'] as String?,
       url: json['url'] as String,
+      urlAbsenceReason: json['url_absence_reason']?.toString(),
       price: _decimal(json['price']) ?? 0,
       currency: json['currency'] as String,
       currencyRaw: json['currency_raw']?.toString(),
       currencyInferred: json['currency_inferred'] as bool? ?? false,
       matchConfidence: _decimal(json['match_confidence']) ?? 0,
       sourceConfidence: _decimal(json['source_confidence']) ?? 1,
-      ageHours: _decimal(json['age_hours']) ?? 0,
+      ageHours: _decimal(json['age_hours']),
       tier: json['tier'] as String,
       tierConfidence: _decimal(json['tier_confidence']) ?? 0,
       isDumping: json['is_dumping'] as bool,
+      cohortRole: json['cohort_role']?.toString() ?? 'MANUAL_REVIEW',
+      targetEffect: json['target_effect']?.toString() ?? 'NOT_IN_TARGET_MEDIAN',
       exclusionReason: json['exclusion_reason'] as String?,
-      normalizedPrice:
-          _decimal(json['normalized_price']) ?? (_decimal(json['price']) ?? 0),
-      multiplier: _decimal(json['multiplier']) ?? 1,
-      coefficientModel: json['coefficient_model']?.toString() ?? 'reference',
-      coefficientVersion:
-          json['coefficient_version']?.toString() ?? 'reference-tier-v1',
-      coefficientConfidence: _decimal(json['coefficient_confidence']) ?? 1,
+      normalizedPrice: _decimal(json['normalized_price']),
+      multiplier: _decimal(json['multiplier']),
+      coefficientModel: json['coefficient_model']?.toString(),
+      coefficientVersion: json['coefficient_version']?.toString(),
+      coefficientConfidence: _decimal(json['coefficient_confidence']),
       observedAt: DateTime.parse(json['observed_at'] as String),
       automaticEligible: json['automatic_eligible'] as bool? ?? false,
       comparisonEvidence: json['comparison_evidence'] as Map<String, dynamic>?,
@@ -393,24 +431,33 @@ class RecommendationEvidence {
   final String observationId;
   final String sellerName;
   final String title;
+  final String? description;
+  final bool descriptionAvailable;
+  final String? conditionRaw;
+  final String conditionState;
+  final List<String> conditionReasonCodes;
+  final List<Map<String, dynamic>> crossCandidates;
   final String? brand;
   final String url;
+  final String? urlAbsenceReason;
   final double price;
   final String currency;
   final String? currencyRaw;
   final bool currencyInferred;
   final double matchConfidence;
   final double sourceConfidence;
-  final double ageHours;
+  final double? ageHours;
   final String tier;
   final double tierConfidence;
   final bool isDumping;
+  final String cohortRole;
+  final String targetEffect;
   final String? exclusionReason;
-  final double normalizedPrice;
-  final double multiplier;
-  final String coefficientModel;
-  final String coefficientVersion;
-  final double coefficientConfidence;
+  final double? normalizedPrice;
+  final double? multiplier;
+  final String? coefficientModel;
+  final String? coefficientVersion;
+  final double? coefficientConfidence;
   final DateTime observedAt;
   final bool automaticEligible;
   final Map<String, dynamic>? comparisonEvidence;
@@ -424,6 +471,18 @@ class RecommendationEvidence {
     'kemp' => 'KEMP',
     'used' => 'б/у',
     _ => 'не определён',
+  };
+
+  bool get affectsTargetMedian => targetEffect == 'IN_TARGET_MEDIAN';
+
+  String get cohortLabel => switch (cohortRole) {
+    'TARGET_MARKET' => 'Целевой рынок',
+    'KEMP_REFERENCE' => 'KEMP reference',
+    'OWNED_STORE' => 'Свой магазин',
+    'USED_REJECTED' => 'Б/у — исключено',
+    'DUMPING_DIAGNOSTIC' => 'KEMP dumping diagnostic',
+    'HARD_REJECTED' => 'Отклонено',
+    _ => 'Ручная проверка',
   };
 }
 

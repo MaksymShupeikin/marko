@@ -40,6 +40,10 @@ void main() {
       'raw_competitor_count': 7,
       'unique_seller_count': 6,
       'clean_competitor_count': 5,
+      'target_market_count': 5,
+      'kemp_reference_count': 2,
+      'owned_store_count': 1,
+      'rejected_count': 3,
       'effective_competitor_count': '4.8',
       'dispersion': '0.04',
       'outlier_method': 'mad',
@@ -49,6 +53,8 @@ void main() {
       'priority_score': '972.00',
       'priority_score_type': 'gross_uplift_opportunity',
       'review_priority': '0',
+      'absolute_recommended_change': '120',
+      'percentage_recommended_change': '0.15',
       'reason_codes': ['MARKET_SUPPORTS_RAISE'],
       'computed_at': '2026-07-16T12:00:00Z',
     });
@@ -63,6 +69,10 @@ void main() {
     expect(item.rawCompetitorCount, 7);
     expect(item.uniqueSellerCount, 6);
     expect(item.cleanCompetitorCount, 5);
+    expect(item.targetMarketCount, 5);
+    expect(item.kempReferenceCount, 2);
+    expect(item.absoluteRecommendedChange, 120);
+    expect(item.percentageRecommendedChange, 0.15);
     expect(item.effectiveCompetitorCount, 4.8);
     expect(item.actionGatesPassed, isTrue);
     expect(item.priorityLabel, contains('₴/мес.'));
@@ -105,8 +115,15 @@ void main() {
       'observation_id': 'obs-1',
       'seller_name': 'Seller',
       'title': 'OEM part',
+      'description': 'Новая деталь',
+      'description_available': true,
+      'condition_raw': 'новая',
+      'condition_state': 'NEW',
+      'condition_reason_codes': ['EXPLICIT_NEW'],
+      'cross_candidates': <dynamic>[],
       'brand': 'VAG',
       'url': 'https://example.test/item',
+      'url_absence_reason': null,
       'price': '2400',
       'currency': 'UAH',
       'match_confidence': '0.95',
@@ -115,6 +132,8 @@ void main() {
       'tier': 'oem',
       'tier_confidence': '0.93',
       'is_dumping': false,
+      'cohort_role': 'TARGET_MARKET',
+      'target_effect': 'IN_TARGET_MEDIAN',
       'exclusion_reason': null,
       'normalized_price': '1000',
       'multiplier': '2.4',
@@ -129,6 +148,8 @@ void main() {
     expect(evidence.multiplier, 2.4);
     expect(evidence.coefficientModel, 'shrinkage');
     expect(evidence.tierLabel, 'OEM');
+    expect(evidence.affectsTargetMedian, isTrue);
+    expect(evidence.conditionState, 'NEW');
   });
 
   test('parses field-level recommendation replay drift', () {

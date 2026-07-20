@@ -18,10 +18,7 @@ def test_scraper_metrics_endpoints_are_in_openapi() -> None:
     assert "/api/v1/jobs/{sync_run_id}/scrape-metrics" in paths
     assert "/api/v1/jobs/{sync_run_id}/scrape-metrics/prometheus" in paths
     assert "/api/v1/pricing/runs/{run_id}/collection-metrics" in paths
-    assert (
-        "/api/v1/pricing/runs/{run_id}/collection-metrics/prometheus"
-        in paths
-    )
+    assert "/api/v1/pricing/runs/{run_id}/collection-metrics/prometheus" in paths
 
 
 def test_persistence_models_encode_three_work_levels_and_idempotency() -> None:
@@ -57,12 +54,8 @@ def test_prometheus_renderer_contains_every_required_metric_family() -> None:
             "http_attempts_per_item": 3.0,
         },
         "latency_seconds": {
-            "request": {
-                "catalog_page:success": {"p50": 1, "p95": 2, "p99": 3}
-            },
-            "task_runtime": {
-                "succeeded": {"p50": 5, "p95": 5, "p99": 5}
-            },
+            "request": {"catalog_page:success": {"p50": 1, "p95": 2, "p99": 3}},
+            "task_runtime": {"succeeded": {"p50": 5, "p95": 5, "p99": 5}},
             "queue_wait": {"p50": 0.1, "p95": 0.2, "p99": 0.3},
             "end_to_end_item": {"p50": 5, "p95": 5, "p99": 5},
         },
@@ -85,9 +78,7 @@ def test_prometheus_renderer_contains_every_required_metric_family() -> None:
             "scrape_queue_depth": 0,
             "scrape_oldest_item_age_seconds": 0,
             "scrape_worker_slots": {"configured": 2, "busy": 0},
-            "scrape_task_executions_total": [
-                {"outcome": "succeeded", "value": 1}
-            ],
+            "scrape_task_executions_total": [{"outcome": "succeeded", "value": 1}],
             "scrape_task_redeliveries_total": 0,
             "scrape_worker_lost_total": 0,
         },

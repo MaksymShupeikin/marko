@@ -1,4 +1,5 @@
 """Exceptions shared across the scraper."""
+
 from __future__ import annotations
 
 
@@ -12,3 +13,7 @@ class UnsafeResponse(RequestFailed):
 
 class ParseError(RuntimeError):
     """HTML does not contain the expected Apollo state."""
+
+
+class ParserSchemaChanged(ParseError):
+    """Apollo exists, but the recognized listing/search contract does not."""

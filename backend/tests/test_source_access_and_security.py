@@ -218,8 +218,7 @@ async def test_member_cannot_replay_dead_letter() -> None:
             base_url="http://test",
         ) as client:
             response = await client.post(
-                "/api/v1/operations/dead-letters/"
-                f"pricing_target/{uuid4()}/replay"
+                f"/api/v1/operations/dead-letters/pricing_target/{uuid4()}/replay"
             )
     finally:
         application.dependency_overrides.clear()

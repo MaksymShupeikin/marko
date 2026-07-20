@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.14",
     "asyncpg>=0.30",
     "celery[redis]>=5.4",
+    "cryptography>=49.0",
     "email-validator>=2.2",
     "fastapi>=0.115",
     "httpx>=0.28",
@@ -45,3 +46,6 @@ packages = ["src/marko", "src/metis"]
 testpaths = ["tests"]
 pythonpath = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "postgres: opt-in tests requiring a real PostgreSQL database",
+]

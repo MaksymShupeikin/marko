@@ -1,4 +1,5 @@
 """Network defaults and scraping configuration."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,9 +27,10 @@ DEFAULT_HEADERS: dict[str, str] = {
 @dataclass(frozen=True)
 class ScrapeConfig:
     """Parameters for a scraping session."""
-    delay: float = 1.0          # base delay between requests in seconds
-    delay_jitter: float = 0.5   # random jitter in seconds
-    timeout: float = 30.0       # HTTP request timeout in seconds
+
+    delay: float = 1.0  # base delay between requests in seconds
+    delay_jitter: float = 0.5  # random jitter in seconds
+    timeout: float = 30.0  # HTTP request timeout in seconds
     # Maximum physical attempts total for one logical HTTP request.  The old
     # name ``max_retries`` was ambiguous because 4 meant 4 attempts, not
     # 1 initial attempt + 4 retries.
@@ -45,8 +47,8 @@ class ScrapeConfig:
     max_pages: int = 0
     start_page: int = 1
     # Cross-seller comparison knobs.
-    max_sellers: int = 10          # cap of distinct sellers in a comparison
+    max_sellers: int = 10  # cap of distinct sellers in a comparison
     similarity_threshold: float = 0.55  # min fuzzy name score to accept a match
-    max_search_pages: int = 3      # search pages to scan while collecting offers
+    max_search_pages: int = 3  # search pages to scan while collecting offers
     user_agents: tuple[str, ...] = USER_AGENTS
     base_headers: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_HEADERS))

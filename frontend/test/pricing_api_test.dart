@@ -8,13 +8,16 @@ import 'package:marko_client/features/pricing/pricing_api.dart';
 import 'package:marko_client/features/pricing/pricing_models.dart';
 
 void main() {
-  test('requests recommendations in economic-priority order', () async {
+  test('requests all recommendations by literal absolute change', () async {
     final api = PricingApi(
       ApiClient(
         client: MockClient((request) async {
           expect(request.url.path, '/api/v1/pricing/recommendations');
-          expect(request.url.queryParameters['sort'], 'priority');
-          expect(request.url.queryParameters['queue'], 'raise');
+          expect(
+            request.url.queryParameters['sort'],
+            'ABSOLUTE_RECOMMENDED_CHANGE',
+          );
+          expect(request.url.queryParameters['queue'], 'all');
           expect(request.url.queryParameters['action'], 'RAISE');
           return http.Response(
             jsonEncode({
@@ -66,7 +69,7 @@ void main() {
       ApiClient(
         client: MockClient((request) async {
           expect(request.url.queryParameters['queue'], 'review');
-          expect(request.url.queryParameters['sort'], 'review_priority');
+          expect(request.url.queryParameters['sort'], 'REVIEW_PRIORITY');
           return http.Response(
             jsonEncode({
               'items': <dynamic>[],
@@ -82,7 +85,7 @@ void main() {
       ),
     );
 
-    await api.listRecommendations(queue: 'review', sort: 'review_priority');
+    await api.listRecommendations(queue: 'review', sort: 'REVIEW_PRIORITY');
   });
 
   test('saves a tier override as a new classification', () async {

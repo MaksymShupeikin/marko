@@ -343,7 +343,9 @@ def parse_machine_summary_yaml(text: str) -> MachineReadableSummary:
     except (yaml.YAMLError, MachineSummaryParseError) as exc:
         raise MachineSummaryParseError(str(exc)) from exc
     if len(nodes) != 1 or nodes[0] is None:
-        raise MachineSummaryParseError("exactly one non-empty YAML document is required")
+        raise MachineSummaryParseError(
+            "exactly one non-empty YAML document is required"
+        )
     _reject_node_hazards(nodes[0])
     try:
         documents = tuple(yaml.load_all(text, Loader=_UniqueKeySafeLoader))
@@ -401,8 +403,14 @@ def _validate_capability(
         weights,
     )
     expected = {
-        f"{path}.raw_interval.lower": (capability.raw_interval.lower, calculated.raw_lower),
-        f"{path}.raw_interval.upper": (capability.raw_interval.upper, calculated.raw_upper),
+        f"{path}.raw_interval.lower": (
+            capability.raw_interval.lower,
+            calculated.raw_lower,
+        ),
+        f"{path}.raw_interval.upper": (
+            capability.raw_interval.upper,
+            calculated.raw_upper,
+        ),
         f"{path}.effective_interval.lower": (
             capability.effective_interval.lower,
             calculated.effective_lower,
@@ -584,10 +592,7 @@ def _validate_production_gate(
     add: Any,
 ) -> None:
     all_gate_ids = (
-        gate.passed_gates
-        + gate.failed_gates
-        + gate.blocked_gates
-        + gate.unknown_gates
+        gate.passed_gates + gate.failed_gates + gate.blocked_gates + gate.unknown_gates
     )
     if len(all_gate_ids) != len(set(all_gate_ids)):
         add("DUPLICATE_PRODUCTION_GATE", path, "gate IDs must be disjoint")
@@ -989,8 +994,12 @@ def _validate_gaps(gaps: GapInventory, add: Any) -> None:
 
 def _collect_global_ids(summary: MachineReadableSummary) -> list[tuple[str, str]]:
     values: list[tuple[str, str]] = []
-    values.extend((item.capability_id, "capability") for item in summary.metis.capabilities)
-    values.extend((item.capability_id, "capability") for item in summary.marko.capabilities)
+    values.extend(
+        (item.capability_id, "capability") for item in summary.metis.capabilities
+    )
+    values.extend(
+        (item.capability_id, "capability") for item in summary.marko.capabilities
+    )
     for records in (
         summary.marko.reusable_as_is,
         summary.marko.adapt_before_reuse,
@@ -1072,7 +1081,10 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
         )
 
     if stage.status == StageStatus.PASS:
-        if stage.acceptance_criteria_passed is not True or stage.audit_complete is not True:
+        if (
+            stage.acceptance_criteria_passed is not True
+            or stage.audit_complete is not True
+        ):
             add(
                 "PASS_WITHOUT_COMPLETION",
                 "stage",
@@ -1134,7 +1146,11 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
             "next_stage",
             "next-stage identity, objective, reason, and stop condition are required",
         )
-    if not next_stage.required_inputs or not next_stage.expected_outputs or not next_stage.acceptance_criteria:
+    if (
+        not next_stage.required_inputs
+        or not next_stage.expected_outputs
+        or not next_stage.acceptance_criteria
+    ):
         add(
             "NEXT_STAGE_CONTRACT_INCOMPLETE",
             "next_stage",
@@ -1144,11 +1160,19 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
     if stage.status == StageStatus.FAIL and not any(
         token in next_id for token in ("REPAIR", "REVALIDATION")
     ):
-        add("FAIL_NEXT_STAGE_INVALID", "next_stage.id", "FAIL must lead to repair/revalidation")
+        add(
+            "FAIL_NEXT_STAGE_INVALID",
+            "next_stage.id",
+            "FAIL must lead to repair/revalidation",
+        )
     if stage.status == StageStatus.BLOCKED and not any(
         token in next_id for token in ("RESUME", "DEPENDENCY", "INPUT", "DECISION")
     ):
-        add("BLOCKED_NEXT_STAGE_INVALID", "next_stage.id", "BLOCKED must resolve dependency and resume")
+        add(
+            "BLOCKED_NEXT_STAGE_INVALID",
+            "next_stage.id",
+            "BLOCKED must resolve dependency and resume",
+        )
     if stage.status == StageStatus.NO_GO and (
         "IMPLEMENTATION" in next_id
         or not any(
@@ -1156,7 +1180,11 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
             for token in ("DECISION", "REDESIGN", "ALTERNATIVE", "REPLACEMENT")
         )
     ):
-        add("NO_GO_NEXT_STAGE_INVALID", "next_stage.id", "NO_GO requires a decision/redesign successor")
+        add(
+            "NO_GO_NEXT_STAGE_INVALID",
+            "next_stage.id",
+            "NO_GO requires a decision/redesign successor",
+        )
 
     repository = summary.repository
     if repository.identity_verified is True:
@@ -1240,7 +1268,8 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
         for index, domain in enumerate(domains):
             if (
                 domain.effective_readiness < 50
-                or _EVIDENCE_RANK[domain.evidence_level] < _EVIDENCE_RANK[EvidenceLevel.E2]
+                or _EVIDENCE_RANK[domain.evidence_level]
+                < _EVIDENCE_RANK[EvidenceLevel.E2]
                 or not domain.evidence_refs
                 or domain.effective_readiness > evidence_cap(domain.evidence_level)
             ):
@@ -1263,13 +1292,21 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
         or _EVIDENCE_RANK[summary.metis.highest_evidence_level]
         < _EVIDENCE_RANK[EvidenceLevel.E4]
     ):
-        add("METIS_MATURITY_OVERSTATED", "metis.maturity_class", "production class requires E4+")
+        add(
+            "METIS_MATURITY_OVERSTATED",
+            "metis.maturity_class",
+            "production class requires E4+",
+        )
     if summary.marko.maturity_class in production_marko_classes and (
         summary.marko.highest_evidence_level is None
         or _EVIDENCE_RANK[summary.marko.highest_evidence_level]
         < _EVIDENCE_RANK[EvidenceLevel.E4]
     ):
-        add("MARKO_MATURITY_OVERSTATED", "marko.maturity_class", "production class requires E4+")
+        add(
+            "MARKO_MATURITY_OVERSTATED",
+            "marko.maturity_class",
+            "production class requires E4+",
+        )
 
     combined = summary.combined_system
     if combined.end_to_end_flow_verified == VerificationState.VERIFIED and (
@@ -1310,7 +1347,9 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
             or combined.end_to_end_evidence_level is None
             or _EVIDENCE_RANK[combined.end_to_end_evidence_level]
             < _EVIDENCE_RANK[EvidenceLevel.E4]
-            or any(state != VerificationState.VERIFIED for state in recommendation_states)
+            or any(
+                state != VerificationState.VERIFIED for state in recommendation_states
+            )
             or summary.metis.critical_unknown_count != 0
             or summary.marko.critical_unknown_count != 0
             or summary.gaps.p0
@@ -1345,7 +1384,11 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
         if source.state not in {
             SourceAccessState.UNKNOWN,
             SourceAccessState.NOT_APPLICABLE,
-        } and (source.basis is None or source.verified_at is None or not source.evidence_refs):
+        } and (
+            source.basis is None
+            or source.verified_at is None
+            or not source.evidence_refs
+        ):
             add(
                 "SOURCE_STATE_UNTRACED",
                 f"source_access_states[{index}]",
@@ -1361,14 +1404,20 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
                 )
 
     for index, decision in enumerate(summary.business_decisions_required):
-        if decision.status.value in {"APPROVED", "REJECTED"} and not decision.evidence_refs:
+        if (
+            decision.status.value in {"APPROVED", "REJECTED"}
+            and not decision.evidence_refs
+        ):
             add(
                 "BUSINESS_DECISION_UNTRACED",
                 f"business_decisions_required[{index}]",
                 "approved/rejected decisions require evidence",
             )
     for index, assumption in enumerate(summary.engineering_assumptions):
-        if assumption.status == AssumptionStatus.VALIDATED and not assumption.evidence_refs:
+        if (
+            assumption.status == AssumptionStatus.VALIDATED
+            and not assumption.evidence_refs
+        ):
             add(
                 "VALIDATED_ASSUMPTION_UNTRACED",
                 f"engineering_assumptions[{index}]",
@@ -1443,6 +1492,70 @@ def validate_summary(summary: MachineReadableSummary) -> tuple[ValidationIssue, 
                     path,
                     f"declare unknown or validation warning {warning}",
                 )
+
+    identity_spine = summary.p0_identity_spine
+    if identity_spine is not None and summary.stage.status == StageStatus.PASS:
+        required_true = {
+            "query_only_supported": identity_spine.query_only_supported,
+            "identity_fields_separated": identity_spine.identity_fields_separated,
+            "legacy_rows_marked_unverified": (
+                identity_spine.legacy_rows_marked_unverified
+            ),
+            "calibration_requires_automatic_eligible": (
+                identity_spine.calibration_requires_automatic_eligible
+            ),
+            "calibration_requires_hard_gate_pass": (
+                identity_spine.calibration_requires_hard_gate_pass
+            ),
+            "calibration_requires_verified_oe": (
+                identity_spine.calibration_requires_verified_oe
+            ),
+            "empty_vs_schema_drift_distinguished": (
+                identity_spine.empty_vs_schema_drift_distinguished
+            ),
+            "offer_accounting_conservation_verified": (
+                identity_spine.offer_accounting_conservation_verified
+            ),
+            "postgresql_migration_verified": (
+                identity_spine.postgresql_migration_verified
+            ),
+        }
+        for field_name, value in required_true.items():
+            if not value:
+                add(
+                    "P0_IDENTITY_SPINE_PASS_CONTRADICTION",
+                    f"p0_identity_spine.{field_name}",
+                    "PASS requires this P0 identity-spine invariant to be true",
+                )
+        required_zero = {
+            "sentinel_url_occurrences_runtime": (
+                identity_spine.sentinel_url_occurrences_runtime
+            ),
+            "unconditional_source_confidence_one_occurrences": (
+                identity_spine.unconditional_source_confidence_one_occurrences
+            ),
+            "replay_network_requests": identity_spine.replay_network_requests,
+            "full_suite.failed": identity_spine.full_suite.failed,
+        }
+        for field_name, value in required_zero.items():
+            if value != 0:
+                add(
+                    "P0_IDENTITY_SPINE_PASS_CONTRADICTION",
+                    f"p0_identity_spine.{field_name}",
+                    "PASS requires this P0 identity-spine counter to be zero",
+                )
+        if identity_spine.full_suite.passed == 0:
+            add(
+                "P0_IDENTITY_SPINE_FULL_SUITE_EMPTY",
+                "p0_identity_spine.full_suite.passed",
+                "PASS requires at least one passing full-suite test",
+            )
+        if identity_spine.remaining_blockers:
+            add(
+                "P0_IDENTITY_SPINE_BLOCKERS_REMAIN",
+                "p0_identity_spine.remaining_blockers",
+                "PASS requires an empty P0 identity-spine blocker list",
+            )
 
     return tuple(issues)
 
@@ -1526,7 +1639,11 @@ def validate_machine_response(
         flags=re.MULTILINE,
     )
     if gate_match is None:
-        add("HUMAN_STOP_GATE_MISSING", "response", "human-readable stop-gate is required")
+        add(
+            "HUMAN_STOP_GATE_MISSING",
+            "response",
+            "human-readable stop-gate is required",
+        )
     else:
         rendered_key = f"STOP_GATE_{gate_match.group(1)}"
         if rendered_key != summary.termination.stop_gate_key:
@@ -1578,8 +1695,7 @@ def build_machine_self_check(
             for code in summary_codes
         ),
         "evidence_ceilings_valid": not any(
-            "EVIDENCE" in code or "READINESS_MISMATCH" in code
-            for code in summary_codes
+            "EVIDENCE" in code or "READINESS_MISMATCH" in code for code in summary_codes
         ),
         "unknowns_not_coerced": "MATERIAL_NULL_UNEXPLAINED" not in summary_codes,
         "located_scraper_not_treated_as_scale_ready": not any(

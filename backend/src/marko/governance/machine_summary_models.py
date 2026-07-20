@@ -581,6 +581,31 @@ class TerminationState(_SummaryModel):
     no_content_after_summary: Literal[True] = True
 
 
+class P0IdentitySpineFullSuite(_SummaryModel):
+    passed: NonNegativeInt
+    failed: NonNegativeInt
+    skipped: NonNegativeInt
+
+
+class P0IdentitySpineSummary(_SummaryModel):
+    """Prompt 15.017 evidence extension for the verified identity P0 gate."""
+
+    query_only_supported: StrictBool
+    sentinel_url_occurrences_runtime: NonNegativeInt
+    identity_fields_separated: StrictBool
+    legacy_rows_marked_unverified: StrictBool
+    calibration_requires_automatic_eligible: StrictBool
+    calibration_requires_hard_gate_pass: StrictBool
+    calibration_requires_verified_oe: StrictBool
+    empty_vs_schema_drift_distinguished: StrictBool
+    offer_accounting_conservation_verified: StrictBool
+    unconditional_source_confidence_one_occurrences: NonNegativeInt
+    replay_network_requests: NonNegativeInt
+    postgresql_migration_verified: StrictBool
+    full_suite: P0IdentitySpineFullSuite
+    remaining_blockers: tuple[StrictStr, ...] = ()
+
+
 class MachineReadableSummary(_SummaryModel):
     schema_: SchemaIdentity = Field(alias="schema")
     stage: MachineStage
@@ -597,3 +622,4 @@ class MachineReadableSummary(_SummaryModel):
     next_stage: MachineNextStage
     validation: ValidationState
     termination: TerminationState
+    p0_identity_spine: P0IdentitySpineSummary | None = None

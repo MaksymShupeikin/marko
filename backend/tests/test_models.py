@@ -46,6 +46,17 @@ def test_from_raw_uses_fallback_keys():
     assert (p.model_id, p.seller_id) == ("NM", 99)
 
 
+def test_from_raw_uses_current_product_page_description_keys():
+    plain = Product.from_raw(
+        {"id": 5, "descriptionPlain": "OE 1K0121251", "descriptionFull": "HTML"},
+        "ua",
+    )
+    full = Product.from_raw({"id": 6, "descriptionFull": "OE 6Q0121253"}, "ua")
+
+    assert plain.description == "OE 1K0121251"
+    assert full.description == "OE 6Q0121253"
+
+
 def test_field_names_end_with_url():
     assert Product.field_names()[-1] == "url"
 

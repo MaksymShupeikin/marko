@@ -29,7 +29,11 @@ from marko.services.scraper_architecture import (
     build_parse_key,
     parser_contract_defaults,
 )
-from marko.services.scraper_contract import ScrapeInput, ScraperBoundaryError
+from marko.services.scraper_contract import (
+    QueryInput,
+    ScrapeInput,
+    ScraperBoundaryError,
+)
 
 
 def _request(**overrides) -> ScrapeRequest:
@@ -95,6 +99,44 @@ def test_trusted_admission_is_fail_closed_and_keeps_server_keys() -> None:
     assert scrape_input is not None
     assert admitted.server_idempotency_keys.submission_key != (
         admitted.server_idempotency_keys.acquisition_key
+    )
+
+
+def test_trusted_query_admission_is_tenant_scoped_and_url_free() -> None:
+    item = ScrapeRequestItem(
+        item_id="query-item",
+        input_kind=InputKind.QUERY,
+        input_value="  1k0  121 251 ",
+        priority=0,
+        metadata={"language": "ua"},
+    )
+    first_request = _request(
+        acquisition_mode=AcquisitionMode.QUERY_BATCH,
+        items=[item],
+    )
+    second_request = _request(
+        workspace_id=str(uuid4()),
+        acquisition_mode=AcquisitionMode.QUERY_BATCH,
+        items=[item],
+    )
+
+    first, first_input = admit_prom_public_item(
+        first_request,
+        item,
+        settings=_settings(permitted=True),
+    )
+    second, second_input = admit_prom_public_item(
+        second_request,
+        item,
+        settings=_settings(permitted=True),
+    )
+
+    assert isinstance(first_input, QueryInput)
+    assert isinstance(second_input, QueryInput)
+    assert first_input.query == "1K0 121 251"
+    assert first_input.as_dict()["canonical_url"] is None
+    assert first.server_idempotency_keys.acquisition_key != (
+        second.server_idempotency_keys.acquisition_key
     )
 
 

@@ -1,0 +1,244 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: PROMPT_15_016_YURI_CATALOG_INGESTION_AND_MEASUREMENT
+      title: YURI_CLIENT_CATALOG_INGESTION_MEASUREMENT_AND_OPERATOR_WORKBOOK
+      type: IMPLEMENTATION
+      scope_owner: Cross-cutting
+      parent_stage: PROMPT_15_016
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-YURI-CATALOG-MEASUREMENT
+        result: The client-provided 4,901-row Prom.ua workbook is SHA-bound and measured with deterministic field, OE-collision and Wilson-interval metrics.
+        artifact_refs:
+          - docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+          - .artifacts/yuri_catalog/YURI_CATALOG_MARKO_INPUT_V1.metrics.json
+        evidence_refs:
+          - "source-sha256:7871f6b20b21d96bbd7b5c2ea8c951c2144a6adec04acac5229261c2172e0e91"
+          - scripts/build_yuri_catalog_workbook.py
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-YURI-OPERATOR-WORKBOOK
+        result: A separate operator workbook preserves all source sheets and adds validated manual-input and explicit OE-review sheets for every catalog row.
+        artifact_refs:
+          - .artifacts/yuri_catalog/YURI_CATALOG_MARKO_INPUT_V1.xlsx
+          - scripts/build_yuri_catalog_workbook.py
+        evidence_refs:
+          - "output-sha256:c0337041455cf36ff2a0919e8b8f87158368b82603badcd740072f4b83850af5"
+          - "command:XLSX ZIP integrity PASS"
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-YURI-CATALOG-IMPORT
+        result: Marko auto-detects Yuri's canonical Prom export, maps stable SKU and OE correctly, ingests optional manual signals and encrypts filled unit cost before persistence.
+        artifact_refs:
+          - backend/src/marko/services/xlsx_catalog.py
+          - backend/src/marko/api/routers/v1/catalog.py
+          - frontend/lib/features/catalog/catalog_page.dart
+        evidence_refs:
+          - backend/tests/test_xlsx_catalog.py
+          - backend/tests/test_cost_encryption.py
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-YURI-CATALOG-VERIFICATION
+        result: Backend, Flutter, static, web-build and workbook-integrity checks pass, and source and generated sheets produce the same 4,647 accepted plus 254 review partition.
+        artifact_refs:
+          - docs/PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18.yaml
+          - docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        evidence_refs:
+          - "command:593 backend tests passed"
+          - "command:25 Flutter tests passed"
+          - "command:flutter web build passed"
+          - "command:original source-sheet digests preserved"
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope: []
+    strongest_verified_result:
+      claim_id: CLM-YURI-CATALOG-REPRODUCIBLE-PARTITION
+      result: The exact client workbook deterministically reproduces 4,901 rows, 4,620 KEMP rows, 4,774 distinct normalized OE identities, 1,083 complete-dimension rows, 4,647 fail-closed accepted rows and 254 explicit review rows.
+      evidence_level: E4
+      evidence_refs:
+        - docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+        - .artifacts/yuri_catalog/YURI_CATALOG_MARKO_INPUT_V1.metrics.json
+        - scripts/build_yuri_catalog_workbook.py
+      reproduction_status: reproducible
+      limitations:
+        - The client catalog is representative for owned inventory, not for competitor market observations.
+        - Filled cost remains plaintext inside the local XLSX until ingestion even though server persistence is encrypted.
+    weakest_critical_area:
+      area_id: AREA-PERMISSION-SAFE-REPRESENTATIVE-MARKET-REPLAY
+      area: Permission-bound representative Prom market evidence
+      score: 25
+      evidence_level: E1
+      reason: No pinned permission-safe competitor snapshot with review labels was supplied or collected in this stage.
+      downstream_impact: Catalog requirement R-15 passes, but controlled-pilot and production recommendation claims remain blocked.
+      required_resolution: Record source authority and run a pinned representative market replay against the measured catalog or an approved stratified subset.
+    evidence_quality:
+      highest_level: E4
+      critical_floor: E1
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: partial
+      limitations:
+        - No live Prom competitor request was authorized or made.
+        - The checkout has no Git metadata, so code evidence is physical-path and hash bound.
+        - Production secret custody and operational recovery remain separate gates.
+    production_implication:
+      state: PRODUCTION_BLOCKED
+      production_ready: false
+      evidence_level: E4
+      passed_hard_gates:
+        - REPRESENTATIVE_CLIENT_CATALOG
+        - R15_CATALOG_RATIO_MEASUREMENT
+        - OPERATOR_WORKBOOK_IMPORT_CONTRACT
+        - ENCRYPTED_BULK_COST_BOUNDARY
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - REPRESENTATIVE_MARKET_REPLAY
+        - SOURCE_ACCESS_PERMISSION
+        - COST_KEY_PROVISIONING_AND_RECOVERY
+        - CONTROLLED_PILOT
+      statement: The client catalog and workbook ingestion stage pass; no market replay, automatic price activation, controlled pilot or production readiness is claimed.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-SOURCE-AUTHORITY
+        priority: P1
+        category: source_access
+        description: No immutable scope-specific authority artifact permits representative or production Prom competitor collection.
+        blocked_scope:
+          - permission-safe representative market replay
+          - production live Prom collection
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        owner: Source and product owners
+        resolution_condition: Record a current scope-specific permission or policy artifact before any live representative collection.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPRESENTATIVE-MARKET-SNAPSHOT
+        priority: P1
+        category: data
+        description: A pinned representative competitor snapshot with expected review outcomes is unavailable.
+        blocked_scope:
+          - representative recommendation replay
+          - controlled pilot evidence
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+        owner: Product and data owners
+        resolution_condition: Supply or authorize creation of a content-addressed permission-safe market snapshot and review labels.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-COST-KEY-OPERATIONS
+        priority: P1
+        category: environment_reproducibility
+        description: No real external deployment key or protected recovery drill is available.
+        blocked_scope:
+          - production bulk cost activation
+          - cost backup and recovery
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+        owner: Operations owner
+        resolution_condition: Provision a non-repository key and pass protected rotation plus recovery validation.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-REPOSITORY-PROVENANCE
+        priority: P1
+        category: environment_reproducibility
+        description: The physical checkout has no Git metadata or canonical commit identity.
+        blocked_scope:
+          - production-grade source provenance
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+        owner: Repository maintainer
+        resolution_condition: Bind this physical source snapshot to a canonical repository and commit or signed archive.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions: []
+    source_access:
+      - BLK-P1-SOURCE-AUTHORITY
+    data:
+      - BLK-P1-REPRESENTATIVE-MARKET-SNAPSHOT
+    environment_reproducibility:
+      - BLK-P1-COST-KEY-OPERATIONS
+      - BLK-P1-REPOSITORY-PROVENANCE
+    unknowns: []
+
+  next_stage:
+    id: PERMISSION_SAFE_PROM_REPLAY_VALIDATION
+    title: PERMISSION_SAFE_PROM_REPLAY_VALIDATION
+    why_it_is_next:
+      - The owned client catalog is measured and import-ready; competitor market evidence is now the first unverified recommendation transition.
+    required_inputs:
+      - input_id: INPUT-PROM-SOURCE-AUTHORITY
+        description: Immutable scope-specific permission or policy evidence for representative Prom competitor collection
+        source: Source and product owners
+        required_state: current, scope-bound and content-addressed before collection
+        currently_available: false
+        evidence_ref: docs/PROMPT_15_016_FINAL_GATE_MANIFEST_2026-07-18.yaml
+      - input_id: INPUT-PINNED-MARKET-SNAPSHOT
+        description: Permission-safe representative competitor snapshot with expected identity, condition, tier and recommendation labels
+        source: Product and data owners
+        required_state: immutable, review-labeled and linked to an approved catalog sample
+        currently_available: false
+        evidence_ref: null
+    expected_artifacts:
+      - artifact_id: ART-PERMISSION-SAFE-PROM-REPLAY-REPORT
+        type: report
+        purpose: Prove representative OE matching, tier comparability, used and KEMP exclusion, abstention and recommendation behavior without live-source ambiguity.
+        required_fields:
+          - source_authority
+          - catalog_sample
+          - market_snapshot_sha256
+          - review_labels
+          - requirement_results
+          - replay_result
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-PROM-REPLAY-AUTHORITY
+        predicate: Every collected or replayed market observation is covered by immutable scope-specific authority and provenance.
+        required_evidence: Authority artifact plus content-addressed raw and structured snapshots
+        threshold: 100% of observations provenance-bound with no unauthorized live request
+      - id: AC-PROM-REPLAY-SEMANTICS
+        predicate: The representative replay preserves OE-first identity, tier comparability, used and KEMP exclusion, confidence abstention and operator-only price decisions.
+        required_evidence: Pinned snapshot, human labels and deterministic replay report
+        threshold: Every hard-gate assertion passes and every mismatch is explicitly reviewed
+    stop_condition:
+      gate_key: STOP_GATE_PERMISSION_SAFE_PROM_REPLAY_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_PROMPT_15_016_YURI_CATALOG_INGESTION_AND_MEASUREMENT
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

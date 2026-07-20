@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
+from decimal import Decimal
+from functools import cached_property, lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from marko.core.cost_encryption import CostKeyring, parse_cost_keyring
 
 
 class Settings(BaseSettings):
@@ -33,10 +36,30 @@ class Settings(BaseSettings):
         "UNKNOWN",
     ] = "NOT_PERMITTED"
     prom_marketplace_source_access_reference: str = ""
+    cost_privacy_mode: Literal[
+        "UNDECIDED",
+        "LOCAL_DEVICE_ONLY",
+        "SERVER_SIDE_ENCRYPTED",
+    ] = "UNDECIDED"
+    cost_encryption_active_key_id: str = ""
+    cost_encryption_keys_json: SecretStr = SecretStr("")
     pricing_collection_min_interval_seconds: float = 2.0
     pricing_circuit_failure_threshold: int = 5
     pricing_circuit_open_seconds: int = 300
     pricing_dispatch_batch_size: int = 100
+    pricing_oe_reenrichment_batch_size: int = Field(default=100, ge=1, le=1000)
+    pricing_parser_schema_changed_alert_count: int = Field(default=0, ge=0)
+    pricing_parser_schema_changed_critical_rate: Decimal = Field(
+        default=Decimal("0.01"), ge=0, le=1
+    )
+    pricing_offer_internal_failure_alert_count: int = Field(default=0, ge=0)
+    pricing_evidence_accounting_error_critical_count: int = Field(default=0, ge=0)
+    pricing_verified_oe_drop_warning_delta: Decimal = Field(
+        default=Decimal("0.20"), ge=0, le=1
+    )
+    pricing_source_confidence_p50_drop_warning_delta: Decimal = Field(
+        default=Decimal("0.15"), ge=0, le=1
+    )
     pricing_collection_worker_count: int = 1
     pricing_collection_max_task_executions: int = 4
     pricing_collection_item_deadline_seconds: int = 1800
@@ -49,6 +72,8 @@ class Settings(BaseSettings):
     pricing_scraper_request_jitter_seconds: float = 0.5
     pricing_scraper_max_search_pages: int = 3
     pricing_scraper_max_sellers: int = 10
+    pricing_brand_tiers_path: str = ""
+    pricing_crosses_path: str = "config/crosses.yaml"
     pricing_v3_robust_dispersion_enabled: bool = False
     pricing_v3_activation_artifact: str = ""
     pricing_v3_activation_sha256: str = ""
@@ -73,6 +98,13 @@ class Settings(BaseSettings):
     store_sync_scraper_http_timeout_seconds: float = 30.0
     store_sync_scraper_http_max_attempts: int = 4
     store_sync_scraper_max_pages: int = 0
+    store_url_resolver_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    store_url_resolver_max_redirects: int = Field(default=3, ge=0, le=10)
+    store_url_resolver_max_response_bytes: int = Field(
+        default=2 * 1024 * 1024,
+        ge=64 * 1024,
+        le=10 * 1024 * 1024,
+    )
     scrape_raw_evidence_replay_enabled: bool = True
     scrape_evidence_gc_batch_size: int = 1000
     scrape_evidence_gc_interval_seconds: int = 3600
@@ -115,6 +147,11 @@ class Settings(BaseSettings):
             raise ValueError("E2E_TASK_HOLD_SECONDS must not be negative")
         if self.e2e_task_hold_seconds and environment != "e2e":
             raise ValueError("E2E_TASK_HOLD_SECONDS is allowed only in ENVIRONMENT=e2e")
+        if self.cost_privacy_mode == "SERVER_SIDE_ENCRYPTED":
+            parse_cost_keyring(
+                active_key_id=self.cost_encryption_active_key_id,
+                keys_json=self.cost_encryption_keys_json.get_secret_value(),
+            )
         if environment == "production":
             if self.debug:
                 raise ValueError("DEBUG must be false in production")
@@ -155,6 +192,15 @@ class Settings(BaseSettings):
         if self.api_docs_enabled is not None:
             return self.api_docs_enabled
         return not self.is_production
+
+    @cached_property
+    def cost_keyring(self) -> CostKeyring:
+        if self.cost_privacy_mode != "SERVER_SIDE_ENCRYPTED":
+            raise ValueError("Server-side cost encryption is not enabled")
+        return parse_cost_keyring(
+            active_key_id=self.cost_encryption_active_key_id,
+            keys_json=self.cost_encryption_keys_json.get_secret_value(),
+        )
 
     @property
     def allowed_host_list(self) -> list[str]:

@@ -1,0 +1,190 @@
+schema_version: "1.0.0"
+artifact_id: PROMPT_15_016_VARIATION_LEDGER_2026-07-18
+prompt_id: PROMPT_15_016
+evidence_scope: LOCAL_SYNTHETIC_AND_ADVERSARIAL
+representative_claim: false
+commands:
+  mutation_suite:
+    command: >-
+      cd backend && uv run pytest -q tests/test_yuri_v1_contract.py
+      tests/test_pricing_engine.py::test_two_competitors_are_insufficient
+      tests/test_pricing_engine.py::test_non_dumping_kemp_offer_is_reference_only_not_a_guardrail
+      tests/test_pricing_api.py::test_absolute_change_sort_is_literal_and_queue_independent
+    status: PASS
+    passed: 43
+    failed: 0
+    duration_seconds: 1.19
+  frontend_contract_suite:
+    command: >-
+      cd frontend && flutter test --no-pub test/pricing_api_test.dart
+      test/pricing_below_cost_dialog_test.dart
+    status: PASS
+    passed: 7
+    failed: 0
+  isolated_e2e:
+    command: >-
+      backend/.venv/bin/python scripts/run_prompt_15_015_e2e.py
+      --evidence-output docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+      --artifact-root .artifacts/prompt_15_016_e2e
+    status: PASS
+    evidence_ref: docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+test_artifact_hashes:
+  backend/tests/test_yuri_v1_contract.py: aad0e03168870902a5bcedd9706e0a42aad70f4e36026f1a95ce9db3f876ef8b
+  backend/tests/test_pricing_engine.py: a8e13ba41e133f92994c1ab858a7339be8ff6e92a66aac88c9c715056ec85b3a
+  backend/tests/test_pricing_api.py: 8fbada301009a8f2d7a7f0b4396b32d70110e13e6770f2fe3cdeb3bfa9c84e97
+  backend/tests/test_xlsx_catalog.py: 1e560868df18df0d60aa1eddcd95b5bfd23c41691792d851a21b2d7d7b65c376
+  backend/tests/test_recommendation_replay.py: 32bab074775cba1e9a1bdfa88e397c64e2e6acc5a15854b547c9a5af1eb0ddb9
+  frontend/test/pricing_api_test.dart: 4cf8f1c532576d86d94c4bcf97ba71cde41a87c5fc0e882ee09535570818ed70
+  frontend/test/pricing_below_cost_dialog_test.dart: bf20c75816cf0a7d022573fedd2c565154a4201d5ed20c47991a832bdaa5b65f
+variation_cases:
+  positive:
+    - id: V-POS-OE-CROSS-BRAND
+      invariant: same normalized OE reaches comparability regardless of brand
+      test: backend/tests/test_yuri_v1_contract.py::test_oe_first_same_oe_different_brand_reaches_comparability
+      outcome: PASS
+    - id: V-POS-FRESH-LOWER
+      invariant: fresh stock may follow a supported market downward
+      test: backend/tests/test_yuri_v1_contract.py::test_fresh_market_lower_case_produces_manual_lower_candidate
+      outcome: PASS
+    - id: V-POS-DESCRIPTION-USED
+      invariant: description-only used marker is detected
+      test: backend/tests/test_yuri_v1_contract.py::test_used_signal_from_any_available_lane_is_a_hard_tier_reject
+      outcome: PASS
+  negative:
+    - id: V-NEG-OE-CONFLICT
+      invariant: matching brand cannot override conflicting OE
+      test: backend/tests/test_yuri_v1_contract.py::test_same_brand_cannot_override_conflicting_oe
+      outcome: PASS
+    - id: V-NEG-UNKNOWN-CONDITION
+      invariant: unknown condition is not treated as new and legacy adapter fails closed
+      tests:
+        - backend/tests/test_yuri_v1_contract.py::test_unknown_condition_is_not_silently_treated_as_new
+        - backend/tests/test_yuri_v1_contract.py::test_legacy_domain_adapter_rederives_used_and_kemp_safety_signals
+      outcome: PASS
+    - id: V-NEG-UNVALIDATED-COEFFICIENT
+      invariant: missing coefficient never becomes multiplier one
+      test: backend/tests/test_yuri_v1_contract.py::test_unknown_budget_coefficient_does_not_fall_back_to_one
+      outcome: PASS
+  boundary:
+    - id: V-BOUND-OE-UNICODE
+      invariant: NFKC OE normalization removes Unicode separators without changing identity
+      test: backend/tests/test_yuri_v1_contract.py::test_oe_normalization_is_nfkc_and_removes_all_non_alnum_separators
+      outcome: PASS
+    - id: V-BOUND-OE-COLLISION
+      invariant: multiple raw OEs collapsing to one normalized identity are removed for manual review
+      test: backend/tests/test_xlsx_catalog.py::test_normalized_oe_collision_is_removed_for_manual_review
+      outcome: PASS
+    - id: V-BOUND-AGE-POLICY
+      invariant: half-lives are positive and dead-stock pressure parameters dominate stale parameters
+      test: backend/tests/test_yuri_v1_contract.py::test_age_policy_rejects_parameters_that_break_dead_stock_dominance
+      outcome: PASS
+    - id: V-BOUND-URL-PROTOCOL
+      invariant: only absolute HTTP(S) competitor URLs are openable
+      test: backend/tests/test_yuri_v1_contract.py::test_competitor_url_is_preserved_only_for_openable_http_protocols
+      outcome: PASS
+  metamorphic:
+    - id: V-META-KEMP-PRICE
+      transformation: mutate only KEMP reference price
+      invariant: target fair price, action and recommendation remain unchanged
+      test: backend/tests/test_yuri_v1_contract.py::test_kemp_reference_price_mutation_does_not_change_target_recommendation
+      outcome: PASS
+    - id: V-META-KEMP-PERSISTED-ROLE
+      transformation: forge KEMP_REFERENCE role with inconsistent tier flags
+      invariant: observation cannot reenter TARGET_MARKET
+      test: backend/tests/test_yuri_v1_contract.py::test_persisted_non_target_cohort_role_cannot_reenter_target_market
+      outcome: PASS
+    - id: V-META-AGE
+      transformation: increase stock_age_days with all other inputs fixed
+      invariant: stale/dead target is non-increasing
+      tests:
+        - backend/tests/test_yuri_v1_contract.py::test_stale_age_pressure_is_monotonic_and_continuous
+        - backend/tests/test_yuri_v1_contract.py::test_dead_stock_target_is_not_higher_than_stale_for_same_age
+      outcome: PASS
+    - id: V-META-COST
+      transformation: change or remove sunk cost
+      invariant: fair market price remains evidence-driven and recommendation is not floored by cost
+      tests:
+        - backend/tests/test_pricing_engine.py::test_stale_cost_mutation_does_not_change_recommendation
+        - backend/tests/test_yuri_v1_contract.py::test_missing_cost_does_not_block_market_clearance_recommendation
+      outcome: PASS
+mutations:
+  - mutation_id: M-01
+    change: restore brand mismatch rejection
+    killed_by: backend/tests/test_yuri_v1_contract.py::test_oe_first_same_oe_different_brand_reaches_comparability
+    status: KILLED
+  - mutation_id: M-02
+    change: treat brand as identity dimension
+    killed_by: backend/tests/test_yuri_v1_contract.py::test_brand_dimension_is_not_an_identity_or_comparability_rejection
+    status: KILLED
+  - mutation_id: M-03
+    change: append KEMP_REFERENCE to TARGET_MARKET
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_kemp_reference_price_mutation_does_not_change_target_recommendation
+      - backend/tests/test_yuri_v1_contract.py::test_persisted_non_target_cohort_role_cannot_reenter_target_market
+    status: KILLED
+  - mutation_id: M-04
+    change: use KEMP price as recommendation guardrail
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_kemp_reference_price_mutation_does_not_change_target_recommendation
+      - backend/tests/test_pricing_engine.py::test_non_dumping_kemp_offer_is_reference_only_not_a_guardrail
+    status: KILLED
+  - mutation_id: M-05
+    change: replace available description with null
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_product_additive_boundary_preserves_available_description
+      - backend/tests/test_yuri_v1_contract.py::test_description_condition_is_persisted_before_cohort_assignment
+    status: KILLED
+  - mutation_id: M-06
+    change: treat UNKNOWN condition as new
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_unknown_condition_is_not_silently_treated_as_new
+      - backend/tests/test_yuri_v1_contract.py::test_legacy_domain_adapter_rederives_used_and_kemp_safety_signals
+    status: KILLED
+  - mutation_id: M-07
+    change: disable used-description marker
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_used_signal_from_any_available_lane_is_a_hard_tier_reject
+      - backend/tests/test_yuri_v1_contract.py::test_description_condition_is_persisted_before_cohort_assignment
+    status: KILLED
+  - mutation_id: M-08
+    change: make age beta constant
+    killed_by: backend/tests/test_yuri_v1_contract.py::test_stale_age_pressure_is_monotonic_and_continuous
+    status: KILLED
+  - mutation_id: M-09
+    change: reverse age monotonicity or dead/stale dominance
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_dead_stock_target_is_not_higher_than_stale_for_same_age
+      - backend/tests/test_yuri_v1_contract.py::test_age_policy_rejects_parameters_that_break_dead_stock_dominance
+    status: KILLED
+  - mutation_id: M-10
+    change: restore fresh-lower prohibition
+    killed_by: backend/tests/test_yuri_v1_contract.py::test_fresh_market_lower_case_produces_manual_lower_candidate
+    status: KILLED
+  - mutation_id: M-11
+    change: sort by economic priority under absolute-change label
+    killed_by:
+      - backend/tests/test_pricing_api.py::test_absolute_change_sort_is_literal_and_queue_independent
+      - frontend/test/pricing_api_test.dart
+    status: KILLED
+  - mutation_id: M-12
+    change: leak raw cost through import, catalog, response, validation error or dialog payload
+    killed_by:
+      - backend/tests/test_yuri_v1_contract.py::test_catalog_response_redacts_legacy_cost_columns_and_model_field
+      - backend/tests/test_yuri_v1_contract.py::test_validation_errors_never_echo_raw_cost_or_client_input
+      - backend/tests/test_xlsx_catalog.py::test_cost_is_not_mapped_or_retained_in_generic_raw_row
+      - frontend/test/pricing_below_cost_dialog_test.dart
+    status: KILLED
+  - mutation_id: M-13
+    change: convert insufficient sample to HOLD or actionable recommendation
+    killed_by: backend/tests/test_pricing_engine.py::test_two_competitors_are_insufficient
+    status: KILLED
+  - mutation_id: M-14
+    change: substitute multiplier one for unknown coefficient
+    killed_by: backend/tests/test_yuri_v1_contract.py::test_unknown_budget_coefficient_does_not_fall_back_to_one
+    status: KILLED
+survived_mutations: []
+gate:
+  required_mutations: 14
+  killed_mutations: 14
+  survived_mutations: 0
+  status: PASS

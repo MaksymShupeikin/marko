@@ -1,0 +1,574 @@
+schema_version: metis-brand-tiers-v1
+dataset_id: metis-prom-ua-live-30-oe-2026-07-19
+market: prom.ua/UA
+data_class: bounded_live_discovery
+representative: false
+domain_policy_approved: false
+approved_by: null
+approved_at: null
+notes:
+  - Only KEMP is approved as a contractual system invariant.
+  - Every non-KEMP tier remains UNKNOWN until Ukrainian Prom domain review.
+  - Price ratios are evidence for review, not automatic tier assignments.
+brands:
+  - brand: "KEMP"
+    normalized: "KEMP"
+    tier: kemp
+    confidence: "1.0000"
+    approved: true
+    evidence:
+      offer_count: 31
+      distinct_target_oes: 20
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "NRF"
+    normalized: "NRF"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 9
+      distinct_target_oes: 2
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "VAG"
+    normalized: "VAG"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 8
+      distinct_target_oes: 2
+      exact_working_offers: 8
+      paired_ratio_observations: 8
+      median_price_vs_kemp: 11.1419
+  - brand: "SACHS"
+    normalized: "SACHS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 5
+      distinct_target_oes: 2
+      exact_working_offers: 5
+      paired_ratio_observations: 5
+      median_price_vs_kemp: 1.3941
+  - brand: "Bosch"
+    normalized: "BOSCH"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 4
+      distinct_target_oes: 2
+      exact_working_offers: 2
+      paired_ratio_observations: 2
+      median_price_vs_kemp: 1.4294
+  - brand: "GM"
+    normalized: "GM"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 4
+      distinct_target_oes: 1
+      exact_working_offers: 4
+      paired_ratio_observations: 4
+      median_price_vs_kemp: 2.6721
+  - brand: "Audi"
+    normalized: "AUDI"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 3
+      distinct_target_oes: 3
+      exact_working_offers: 3
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 0.481
+  - brand: "CRB"
+    normalized: "CRB"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 3
+      distinct_target_oes: 1
+      exact_working_offers: 3
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Daewoo"
+    normalized: "DAEWOO"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 3
+      distinct_target_oes: 1
+      exact_working_offers: 2
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "ELRING"
+    normalized: "ELRING"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 3
+      distinct_target_oes: 1
+      exact_working_offers: 3
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Nissens"
+    normalized: "NISSENS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 3
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Kimiko"
+    normalized: "KIMIKO"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 2
+      distinct_target_oes: 1
+      exact_working_offers: 2
+      paired_ratio_observations: 2
+      median_price_vs_kemp: 1.4088
+  - brand: "Quick Brake"
+    normalized: "QUICKBRAKE"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 2
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Van Wezel"
+    normalized: "VANWEZEL"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 2
+      distinct_target_oes: 2
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "ABS"
+    normalized: "ABS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 0.5963
+  - brand: "Aftermarket"
+    normalized: "AFTERMARKET"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.0284
+  - brand: "AIC"
+    normalized: "AIC"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "AJUSA"
+    normalized: "AJUSA"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Athena"
+    normalized: "ATHENA"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Autotechteile"
+    normalized: "AUTOTECHTEILE"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Chery"
+    normalized: "CHERY"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.1942
+  - brand: "Delphi"
+    normalized: "DELPHI"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Denckermann"
+    normalized: "DENCKERMANN"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "ESCORT"
+    normalized: "ESCORT"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "EuroEx"
+    normalized: "EUROEX"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.1097
+  - brand: "Fitshi"
+    normalized: "FITSHI"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.1128
+  - brand: "Ford Motor Company"
+    normalized: "FORDMOTORCOMPANY"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Fps"
+    normalized: "FPS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "General Motors"
+    normalized: "GENERALMOTORS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 3.4402
+  - brand: "Genuine"
+    normalized: "GENUINE"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 0.9817
+  - brand: "KLM AutoParts"
+    normalized: "KLMAUTOPARTS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.0986
+  - brand: "LEADERPARTS"
+    normalized: "LEADERPARTS"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Mercedes-Benz"
+    normalized: "MERCEDESBENZ"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.3359
+  - brand: "Meyle"
+    normalized: "MEYLE"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "OEM"
+    normalized: "OEM"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.2085
+  - brand: "Onnuri"
+    normalized: "ONNURI"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Opel"
+    normalized: "OPEL"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Polcar"
+    normalized: "POLCAR"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.1999
+  - brand: "Profit"
+    normalized: "PROFIT"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Shin Kum"
+    normalized: "SHINKUM"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Shino"
+    normalized: "SHINO"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.2022
+  - brand: "Swatch"
+    normalized: "SWATCH"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.0195
+  - brand: "TRUCKTEC Automotive"
+    normalized: "TRUCKTECAUTOMOTIVE"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Turkey"
+    normalized: "TURKEY"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 1.3485
+  - brand: "UFI"
+    normalized: "UFI"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Victor Reinz"
+    normalized: "VICTORREINZ"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Vida"
+    normalized: "VIDA"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "VIKA"
+    normalized: "VIKA"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 0
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null
+  - brand: "Volkswagen"
+    normalized: "VOLKSWAGEN"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 8.3257
+  - brand: "VW"
+    normalized: "VW"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 1
+      median_price_vs_kemp: 11.8856
+  - brand: "XUPING"
+    normalized: "XUPING"
+    tier: unknown
+    confidence: "0.0000"
+    approved: false
+    evidence:
+      offer_count: 1
+      distinct_target_oes: 1
+      exact_working_offers: 1
+      paired_ratio_observations: 0
+      median_price_vs_kemp: null

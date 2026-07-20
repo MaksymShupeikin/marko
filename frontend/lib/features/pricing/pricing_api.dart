@@ -9,9 +9,9 @@ class PricingApi {
   final ApiClient _client;
 
   Future<RecommendationPage> listRecommendations({
-    String queue = 'raise',
+    String queue = 'all',
     String? action,
-    String sort = 'priority',
+    String sort = 'ABSOLUTE_RECOMMENDED_CHANGE',
   }) async {
     final payload = await _client.getJson(
       '/api/v1/pricing/recommendations',

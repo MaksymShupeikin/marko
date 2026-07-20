@@ -24,7 +24,14 @@ from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from marko.core.config import Settings, get_settings
 from marko.infrastructure.db.models import CatalogImportBatch, CatalogItem
+from marko.services.catalog_costs import add_encrypted_cost_record
+from marko.services.cost_privacy import (
+    CostPrivacyMode,
+    is_raw_cost_label,
+    require_server_cost_input_allowed,
+)
 
 MAX_XLSX_BYTES = 25 * 1024 * 1024
 MAX_UNCOMPRESSED_XLSX_BYTES = 250 * 1024 * 1024
@@ -140,9 +147,51 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "monthly sales",
         "продажи в месяц",
         "продажі на місяць",
+        "план продаж в месяц",
+        "план продажів на місяць",
     ),
-    # Cost is deliberately not auto-detected. It can be mapped explicitly, but
-    # the normal product flow asks the operator to enter it inside Marko.
+    "units_sold_30d": (
+        "units sold 30d",
+        "sales 30d",
+        "продажи за 30 дней",
+        "продажі за 30 днів",
+    ),
+    "units_sold_60d": (
+        "units sold 60d",
+        "sales 60d",
+        "продажи за 60 дней",
+        "продажі за 60 днів",
+    ),
+    "units_sold_90d": (
+        "units sold 90d",
+        "sales 90d",
+        "продажи за 90 дней",
+        "продажі за 90 днів",
+    ),
+    "days_since_last_sale": (
+        "days since last sale",
+        "дней с последней продажи",
+        "днів з останнього продажу",
+    ),
+    "historical_monthly_units": (
+        "historical monthly units",
+        "historical monthly sales",
+        "средние продажи в месяц",
+        "середні продажі на місяць",
+    ),
+    "views_30d": (
+        "views 30d",
+        "просмотры за 30 дней",
+        "перегляди за 30 днів",
+    ),
+    "conversion_rate_proxy": (
+        "conversion rate proxy",
+        "conversion",
+        "конверсия",
+        "конверсія",
+    ),
+    # Raw cost is never ingested through a generic workbook boundary.  The
+    # privacy mode must be decided before a dedicated path can exist.
     "cost": (),
     "manual_priority": ("manual priority", "приоритет", "пріоритет"),
 }
@@ -152,6 +201,10 @@ REQUIRED_FIELDS = frozenset({"oe", "name", "category", "price"})
 
 class CatalogImportError(ValueError):
     """The workbook as a whole cannot be imported."""
+
+
+class SensitiveCatalogImportBlocked(CatalogImportError):
+    """A workbook contains raw cost but encrypted ingestion is unavailable."""
 
 
 @dataclass(frozen=True)
@@ -181,6 +234,13 @@ class ParsedCatalogRow:
     stock_qty: Decimal | None
     stock_age_days: Decimal | None
     expected_units_sold: Decimal | None
+    units_sold_30d: Decimal | None
+    units_sold_60d: Decimal | None
+    units_sold_90d: Decimal | None
+    days_since_last_sale: Decimal | None
+    historical_monthly_units: Decimal | None
+    views_30d: Decimal | None
+    conversion_rate_proxy: Decimal | None
     cost: Decimal | None
     manual_priority: Decimal
     raw_row: dict[str, Any]
@@ -192,6 +252,7 @@ class ParsedCatalog:
     issues: list[ImportIssue]
     column_mapping: dict[str, str]
     total_rows: int
+    sensitive_costs: dict[int, Decimal]
 
 
 def normalize_identifier(value: Any) -> str:
@@ -206,6 +267,7 @@ def parse_catalog_xlsx(
     *,
     explicit_mapping: dict[str, str] | None = None,
     sheet_name: str | None = None,
+    allow_encrypted_cost_input: bool = False,
 ) -> ParsedCatalog:
     if not content:
         raise CatalogImportError("Файл пуст")
@@ -246,10 +308,21 @@ def parse_catalog_xlsx(
             )
         headers = _unique_headers(header_values)
         resolved = resolve_column_mapping(headers, explicit_mapping)
+        cost_indexes = [
+            index for index, header in enumerate(headers) if is_raw_cost_label(header)
+        ]
+        if len(cost_indexes) > 1:
+            raise CatalogImportError(
+                "Найдено несколько колонок себестоимости; оставьте одну"
+            )
+        cost_index = cost_indexes[0] if cost_indexes else None
 
         rows: list[ParsedCatalogRow] = []
         issues: list[ImportIssue] = []
+        sensitive_costs: dict[int, Decimal] = {}
         seen_skus: set[str] = set()
+        seen_oe_rows: dict[str, ParsedCatalogRow] = {}
+        blocked_oe_collisions: set[str] = set()
         total_rows = 0
         for source_row, values in enumerate(iterator, start=2):
             if source_row - 1 > MAX_ROWS:
@@ -260,13 +333,58 @@ def parse_catalog_xlsx(
             raw_row = {
                 header: _json_safe(values[index] if index < len(values) else None)
                 for index, header in enumerate(headers)
+                if not is_raw_cost_label(header)
             }
             try:
+                raw_cost = (
+                    values[cost_index]
+                    if cost_index is not None and cost_index < len(values)
+                    else None
+                )
+                parsed_cost = _optional_unit_cost(raw_cost)
+                if parsed_cost is not None and not allow_encrypted_cost_input:
+                    raise SensitiveCatalogImportBlocked(
+                        "Себестоимость заполнена, но защищённый серверный импорт не включён"
+                    )
                 parsed = _parse_row(source_row, values, resolved, raw_row)
                 if parsed.sku in seen_skus:
                     raise CatalogImportError(f"Дублирующийся SKU: {parsed.sku}")
                 seen_skus.add(parsed.sku)
+                if parsed.oe_norm in blocked_oe_collisions:
+                    issues.append(
+                        ImportIssue(
+                            source_row,
+                            "NORMALIZED_OE_COLLISION",
+                            "OE normalization collision requires manual review",
+                        )
+                    )
+                    continue
+                previous = seen_oe_rows.get(parsed.oe_norm)
+                if previous is not None:
+                    rows.remove(previous)
+                    seen_oe_rows.pop(parsed.oe_norm, None)
+                    blocked_oe_collisions.add(parsed.oe_norm)
+                    issues.extend(
+                        (
+                            ImportIssue(
+                                previous.source_row,
+                                "NORMALIZED_OE_COLLISION",
+                                "OE normalization collision requires manual review",
+                            ),
+                            ImportIssue(
+                                source_row,
+                                "NORMALIZED_OE_COLLISION",
+                                "OE normalization collision requires manual review",
+                            ),
+                        )
+                    )
+                    continue
+                seen_oe_rows[parsed.oe_norm] = parsed
                 rows.append(parsed)
+                if parsed_cost is not None:
+                    sensitive_costs[source_row] = parsed_cost
+            except SensitiveCatalogImportBlocked:
+                raise
             except CatalogImportError as exc:
                 issues.append(ImportIssue(source_row, "INVALID_ROW", str(exc)))
     finally:
@@ -274,11 +392,20 @@ def parse_catalog_xlsx(
 
     if total_rows == 0:
         raise CatalogImportError("В XLSX нет товарных строк")
+    accepted_source_rows = {row.source_row for row in rows}
+    column_mapping = {field: headers[index] for field, index in resolved.items()}
+    if cost_index is not None:
+        column_mapping["cost"] = headers[cost_index]
     return ParsedCatalog(
         rows=rows,
         issues=issues,
-        column_mapping={field: headers[index] for field, index in resolved.items()},
+        column_mapping=column_mapping,
         total_rows=total_rows,
+        sensitive_costs={
+            row: value
+            for row, value in sensitive_costs.items()
+            if row in accepted_source_rows
+        },
     )
 
 
@@ -295,9 +422,15 @@ def resolve_column_mapping(
         raise CatalogImportError(
             "Неизвестные поля mapping: " + ", ".join(sorted(unknown_fields))
         )
+    if "cost" in explicit:
+        raise CatalogImportError(
+            "Raw cost import is disabled until cost privacy mode is approved"
+        )
 
-    result: dict[str, int] = {}
+    result = _prom_export_mapping(headers) if not explicit else {}
     for field, aliases in FIELD_ALIASES.items():
+        if field in result:
+            continue
         candidates = (explicit[field],) if field in explicit else aliases
         matched: list[int] = []
         for candidate in candidates:
@@ -331,14 +464,38 @@ async def import_catalog_xlsx(
     explicit_mapping: dict[str, str] | None = None,
     sheet_name: str | None = None,
     store_id: UUID | None = None,
+    user_id: UUID,
+    settings: Settings | None = None,
 ) -> CatalogImportBatch:
     """Parse and atomically persist one immutable catalog snapshot."""
+    selected = settings or get_settings()
+    allow_encrypted_cost_input = False
+    if (
+        CostPrivacyMode(selected.cost_privacy_mode)
+        == CostPrivacyMode.SERVER_SIDE_ENCRYPTED
+    ):
+        try:
+            selected.cost_keyring
+        except ValueError:
+            pass
+        else:
+            allow_encrypted_cost_input = True
     parsed = await asyncio.to_thread(
         parse_catalog_xlsx,
         content,
         explicit_mapping=explicit_mapping,
         sheet_name=sheet_name,
+        allow_encrypted_cost_input=allow_encrypted_cost_input,
     )
+    if parsed.sensitive_costs:
+        try:
+            require_server_cost_input_allowed(
+                next(iter(parsed.sensitive_costs.values())), settings=selected
+            )
+        except RuntimeError as exc:
+            raise CatalogImportError(
+                "Защищённый импорт себестоимости недоступен"
+            ) from exc
     now = datetime.now(UTC)
     batch = CatalogImportBatch(
         workspace_id=workspace_id,
@@ -355,17 +512,29 @@ async def import_catalog_xlsx(
     )
     session.add(batch)
     await session.flush()
-    session.add_all(
-        [
-            CatalogItem(
+    items = [
+        CatalogItem(
+            workspace_id=workspace_id,
+            import_batch_id=batch.id,
+            store_id=store_id,
+            **asdict(row),
+        )
+        for row in parsed.rows
+    ]
+    session.add_all(items)
+    await session.flush()
+    for item, row in zip(items, parsed.rows, strict=True):
+        cost = parsed.sensitive_costs.get(row.source_row)
+        if cost is not None:
+            add_encrypted_cost_record(
+                session,
                 workspace_id=workspace_id,
-                import_batch_id=batch.id,
-                store_id=store_id,
-                **asdict(row),
+                catalog_item_id=item.id,
+                user_id=user_id,
+                cost=cost,
+                reason=f"encrypted XLSX import row {row.source_row}",
+                settings=selected,
             )
-            for row in parsed.rows
-        ]
-    )
     batch.status = (
         "failed" if not parsed.rows else "partial" if parsed.issues else "completed"
     )
@@ -483,7 +652,23 @@ def _parse_row(
     stock_qty = _optional_nonnegative_decimal(get("stock_qty"), "остаток")
     stock_age = _optional_nonnegative_decimal(get("stock_age_days"), "возраст запаса")
     expected = _optional_nonnegative_decimal(get("expected_units_sold"), "продажи")
-    cost = _optional_positive_decimal(get("cost"), "себестоимость")
+    units_sold_30d = _optional_nonnegative_decimal(
+        get("units_sold_30d"), "продажи за 30 дней"
+    )
+    units_sold_60d = _optional_nonnegative_decimal(
+        get("units_sold_60d"), "продажи за 60 дней"
+    )
+    units_sold_90d = _optional_nonnegative_decimal(
+        get("units_sold_90d"), "продажи за 90 дней"
+    )
+    days_since_last_sale = _optional_nonnegative_decimal(
+        get("days_since_last_sale"), "дней с последней продажи"
+    )
+    historical_monthly_units = _optional_nonnegative_decimal(
+        get("historical_monthly_units"), "средние продажи в месяц"
+    )
+    views_30d = _optional_nonnegative_decimal(get("views_30d"), "просмотры за 30 дней")
+    conversion_rate_proxy = _optional_ratio(get("conversion_rate_proxy"), "конверсия")
     priority = _optional_positive_decimal(
         get("manual_priority"), "приоритет"
     ) or Decimal("1")
@@ -511,10 +696,45 @@ def _parse_row(
         stock_qty=stock_qty,
         stock_age_days=stock_age,
         expected_units_sold=expected,
-        cost=cost,
+        units_sold_30d=units_sold_30d,
+        units_sold_60d=units_sold_60d,
+        units_sold_90d=units_sold_90d,
+        days_since_last_sale=days_since_last_sale,
+        historical_monthly_units=historical_monthly_units,
+        views_30d=views_30d,
+        conversion_rate_proxy=conversion_rate_proxy,
+        cost=None,
         manual_priority=priority,
         raw_row=raw_row,
     )
+
+
+def _prom_export_mapping(headers: list[str]) -> dict[str, int]:
+    """Recognize Yuri's canonical Prom.ua export without an explicit JSON map."""
+    exact = {_normalize_header(header): index for index, header in enumerate(headers)}
+    required = {
+        "sku": "унікальний ідентифікатор",
+        "oe": "код товару",
+        "name": "назва позиції",
+        "category": "назва групи",
+        "price": "ціна",
+    }
+    if not all(header in exact for header in required.values()):
+        return {}
+    optional = {
+        "mpn": "номер пристрою mpn",
+        "currency": "валюта",
+        "available": "наявність",
+        "brand": "виробник",
+        "description": "опис",
+        "product_url": "продукт на сайті",
+        "stock_qty": "кількість",
+    }
+    result = {field: exact[header] for field, header in required.items()}
+    result.update(
+        {field: exact[header] for field, header in optional.items() if header in exact}
+    )
+    return result
 
 
 def _unique_headers(values: tuple[Any, ...]) -> list[str]:
@@ -604,6 +824,26 @@ def _optional_nonnegative_decimal(value: Any, label: str) -> Decimal | None:
     return result
 
 
+def _optional_ratio(value: Any, label: str) -> Decimal | None:
+    result = _optional_nonnegative_decimal(value, label)
+    if result is not None and result > 1:
+        raise CatalogImportError(f"{label} должна быть от 0 до 1")
+    return result
+
+
+def _optional_unit_cost(value: Any) -> Decimal | None:
+    if value is None or not _cell_text(value):
+        return None
+    result = _decimal(value, "себестоимость")
+    if result <= 0:
+        raise CatalogImportError("себестоимость должна быть > 0")
+    if result.as_tuple().exponent < -2:
+        raise CatalogImportError("себестоимость поддерживает не более 2 знаков")
+    if result >= Decimal("1000000000000"):
+        raise CatalogImportError("себестоимость выше допустимого диапазона")
+    return result.quantize(Decimal("0.01"))
+
+
 def _normalize_currency(value: Any) -> str:
     raw = _cell_text(value).casefold()
     if not raw or raw in {"uah", "грн", "₴", "гривня", "гривень"}:
@@ -631,6 +871,8 @@ def _optional_bool(value: Any) -> bool | None:
         "в наличии",
         "в наявності",
         "available",
+        "+",
+        "!",
     }:
         return True
     if raw in {
@@ -643,6 +885,7 @@ def _optional_bool(value: Any) -> bool | None:
         "нет в наличии",
         "немає",
         "unavailable",
+        "-",
     }:
         return False
     raise CatalogImportError("неизвестное значение наличия")
@@ -691,6 +934,7 @@ __all__ = [
     "ImportIssue",
     "ParsedCatalog",
     "ParsedCatalogRow",
+    "SensitiveCatalogImportBlocked",
     "get_import_batch",
     "import_catalog_xlsx",
     "list_catalog_items",

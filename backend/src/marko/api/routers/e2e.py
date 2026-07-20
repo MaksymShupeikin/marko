@@ -53,4 +53,3 @@ async def start_fixture_replay_pricing_run(
     except PricingRunError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PricingRunResponse.model_validate(run)
-

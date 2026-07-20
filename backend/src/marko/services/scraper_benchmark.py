@@ -198,11 +198,7 @@ def evaluate_benchmark_series(
                     if acceptance.required_successful_capacity is not None
                     else acceptance.required_terminal_capacity
                 )
-                and (
-                    run.successful_items / run.valid_items
-                    if run.valid_items
-                    else 0.0
-                )
+                and (run.successful_items / run.valid_items if run.valid_items else 0.0)
                 >= acceptance.minimum_success_rate
             ),
             "latency_slo_failed": (
@@ -210,15 +206,13 @@ def evaluate_benchmark_series(
                 and run.latency_p99_seconds <= acceptance.latency_p99_slo_seconds
             ),
             "retry_slo_failed": (
-                run.http_attempts_per_item
-                <= acceptance.max_http_attempts_per_item
+                run.http_attempts_per_item <= acceptance.max_http_attempts_per_item
             ),
             "source_headroom_failed": (
                 run.source_utilization <= acceptance.max_source_utilization
             ),
             "database_headroom_failed": (
-                run.database_utilization
-                <= acceptance.max_database_utilization
+                run.database_utilization <= acceptance.max_database_utilization
             ),
             "error_slo_failed": (
                 run.error_rate <= acceptance.max_error_rate
@@ -243,9 +237,7 @@ def evaluate_benchmark_series(
                 system_parallel_efficiency=eta,
                 worker_efficiency_interpretable=interpretable,
                 capacity_pass=checks["capacity_below_required"],
-                successful_capacity_pass=checks[
-                    "successful_capacity_below_required"
-                ],
+                successful_capacity_pass=checks["successful_capacity_below_required"],
                 latency_pass=checks["latency_slo_failed"],
                 retry_pass=checks["retry_slo_failed"],
                 source_headroom_pass=checks["source_headroom_failed"],
@@ -261,15 +253,12 @@ def evaluate_benchmark_series(
             capacity_gain = (
                 run.terminal_capacity - previous.terminal_capacity
             ) / previous.terminal_capacity
-            materially_worse = (
-                _material_rate_worsening(
-                    run.error_rate,
-                    previous.error_rate,
-                )
-                or _material_rate_worsening(
-                    run.rate_limited_attempt_rate,
-                    previous.rate_limited_attempt_rate,
-                )
+            materially_worse = _material_rate_worsening(
+                run.error_rate,
+                previous.error_rate,
+            ) or _material_rate_worsening(
+                run.rate_limited_attempt_rate,
+                previous.rate_limited_attempt_rate,
             )
             if (
                 capacity_gain < acceptance.saturation_increment_threshold
@@ -283,10 +272,7 @@ def evaluate_benchmark_series(
             evaluation.concurrency
             for evaluation in evaluations
             if evaluation.accepted
-            and (
-                first_saturation is None
-                or evaluation.concurrency < first_saturation
-            )
+            and (first_saturation is None or evaluation.concurrency < first_saturation)
         ),
         None,
     )
@@ -298,8 +284,7 @@ def evaluate_benchmark_series(
             "eta_is_full_system_efficiency_when_external_subsystem_is_saturated"
         )
     production_proven = (
-        selected is not None
-        and len(ordered) >= acceptance.minimum_concurrency_levels
+        selected is not None and len(ordered) >= acceptance.minimum_concurrency_levels
     )
     if production_proven:
         stop_reason = "smallest_concurrency_meeting_all_acceptance_conditions"

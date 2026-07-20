@@ -16,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -63,12 +64,13 @@ class SyncStatus(str, enum.Enum):
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     firebase_uid: Mapped[str | None] = mapped_column(
         String(128), unique=True, index=True
     )
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
     display_name: Mapped[str | None] = mapped_column(String(160))
     avatar_url: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(
@@ -78,10 +80,11 @@ class User(TimestampMixin, Base):
 
 class Workspace(TimestampMixin, Base):
     __tablename__ = "workspaces"
+    __table_args__ = (UniqueConstraint("slug"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(160))
-    slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    slug: Mapped[str] = mapped_column(String(100), index=True)
 
 
 class WorkspaceMember(Base):
@@ -419,6 +422,7 @@ class StoreSyncTaskExecution(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     sync_run_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("sync_runs.id", ondelete="CASCADE"),
+        index=True,
     )
     task_id: Mapped[str | None] = mapped_column(String(255), index=True)
     execution_no: Mapped[int] = mapped_column(Integer)
@@ -561,6 +565,10 @@ class ScrapeEvidenceBlob(Base):
 
     __tablename__ = "scrape_evidence_blobs"
     __table_args__ = (
+        UniqueConstraint(
+            "content_sha256",
+            name="uq_scrape_evidence_blobs_content_sha256",
+        ),
         CheckConstraint(
             "raw_size_bytes >= 0 AND stored_size_bytes >= 0",
             name="ck_scrape_evidence_blob_sizes",
@@ -864,8 +872,7 @@ class CatalogItemOverride(Base):
             name="ck_catalog_item_overrides_sales_nonnegative",
         ),
         CheckConstraint(
-            "NOT allow_below_cost OR (stock_status = 'dead_stock' AND "
-            "below_cost_floor IS NOT NULL AND below_cost_warning_confirmed)",
+            "NOT allow_below_cost OR below_cost_warning_confirmed",
             name="ck_catalog_item_override_below_cost_authorization",
         ),
         Index(
@@ -902,6 +909,60 @@ class CatalogItemOverride(Base):
     below_cost_warning_confirmed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CatalogItemCostRecord(Base):
+    """Append-only encrypted unit-cost value or explicit clear tombstone."""
+
+    __tablename__ = "catalog_item_cost_records"
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('SET', 'CLEAR')",
+            name="ck_catalog_item_cost_record_action",
+        ),
+        CheckConstraint(
+            "(action = 'SET' AND ciphertext IS NOT NULL AND nonce IS NOT NULL "
+            "AND octet_length(nonce) = 12 "
+            "AND octet_length(ciphertext) BETWEEN 20 AND 31 "
+            "AND key_id IS NOT NULL AND algorithm = 'AES-256-GCM' "
+            "AND format_version = 1) OR "
+            "(action = 'CLEAR' AND ciphertext IS NULL AND nonce IS NULL "
+            "AND key_id IS NULL AND algorithm IS NULL AND format_version IS NULL)",
+            name="ck_catalog_item_cost_record_payload",
+        ),
+        UniqueConstraint("sequence_no", name="uq_catalog_item_cost_record_sequence"),
+        UniqueConstraint(
+            "key_id", "nonce", name="uq_catalog_item_cost_record_key_nonce"
+        ),
+        Index(
+            "ix_catalog_item_cost_record_current",
+            "workspace_id",
+            "catalog_item_id",
+            "sequence_no",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    sequence_no: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    action: Mapped[str] = mapped_column(String(8))
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    key_id: Mapped[str | None] = mapped_column(String(64))
+    algorithm: Mapped[str | None] = mapped_column(String(32))
+    format_version: Mapped[int | None] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -957,6 +1018,9 @@ class PricingRun(TimestampMixin, Base):
     )
     coefficient_version: Mapped[str | None] = mapped_column(String(160))
     calibration_dataset_hash: Mapped[str | None] = mapped_column(String(64))
+    calibration_accounting: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
     calibration_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
@@ -1048,6 +1112,10 @@ class ScrapeTarget(TimestampMixin, Base):
             "'REPLAY_REQUIRED', 'NO_RECOMMENDATION')",
             name="ck_scrape_target_operator_action",
         ),
+        CheckConstraint(
+            "input_kind IN ('product_seed', 'query')",
+            name="ck_scrape_target_input_kind",
+        ),
         Index("ix_scrape_target_run_status", "pricing_run_id", "status"),
         Index("ix_scrape_target_acquisition_key", "acquisition_key"),
     )
@@ -1077,6 +1145,9 @@ class ScrapeTarget(TimestampMixin, Base):
     original_url: Mapped[str | None] = mapped_column(Text)
     canonical_url: Mapped[str | None] = mapped_column(Text)
     product_key: Mapped[str | None] = mapped_column(String(100))
+    input_kind: Mapped[str] = mapped_column(
+        String(24), default="product_seed", server_default="product_seed"
+    )
     query: Mapped[str] = mapped_column(String(255))
     input_hash: Mapped[str] = mapped_column(String(64), index=True)
     adapter_version: Mapped[str] = mapped_column(String(80))
@@ -1312,10 +1383,54 @@ class MarketObservation(Base):
             "comparison_evidence IS NOT NULL AND comparability_policy_id IS NOT NULL "
             "AND comparability_policy_hash IS NOT NULL AND "
             "char_length(comparability_policy_hash) = 64 AND "
-            "seller_identity_verified AND source_provenance_verified)",
+            "seller_identity_verified AND source_provenance_verified AND "
+            "oe_verification_status IN ('VERIFIED_EXACT', 'VERIFIED_CROSS') AND "
+            "verified_matched_oe_norm IS NOT NULL AND "
+            "comparison_identity_key IS NOT NULL AND "
+            "comparability_hard_gate_result = 'PASS')",
             name="ck_market_observation_auto_evidence",
         ),
+        CheckConstraint(
+            "oe_verification_status IN ('VERIFIED_EXACT', 'VERIFIED_CROSS', "
+            "'UNKNOWN', 'CONFLICT', 'AMBIGUOUS', 'LEGACY_UNVERIFIED')",
+            name="ck_market_observation_oe_verification_status",
+        ),
+        CheckConstraint(
+            "comparability_hard_gate_result IN ('PASS', 'MANUAL_REVIEW', 'REJECT')",
+            name="ck_market_observation_comparability_result",
+        ),
+        CheckConstraint(
+            "((oe_verification_status IN ('VERIFIED_EXACT', 'VERIFIED_CROSS') AND "
+            "verified_matched_oe_norm IS NOT NULL AND comparison_identity_key IS NOT NULL) "
+            "OR (oe_verification_status NOT IN ('VERIFIED_EXACT', 'VERIFIED_CROSS') AND "
+            "verified_matched_oe_norm IS NULL AND comparison_identity_key IS NULL))",
+            name="ck_market_observation_verified_identity",
+        ),
+        CheckConstraint(
+            "condition_state IN ('NEW', 'USED_OR_REFURBISHED', 'CONFLICT', 'UNKNOWN')",
+            name="ck_market_observation_condition_state",
+        ),
+        CheckConstraint(
+            "(description_available AND description IS NOT NULL) OR "
+            "(NOT description_available AND description IS NULL)",
+            name="ck_market_observation_description_availability",
+        ),
+        CheckConstraint(
+            "(url <> '' AND url_absence_reason IS NULL) OR "
+            "(url = '' AND url_absence_reason IS NOT NULL)",
+            name="ck_market_observation_url_or_reason",
+        ),
+        CheckConstraint(
+            "(via_cross AND cross_link_id IS NOT NULL) OR "
+            "(NOT via_cross AND cross_link_id IS NULL)",
+            name="ck_market_observation_cross_provenance",
+        ),
         Index("ix_market_observation_catalog_time", "catalog_item_id", "observed_at"),
+        Index(
+            "ix_market_observation_comparability_policy",
+            "comparability_policy_id",
+            "comparability_policy_hash",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -1333,10 +1448,49 @@ class MarketObservation(Base):
     seller_id: Mapped[str] = mapped_column(String(255))
     seller_name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(Text)
+    url_absence_reason: Mapped[str | None] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
+    description_available: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    condition_raw: Mapped[str | None] = mapped_column(Text)
+    condition_state: Mapped[str] = mapped_column(
+        String(32), default="UNKNOWN", server_default="UNKNOWN"
+    )
+    condition_reason_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    cross_candidates: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     brand_raw: Mapped[str | None] = mapped_column(String(255))
-    matched_oe_norm: Mapped[str] = mapped_column(String(255), index=True)
+    # Deprecated compatibility field. New eligibility/calibration code must not read it.
+    matched_oe_norm: Mapped[str | None] = mapped_column(String(255), index=True)
+    search_oe_norm: Mapped[str] = mapped_column(String(255), index=True)
+    extracted_oe_norms: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    verified_matched_oe_norm: Mapped[str | None] = mapped_column(
+        String(255), index=True
+    )
+    comparison_identity_key: Mapped[str | None] = mapped_column(String(255), index=True)
+    oe_verification_status: Mapped[str] = mapped_column(
+        String(32), default="UNKNOWN", server_default="UNKNOWN", index=True
+    )
+    oe_evidence: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    oe_extractor_version: Mapped[str] = mapped_column(
+        String(80),
+        default="legacy-unverified-v0",
+        server_default="legacy-unverified-v0",
+    )
+    oe_reenriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    oe_reenrichment_error_code: Mapped[str | None] = mapped_column(String(100))
+    canonical_category_id: Mapped[str] = mapped_column(
+        String(120), default="generic_unknown", server_default="generic_unknown"
+    )
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     currency: Mapped[str] = mapped_column(String(3))
     currency_raw: Mapped[str | None] = mapped_column(String(32))
@@ -1346,15 +1500,29 @@ class MarketObservation(Base):
     is_available: Mapped[bool | None] = mapped_column(Boolean)
     match_confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
     source_confidence: Mapped[Decimal] = mapped_column(
-        Numeric(5, 4), default=Decimal("1"), server_default="1"
+        Numeric(5, 4), default=Decimal("0"), server_default="0"
+    )
+    source_confidence_factors: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    source_confidence_method_version: Mapped[str] = mapped_column(
+        String(80),
+        default="legacy-unverified-v0",
+        server_default="legacy-unverified-v0",
     )
     parser_version: Mapped[str] = mapped_column(String(80))
     evidence_contract_version: Mapped[str] = mapped_column(
-        String(80), default="comparison-evidence-v1", server_default="legacy-unknown-v0"
+        String(80), default="comparison-evidence-v2", server_default="legacy-unknown-v0"
     )
     comparability_policy_id: Mapped[str | None] = mapped_column(String(120))
     comparability_policy_hash: Mapped[str | None] = mapped_column(String(64))
     comparison_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    comparability_hard_gate_result: Mapped[str] = mapped_column(
+        String(32), default="MANUAL_REVIEW", server_default="MANUAL_REVIEW"
+    )
+    calibration_exclusion_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     seller_identity_verified: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
@@ -1364,7 +1532,132 @@ class MarketObservation(Base):
     automatic_eligible: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", index=True
     )
+    via_cross: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", index=True
+    )
+    cross_link_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("cross_links.id", ondelete="RESTRICT"), index=True
+    )
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OfferProcessingOutcome(Base):
+    """Append-only terminal partition for every retrieved candidate element."""
+
+    __tablename__ = "offer_processing_outcomes"
+    __table_args__ = (
+        UniqueConstraint(
+            "raw_market_capture_id",
+            "pricing_run_item_id",
+            "raw_offer_index",
+            name="uq_offer_processing_outcome_capture_item_index",
+        ),
+        CheckConstraint("raw_offer_index >= 0", name="ck_offer_outcome_index"),
+        CheckConstraint(
+            "outcome_code IN ('OBSERVATION_PERSISTED', 'REJECTED_NOT_MAPPING', "
+            "'REJECTED_INVALID_PRICE', 'REJECTED_INVALID_MATCH_SCORE', "
+            "'REJECTED_MISSING_LISTING_IDENTITY', 'REJECTED_SCHEMA_MISMATCH', "
+            "'REJECTED_SERIALIZATION', 'FAILED_INTERNAL_PROCESSING')",
+            name="ck_offer_outcome_code",
+        ),
+        CheckConstraint(
+            "((outcome_code = 'OBSERVATION_PERSISTED' AND market_observation_id IS NOT NULL) "
+            "OR (outcome_code <> 'OBSERVATION_PERSISTED' AND market_observation_id IS NULL))",
+            name="ck_offer_outcome_observation_binding",
+        ),
+        Index("ix_offer_outcome_item_code", "pricing_run_item_id", "outcome_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    pricing_run_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_run_items.id", ondelete="CASCADE"), index=True
+    )
+    raw_market_capture_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("raw_market_captures.id", ondelete="CASCADE"), index=True
+    )
+    market_observation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+    )
+    source_listing_id: Mapped[str | None] = mapped_column(String(255))
+    raw_offer_index: Mapped[int] = mapped_column(Integer)
+    outcome_code: Mapped[str] = mapped_column(String(64))
+    stage: Mapped[str] = mapped_column(String(40))
+    reason_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    payload_sha256: Mapped[str | None] = mapped_column(String(64))
+    safe_sample: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CrossLink(Base):
+    """Append-only canonical Stage A+B decision for one normalized OE pair."""
+
+    __tablename__ = "cross_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "pricing_run_id",
+            "our_oem_norm",
+            "extracted_oem_norm",
+            name="uq_cross_link_run_pair",
+        ),
+        UniqueConstraint("sequence_no", name="uq_cross_link_sequence"),
+        CheckConstraint(
+            "our_oem_norm <> '' AND extracted_oem_norm <> '' "
+            "AND our_oem_norm <> extracted_oem_norm",
+            name="ck_cross_link_distinct_oems",
+        ),
+        CheckConstraint(
+            "validation_status IN ('CONFIRMED', 'REVIEW', 'REJECTED', 'UNKNOWN')",
+            name="ck_cross_link_validation_status",
+        ),
+        CheckConstraint(
+            "(validation_status = 'REJECTED' AND rejection_reason IS NOT NULL) OR "
+            "(validation_status <> 'REJECTED' AND rejection_reason IS NULL)",
+            name="ck_cross_link_rejection_reason",
+        ),
+        Index(
+            "ix_cross_link_workspace_pair",
+            "workspace_id",
+            "our_oem_norm",
+            "extracted_oem_norm",
+        ),
+        Index(
+            "ix_cross_link_run_status",
+            "pricing_run_id",
+            "validation_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    sequence_no: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    pricing_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_runs.id", ondelete="RESTRICT"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="RESTRICT"), index=True
+    )
+    our_oem_norm: Mapped[str] = mapped_column(String(255))
+    extracted_oem_norm: Mapped[str] = mapped_column(String(255))
+    source_listing_url: Mapped[str] = mapped_column(Text)
+    source_seller: Mapped[str] = mapped_column(String(255))
+    raw_context: Mapped[str] = mapped_column(Text)
+    extraction_method: Mapped[str] = mapped_column(String(50))
+    validation_status: Mapped[str] = mapped_column(String(16))
+    rejection_reason: Mapped[str | None] = mapped_column(String(50))
+    reciprocal_evidence_url: Mapped[str | None] = mapped_column(Text)
+    source_evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    validation_details: Mapped[dict[str, Any]] = mapped_column(JSON)
+    method_version: Mapped[str] = mapped_column(String(80))
+    config_sha256: Mapped[str] = mapped_column(String(64))
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ObservationTierClassification(Base):
@@ -1378,6 +1671,12 @@ class ObservationTierClassification(Base):
         CheckConstraint(
             "tier_confidence >= 0 AND tier_confidence <= 1",
             name="ck_observation_tier_confidence",
+        ),
+        CheckConstraint(
+            "cohort_role IN ('TARGET_MARKET', 'KEMP_REFERENCE', 'OWNED_STORE', "
+            "'USED_REJECTED', 'DUMPING_DIAGNOSTIC', 'MANUAL_REVIEW', "
+            "'HARD_REJECTED')",
+            name="ck_observation_cohort_role",
         ),
         Index(
             "ix_observation_tier_current",
@@ -1398,6 +1697,9 @@ class ObservationTierClassification(Base):
     is_owned: Mapped[bool] = mapped_column(Boolean)
     is_dumping: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
+    )
+    cohort_role: Mapped[str] = mapped_column(
+        String(32), default="MANUAL_REVIEW", server_default="MANUAL_REVIEW"
     )
     exclusion_reason: Mapped[str | None] = mapped_column(String(100))
     reason_codes: Mapped[list[str]] = mapped_column(JSON)
@@ -1486,6 +1788,9 @@ class TierCalibrationPairRecord(Base):
     quality_weight: Mapped[Decimal] = mapped_column(Numeric(8, 6))
     tier_observation_ids: Mapped[list[str]] = mapped_column(JSON)
     reference_observation_ids: Mapped[list[str]] = mapped_column(JSON)
+    identity_evidence: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     dataset_hash: Mapped[str] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -1595,6 +1900,18 @@ class PricingRecommendation(Base):
             name="ck_pricing_recommendation_counts_nonnegative",
         ),
         CheckConstraint(
+            "target_market_count >= 0 AND kemp_reference_count >= 0 AND "
+            "owned_store_count >= 0 AND rejected_count >= 0",
+            name="ck_pricing_recommendation_cohort_counts_nonnegative",
+        ),
+        CheckConstraint(
+            "(recommended_price IS NULL AND absolute_recommended_change IS NULL "
+            "AND percentage_recommended_change IS NULL) OR "
+            "(recommended_price IS NOT NULL AND absolute_recommended_change >= 0 "
+            "AND percentage_recommended_change >= 0)",
+            name="ck_pricing_recommendation_change_metrics",
+        ),
+        CheckConstraint(
             "action NOT IN ('RAISE', 'LOWER') OR "
             "(action_gates_passed AND recommended_price IS NOT NULL)",
             name="ck_pricing_recommendation_action_gate",
@@ -1621,6 +1938,11 @@ class PricingRecommendation(Base):
         Index("ix_pricing_recommendation_run_action", "pricing_run_id", "action"),
         Index(
             "ix_pricing_recommendation_run_priority", "pricing_run_id", "priority_score"
+        ),
+        Index(
+            "ix_pricing_recommendation_run_absolute_change",
+            "pricing_run_id",
+            "absolute_recommended_change",
         ),
     )
 
@@ -1653,6 +1975,16 @@ class PricingRecommendation(Base):
     raw_competitor_count: Mapped[int] = mapped_column(Integer)
     unique_seller_count: Mapped[int] = mapped_column(Integer)
     clean_competitor_count: Mapped[int] = mapped_column(Integer)
+    target_market_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    kemp_reference_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    owned_store_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     effective_competitor_count: Mapped[Decimal] = mapped_column(Numeric(12, 4))
     dispersion: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
     outlier_method: Mapped[str] = mapped_column(String(24))
@@ -1677,8 +2009,15 @@ class PricingRecommendation(Base):
     priority_score: Mapped[Decimal] = mapped_column(Numeric(20, 6))
     priority_score_type: Mapped[str] = mapped_column(String(40))
     review_priority: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    absolute_recommended_change: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    percentage_recommended_change: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 10)
+    )
     reason_codes: Mapped[list[str]] = mapped_column(JSON)
     evidence_observation_ids: Mapped[list[str]] = mapped_column(JSON)
+    kemp_reference_observation_ids: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     excluded_observations: Mapped[list[dict[str, str]]] = mapped_column(JSON)
     policy_version: Mapped[str] = mapped_column(String(80))
     parser_version: Mapped[str] = mapped_column(String(80))

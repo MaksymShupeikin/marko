@@ -55,8 +55,7 @@ def test_benchmark_selects_smallest_accepted_concurrency() -> None:
     assert decision.production_capacity_proven is True
     assert decision.evaluations[1].system_parallel_efficiency == 1
     assert (
-        decision.stop_reason
-        == "smallest_concurrency_meeting_all_acceptance_conditions"
+        decision.stop_reason == "smallest_concurrency_meeting_all_acceptance_conditions"
     )
 
 
@@ -122,10 +121,7 @@ def test_benchmark_requires_useful_successful_capacity() -> None:
     assert second.capacity_pass is True
     assert second.successful_capacity == 1.25
     assert second.successful_capacity_pass is False
-    assert (
-        "successful_capacity_below_required"
-        in second.rejection_reasons
-    )
+    assert "successful_capacity_below_required" in second.rejection_reasons
     assert second.accepted is False
 
 

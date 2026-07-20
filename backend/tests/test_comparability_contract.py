@@ -10,15 +10,18 @@ import random
 import pytest
 
 from metis.pricing import (
+    CoefficientModel,
     CompetitorOffer,
     DimensionEvidence,
     EvidenceState,
     ProductPricingContext,
     ProductTier,
     RecommendationAction,
+    TierCoefficient,
+    category_comparability_rule,
     evaluate_comparison_evidence,
-    verified_comparison_evidence,
     recommend_price,
+    verified_comparison_evidence,
 )
 
 
@@ -32,11 +35,33 @@ AUTOMATIC = {
     RecommendationAction.LOWER,
 }
 RETRIEVAL_KINDS = ("fuzzy", "sku", "model")
+CATEGORY = "brakes"
+
+
+def _coefficients() -> dict[tuple[str, ProductTier], TierCoefficient]:
+    return {
+        (CATEGORY, ProductTier.BUDGET): TierCoefficient(
+            category=CATEGORY,
+            tier=ProductTier.BUDGET,
+            multiplier=Decimal("1"),
+            model=CoefficientModel.SHRINKAGE,
+            method_version="comparability-contract-v2",
+            coefficient_version="comparability-contract-v2:synthetic",
+            sample_size=20,
+            effective_sample_size=Decimal("18"),
+            confidence=Decimal("0.95"),
+            validated=True,
+            log_effect=Decimal("0"),
+            interval_low=Decimal("0.9"),
+            interval_high=Decimal("1.1"),
+            dataset_hash="a" * 64,
+        )
+    }
 
 
 def _context() -> ProductPricingContext:
     return ProductPricingContext(
-        sku="COMPARABILITY-1", category="brakes", current_price=Decimal("80")
+        sku="COMPARABILITY-1", category=CATEGORY, current_price=Decimal("80")
     )
 
 
@@ -99,12 +124,8 @@ def _market(**kwargs) -> list[CompetitorOffer]:
         ("M-001", "oe_reference", EvidenceState.UNKNOWN),
         ("M-002", "oe_reference", EvidenceState.UNKNOWN),
         ("M-003", "oe_reference", EvidenceState.CONFLICT),
-        ("M-004", "brand_manufacturer", EvidenceState.UNKNOWN),
-        ("M-005", "brand_manufacturer", EvidenceState.CONFLICT),
-        ("M-006", "fitment", EvidenceState.UNKNOWN),
         ("M-007", "vehicle_generation", EvidenceState.CONFLICT),
         ("M-008", "year_interval", EvidenceState.CONFLICT),
-        ("M-009", "side", EvidenceState.UNKNOWN),
         ("M-010", "side", EvidenceState.CONFLICT),
         ("M-011", "position", EvidenceState.CONFLICT),
         ("M-012", "condition", EvidenceState.CONFLICT),
@@ -130,11 +151,40 @@ def test_m001_m013_hard_dimensions_never_auto(
         )
         for index in range(5)
     ]
-    result = recommend_price(_context(), offers, {})
+    result = recommend_price(_context(), offers, _coefficients())
     assert result.action in ABSTAIN
     assert result.recommended_price is None
     if state == EvidenceState.CONFLICT:
         assert any("REJECTED_" in item.reason for item in result.excluded)
+
+
+@pytest.mark.parametrize("state", (EvidenceState.UNKNOWN, EvidenceState.CONFLICT))
+def test_brand_is_informational_after_oe_identity(state: EvidenceState) -> None:
+    offers = [
+        _offer(
+            index,
+            evidence=_evidence(index, dimension="brand_manufacturer", state=state),
+        )
+        for index in range(5)
+    ]
+    result = recommend_price(_context(), offers, _coefficients())
+    assert result.action in AUTOMATIC
+    assert result.automatic_eligible
+
+
+@pytest.mark.parametrize("dimension", ("fitment", "side"))
+def test_category_conditional_unknown_does_not_become_a_global_hard_gate(
+    dimension: str,
+) -> None:
+    offers = [
+        _offer(
+            index,
+            evidence=_evidence(index, dimension=dimension, state=EvidenceState.UNKNOWN),
+        )
+        for index in range(5)
+    ]
+    result = recommend_price(_context(), offers, _coefficients())
+    assert result.action in AUTOMATIC
 
 
 @pytest.mark.parametrize("retrieval_kind", RETRIEVAL_KINDS)
@@ -149,7 +199,7 @@ def test_m014_unknown_source_cannot_be_faked_by_confidence(
             provenance=replace(evidence.provenance, source_type="unknown"),
         )
         offers.append(_offer(index, evidence=evidence))
-    result = recommend_price(_context(), offers, {})
+    result = recommend_price(_context(), offers, _coefficients())
     assert result.action in ABSTAIN
     assert result.recommended_price is None
     assert "MANUAL_MISSING_SOURCE_PROVENANCE" in result.reasons
@@ -164,13 +214,11 @@ def test_m015_missing_source_hash_abstains() -> None:
                 index,
                 evidence=replace(
                     evidence,
-                    provenance=replace(
-                        evidence.provenance, raw_evidence_sha256=None
-                    ),
+                    provenance=replace(evidence.provenance, raw_evidence_sha256=None),
                 ),
             )
         )
-    result = recommend_price(_context(), offers, {})
+    result = recommend_price(_context(), offers, _coefficients())
     assert result.action in ABSTAIN
     assert result.recommended_price is None
 
@@ -186,9 +234,11 @@ def test_m016_blank_seller_ids_are_not_independent() -> None:
             ),
         )
         offers.append(
-            _offer(index, seller_id="", seller_name=f"Unique {index}", evidence=evidence)
+            _offer(
+                index, seller_id="", seller_name=f"Unique {index}", evidence=evidence
+            )
         )
-    result = recommend_price(_context(), offers, {})
+    result = recommend_price(_context(), offers, _coefficients())
     assert result.action in ABSTAIN
     assert result.unique_seller_count == 0
     assert result.recommended_price is None
@@ -226,7 +276,7 @@ def test_m017_same_verified_seller_multiple_names_deduplicates() -> None:
                 evidence=evidence,
             )
         )
-    result = recommend_price(_context(), offers, {})
+    result = recommend_price(_context(), offers, _coefficients())
     assert result.unique_seller_count == 1
     assert result.action in ABSTAIN
 
@@ -236,7 +286,7 @@ def test_m018_missing_raw_currency_does_not_default_to_uah(
     currency_raw: str | None,
 ) -> None:
     result = recommend_price(
-        _context(), _market(currency="UAH", currency_raw=currency_raw), {}
+        _context(), _market(currency="UAH", currency_raw=currency_raw), _coefficients()
     )
     assert result.action in ABSTAIN
     assert result.recommended_price is None
@@ -244,23 +294,27 @@ def test_m018_missing_raw_currency_does_not_default_to_uah(
 
 
 def test_m019_currency_conflict_rejects() -> None:
-    result = recommend_price(_context(), _market(currency="USD", currency_raw="USD"), {})
+    result = recommend_price(
+        _context(),
+        _market(currency="USD", currency_raw="USD"),
+        _coefficients(),
+    )
     assert result.action in ABSTAIN
     assert result.recommended_price is None
     assert any("REJECTED_" in item.reason for item in result.excluded)
 
 
 def test_m020_all_verified_can_reach_automatic_gate() -> None:
-    result = recommend_price(_context(), _market(), {})
+    result = recommend_price(_context(), _market(), _coefficients())
     assert result.action in AUTOMATIC
     assert result.automatic_eligible is True
     assert result.verified_seller_count == 5
 
 
 def test_m021_removing_any_required_dimension_revokes_automatic() -> None:
-    baseline = recommend_price(_context(), _market(), {})
+    baseline = recommend_price(_context(), _market(), _coefficients())
     assert baseline.action in AUTOMATIC
-    dimensions = tuple(_evidence(0).dimensions)
+    dimensions = tuple(category_comparability_rule(CATEGORY).hard_required)
     for dimension in dimensions:
         offers = [
             _offer(
@@ -271,13 +325,15 @@ def test_m021_removing_any_required_dimension_revokes_automatic() -> None:
             )
             for index in range(5)
         ]
-        result = recommend_price(_context(), offers, {})
+        result = recommend_price(_context(), offers, _coefficients())
         assert result.action in ABSTAIN, dimension
         assert result.recommended_price is None, dimension
 
 
 def test_m022_adding_any_conflict_revokes_automatic() -> None:
-    for dimension in tuple(_evidence(0).dimensions):
+    for dimension in tuple(
+        name for name in _evidence(0).dimensions if name != "brand_manufacturer"
+    ):
         offers = [
             _offer(
                 index,
@@ -287,7 +343,7 @@ def test_m022_adding_any_conflict_revokes_automatic() -> None:
             )
             for index in range(5)
         ]
-        result = recommend_price(_context(), offers, {})
+        result = recommend_price(_context(), offers, _coefficients())
         assert result.action in ABSTAIN, dimension
         assert result.recommended_price is None, dimension
 
@@ -305,18 +361,21 @@ def _canonical(result) -> tuple:
 
 def test_m023_permutation_is_canonical() -> None:
     offers = _market()
-    expected = _canonical(recommend_price(_context(), offers, {}))
+    expected = _canonical(recommend_price(_context(), offers, _coefficients()))
     rng = random.Random(15015)
     for _ in range(12):
         shuffled = list(offers)
         rng.shuffle(shuffled)
-        assert _canonical(recommend_price(_context(), shuffled, {})) == expected
+        assert (
+            _canonical(recommend_price(_context(), shuffled, _coefficients()))
+            == expected
+        )
 
 
 def test_m024_duplicate_evidence_does_not_increase_count() -> None:
     offers = _market()
     duplicate = replace(offers[0], observation_id="obs-duplicate", price=Decimal("999"))
-    result = recommend_price(_context(), [*offers, duplicate], {})
+    result = recommend_price(_context(), [*offers, duplicate], _coefficients())
     assert result.unique_seller_count == 5
     assert any(item.reason == "SELLER_DUPLICATE" for item in result.excluded)
 
@@ -330,18 +389,28 @@ def test_m025_original_raise_920_payload_is_killed() -> None:
         ProductPricingContext(
             sku="OLD-RAISE-920", category="brakes", current_price=Decimal("800")
         ),
-        [replace(item, price=Decimal(1000 + index * 50)) for index, item in enumerate(deficient)],
-        {},
+        [
+            replace(item, price=Decimal(1000 + index * 50))
+            for index, item in enumerate(deficient)
+        ],
+        _coefficients(),
     )
     assert result.action in ABSTAIN
     assert result.recommended_price is None
 
 
 def test_property_evidence_removal_or_conflict_never_increases_eligibility() -> None:
-    dimensions = tuple(_evidence(0).dimensions)
-    for state, dimension in itertools.product(
-        (EvidenceState.UNKNOWN, EvidenceState.CONFLICT), dimensions
-    ):
+    hard_required = tuple(category_comparability_rule(CATEGORY).hard_required)
+    conflict_dimensions = tuple(
+        name for name in _evidence(0).dimensions if name != "brand_manufacturer"
+    )
+    cases = tuple(
+        itertools.chain(
+            itertools.product((EvidenceState.UNKNOWN,), hard_required),
+            itertools.product((EvidenceState.CONFLICT,), conflict_dimensions),
+        )
+    )
+    for state, dimension in cases:
         offers = [
             _offer(
                 index,
@@ -349,6 +418,8 @@ def test_property_evidence_removal_or_conflict_never_increases_eligibility() -> 
             )
             for index in range(5)
         ]
-        result = recommend_price(_context(), offers, {})
+        result = recommend_price(_context(), offers, _coefficients())
         assert result.action in ABSTAIN
         assert not result.automatic_eligible
+    (TierCoefficient,)
+    (category_comparability_rule,)

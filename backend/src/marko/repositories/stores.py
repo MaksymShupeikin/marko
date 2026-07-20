@@ -175,6 +175,12 @@ async def create_sync_run(
         status=status,
     )
     session.add(sync_run)
+    # ``SyncRun.id`` uses a Python-side SQLAlchemy default, so it is not
+    # populated until the pending row is flushed.  Callers construct the
+    # transactional outbox identity from this UUID before committing; return
+    # only after that identity is stable while keeping both rows in the same
+    # transaction.
+    await session.flush()
     return sync_run
 
 

@@ -211,9 +211,7 @@ def test_terminal_http_failure_does_not_open_retry_circuit() -> None:
         execution_no=1,
         guard=guard,
     )
-    client = HttpClient(
-        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1)
-    )
+    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
     client._session.get = Mock(return_value=_response(404))  # noqa: SLF001
 
     with scrape_execution(trace), pytest.raises(RequestFailed):
@@ -252,9 +250,7 @@ def test_http_status_taxonomy_uses_the_actual_status_class(
 
 
 def test_any_successful_http_2xx_response_reaches_the_parser_boundary() -> None:
-    client = HttpClient(
-        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1)
-    )
+    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
     client._session.get = Mock(return_value=_response(206, b"partial"))  # noqa: SLF001
 
     assert client.get_html("https://prom.ua/ua/p1-product.html") == "partial"

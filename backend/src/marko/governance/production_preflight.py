@@ -201,7 +201,9 @@ def run_preflight(
         values, duplicates = parse_env_file(resolved)
     except EnvFileError as exc:
         values, duplicates = {}, ()
-        collector.add("PREFLIGHT_INPUT_SOURCE", "P0_INPUT_SOURCE", False, exc.reason_code)
+        collector.add(
+            "PREFLIGHT_INPUT_SOURCE", "P0_INPUT_SOURCE", False, exc.reason_code
+        )
     else:
         collector.add("PREFLIGHT_INPUT_SOURCE", "P0_INPUT_SOURCE", True)
         collector.add(
@@ -372,11 +374,9 @@ def _valid_field(name: str, raw: str | None, policy: FieldPolicy) -> bool:
         if policy.local_endpoint_forbidden and _is_local(hostname):
             return False
         if (
-            parsed.username is not None
-            and _is_placeholder(unquote(parsed.username))
+            parsed.username is not None and _is_placeholder(unquote(parsed.username))
         ) or (
-            parsed.password is not None
-            and _is_placeholder(unquote(parsed.password))
+            parsed.password is not None and _is_placeholder(unquote(parsed.password))
         ):
             return False
     if policy.parser == "origins":
@@ -429,7 +429,9 @@ def _valid_https_origin(value: str) -> bool:
 def _check_file_permissions(
     path: Path, values: Mapping[str, str], collector: _Collector
 ) -> None:
-    has_secret_fields = any(values.get(name) for name, policy in FIELD_POLICIES.items() if policy.secret)
+    has_secret_fields = any(
+        values.get(name) for name, policy in FIELD_POLICIES.items() if policy.secret
+    )
     mode = path.stat().st_mode & 0o777
     secure = not has_secret_fields or mode & 0o077 == 0
     collector.add(
@@ -474,7 +476,9 @@ def _validate_connectivity(
             if not hostname:
                 raise ValueError
             socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-            with socket.create_connection((hostname, port), timeout=timeout) as connection:
+            with socket.create_connection(
+                (hostname, port), timeout=timeout
+            ) as connection:
                 if parsed.scheme == "rediss":
                     context = ssl.create_default_context()
                     with context.wrap_socket(connection, server_hostname=hostname):
@@ -543,8 +547,16 @@ def _application_dependency_probes(
         db_ok = broker_ok = backend_ok = False
     for check_id, passed, reason in (
         ("PREFLIGHT_POSTGRES_SELECT_1", db_ok, "PREFLIGHT_POSTGRES_QUERY_FAILED"),
-        ("PREFLIGHT_REDIS_BROKER_PING", broker_ok, "PREFLIGHT_REDIS_BROKER_PING_FAILED"),
-        ("PREFLIGHT_REDIS_BACKEND_PING", backend_ok, "PREFLIGHT_REDIS_BACKEND_PING_FAILED"),
+        (
+            "PREFLIGHT_REDIS_BROKER_PING",
+            broker_ok,
+            "PREFLIGHT_REDIS_BROKER_PING_FAILED",
+        ),
+        (
+            "PREFLIGHT_REDIS_BACKEND_PING",
+            backend_ok,
+            "PREFLIGHT_REDIS_BACKEND_PING_FAILED",
+        ),
     ):
         collector.add(check_id, "P4_DEPENDENCY_CONNECTIVITY", passed, reason)
 
@@ -552,9 +564,21 @@ def _application_dependency_probes(
 def _validate_full_evidence(path: Path | None, collector: _Collector) -> None:
     if path is None or not path.is_file():
         for check_id, layer, reason in (
-            ("PREFLIGHT_DATABASE_SCHEMA", "P5_DATABASE_SCHEMA", "PREFLIGHT_SCHEMA_EVIDENCE_MISSING"),
-            ("PREFLIGHT_RUNTIME_SERVICES", "P6_RUNTIME_SERVICES", "PREFLIGHT_RUNTIME_EVIDENCE_MISSING"),
-            ("PREFLIGHT_WORKFLOW_SMOKE", "P7_WORKFLOW_SMOKE", "PREFLIGHT_WORKFLOW_EVIDENCE_MISSING"),
+            (
+                "PREFLIGHT_DATABASE_SCHEMA",
+                "P5_DATABASE_SCHEMA",
+                "PREFLIGHT_SCHEMA_EVIDENCE_MISSING",
+            ),
+            (
+                "PREFLIGHT_RUNTIME_SERVICES",
+                "P6_RUNTIME_SERVICES",
+                "PREFLIGHT_RUNTIME_EVIDENCE_MISSING",
+            ),
+            (
+                "PREFLIGHT_WORKFLOW_SMOKE",
+                "P7_WORKFLOW_SMOKE",
+                "PREFLIGHT_WORKFLOW_EVIDENCE_MISSING",
+            ),
         ):
             collector.add(check_id, layer, False, reason, blocked=True)
         return
@@ -627,7 +651,9 @@ def _validate_full_evidence(path: Path | None, collector: _Collector) -> None:
         )
 
 
-def _valid_activation_artifact(path_value: str | None, expected_hash: str | None) -> bool:
+def _valid_activation_artifact(
+    path_value: str | None, expected_hash: str | None
+) -> bool:
     if not path_value or not expected_hash or len(expected_hash) != 64:
         return False
     path = Path(path_value).expanduser()

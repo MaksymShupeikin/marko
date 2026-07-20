@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, fields
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
+from marko.core.config import get_settings
+from marko.infrastructure.db.models import OfferProcessingOutcome
+from marko.services.catalog_costs import get_latest_cost_record
 from marko.api.schemas.pricing import (
     CalibrationRequest,
     CatalogItemOverrideRequest,
@@ -61,6 +65,8 @@ from marko.services.pricing_runs import (
     policy_from_dict,
     override_observation_tier,
 )
+from marko.services.cost_privacy import privacy_safe_mapping
+from marko.services.market_collection import _validated_listing_url
 from marko.services.recommendation_replay import (
     RecommendationReplayUnavailable,
     replay_recommendation,
@@ -110,6 +116,10 @@ async def evaluate_price(
         raw_competitor_count=result.raw_competitor_count,
         unique_seller_count=result.unique_seller_count,
         clean_competitor_count=result.clean_competitor_count,
+        target_market_count=result.target_market_count,
+        kemp_reference_count=result.kemp_reference_count,
+        owned_store_count=result.owned_store_count,
+        rejected_count=result.rejected_count,
         effective_competitor_count=result.effective_competitor_count,
         dispersion=result.dispersion,
         dispersion_method=result.dispersion_method.value,
@@ -127,13 +137,16 @@ async def evaluate_price(
         unknown_hard_fields=list(result.unknown_hard_fields),
         robust_diagnostic=cluster_diagnostic_to_dict(result.cluster_diagnostic),
         robust_policy_fingerprint=dict(result.robust_policy_fingerprint),
-        cost_floor=result.cost_floor,
-        cost_basis_inventory_value=result.cost_basis_inventory_value,
         priority_score=result.priority_score,
         priority_score_type=result.priority_score_type.value,
         review_priority=result.review_priority,
+        absolute_recommended_change=result.absolute_recommended_change,
+        percentage_recommended_change=result.percentage_recommended_change,
         reasons=list(result.reasons),
         evidence=[_normalized_offer_payload(item) for item in result.evidence],
+        kemp_reference_evidence=[
+            _normalized_offer_payload(item) for item in result.kemp_reference_evidence
+        ],
         excluded=[asdict(item) for item in result.excluded],
         policy_version=result.policy_version,
     )
@@ -370,7 +383,21 @@ async def create_catalog_override(
         raise HTTPException(status_code=404, detail="Catalog item not found") from exc
     except PricingRunError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return CatalogItemOverrideResponse.model_validate(override)
+    response_data = {
+        name: getattr(override, name)
+        for name in CatalogItemOverrideResponse.model_fields
+        if name not in {"cost_configured", "cost_privacy_mode"}
+    }
+    cost_record = await get_latest_cost_record(
+        session,
+        workspace_id=current.workspace_id,
+        catalog_item_id=catalog_item_id,
+    )
+    response_data.update(
+        cost_configured=cost_record is not None and cost_record.action == "SET",
+        cost_privacy_mode=get_settings().cost_privacy_mode,
+    )
+    return CatalogItemOverrideResponse.model_validate(response_data)
 
 
 @router.get("/recommendations", response_model=RecommendationPageResponse)
@@ -382,11 +409,18 @@ async def get_recommendations(
     | None = None,
     confidence_grade: str | None = None,
     category: str | None = None,
-    queue: Literal["raise", "clearance", "review", "hold", "all"] = "raise",
+    queue: Literal["raise", "clearance", "review", "hold", "all"] = "all",
     priority_score_type: str | None = None,
     confidence_min: Annotated[Decimal | None, Query(ge=0, le=1)] = None,
     confidence_max: Annotated[Decimal | None, Query(ge=0, le=1)] = None,
-    sort: Literal["priority", "review_priority", "newest"] = "priority",
+    sort: Literal[
+        "ABSOLUTE_RECOMMENDED_CHANGE",
+        "PERCENT_RECOMMENDED_CHANGE",
+        "EXPECTED_GROSS_UPLIFT",
+        "CLEARANCE_CAPITAL_LOCK",
+        "REVIEW_PRIORITY",
+        "NEWEST",
+    ] = "ABSOLUTE_RECOMMENDED_CHANGE",
     limit: Annotated[int, Query(ge=1, le=250)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> RecommendationPageResponse:
@@ -474,17 +508,97 @@ async def get_recommendation_market_evidence(
         for value in recommendation.calculation_trace.get("normalized_offers", [])
         if isinstance(value, dict) and value.get("observation_id")
     }
+    normalized_by_id.update(
+        {
+            str(value.get("observation_id")): value
+            for value in recommendation.calculation_trace.get(
+                "kemp_reference_offers", []
+            )
+            if isinstance(value, dict) and value.get("observation_id")
+        }
+    )
+    excluded_by_id = {
+        str(value.get("observation_id")): value
+        for value in recommendation.calculation_trace.get("excluded_observations", [])
+        if isinstance(value, dict) and value.get("observation_id")
+    }
+    run_item_ids = {observation.pricing_run_item_id for observation, _ in rows}
+    outcome_counts_by_item: dict[UUID, dict[str, int]] = {
+        run_item_id: {} for run_item_id in run_item_ids
+    }
+    if run_item_ids:
+        outcome_rows = list(
+            (
+                await session.execute(
+                    select(
+                        OfferProcessingOutcome.pricing_run_item_id,
+                        OfferProcessingOutcome.outcome_code,
+                        func.count(OfferProcessingOutcome.id),
+                    )
+                    .where(OfferProcessingOutcome.pricing_run_item_id.in_(run_item_ids))
+                    .group_by(
+                        OfferProcessingOutcome.pricing_run_item_id,
+                        OfferProcessingOutcome.outcome_code,
+                    )
+                )
+            ).all()
+        )
+        for run_item_id, outcome_code, count in outcome_rows:
+            outcome_counts_by_item[run_item_id][outcome_code] = int(count)
     response: list[RecommendationEvidenceResponse] = []
     for observation, classification in rows:
         normalized = normalized_by_id.get(str(observation.id), {})
+        excluded = excluded_by_id.get(str(observation.id), {})
+        cohort_role = str(
+            normalized.get("cohort_role")
+            or excluded.get("cohort_role")
+            or classification.cohort_role
+        )
+        multiplier_raw = normalized.get("multiplier", normalized.get("coefficient"))
+        normalized_price_raw = normalized.get("normalized_price")
+        coefficient_confidence_raw = normalized.get("coefficient_confidence")
+        age_hours_raw = normalized.get("age_hours")
+        if age_hours_raw is None:
+            observed_age_seconds = (
+                recommendation.computed_at - observation.observed_at
+            ).total_seconds()
+            age_hours = (
+                Decimal(str(observed_age_seconds / 3600))
+                if observed_age_seconds >= 0
+                else None
+            )
+        else:
+            age_hours = Decimal(str(age_hours_raw))
+        safe_url, validation_absence_reason = _validated_listing_url(observation.url)
+        url_absence_reason = (
+            validation_absence_reason
+            if validation_absence_reason == "INVALID_URL_PROTOCOL"
+            else observation.url_absence_reason or validation_absence_reason
+        )
         response.append(
             RecommendationEvidenceResponse(
                 observation_id=observation.id,
                 seller_id=observation.seller_id,
                 seller_name=observation.seller_name,
                 title=observation.title,
+                description=observation.description,
+                description_available=observation.description_available,
+                condition_raw=observation.condition_raw,
+                condition_state=observation.condition_state,
+                condition_reason_codes=observation.condition_reason_codes,
+                cross_candidates=observation.cross_candidates,
                 brand=observation.brand_raw,
-                url=observation.url,
+                search_oe_norm=observation.search_oe_norm,
+                extracted_oe_norms=observation.extracted_oe_norms,
+                verified_matched_oe_norm=observation.verified_matched_oe_norm,
+                comparison_identity_key=observation.comparison_identity_key,
+                oe_verification_status=observation.oe_verification_status,
+                oe_evidence_summary=_safe_oe_evidence_summary(observation.oe_evidence),
+                oe_extractor_version=observation.oe_extractor_version,
+                oe_reenriched_at=observation.oe_reenriched_at,
+                oe_reenrichment_error_code=(observation.oe_reenrichment_error_code),
+                url=safe_url,
+                url_absence_reason=url_absence_reason,
                 price=observation.price,
                 currency=observation.currency,
                 currency_raw=observation.currency_raw,
@@ -492,31 +606,57 @@ async def get_recommendation_market_evidence(
                 is_available=observation.is_available,
                 match_confidence=observation.match_confidence,
                 source_confidence=observation.source_confidence,
-                age_hours=Decimal(str(normalized.get("age_hours", "0"))),
+                source_confidence_factors=observation.source_confidence_factors,
+                source_confidence_method_version=(
+                    observation.source_confidence_method_version
+                ),
+                age_hours=age_hours,
                 tier=classification.tier,
                 tier_confidence=classification.tier_confidence,
                 is_used=classification.is_used,
                 is_kemp=classification.is_kemp,
                 is_owned=classification.is_owned,
                 is_dumping=classification.is_dumping,
+                cohort_role=cohort_role,
+                target_effect=(
+                    "IN_TARGET_MEDIAN"
+                    if cohort_role == "TARGET_MARKET"
+                    else "NOT_IN_TARGET_MEDIAN"
+                ),
                 exclusion_reason=classification.exclusion_reason,
-                normalized_price=Decimal(
-                    str(normalized.get("normalized_price", observation.price))
+                normalized_price=(
+                    Decimal(str(normalized_price_raw))
+                    if normalized_price_raw is not None
+                    else None
                 ),
-                multiplier=Decimal(
-                    str(
-                        normalized.get("multiplier", normalized.get("coefficient", "1"))
-                    )
+                multiplier=(
+                    Decimal(str(multiplier_raw)) if multiplier_raw is not None else None
                 ),
-                coefficient_model=str(normalized.get("coefficient_model", "reference")),
-                coefficient_version=str(
-                    normalized.get("coefficient_version", "reference-tier-v1")
+                coefficient_model=(
+                    str(normalized.get("coefficient_model"))
+                    if normalized.get("coefficient_model") is not None
+                    else None
                 ),
-                coefficient_confidence=Decimal(
-                    str(normalized.get("coefficient_confidence", "1"))
+                coefficient_version=(
+                    str(normalized.get("coefficient_version"))
+                    if normalized.get("coefficient_version") is not None
+                    else None
+                ),
+                coefficient_confidence=(
+                    Decimal(str(coefficient_confidence_raw))
+                    if coefficient_confidence_raw is not None
+                    else None
                 ),
                 observed_at=observation.observed_at,
                 automatic_eligible=observation.automatic_eligible,
+                comparability_hard_gate_result=(
+                    observation.comparability_hard_gate_result
+                ),
+                calibration_exclusion_codes=(observation.calibration_exclusion_codes),
+                offer_outcome_counts=outcome_counts_by_item.get(
+                    observation.pricing_run_item_id,
+                    {},
+                ),
                 comparability_policy_id=observation.comparability_policy_id,
                 comparability_policy_hash=observation.comparability_policy_hash,
                 comparison_evidence=observation.comparison_evidence,
@@ -558,8 +698,8 @@ async def replay_persisted_recommendation(
         replay_contract_version=replay.replay_contract_version,
         calculated_at=replay.calculated_at,
         exact_match=replay.exact_match,
-        mismatches=replay.mismatches,
-        replayed=replay.replayed,
+        mismatches=privacy_safe_mapping(replay.mismatches),
+        replayed=privacy_safe_mapping(replay.replayed),
     )
 
 
@@ -617,7 +757,37 @@ async def decide_recommendation(
         raise HTTPException(status_code=404, detail="Recommendation not found") from exc
     except PricingRunError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return RecommendationDecisionResponse.model_validate(decision)
+    response_data = {
+        name: getattr(decision, name)
+        for name in RecommendationDecisionResponse.model_fields
+        if name != "context_snapshot"
+    }
+    response_data["context_snapshot"] = privacy_safe_mapping(decision.context_snapshot)
+    return RecommendationDecisionResponse.model_validate(response_data)
+
+
+def _safe_oe_evidence_summary(
+    evidence: Any,
+) -> list[dict[str, Any]]:
+    """Expose trace identifiers and normalized facts, never retained raw content."""
+
+    if not isinstance(evidence, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "evidence_ref": item.get("evidence_ref"),
+                "source_kind": item.get("source_kind"),
+                "normalized_value": item.get("normalized_value"),
+                "confidence": item.get("confidence"),
+                "raw_capture_id": item.get("raw_capture_id"),
+                "extractor_version": item.get("extractor_version"),
+            }
+        )
+    return result
 
 
 def _recommendation_response(recommendation, item) -> RecommendationResponse:
@@ -636,8 +806,8 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         stock_status=recommendation.context_snapshot.get(
             "stock_status", item.stock_status
         ),
-        context_snapshot=recommendation.context_snapshot,
-        calculation_trace=recommendation.calculation_trace,
+        context_snapshot=privacy_safe_mapping(recommendation.context_snapshot),
+        calculation_trace=privacy_safe_mapping(recommendation.calculation_trace),
         action=recommendation.action,
         current_price=recommendation.current_price,
         fair_price=recommendation.fair_price,
@@ -652,6 +822,10 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         raw_competitor_count=recommendation.raw_competitor_count,
         unique_seller_count=recommendation.unique_seller_count,
         clean_competitor_count=recommendation.clean_competitor_count,
+        target_market_count=recommendation.target_market_count,
+        kemp_reference_count=recommendation.kemp_reference_count,
+        owned_store_count=recommendation.owned_store_count,
+        rejected_count=recommendation.rejected_count,
         effective_competitor_count=recommendation.effective_competitor_count,
         dispersion=recommendation.dispersion,
         dispersion_method=str(robust_trace.get("selected_method", "legacy_mad")),
@@ -671,13 +845,14 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         decision_fingerprint=recommendation.decision_fingerprint,
         hard_gate_trace=recommendation.hard_gate_trace,
         robust_diagnostic=recommendation.robust_diagnostic,
-        cost_floor=recommendation.cost_floor,
-        cost_basis_inventory_value=recommendation.cost_basis_inventory_value,
         priority_score=recommendation.priority_score,
         priority_score_type=recommendation.priority_score_type,
         review_priority=recommendation.review_priority,
+        absolute_recommended_change=recommendation.absolute_recommended_change,
+        percentage_recommended_change=recommendation.percentage_recommended_change,
         reason_codes=recommendation.reason_codes,
         evidence_observation_ids=recommendation.evidence_observation_ids,
+        kemp_reference_observation_ids=(recommendation.kemp_reference_observation_ids),
         excluded_observations=recommendation.excluded_observations,
         policy_version=recommendation.policy_version,
         parser_version=recommendation.parser_version,

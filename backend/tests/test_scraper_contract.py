@@ -29,12 +29,21 @@ def test_scrape_input_canonicalizes_url_and_query() -> None:
     assert value.query == "OE 123"
     assert len(value.input_hash) == 64
 
+    seller_value = ScrapeInput.build(
+        "https://kemp-cs2847093.prom.ua/p123-example.html?utm=x",
+        "oe 123",
+    )
+    assert seller_value.canonical_url == "https://prom.ua/ua/p123-example.html"
+    assert seller_value.product_key == "prom:product:123"
+
 
 @pytest.mark.parametrize(
     "url",
     [
         None,
         "https://example.com/ua/p1-product.html",
+        "https://evilprom.ua/ua/p1-product.html",
+        "https://prom.ua.example.com/ua/p1-product.html",
         "https://prom.ua/not-a-product",
     ],
 )
@@ -59,8 +68,11 @@ def test_scrape_output_is_deterministic_and_reports_completeness() -> None:
     assert first.content_sha256 == second.content_sha256
     assert first.payload == second.payload
     assert first.structured_completeness == 1
-    assert first.payload["output"]["offers"][0]["product_id"] == 2
-    assert "is_available" in first.payload["output"]["offers"][0]
+    record = first.payload["output"]["records"][0]
+    assert record["product"]["product_id"] == 2
+    assert "sku" in record["product"]
+    assert "model_id" in record["product"]
+    assert "is_available" in record["product"]
     expected_output_size = len(
         json.dumps(
             first.payload["output"],

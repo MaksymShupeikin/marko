@@ -33,6 +33,9 @@ def test_e2e_compose_is_isolated_and_live_source_is_fail_closed() -> None:
     assert environment["ENVIRONMENT"] == "e2e"
     assert environment["E2E_AUTH_BYPASS"] == "true"
     assert environment["PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT"] == "NOT_PERMITTED"
+    assert environment["PRICING_BRAND_TIERS_PATH"] == (
+        "/app/src/marko/e2e/fixtures/brands.yaml"
+    )
     assert environment["PRICING_V3_ROBUST_DISPERSION_ENABLED"] == "false"
     assert environment["PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED"] == "false"
     assert set(e2e["services"]) >= {
@@ -58,6 +61,9 @@ def test_production_manifest_hard_disables_e2e_auth() -> None:
     assert environment["ENVIRONMENT"] == "production"
     assert environment["E2E_AUTH_BYPASS"] == "false"
     assert environment["E2E_AUTH_TOKEN"] == ""
+    assert environment["PRICING_BRAND_TIERS_PATH"] == (
+        "${PRICING_BRAND_TIERS_PATH:-/app/config/brands.yaml}"
+    )
 
 
 def test_host_runner_has_full_failure_matrix_and_scoped_cleanup() -> None:
@@ -134,17 +140,19 @@ def test_replay_fixture_produces_verified_structured_evidence_without_network() 
         input_hash="0" * 64,
     )
     output = _target_output(target, fixture, fixture_hash)
-    offers = output.payload["output"]["offers"]
-    assert len(offers) == len(fixture["offers"])
-    assert all(offer["automatic_eligible"] is True for offer in offers)
-    for offer in offers:
-        evidence = comparison_evidence_from_dict(offer["comparison_evidence"])
+    records = output.payload["output"]["records"]
+    assert len(records) == len(fixture["offers"])
+    assert all(record["retrieval_score"] is None for record in records)
+    for record in records:
+        offer = record["product"]
+        evidence = comparison_evidence_from_dict(record["upstream_comparison_evidence"])
         decision = evaluate_comparison_evidence(
             evidence,
             seller_id=offer["seller_id"],
             currency_raw=offer["currency"],
             currency_normalized=offer["currency"],
             required_currency="UAH",
+            category="brakes",
         )
         assert decision.automatic_eligible
         assert evidence is not None

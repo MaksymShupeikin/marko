@@ -1,0 +1,421 @@
+schema_version: "1.0.0"
+artifact_id: PROMPT_15_016_REQUIREMENTS_TRACE_2026-07-18
+prompt_id: PROMPT_15_016
+evidence_snapshot: POST_REMEDIATION
+evidence_ceiling: E4_NON_REPRESENTATIVE
+requirements:
+  - requirement_id: R-01
+    title: OE-first identity independent of brand
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-01, H-02]
+    first_broken_transition: "candidate retrieval -> OE evidence: match_offer rejects a known different brand before evaluating normalized OE"
+    code_refs:
+      - backend/src/marko/services/matching.py:112
+      - backend/src/metis/pricing/comparability.py:34
+    pre_fix_test_refs: [backend/tests/test_matching.py:83]
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/marko/services/matching.py
+      - backend/src/metis/pricing/comparability.py
+      - backend/tests/test_yuri_v1_contract.py::test_oe_first_same_oe_different_brand_reaches_comparability
+      - backend/tests/test_yuri_v1_contract.py::test_same_brand_cannot_override_conflicting_oe
+  - requirement_id: R-02
+    title: Tier comparability and validated KEMP-equivalent normalization after identity
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-02, H-03]
+    first_broken_transition: "identity gate -> tier classification: cross-brand same-OE candidates cannot reach classification; budget silently uses multiplier one"
+    code_refs:
+      - backend/src/metis/pricing/engine.py:176
+      - backend/src/metis/pricing/engine.py:182
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/tiering.py
+      - backend/src/metis/pricing/engine.py
+      - backend/tests/test_yuri_v1_contract.py::test_brand_dimension_is_not_an_identity_or_comparability_rejection
+      - backend/tests/test_yuri_v1_contract.py::test_unknown_budget_coefficient_does_not_fall_back_to_one
+  - requirement_id: R-03
+    title: Manual operator decision with no automatic Prom writeback
+    pre_status: PASS
+    post_status: PASS
+    hypotheses: [H-11]
+    code_refs:
+      - backend/src/marko/services/pricing_runs.py:1279
+      - frontend/lib/features/pricing/recommendation_decision_dialog.dart:121
+    evidence_level: E2
+    post_evidence_refs:
+      - backend/src/marko/services/pricing_runs.py
+      - backend/src/marko/api/routers/v1/pricing.py
+      - frontend/lib/features/pricing/recommendation_decision_dialog.dart
+      - backend/tests/test_pricing_api.py
+  - requirement_id: R-04
+    title: Fresh market movement and monotonic stale/dead age pressure
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-07, H-08]
+    first_broken_transition: "recommendation mode -> target: fresh routes only through raise logic and clearance beta ignores stock_age_days"
+    code_refs:
+      - backend/src/metis/pricing/engine.py:450
+      - backend/src/metis/pricing/engine.py:875
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/engine.py
+      - backend/src/metis/pricing/types.py
+      - backend/tests/test_yuri_v1_contract.py::test_fresh_market_lower_case_produces_manual_lower_candidate
+      - backend/tests/test_yuri_v1_contract.py::test_stale_age_pressure_is_monotonic_and_continuous
+      - backend/tests/test_yuri_v1_contract.py::test_dead_stock_target_is_not_higher_than_stale_for_same_age
+  - requirement_id: R-05
+    title: Manual cost input with an explicit honest privacy mode
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-09]
+    first_broken_transition: "manual cost input -> persistence/response: raw cost is stored as plaintext NUMERIC and copied into generic snapshots and API contracts without a selected privacy mode"
+    code_refs:
+      - backend/src/marko/core/cost_encryption.py
+      - backend/src/marko/services/catalog_costs.py
+      - backend/src/marko/infrastructure/db/models.py
+      - backend/migrations/versions/20260718_0013_encrypted_catalog_cost.py
+      - backend/src/marko/services/market_collection.py
+      - backend/src/marko/api/schemas/pricing.py
+    evidence_level: E4
+    implemented_boundary: PASS_SERVER_SIDE_ENCRYPTED
+    selected_mode: SERVER_SIDE_ENCRYPTED
+    deployment_note: "The local runtime stays fail-closed until an external key is provisioned; no key is committed or emitted in evidence."
+    post_evidence_refs:
+      - docs/PROMPT_15_016_COST_PRIVACY_ADR_2026-07-18.md
+      - backend/src/marko/core/cost_encryption.py
+      - backend/src/marko/services/catalog_costs.py
+      - backend/src/marko/services/cost_privacy.py
+      - backend/src/marko/api/main.py
+      - backend/tests/test_cost_encryption.py
+      - backend/tests/test_yuri_v1_contract.py::test_catalog_response_redacts_legacy_cost_columns_and_model_field
+      - backend/tests/test_yuri_v1_contract.py::test_validation_errors_never_echo_raw_cost_or_client_input
+      - frontend/test/pricing_below_cost_dialog_test.dart
+      - frontend/test/pricing_encrypted_cost_dialog_test.dart
+      - scripts/prove_encrypted_cost_runtime.py
+  - requirement_id: R-06
+    title: Literal absolute recommended price change sorting
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-10]
+    first_broken_transition: "recommendation persistence -> listing query: no absolute delta column and default ordering uses economic priority_score"
+    code_refs:
+      - backend/src/marko/services/pricing_runs.py:1070
+      - frontend/lib/features/pricing/pricing_api.dart:14
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/marko/infrastructure/db/models.py
+      - backend/src/marko/services/pricing_runs.py
+      - backend/src/marko/api/schemas/pricing.py
+      - frontend/lib/features/pricing/pricing_api.dart
+      - backend/tests/test_pricing_api.py::test_absolute_change_sort_is_literal_and_queue_independent
+  - requirement_id: R-07
+    title: Competitor listing URL per evidence row or explicit absence reason
+    pre_status: PARTIAL
+    post_status: PASS
+    hypotheses: [H-11]
+    first_broken_transition: "observation -> operator evidence: URL exists but absence reason and lane-specific evidence are not represented"
+    code_refs:
+      - backend/src/marko/api/schemas/pricing.py:311
+      - frontend/lib/features/pricing/recommendations_page.dart:680
+    evidence_level: E2
+    post_evidence_refs:
+      - backend/src/marko/api/schemas/pricing.py
+      - backend/src/marko/services/pricing_runs.py
+      - frontend/lib/features/pricing/recommendations_page.dart
+      - backend/tests/test_yuri_v1_contract.py::test_competitor_url_is_preserved_only_for_openable_http_protocols
+  - requirement_id: R-08
+    title: Description-derived cross candidates remain non-automatic phase-2 evidence
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-05]
+    first_broken_transition: "raw/parser output -> persisted observation: description is discarded, so neither condition evidence nor isolated cross candidates can be derived"
+    code_refs:
+      - backend/src/marko/services/market_collection.py:1438
+      - backend/src/marko/services/market_collection.py:1486
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/marko/services/parser_models.py
+      - backend/src/marko/services/market_collection.py
+      - backend/src/marko/infrastructure/db/models.py
+      - backend/tests/test_yuri_v1_contract.py::test_product_additive_boundary_preserves_available_description
+      - backend/tests/test_yuri_v1_contract.py::test_description_condition_is_persisted_before_cohort_assignment
+  - requirement_id: R-09
+    title: Used and refurbished offers are hard-excluded from target cohort
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-05, H-06]
+    first_broken_transition: "available description -> used classifier: persistence always passes description=None"
+    code_refs:
+      - backend/src/metis/pricing/tiering.py:49
+      - backend/src/marko/services/market_collection.py:1435
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/tiering.py
+      - backend/src/metis/pricing/engine.py
+      - backend/src/marko/services/market_collection.py
+      - backend/tests/test_yuri_v1_contract.py::test_used_signal_from_any_available_lane_is_a_hard_tier_reject
+      - backend/tests/test_yuri_v1_contract.py::test_unknown_condition_is_not_silently_treated_as_new
+  - requirement_id: R-10
+    title: Other KEMP sellers are retained only in a separate reference lane
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-04]
+    first_broken_transition: "tier classification -> target cohort: direct KEMP is appended to eligible and can affect cleaning, median, guardrail and recommendation"
+    code_refs:
+      - backend/src/metis/pricing/engine.py:176
+      - backend/src/metis/pricing/engine.py:862
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/engine.py
+      - backend/src/marko/services/pricing_runs.py
+      - backend/tests/test_yuri_v1_contract.py::test_kemp_reference_price_mutation_does_not_change_target_recommendation
+      - backend/tests/test_yuri_v1_contract.py::test_persisted_non_target_cohort_role_cannot_reenter_target_market
+  - requirement_id: R-11
+    title: V1 excludes Autopro, automatic writeback, 1C/BAS and full cross database
+    pre_status: PASS
+    post_status: PASS
+    hypotheses: [H-11]
+    code_refs:
+      - backend/src/marko/services/source_access.py:1
+      - frontend/lib/features/pricing/recommendation_decision_dialog.dart:121
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/marko/services/source_access.py
+      - frontend/lib/features/pricing/recommendation_decision_dialog.dart
+      - docs/PROMPT_15_016_E2E_EVIDENCE_2026-07-18.yaml
+  - requirement_id: R-12
+    title: Physical inventory context without FX or replacement-cost core coupling
+    pre_status: PASS
+    post_status: PASS
+    hypotheses: []
+    code_refs:
+      - backend/src/metis/pricing/types.py:167
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/types.py
+      - backend/src/metis/pricing/engine.py
+      - backend/tests/test_pricing_engine.py
+  - requirement_id: R-13
+    title: Sunk cost is analytical context, not a universal price floor
+    pre_status: FAIL
+    post_status: PASS
+    hypotheses: [H-07, H-09]
+    first_broken_transition: "clearance target -> recommendation: missing cost forces MANUAL_REVIEW and ordinary cost becomes a hard floor"
+    code_refs:
+      - backend/src/metis/pricing/engine.py:917
+      - backend/src/metis/pricing/engine.py:920
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/engine.py
+      - backend/src/marko/api/schemas/pricing.py
+      - backend/tests/test_pricing_engine.py::test_stale_cost_mutation_does_not_change_recommendation
+      - backend/tests/test_yuri_v1_contract.py::test_missing_cost_does_not_block_market_clearance_recommendation
+  - requirement_id: R-14
+    title: No unsupported elasticity or causal demand claim
+    pre_status: PASS
+    post_status: PASS
+    hypotheses: []
+    code_refs:
+      - backend/src/metis/pricing/engine.py:1053
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/metis/pricing/engine.py
+      - backend/src/marko/api/schemas/pricing.py
+      - frontend/lib/features/pricing/recommendations_page.dart
+  - requirement_id: R-15
+    title: Measure claimed catalog ratios on the real client workbook
+    pre_status: BLOCKED_DATA
+    post_status: PASS
+    hypotheses: [H-12]
+    blocker: null
+    required_input: null
+    evidence_level: E4
+    post_evidence_refs:
+      - docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+      - .artifacts/yuri_catalog/YURI_CATALOG_MARKO_INPUT_V1.metrics.json
+      - scripts/build_yuri_catalog_workbook.py
+      - backend/tests/test_xlsx_catalog.py
+  - requirement_id: R-16
+    title: Prom-only V1 provider boundary
+    pre_status: PASS
+    post_status: PASS
+    hypotheses: []
+    code_refs:
+      - backend/src/marko/services/source_access.py:1
+    evidence_level: E1
+    post_evidence_refs:
+      - backend/src/marko/services/source_access.py
+      - backend/src/marko/config/settings.py
+      - backend/tests/test_yuri_v1_contract.py
+  - requirement_id: R-17
+    title: Sparse, conflicting or unknown evidence abstains
+    pre_status: PASS
+    post_status: PASS
+    hypotheses: [H-11]
+    code_refs:
+      - backend/src/metis/pricing/comparability.py:90
+      - backend/src/metis/pricing/engine.py:239
+    test_refs:
+      - backend/tests/test_comparability_contract.py
+    evidence_level: E2
+    post_evidence_refs:
+      - backend/src/metis/pricing/comparability.py
+      - backend/src/metis/pricing/engine.py
+      - backend/tests/test_comparability_contract.py
+      - backend/tests/test_pricing_engine.py::test_two_competitors_are_insufficient
+hypotheses:
+  - hypothesis_id: H-01
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs: [backend/src/marko/services/matching.py:112]
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k oe_first"
+    first_broken_transition: "retrieval -> OE evidence"
+    affected_requirements: [R-01, R-02]
+    remediation_required: true
+  - hypothesis_id: H-02
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs: [backend/src/metis/pricing/comparability.py:34]
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k brand_dimension"
+    first_broken_transition: "comparison evidence -> hard identity gate"
+    affected_requirements: [R-01, R-02]
+    remediation_required: true
+  - hypothesis_id: H-03
+    status: CONFIRMED
+    claim_type: INFERENCE
+    evidence_refs:
+      - backend/src/marko/services/matching.py:112
+      - backend/src/metis/pricing/engine.py:185
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k oe_first"
+    first_broken_transition: "candidate retrieval -> tier normalization"
+    affected_requirements: [R-02]
+    remediation_required: true
+  - hypothesis_id: H-04
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/metis/pricing/engine.py:176
+      - backend/src/metis/pricing/engine.py:862
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k kemp_reference"
+    first_broken_transition: "KEMP classification -> target eligibility"
+    affected_requirements: [R-10]
+    remediation_required: true
+  - hypothesis_id: H-05
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/marko/services/market_collection.py:1438
+      - backend/src/marko/services/market_collection.py:1486
+      - backend/src/marko/services/market_collection.py:1711
+      - backend/src/marko/services/market_collection.py:1749
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k description"
+    first_broken_transition: "raw offer -> tier classifier and observation persistence"
+    affected_requirements: [R-08, R-09]
+    remediation_required: true
+  - hypothesis_id: H-06
+    status: CONFIRMED
+    claim_type: INFERENCE
+    evidence_refs:
+      - backend/src/metis/pricing/tiering.py:49
+      - backend/src/marko/services/market_collection.py:1438
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k used_description"
+    first_broken_transition: "description evidence -> used classifier"
+    affected_requirements: [R-09]
+    remediation_required: true
+  - hypothesis_id: H-07
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/metis/pricing/engine.py:454
+      - backend/src/metis/pricing/engine.py:1357
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k fresh_lower"
+    first_broken_transition: "fresh mode -> market-lower action"
+    affected_requirements: [R-04, R-13]
+    remediation_required: true
+  - hypothesis_id: H-08
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/metis/pricing/engine.py:875
+      - backend/src/metis/pricing/engine.py:1093
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k age_monotonic"
+    first_broken_transition: "stock_age_days -> clearance beta"
+    affected_requirements: [R-04]
+    remediation_required: true
+  - hypothesis_id: H-09
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/marko/infrastructure/db/models.py:828
+      - backend/src/marko/services/market_collection.py:2382
+      - backend/src/marko/api/schemas/pricing.py:140
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k cost_leakage"
+    first_broken_transition: "cost input -> plaintext persistence and generic response snapshot"
+    affected_requirements: [R-05, R-13]
+    remediation_required: true
+  - hypothesis_id: H-10
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/marko/services/pricing_runs.py:1133
+      - frontend/lib/features/pricing/pricing_api.dart:14
+    reproduction_command: "uv run pytest -q tests/test_yuri_v1_contract.py -k literal_sort"
+    first_broken_transition: "computed recommendation -> persistence and API ordering"
+    affected_requirements: [R-06]
+    remediation_required: true
+  - hypothesis_id: H-11
+    status: CONFIRMED
+    claim_type: FACT
+    evidence_refs:
+      - backend/src/marko/services/pricing_runs.py:1279
+      - backend/src/metis/pricing/engine.py:239
+      - frontend/lib/features/pricing/recommendation_decision_dialog.dart:121
+    reproduction_command: "uv run pytest -q tests/test_pricing_api.py tests/test_pricing_engine.py"
+    first_broken_transition: null
+    affected_requirements: [R-03, R-07, R-17]
+    remediation_required: false
+  - hypothesis_id: H-12
+    status: RESOLVED
+    claim_type: EXECUTION_RESULT
+    evidence_refs:
+      - docs/PROMPT_15_016_YURI_CATALOG_MEASUREMENT_2026-07-19.md
+      - .artifacts/yuri_catalog/YURI_CATALOG_MARKO_INPUT_V1.metrics.json
+    reproduction_command: "cd backend && uv run python ../scripts/build_yuri_catalog_workbook.py CLIENT.xlsx OUTPUT.xlsx"
+    first_broken_transition: null
+    affected_requirements: [R-15]
+    remediation_required: false
+    blocker: null
+
+post_remediation_summary:
+  implementation_status: PASS
+  requirements_passed: 17
+  requirements_failed: 0
+  requirements_blocked: 0
+  blocked_requirements: []
+  hypothesis_disposition:
+    H-01: REMEDIATED
+    H-02: REMEDIATED
+    H-03: REMEDIATED
+    H-04: REMEDIATED
+    H-05: REMEDIATED
+    H-06: REMEDIATED
+    H-07: REMEDIATED
+    H-08: REMEDIATED
+    H-09: REMEDIATED_SERVER_SIDE_ENCRYPTED
+    H-10: REMEDIATED
+    H-11: PRESERVED_AND_VERIFIED
+    H-12: RESOLVED_ON_CLIENT_WORKBOOK
+  verification:
+    backend_full_suite: "593 passed in 8.48s"
+    yuri_contract_suite: "40 passed in 1.51s"
+    frontend_suite: "25 passed"
+    client_catalog_rows: 4901
+    client_catalog_auto_admissible_rows: 4647
+    client_catalog_manual_review_rows: 254
+    isolated_e2e_run_id: 20260718T204534Z-05fa3ff1
+    isolated_e2e_status: PASS
+    live_prom_requests: 0
+    automatic_price_applications: 0
+  first_unverified_transition: "measured client catalog -> permission-safe representative market replay"

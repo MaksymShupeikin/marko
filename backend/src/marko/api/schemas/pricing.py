@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from metis.pricing import (
     CoefficientModel,
+    CohortRole,
     CompetitorOffer,
     ProductPricingContext,
     ProductTier,
@@ -39,6 +40,7 @@ class PricingRunResponse(BaseModel):
     coefficient_model: str
     coefficient_version: str | None
     calibration_dataset_hash: str | None
+    calibration_accounting: dict[str, Any]
     calibration_started_at: datetime | None
     calibration_completed_at: datetime | None
     total_items: int
@@ -137,8 +139,11 @@ class TierCoefficientPageResponse(BaseModel):
 
 
 class CatalogItemOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     stock_status: Literal["fresh", "stale", "dead_stock", "unknown"] | None = None
-    cost: Decimal | None = Field(default=None, gt=0)
+    cost: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    clear_cost: bool = False
     stock_qty: Decimal | None = Field(default=None, ge=0)
     stock_age_days: Decimal | None = Field(default=None, ge=0)
     expected_units_sold: Decimal | None = Field(default=None, ge=0)
@@ -153,14 +158,13 @@ class CatalogItemOverrideRequest(BaseModel):
     liquidity_target: Decimal | None = Field(default=None, ge=0, le=1)
     urgency: Decimal | None = Field(default=None, ge=0, le=1)
     allow_below_cost: bool = False
-    below_cost_floor: Decimal | None = Field(default=None, ge=0)
     below_cost_warning_confirmed: bool = False
     reason: str = Field(min_length=3, max_length=2000)
 
     @model_validator(mode="after")
     def validate_below_cost_override(self):
-        if self.allow_below_cost and self.below_cost_floor is None:
-            raise ValueError("below_cost_floor is required when allow_below_cost=true")
+        if self.cost is not None and self.clear_cost:
+            raise ValueError("cost and clear_cost cannot be submitted together")
         if self.allow_below_cost and not self.below_cost_warning_confirmed:
             raise ValueError("below-cost warning confirmation is required")
         return self
@@ -173,7 +177,8 @@ class CatalogItemOverrideResponse(BaseModel):
     catalog_item_id: UUID
     user_id: UUID | None
     stock_status: str | None
-    cost: Decimal | None
+    cost_configured: bool
+    cost_privacy_mode: str
     stock_qty: Decimal | None
     stock_age_days: Decimal | None
     expected_units_sold: Decimal | None
@@ -188,7 +193,6 @@ class CatalogItemOverrideResponse(BaseModel):
     liquidity_target: Decimal | None
     urgency: Decimal | None
     allow_below_cost: bool
-    below_cost_floor: Decimal | None
     below_cost_warning_confirmed: bool
     reason: str
     created_at: datetime
@@ -220,6 +224,10 @@ class RecommendationResponse(BaseModel):
     raw_competitor_count: int
     unique_seller_count: int
     clean_competitor_count: int
+    target_market_count: int
+    kemp_reference_count: int
+    owned_store_count: int
+    rejected_count: int
     effective_competitor_count: Decimal
     dispersion: Decimal | None
     dispersion_method: str
@@ -235,13 +243,14 @@ class RecommendationResponse(BaseModel):
     decision_fingerprint: str | None
     hard_gate_trace: dict[str, Any]
     robust_diagnostic: dict[str, Any] | None
-    cost_floor: Decimal | None
-    cost_basis_inventory_value: Decimal | None
     priority_score: Decimal
     priority_score_type: str
     review_priority: Decimal
+    absolute_recommended_change: Decimal | None
+    percentage_recommended_change: Decimal | None
     reason_codes: list[str]
     evidence_observation_ids: list[str]
+    kemp_reference_observation_ids: list[str]
     excluded_observations: list[dict[str, str]]
     policy_version: str
     parser_version: str
@@ -288,9 +297,7 @@ class RecommendationDecisionResponse(BaseModel):
     decision: str
     old_price: Decimal
     new_price: Decimal | None
-    cost_snapshot: Decimal | None
     recommended_price_snapshot: Decimal | None
-    approved_floor: Decimal | None
     allow_below_cost: bool
     warning_confirmed: bool
     warning_confirmed_at: datetime | None
@@ -305,8 +312,24 @@ class RecommendationEvidenceResponse(BaseModel):
     seller_id: str
     seller_name: str
     title: str
+    description: str | None
+    description_available: bool
+    condition_raw: str | None
+    condition_state: str
+    condition_reason_codes: list[str]
+    cross_candidates: list[dict[str, Any]]
     brand: str | None
+    search_oe_norm: str
+    extracted_oe_norms: list[str]
+    verified_matched_oe_norm: str | None
+    comparison_identity_key: str | None
+    oe_verification_status: str
+    oe_evidence_summary: list[dict[str, Any]]
+    oe_extractor_version: str
+    oe_reenriched_at: datetime | None
+    oe_reenrichment_error_code: str | None
     url: str
+    url_absence_reason: str | None
     price: Decimal
     currency: str
     currency_raw: str | None
@@ -314,21 +337,28 @@ class RecommendationEvidenceResponse(BaseModel):
     is_available: bool | None
     match_confidence: Decimal
     source_confidence: Decimal
-    age_hours: Decimal
+    source_confidence_factors: dict[str, Any]
+    source_confidence_method_version: str
+    age_hours: Decimal | None
     tier: str
     tier_confidence: Decimal
     is_used: bool
     is_kemp: bool
     is_owned: bool
     is_dumping: bool
+    cohort_role: str
+    target_effect: str
     exclusion_reason: str | None
-    normalized_price: Decimal
-    multiplier: Decimal
-    coefficient_model: str
-    coefficient_version: str
-    coefficient_confidence: Decimal
+    normalized_price: Decimal | None
+    multiplier: Decimal | None
+    coefficient_model: str | None
+    coefficient_version: str | None
+    coefficient_confidence: Decimal | None
     observed_at: datetime
     automatic_eligible: bool
+    comparability_hard_gate_result: str
+    calibration_exclusion_codes: list[str]
+    offer_outcome_counts: dict[str, int]
     comparability_policy_id: str | None
     comparability_policy_hash: str | None
     comparison_evidence: dict[str, Any] | None
@@ -350,6 +380,7 @@ class ObservationTierOverrideResponse(BaseModel):
     is_kemp: bool
     is_owned: bool
     is_dumping: bool
+    cohort_role: str
     exclusion_reason: str | None
     reason_codes: list[str]
     method_version: str
@@ -371,7 +402,7 @@ class CompetitorOfferInput(BaseModel):
     match_confidence: Decimal = Field(ge=0, le=1)
     tier: ProductTier
     tier_confidence: Decimal = Field(ge=0, le=1)
-    source_confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
+    source_confidence: Decimal = Field(default=Decimal("0"), ge=0, le=1)
     is_used: bool = False
     is_kemp: bool = False
     is_owned: bool = False
@@ -381,6 +412,7 @@ class CompetitorOfferInput(BaseModel):
     source: str = "unknown"
     listing_url: str | None = None
     comparison_evidence: dict[str, Any] | None = None
+    cohort_role: CohortRole | None = None
 
     def to_domain(self) -> CompetitorOffer:
         values = self.model_dump()
@@ -415,12 +447,13 @@ class TierCoefficientInput(BaseModel):
 
 
 class PricingContextInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     sku: str
     category: str
     current_price: Decimal = Field(gt=0)
     currency: str = "UAH"
     stock_status: Literal["fresh", "stale", "dead_stock", "unknown"] = "unknown"
-    cost: Decimal | None = Field(default=None, gt=0)
     stock_qty: Decimal | None = Field(default=None, ge=0)
     stock_age_days: Decimal | None = Field(default=None, ge=0)
     expected_units_sold: Decimal | None = Field(default=None, ge=0)
@@ -432,10 +465,9 @@ class PricingContextInput(BaseModel):
     views_30d: Decimal | None = Field(default=None, ge=0)
     conversion_rate_proxy: Decimal | None = Field(default=None, ge=0, le=1)
     liquidity_target: Decimal = Field(default=Decimal("0"), ge=0, le=1)
-    urgency: Decimal = Field(default=Decimal("1"), ge=0, le=1)
+    urgency: Decimal = Field(default=Decimal("0"), ge=0, le=1)
     manual_priority: Decimal = Field(default=Decimal("1"), gt=0)
     allow_below_cost: bool = False
-    below_cost_floor: Decimal | None = Field(default=None, ge=0)
     severe_data_health_issue: bool = False
     below_cost_authorization_id: str | None = None
     below_cost_authorized_by: str | None = None
@@ -472,6 +504,10 @@ class PricingEvaluateResponse(BaseModel):
     raw_competitor_count: int
     unique_seller_count: int
     clean_competitor_count: int
+    target_market_count: int
+    kemp_reference_count: int
+    owned_store_count: int
+    rejected_count: int
     effective_competitor_count: Decimal
     dispersion: Decimal | None
     dispersion_method: str
@@ -489,12 +525,13 @@ class PricingEvaluateResponse(BaseModel):
     unknown_hard_fields: list[str]
     robust_diagnostic: dict[str, Any] | None
     robust_policy_fingerprint: dict[str, str]
-    cost_floor: Decimal | None
-    cost_basis_inventory_value: Decimal | None
     priority_score: Decimal
     priority_score_type: str
     review_priority: Decimal
+    absolute_recommended_change: Decimal | None
+    percentage_recommended_change: Decimal | None
     reasons: list[str]
     evidence: list[dict[str, Any]]
+    kemp_reference_evidence: list[dict[str, Any]]
     excluded: list[dict[str, Any]]
     policy_version: str

@@ -1,4 +1,5 @@
 """Account information backed by a verified Firebase session."""
+
 from fastapi import APIRouter
 
 from marko.api.dependencies import CurrentUser

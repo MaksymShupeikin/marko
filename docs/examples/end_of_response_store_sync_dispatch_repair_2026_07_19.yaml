@@ -1,0 +1,165 @@
+end_of_response:
+  contract_version: "15.1"
+  stage_result:
+    stage:
+      id: STORE_SYNC_DISPATCH_REPAIR_IMPLEMENTATION_2026_07_19
+      title: STORE SYNC DISPATCH REPAIR IMPLEMENTATION
+      type: IMPLEMENTATION
+      scope_owner: Marko
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-SYNC-RUN-IDENTITY
+        result: SyncRun is flushed before its UUID is consumed by the transactional outbox.
+        artifact_refs:
+          - backend/src/marko/repositories/stores.py
+          - backend/tests/test_store_sync_identity.py
+          - backend/tests/test_store_registration_postgres.py
+        evidence_refs:
+          - opt-in PostgreSQL integration test passed
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-PROM-SELLER-URL-RESOLUTION
+        result: Canonical prom.ua seller URLs and public HTTPS seller subdomains are safely admitted and resolved with bounded redirects, timeout, response size, and Prom-only redirect validation.
+        artifact_refs:
+          - backend/src/marko/services/seller_url_resolver.py
+          - backend/src/marko/api/schemas/stores.py
+          - frontend/lib/features/stores/stores_controller.dart
+        evidence_refs:
+          - backend/tests/test_seller_url_resolver.py
+          - frontend/test/stores_controller_test.dart
+          - live Pilot-avto and PROFParts resolver check
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-PRICE-OBSERVATION-SCHEMA
+        result: Missing price-observation currency evidence columns were added fail-closed and SQLAlchemy metadata now matches the migrated PostgreSQL schema.
+        artifact_refs:
+          - backend/migrations/versions/20260719_0015_price_observation_currency_evidence.py
+          - backend/src/marko/services/catalog_import.py
+          - backend/src/marko/infrastructure/db/models.py
+        evidence_refs:
+          - alembic check reported no new upgrade operations
+          - live price observations preserved raw currency
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-LIVE-TWO-STORE-SYNC
+        result: Pilot-avto and PROFParts completed through PostgreSQL, Redis, the transactional outbox, and store-sync execution with 725 and 675 persisted products respectively.
+        artifact_refs:
+          - https://pilot-avto.prom.ua/ua/
+          - https://profiparts-cs3325174.prom.ua/
+        evidence_refs:
+          - completed SyncRun rows 06fe6ed9-a1dc-4455-a23d-2284a3b55aa1 and 3e2f695c-acb2-4734-8bae-8bec76eb94e4
+          - Docker Compose runtime query
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope:
+      - scope_item_id: SCOPE-AUTHENTICATED-UI-VISUAL-CONFIRMATION
+        reason: The in-app browser is at the Firebase sign-in screen; no password or Google account access was used without the user.
+        hard_required: false
+        external_dependency: true
+    strongest_verified_result:
+      claim_id: CLM-LIVE-STORE-SYNC-SUCCEEDED
+      result: Two real Prom subdomain storefronts resolved to canonical seller identities and reached completed, succeeded sync runs with 1400 total persisted listings, raw currency evidence, full evidence coverage, and exact outbox UUID identity.
+      evidence_level: E3
+      evidence_refs:
+        - PostgreSQL runtime query for both completed SyncRun rows
+        - docker compose ps
+        - backend/tests/test_store_registration_postgres.py
+      reproduction_status: reproducible
+      limitations:
+        - Validation is local rather than production.
+        - The final authenticated UI screen awaits user sign-in.
+    weakest_critical_area:
+      area_id: AREA-AUTHENTICATED-UI-VISUAL
+      area: Authenticated browser presentation after sync
+      score: 50
+      evidence_level: E2
+      reason: Frontend validation and build passed, but the current browser session is signed out.
+      downstream_impact: The user must sign in once to visually confirm the already-persisted stores and products.
+      required_resolution: Sign in through the open Marko login page and refresh the Stores screen.
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E2
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: representative
+      limitations:
+        - No production load or recovery claim is made.
+        - Flutter analyze required an ASCII-path copy because the analysis server crashes on the checkout path encoding.
+    production_implication:
+      state: DEVELOPMENT_ONLY
+      production_ready: false
+      evidence_level: E3
+      passed_hard_gates:
+        - SYNC_RUN_UUID_BEFORE_OUTBOX
+        - PROM_SUBDOMAIN_RESOLUTION
+        - POSTGRES_STORE_REGISTRATION
+        - TWO_STORE_LIVE_PERSISTENCE
+        - SCHEMA_METADATA_ALIGNMENT
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - PROJECT_WIDE_PRODUCTION_READINESS_NOT_ASSESSED
+      statement: The requested local repair is complete and operational; this stage does not assert project-wide production readiness.
+  blockers:
+    overall: NONE_VERIFIED
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1: []
+    business_decisions: []
+    source_access: []
+    data: []
+    environment_reproducibility: []
+    unknowns: []
+  next_stage:
+    id: AUTHENTICATED_UI_VISUAL_CONFIRMATION
+    title: AUTHENTICATED UI VISUAL CONFIRMATION
+    why_it_is_next:
+      - The stores and products already exist; only the signed-in presentation remains to be viewed.
+    required_inputs:
+      - input_id: INPUT-USER-FIREBASE-SESSION
+        description: Open local Marko login page where the user can establish the user-controlled Firebase session.
+        source: in-app browser
+        required_state: login page available for user sign-in
+        currently_available: true
+        evidence_ref: in-app browser login screen
+    expected_artifacts:
+      - artifact_id: ART-AUTHENTICATED-STORES-SCREEN
+        type: report
+        purpose: Confirm both stores and their product counts in the authenticated UI.
+        required_fields:
+          - Pilot-avto
+          - PROFParts
+          - product_count
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-UI-01
+        predicate: The authenticated Stores screen shows both synchronized competitors with non-zero product counts.
+        required_evidence: Browser state after user sign-in
+        threshold: two visible stores and no sync error banner
+    stop_condition:
+      gate_key: STOP_GATE_AUTHENTICATED_UI_VISUAL_CONFIRMATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+  stop_gate:
+    key: STOP_GATE_STORE_SYNC_DISPATCH_REPAIR_IMPLEMENTATION_2026_07_19
+    primary_status: PASS
+    secondary_findings:
+      - status: PASS
+        finding: Backend persistence and frontend automated checks are complete; authenticated UI visual confirmation remains an optional user-controlled follow-up.
+        evidence_refs:
+          - in-app browser login screen
+          - frontend/test/stores_controller_test.dart
+    automatic_transition: false

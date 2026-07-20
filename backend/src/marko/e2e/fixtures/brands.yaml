@@ -1,0 +1,21 @@
+schema_version: metis-brand-tiers-v1
+dataset_id: prompt-15.015-synthetic-e2e-brands-v1
+market: synthetic/replay
+data_class: synthetic_e2e_fixture
+representative: false
+domain_policy_approved: true
+approved_by: E2E_FIXTURE_ONLY
+approved_at: "2026-07-19T00:00:00Z"
+notes:
+  - This rule exists only to exercise deterministic synthetic E2E plumbing.
+  - It is not Ukrainian Prom evidence and cannot activate production pricing.
+brands:
+  - brand: Bosch
+    normalized: BOSCH
+    tier: oes
+    confidence: "1.0000"
+    approved: true
+    evidence:
+      - fixture://prompt-15.015/brands/bosch
+    approved_by: E2E_FIXTURE_ONLY
+    approved_at: "2026-07-19T00:00:00Z"

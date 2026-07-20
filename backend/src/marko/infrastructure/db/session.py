@@ -1,4 +1,5 @@
 """Async SQLAlchemy engine and request-scoped sessions."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -16,4 +17,3 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with async_session_factory() as session:
         yield session
-

@@ -8,18 +8,21 @@ class RecommendationsState {
   const RecommendationsState({
     required this.page,
     required this.queue,
+    required this.sort,
     this.actionFilter,
     this.error,
   });
 
   final RecommendationPage page;
   final String queue;
+  final String sort;
   final String? actionFilter;
   final String? error;
 
   RecommendationsState copyWith({
     RecommendationPage? page,
     String? queue,
+    String? sort,
     String? actionFilter,
     bool clearFilter = false,
     String? error,
@@ -28,6 +31,7 @@ class RecommendationsState {
     return RecommendationsState(
       page: page ?? this.page,
       queue: queue ?? this.queue,
+      sort: sort ?? this.sort,
       actionFilter: clearFilter ? null : actionFilter ?? this.actionFilter,
       error: clearError ? null : error ?? this.error,
     );
@@ -39,31 +43,32 @@ class RecommendationsController extends AsyncNotifier<RecommendationsState> {
 
   @override
   Future<RecommendationsState> build() async {
-    final initialQueue = Environment.e2eMode ? 'review' : 'raise';
+    final initialQueue = Environment.e2eMode ? 'review' : 'all';
+    const initialSort = 'ABSOLUTE_RECOMMENDED_CHANGE';
     final initialPage = await _loadInitialPage(
       ref.watch(pricingApiProvider),
       initialQueue,
+      initialSort,
     );
-    return RecommendationsState(page: initialPage, queue: initialQueue);
+    return RecommendationsState(
+      page: initialPage,
+      queue: initialQueue,
+      sort: initialSort,
+    );
   }
 
   Future<RecommendationPage> _loadInitialPage(
     PricingApi api,
     String queue,
+    String sort,
   ) async {
     final attempts = Environment.e2eMode ? 120 : 1;
     for (var attempt = 0; attempt < attempts; attempt += 1) {
-      final page = await api.listRecommendations(
-        queue: queue,
-        sort: queue == 'review' ? 'review_priority' : 'priority',
-      );
+      final page = await api.listRecommendations(queue: queue, sort: sort);
       if (!Environment.e2eMode || page.items.isNotEmpty) return page;
       await Future<void>.delayed(const Duration(seconds: 1));
     }
-    return api.listRecommendations(
-      queue: queue,
-      sort: queue == 'review' ? 'review_priority' : 'priority',
-    );
+    return api.listRecommendations(queue: queue, sort: sort);
   }
 
   Future<void> refresh() async {
@@ -75,6 +80,7 @@ class RecommendationsController extends AsyncNotifier<RecommendationsState> {
           page: await _api.listRecommendations(
             queue: current.queue,
             action: current.actionFilter,
+            sort: current.sort,
           ),
           clearError: true,
         ),
@@ -94,8 +100,10 @@ class RecommendationsController extends AsyncNotifier<RecommendationsState> {
           page: await _api.listRecommendations(
             queue: current.queue,
             action: action,
+            sort: current.sort,
           ),
           queue: current.queue,
+          sort: current.sort,
           actionFilter: action,
         ),
       );
@@ -113,9 +121,32 @@ class RecommendationsController extends AsyncNotifier<RecommendationsState> {
         RecommendationsState(
           page: await _api.listRecommendations(
             queue: queue,
-            sort: queue == 'review' ? 'review_priority' : 'priority',
+            sort: current.sort,
           ),
           queue: queue,
+          sort: current.sort,
+        ),
+      );
+    } catch (error, stackTrace) {
+      state = AsyncError(error, stackTrace);
+    }
+  }
+
+  Future<void> setSort(String sort) async {
+    final current = state.value;
+    if (current == null || current.sort == sort) return;
+    state = const AsyncLoading();
+    try {
+      state = AsyncData(
+        RecommendationsState(
+          page: await _api.listRecommendations(
+            queue: current.queue,
+            action: current.actionFilter,
+            sort: sort,
+          ),
+          queue: current.queue,
+          sort: sort,
+          actionFilter: current.actionFilter,
         ),
       );
     } catch (error, stackTrace) {

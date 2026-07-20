@@ -1,17 +1,18 @@
 """Extract product data from prom.ua's embedded Apollo cache."""
+
 from __future__ import annotations
 
 import json
 import re
 
-from .exceptions import ParseError
+from .exceptions import ParseError, ParserSchemaChanged
 from marko.services.parser_models import ListingPage, Product, SeedInfo, get_nested
 
 # window.ApolloCacheState = {...}; - extract balanced JSON object after '='.
 _APOLLO_RE = re.compile(r"window\.ApolloCacheState\s*=\s*(\{)", re.DOTALL)
 # Keys in _FAST_CACHE that hold the data we parse (matched by prefix).
-_LISTING_KEY_PREFIX = "CompanyListingQuery"   # a single seller's catalog
-_SEARCH_KEY_PREFIX = "SearchListingQuery"     # site-wide search (many sellers)
+_LISTING_KEY_PREFIX = "CompanyListingQuery"  # a single seller's catalog
+_SEARCH_KEY_PREFIX = "SearchListingQuery"  # site-wide search (many sellers)
 _PRODUCT_KEY_PREFIX = "ProductCardPageQuery"  # a single product card (seed)
 
 
@@ -68,12 +69,17 @@ def _find_cache_record(cache: dict, key_prefix: str) -> dict | None:
 
 def _products_from_page(page: dict, lang: str) -> list[Product]:
     """Normalize the products[] array of a listing/search page node."""
-    raw_products = page.get("products") or []
-    return [
-        Product.from_raw(item["product"], lang)
-        for item in raw_products
-        if isinstance(item, dict) and item.get("product")
-    ]
+    raw_products = page.get("products")
+    if not isinstance(raw_products, list):
+        raise ParserSchemaChanged("Apollo listing.page.products is not a list")
+    products: list[Product] = []
+    for index, item in enumerate(raw_products):
+        if not isinstance(item, dict) or not isinstance(item.get("product"), dict):
+            raise ParserSchemaChanged(
+                f"Apollo listing.page.products[{index}].product is invalid"
+            )
+        products.append(Product.from_raw(item["product"], lang))
+    return products
 
 
 def _parse_products(html: str, key_prefix: str, lang: str) -> ListingPage:
@@ -81,12 +87,34 @@ def _parse_products(html: str, key_prefix: str, lang: str) -> ListingPage:
     cache = _extract_apollo_state(html)
     record = _find_cache_record(cache, key_prefix)
     if record is None:
-        return ListingPage(products=[], total=None, lang=lang)
-    page = get_nested(record, "result.listing.page") or {}
+        raise ParserSchemaChanged(f"Expected Apollo record {key_prefix} is absent")
+    page = get_nested(record, "result.listing.page")
+    if not isinstance(page, dict):
+        raise ParserSchemaChanged("Apollo result.listing.page is absent or invalid")
+    products = _products_from_page(page, lang)
+    total = page.get("total")
+    if total is not None and (not isinstance(total, int) or isinstance(total, bool)):
+        raise ParserSchemaChanged("Apollo listing.page.total is not an integer")
+    if products and total is not None and total < len(products):
+        raise ParserSchemaChanged(
+            "Apollo listing.page.total contradicts the returned products"
+        )
+    if not products:
+        if page.get("products") != [] or total != 0:
+            raise ParserSchemaChanged(
+                "Apollo empty products contradict the recognized empty-result contract"
+            )
+        return ListingPage(
+            products=[],
+            total=total,
+            lang=lang,
+            outcome="EMPTY_SEARCH_RESULT",
+        )
     return ListingPage(
-        products=_products_from_page(page, lang),
-        total=page.get("total"),
+        products=products,
+        total=total,
         lang=lang,
+        outcome="RESULTS",
     )
 
 

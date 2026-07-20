@@ -1,0 +1,232 @@
+end_of_response:
+  contract_version: "15.1"
+  stage_result:
+    stage:
+      id: METIS_CROSS_DISCOVERY_MEASUREMENT_2026_07_19
+      title: METIS CROSS DISCOVERY MEASUREMENT
+      type: IMPLEMENTATION
+      scope_owner: Metis
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-DESCRIPTION-BOUNDARY
+        result: Prom descriptionPlain and descriptionFull evidence is normalized into Product.description without modifying the frozen Prom parser.
+        artifact_refs:
+          - backend/src/marko/services/parser_models.py
+          - scripts/capture_prom_product_descriptions.py
+          - backend/tests/test_models.py
+          - backend/tests/test_product_description_snapshot.py
+        evidence_refs:
+          - 146 of 146 pinned product pages have descriptions
+          - 146 gzip raw evidence files
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-INDEPENDENT-CROSS-CONTRACT
+        result: One-hop cross links require CONFIRMED status and at least two independent sellers counted by stable seller ID with a name fallback.
+        artifact_refs:
+          - backend/src/metis/pricing/crosses.py
+          - scripts/run_description_crosses_replay.py
+          - backend/tests/test_description_crosses.py
+        evidence_refs:
+          - 60 eligible links across 5 target OEs
+          - same seller ID with different display names remains one independent seller
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-SAME-SET-AB-DISCOVERY
+        result: Exact OE and OE plus one-hop crosses were measured over the same pinned 30-OE sample with independent KEMP retained and the owned seller excluded by seller ID.
+        artifact_refs:
+          - scripts/run_cross_discovery.py
+          - .artifacts/metis_cross_coverage_20260719/METIS_CROSS_COVERAGE_SUMMARY.json
+          - outputs/metis_cross_coverage_20260719/METIS_EXACT_OE_VS_CROSSES.xlsx
+        evidence_refs:
+          - exact OE 28 of 30 positions and 91 seller candidates
+          - cross discovery 28 of 30 positions and 155 seller candidates
+          - 60 of 60 search queries replayed with zero network requests
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-FAIL-CLOSED-PRICING
+        result: Every cross-discovered offer remains pricing_eligible false until category, human match, and human tier labels pass; no recommendation was emitted.
+        artifact_refs:
+          - scripts/run_cross_discovery.py
+          - backend/tests/test_cross_discovery.py
+        evidence_refs:
+          - match precision null
+          - tier precision null
+          - zero confident recommendations
+          - zero erroneous upward recommendations emitted
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-REVIEW-WORKBOOK-AND-DOD
+        result: A formula-driven review workbook and an explicit Milestone 1 Definition of Done were created and inspected.
+        artifact_refs:
+          - outputs/metis_cross_coverage_20260719/METIS_EXACT_OE_VS_CROSSES.xlsx
+          - docs/METIS_MILESTONE_1_DEFINITION_OF_DONE_2026-07-19.md
+          - docs/METIS_EXACT_OE_VS_CROSSES_DISCOVERY_2026-07-19.md
+        evidence_refs:
+          - six rendered workbook ranges visually inspected
+          - no spreadsheet formula error tokens
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope:
+      - scope_item_id: SCOPE-HUMAN-MATCH-AND-TIER-LABELS
+        reason: The current stage prepares the independent review set; human labels are the explicitly separate next stage.
+        hard_required: false
+        external_dependency: true
+      - scope_item_id: SCOPE-AUTOMATIC-PRICING-ACTIVATION
+        reason: Activation is forbidden until measured match precision, approved tier policy, and tier precision pass their gates.
+        hard_required: false
+        external_dependency: true
+    strongest_verified_result:
+      claim_id: CLM-SAME-SET-CROSS-DISCOVERY-MEASURED
+      result: On the same pinned 30-OE set, one-hop cross discovery added 64 unvalidated independent-seller candidates and improved the at-least-two-seller count from 19 to 20 positions, while recommendation emission remained disabled.
+      evidence_level: E3
+      evidence_refs:
+        - .artifacts/metis_cross_coverage_20260719/METIS_CROSS_COVERAGE_SUMMARY.json
+        - outputs/metis_cross_coverage_20260719/METIS_EXACT_OE_VS_CROSSES.xlsx
+        - 666 passed and 1 skipped
+      reproduction_status: reproducible
+      limitations:
+        - The 30-OE discovery sample is not a production population estimate.
+        - Cross-match and tier precision remain unlabeled.
+        - Added candidates are not claimed as valid competitors or commercial lift.
+    weakest_critical_area:
+      area_id: AREA-CROSS-MATCH-AND-TIER-PRECISION
+      area: Independent cross-match and brand-tier validation
+      score: null
+      evidence_level: E2
+      reason: The review workbook is complete, but its human match and tier labels are intentionally blank.
+      downstream_impact: Cross-derived offers cannot enter pricing and no commercial lift can be claimed.
+      required_resolution: Independently label all 60 cross links and the retained offer review set, then compute precision and confidence intervals.
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E2
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 1.0
+      freshness_status: verified
+      representative_scope: non_representative
+      limitations:
+        - Live evidence is a stratified 30-OE discovery sample.
+        - Human validation has not started.
+    production_implication:
+      state: RESEARCH_ONLY
+      production_ready: false
+      evidence_level: E3
+      passed_hard_gates:
+        - PINNED_DESCRIPTION_EVIDENCE
+        - MULTI_SELLER_CROSS_DISCOVERY
+        - OFFLINE_REPLAY
+        - FAIL_CLOSED_PRICING
+        - REVIEW_WORKBOOK
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - INDEPENDENT_MATCH_PRECISION
+        - APPROVED_NON_KEMP_TIER_POLICY
+        - INDEPENDENT_TIER_PRECISION
+        - REPRESENTATIVE_COMMERCIAL_VALIDATION
+      statement: The implementation and discovery measurement are complete; cross-derived automatic pricing and production readiness are not asserted.
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-APPROVED-NON-KEMP-TIER-POLICY
+        priority: P1
+        category: business_decisions
+        description: No customer-approved non-KEMP brand and tier policy exists for measuring or activating tier-aware cross pricing.
+        blocked_scope:
+          - METIS_CROSS_HUMAN_VALIDATION_TIER_PRECISION
+          - CROSS_DERIVED_AUTOMATIC_PRICING
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - Stage C preflight reports an empty approved non-KEMP dictionary
+          - backend/config/brands.yaml
+        owner: customer or authorized domain expert
+        resolution_condition: Approve a versioned non-KEMP brand and tier policy with provenance and effective date.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions:
+      - BLK-APPROVED-NON-KEMP-TIER-POLICY
+    source_access: []
+    data: []
+    environment_reproducibility: []
+    unknowns: []
+  next_stage:
+    id: METIS_CROSS_HUMAN_VALIDATION
+    title: METIS CROSS HUMAN VALIDATION
+    why_it_is_next:
+      - Coverage discovery is now measured, so the decision-critical unknowns are match precision and tier precision.
+      - Human validation is mandatory before any cross-derived price action or commercial-lift claim.
+    required_inputs:
+      - input_id: INPUT-CROSS-REVIEW-WORKBOOK
+        description: The generated workbook containing 60 cross-link rows and 95 discovery-offer rows.
+        source: outputs/metis_cross_coverage_20260719/METIS_EXACT_OE_VS_CROSSES.xlsx
+        required_state: blank review controls ready for an independent domain reviewer
+        currently_available: true
+        evidence_ref: workbook visual inspection
+      - input_id: INPUT-APPROVED-TIER-POLICY
+        description: Customer-approved non-KEMP brand and tier rules with provenance and effective date.
+        source: customer or authorized domain expert
+        required_state: approved rather than draft
+        currently_available: false
+        evidence_ref: current Stage C preflight reports an empty approved non-KEMP dictionary
+    expected_artifacts:
+      - artifact_id: ART-COMPLETED-CROSS-REVIEW
+        type: dataset
+        purpose: Provide independent match, tier, condition, and availability labels.
+        required_fields:
+          - human_match_label
+          - human_tier_label
+          - reviewer
+          - notes
+        temporal_state: PLANNED_NOT_STARTED
+      - artifact_id: ART-CROSS-PRECISION-REPORT
+        type: report
+        purpose: Measure link precision, offer precision, tier precision, confidence intervals, coverage lift, and unsafe recommendation count.
+        required_fields:
+          - match_precision
+          - tier_precision
+          - confidence_intervals
+          - actionable_position_lift
+          - erroneous_upward_recommendations
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-CROSS-REVIEW-01
+        predicate: Every eligible link has MATCH, NOT_MATCH, or UNCERTAIN plus reviewer provenance.
+        required_evidence: completed link-review sheet
+        threshold: 60 of 60 links labeled
+      - id: AC-CROSS-REVIEW-02
+        predicate: Every retained discovery candidate has match, tier, condition, and availability review fields resolved or explicitly uncertain.
+        required_evidence: completed offer-review sheet
+        threshold: 95 of 95 rows reviewed
+      - id: AC-CROSS-REVIEW-03
+        predicate: Cross activation remains fail closed unless approved precision and safety thresholds pass.
+        required_evidence: precision report and recommendation replay
+        threshold: no activation from missing or unknown metrics
+    stop_condition:
+      gate_key: STOP_GATE_METIS_CROSS_HUMAN_VALIDATION
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required: []
+    started: false
+    authorized: false
+  stop_gate:
+    key: STOP_GATE_METIS_CROSS_DISCOVERY_MEASUREMENT_2026_07_19
+    primary_status: PASS
+    secondary_findings:
+      - status: PASS
+        finding: Fail-closed controls correctly keep cross-derived automatic pricing disabled while independent match and tier labels are missing.
+        evidence_refs:
+          - .artifacts/metis_cross_coverage_20260719/METIS_CROSS_COVERAGE_SUMMARY.json
+          - outputs/metis_cross_coverage_20260719/METIS_EXACT_OE_VS_CROSSES.xlsx
+    automatic_transition: false

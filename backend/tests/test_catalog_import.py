@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from factories import product
 from marko.api.schemas.stores import StoreCreateRequest
 from marko.services.catalog_import import (
+    _currency_evidence,
     _merge_structured_completeness,
     parse_product_price,
 )
@@ -20,9 +21,12 @@ def test_parse_product_price_accepts_spaces_and_comma():
 
 
 def test_parse_product_price_returns_none_for_missing_value():
-    assert parse_product_price(
-        product(price=None, discountedPrice=None, priceOriginal=None)
-    ) is None
+    assert (
+        parse_product_price(
+            product(price=None, discountedPrice=None, priceOriginal=None)
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("raw", ["0", "-1", "-15.40 грн"])
@@ -38,6 +42,14 @@ def test_store_create_request_normalizes_prom_url():
 def test_store_create_request_rejects_non_prom_url():
     with pytest.raises(ValidationError):
         StoreCreateRequest(url="https://example.com/store")
+
+
+def test_currency_evidence_preserves_raw_source_value():
+    assert _currency_evidence(" грн ") == ("UAH", "грн", False)
+
+
+def test_currency_evidence_marks_missing_source_value_as_inferred():
+    assert _currency_evidence(None) == ("UAH", None, True)
 
 
 def test_duplicate_replay_does_not_change_structured_completeness():
