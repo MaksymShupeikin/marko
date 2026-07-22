@@ -121,6 +121,22 @@ async def get_workspace_store(
     )
 
 
+async def delete_workspace_store(
+    session: AsyncSession,
+    link: WorkspaceStore,
+) -> bool:
+    """Delete a workspace link and report whether another workspace still uses the store."""
+    store_id = link.store_id
+    await session.delete(link)
+    await session.flush()
+    remaining_link_id = await session.scalar(
+        select(WorkspaceStore.id)
+        .where(WorkspaceStore.store_id == store_id)
+        .limit(1)
+    )
+    return remaining_link_id is not None
+
+
 async def get_active_sync_run(
     session: AsyncSession, store_id: uuid.UUID, workspace_id: uuid.UUID
 ) -> SyncRun | None:

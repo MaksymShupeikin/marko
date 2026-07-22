@@ -27,6 +27,23 @@ class StoreProductsPage extends ConsumerWidget {
     final asyncState = ref.watch(provider);
     final controller = ref.read(provider.notifier);
 
+    Future<void> deleteStore() async {
+      final store = asyncState.value?.store;
+      if (store == null) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) => StoreDeleteDialog(storeName: store.displayName),
+      );
+      if (confirmed != true || !context.mounted) return;
+      final deleted = await controller.deleteStore();
+      if (!deleted || !context.mounted) return;
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/');
+      }
+    }
+
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -36,6 +53,8 @@ class StoreProductsPage extends ConsumerWidget {
               count: asyncState.value?.page.total,
               onBack: context.pop,
               onRefresh: controller.reload,
+              onDelete: deleteStore,
+              isDeleting: asyncState.value?.isDeleting ?? false,
             ),
             Expanded(
               child: asyncState.when(
@@ -64,12 +83,16 @@ class _ProductsHeader extends StatelessWidget {
     required this.count,
     required this.onBack,
     required this.onRefresh,
+    required this.onDelete,
+    required this.isDeleting,
   });
 
   final String title;
   final int? count;
   final VoidCallback onBack;
   final VoidCallback onRefresh;
+  final VoidCallback onDelete;
+  final bool isDeleting;
 
   @override
   Widget build(BuildContext context) {
@@ -115,8 +138,35 @@ class _ProductsHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 12),
+                if (constraints.maxWidth >= 680)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: colors.negative,
+                    ),
+                    onPressed: isDeleting ? null : onDelete,
+                    icon: isDeleting
+                        ? const SizedBox.square(
+                            dimension: 17,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.delete_outline_rounded, size: 18),
+                    label: const Text('Удалить'),
+                  )
+                else
+                  IconButton(
+                    tooltip: 'Удалить магазин',
+                    color: colors.negative,
+                    onPressed: isDeleting ? null : onDelete,
+                    icon: isDeleting
+                        ? const SizedBox.square(
+                            dimension: 17,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.delete_outline_rounded, size: 19),
+                  ),
+                const SizedBox(width: 4),
                 OutlinedButton.icon(
-                  onPressed: onRefresh,
+                  onPressed: isDeleting ? null : onRefresh,
                   icon: const Icon(Icons.refresh_rounded, size: 18),
                   label: const Text('Обновить'),
                 ),
@@ -125,6 +175,37 @@ class _ProductsHeader extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class StoreDeleteDialog extends StatelessWidget {
+  const StoreDeleteDialog({required this.storeName, super.key});
+
+  final String storeName;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return AlertDialog(
+      icon: Icon(Icons.delete_outline_rounded, color: colors.negative),
+      title: const Text('Удалить магазин?'),
+      content: Text(
+        'Магазин «$storeName» и его импортированные товары будут удалены '
+        'из этой рабочей области. Это действие нельзя отменить.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Отмена'),
+        ),
+        FilledButton(
+          key: const ValueKey('confirm-store-delete'),
+          style: FilledButton.styleFrom(backgroundColor: colors.negative),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Удалить'),
+        ),
+      ],
     );
   }
 }

@@ -79,6 +79,16 @@ def test_seller_from_url_parses_and_lowercases_lang():
     assert (seller.company_id, seller.slug, seller.lang) == ("2847093", "kemp", "ua")
 
 
+def test_seller_from_url_defaults_missing_language_to_ua():
+    seller = Seller.from_url("https://prom.ua/c4015921-avtobust.html")
+    assert seller == Seller(company_id="4015921", slug="avtobust", lang="ua")
+
+
 def test_seller_from_url_invalid_raises():
     with pytest.raises(ValueError):
         Seller.from_url("https://example.com/not-a-seller")
+
+
+def test_seller_from_url_rejects_prom_lookalike_domain():
+    with pytest.raises(ValueError):
+        Seller.from_url("https://evil-prom.ua/ua/c4015921-avtobust.html")

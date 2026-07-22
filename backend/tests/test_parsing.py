@@ -5,6 +5,7 @@ from marko.parsers.prom.parser import (
     _extract_apollo_state,
     _slice_balanced_json,
     parse_listing,
+    parse_product_group_ids,
     parse_product_page,
 )
 
@@ -66,6 +67,15 @@ def test_parse_listing_extracts_products():
 def test_parse_listing_missing_record_returns_empty():
     page = parse_listing(html_with_state({"_FAST_CACHE": {}}))
     assert page.is_empty
+
+
+def test_parse_product_group_ids_returns_distinct_ids_in_page_order():
+    html = (
+        '<a href="/ua/c1-store.html?product_group=20">A</a>'
+        '<a href="/ua/c1-store.html?sort=price&amp;product_group=10">B</a>'
+        '<a href="/ua/c1-store.html?product_group=20">A again</a>'
+    )
+    assert parse_product_group_ids(html) == ("20", "10")
 
 
 # parse_product_page

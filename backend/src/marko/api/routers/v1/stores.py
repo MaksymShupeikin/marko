@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, get_session
@@ -18,6 +18,7 @@ from marko.api.schemas.stores import (
 from marko.services.stores import (
     StoreNotFoundError,
     TaskDispatchError,
+    delete_store,
     get_store,
     list_store_products,
     list_stores,
@@ -78,6 +79,26 @@ async def get_store_details(
     except StoreNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
     return StoreResponse(**store.__dict__)
+
+
+@router.delete("/{store_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_store(
+    store_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+) -> Response:
+    try:
+        await delete_store(
+            session,
+            store_id=store_id,
+            workspace_id=current.workspace_id,
+        )
+    except StoreNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Store not found",
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

@@ -33,6 +33,10 @@ class StoresApi {
     return StoreSync.fromJson(payload as Map<String, dynamic>);
   }
 
+  Future<void> deleteStore(String id) async {
+    await _client.deleteJson('/api/v1/stores/$id');
+  }
+
   Future<SyncRun> getJob(String id) async {
     final payload = await _client.getJson('/api/v1/jobs/$id');
     return SyncRun.fromJson(payload as Map<String, dynamic>);

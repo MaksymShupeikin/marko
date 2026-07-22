@@ -4,9 +4,13 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
-_SELLER_URL_RE = re.compile(
-    r"prom\.ua/(?P<lang>[a-z]{2})/c(?P<company_id>\d+)-(?P<slug>[\w-]+)\.html", re.I
+_DEFAULT_SELLER_LANGUAGE = "ua"
+_PROM_HOSTS = frozenset({"prom.ua", "www.prom.ua"})
+_SELLER_PATH_RE = re.compile(
+    r"^/(?:(?P<lang>[a-z]{2})/)?c(?P<company_id>\d+)-(?P<slug>[\w-]+)\.html/?$",
+    re.I,
 )
 
 # Single source of truth: Product field name mapped to its JSON path.
@@ -117,16 +121,22 @@ class Seller:
 
     @classmethod
     def from_url(cls, url: str) -> Seller:
-        match = _SELLER_URL_RE.search(url)
-        if not match:
+        parsed_url = urlsplit(url)
+        match = _SELLER_PATH_RE.fullmatch(parsed_url.path)
+        if (
+            parsed_url.scheme.lower() not in {"http", "https"}
+            or parsed_url.hostname not in _PROM_HOSTS
+            or match is None
+        ):
             raise ValueError(
                 f"Не схоже на URL продавця prom.ua: {url!r}\n"
-                "Очікую щось на кшталт https://prom.ua/ua/c2847093-kemp.html"
+                "Очікую https://prom.ua/c2847093-kemp.html або "
+                "https://prom.ua/ua/c2847093-kemp.html"
             )
         return cls(
             company_id=match.group("company_id"),
             slug=match.group("slug"),
-            lang=match.group("lang").lower(),
+            lang=(match.group("lang") or _DEFAULT_SELLER_LANGUAGE).lower(),
         )
 
 

@@ -27,6 +27,11 @@ def test_store_create_request_normalizes_prom_url():
     assert request.url == "https://prom.ua/ua/c2847093-kemp.html"
 
 
+def test_store_create_request_accepts_url_without_language():
+    request = StoreCreateRequest(url="https://prom.ua/c4015921-avtobust.html")
+    assert request.url == "https://prom.ua/c4015921-avtobust.html"
+
+
 def test_store_create_request_rejects_non_prom_url():
     with pytest.raises(ValidationError):
         StoreCreateRequest(url="https://example.com/store")

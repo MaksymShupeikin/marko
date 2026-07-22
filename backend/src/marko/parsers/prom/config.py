@@ -26,13 +26,16 @@ DEFAULT_HEADERS: dict[str, str] = {
 @dataclass(frozen=True)
 class ScrapeConfig:
     """Parameters for a scraping session."""
-    delay: float = 1.0          # base delay between requests in seconds
-    delay_jitter: float = 0.5   # random jitter in seconds
+    delay: float = 0.25         # minimum interval between request starts
+    delay_jitter: float = 0.1   # random jitter in seconds
     timeout: float = 30.0       # HTTP request timeout in seconds
     max_retries: int = 4        # maximum retries per request
     backoff_factor: float = 1.5 # exponential backoff factor
     max_pages: int = 0
     start_page: int = 1
+    page_concurrency: int = 8
+    catalog_result_limit: int = 10_000
+    expand_product_groups: bool = True
     # Cross-seller comparison knobs.
     max_sellers: int = 10          # cap of distinct sellers in a comparison
     similarity_threshold: float = 0.55  # min fuzzy name score to accept a match

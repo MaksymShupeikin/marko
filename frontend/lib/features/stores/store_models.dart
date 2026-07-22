@@ -207,17 +207,20 @@ class StoreProductsState {
     required this.store,
     required this.page,
     this.isLoadingMore = false,
+    this.isDeleting = false,
     this.error,
   });
 
   final StoreSummary store;
   final ProductPage page;
   final bool isLoadingMore;
+  final bool isDeleting;
   final String? error;
 
   StoreProductsState copyWith({
     ProductPage? page,
     bool? isLoadingMore,
+    bool? isDeleting,
     String? error,
     bool clearError = false,
   }) {
@@ -225,6 +228,7 @@ class StoreProductsState {
       store: store,
       page: page ?? this.page,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      isDeleting: isDeleting ?? this.isDeleting,
       error: clearError ? null : error ?? this.error,
     );
   }

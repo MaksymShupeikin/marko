@@ -144,6 +144,22 @@ class StoreProductsController extends AsyncNotifier<StoreProductsState> {
       );
     }
   }
+
+  Future<bool> deleteStore() async {
+    final current = state.value;
+    if (current == null || current.isDeleting) return false;
+    state = AsyncData(current.copyWith(isDeleting: true, clearError: true));
+    try {
+      await _api.deleteStore(storeId);
+      ref.invalidate(storesControllerProvider);
+      return true;
+    } catch (error) {
+      state = AsyncData(
+        current.copyWith(isDeleting: false, error: error.toString()),
+      );
+      return false;
+    }
+  }
 }
 
 final storeProductsProvider = AsyncNotifierProvider.autoDispose

@@ -16,13 +16,13 @@ from marko.infrastructure.db.models import (
     SyncStatus,
 )
 from marko.infrastructure.db.session import async_session_factory
-from marko.services.parser_models import Product
 from marko.parsers.prom.gateway import PromGateway
+from marko.services.parser_models import Product
 
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
 
-_BATCH_SIZE = 25
+_BATCH_SIZE = 500
 _PRICE_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
@@ -78,7 +78,7 @@ async def _run_import(
         imported = 0
         batch: list[Product] = []
         gateway = PromGateway()
-        for product in gateway.scrape(store.canonical_url, strict=True):
+        async for product in gateway.scrape_strict_async(store.canonical_url):
             batch.append(product)
             if len(batch) >= _BATCH_SIZE:
                 imported += await _persist_batch(session, store.id, batch)
@@ -114,9 +114,13 @@ async def _persist_batch(
         return 0
 
     external_ids = [str(product.id) for product in valid_products]
-    existing_listings = await listings_repo.get_listings_by_external_ids(session, store_id, external_ids)
+    existing_listings = await listings_repo.get_listings_by_external_ids(
+        session,
+        store_id,
+        external_ids,
+    )
     existing = {listing.external_id: listing for listing in existing_listings}
-    
+
     now = datetime.now(UTC)
 
     for product in valid_products:

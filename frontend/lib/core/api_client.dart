@@ -54,6 +54,10 @@ class ApiClient {
     return _request('POST', path, body: body, authenticated: authenticated);
   }
 
+  Future<dynamic> deleteJson(String path, {bool authenticated = true}) {
+    return _request('DELETE', path, authenticated: authenticated);
+  }
+
   Future<dynamic> _request(
     String method,
     String path, {
@@ -96,9 +100,11 @@ class ApiClient {
       headers['Authorization'] = 'Bearer $accessToken';
     }
     final encodedBody = body == null ? null : jsonEncode(body);
-    final request = method == 'POST'
-        ? client.post(uri, headers: headers, body: encodedBody)
-        : client.get(uri, headers: headers);
+    final request = switch (method) {
+      'POST' => client.post(uri, headers: headers, body: encodedBody),
+      'DELETE' => client.delete(uri, headers: headers),
+      _ => client.get(uri, headers: headers),
+    };
     return request.timeout(const Duration(seconds: 15));
   }
 

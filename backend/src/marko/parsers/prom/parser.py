@@ -13,6 +13,7 @@ _APOLLO_RE = re.compile(r"window\.ApolloCacheState\s*=\s*(\{)", re.DOTALL)
 _LISTING_KEY_PREFIX = "CompanyListingQuery"   # a single seller's catalog
 _SEARCH_KEY_PREFIX = "SearchListingQuery"     # site-wide search (many sellers)
 _PRODUCT_KEY_PREFIX = "ProductCardPageQuery"  # a single product card (seed)
+_PRODUCT_GROUP_RE = re.compile(r"(?:[?&]|&amp;)product_group=(\d+)")
 
 
 def _slice_balanced_json(text: str, start: int) -> str:
@@ -93,6 +94,11 @@ def _parse_products(html: str, key_prefix: str, lang: str) -> ListingPage:
 def parse_listing(html: str, lang: str = "ua") -> ListingPage:
     """Parse the HTML of a seller catalog page into a ListingPage."""
     return _parse_products(html, _LISTING_KEY_PREFIX, lang)
+
+
+def parse_product_group_ids(html: str) -> tuple[str, ...]:
+    """Return the distinct seller product-group identifiers linked by a page."""
+    return tuple(dict.fromkeys(_PRODUCT_GROUP_RE.findall(html)))
 
 
 def parse_search(html: str, lang: str = "ua") -> ListingPage:

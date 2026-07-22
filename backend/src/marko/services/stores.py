@@ -9,7 +9,14 @@ from uuid import UUID
 from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.infrastructure.db.models import Listing, SyncRun, StoreKind, SyncStatus
+from marko.infrastructure.db.models import (
+    Listing,
+    MarketplaceStore,
+    StoreKind,
+    SyncRun,
+    SyncStatus,
+    WorkspaceStore,
+)
 from marko.services.parser_models import Seller
 
 import marko.repositories.users as users_repo
@@ -150,6 +157,28 @@ async def get_store(
     if row is None:
         raise StoreNotFoundError(str(store_id))
     return _store_view(*row)
+
+
+async def delete_store(
+    session: AsyncSession,
+    *,
+    store_id: UUID,
+    workspace_id: UUID,
+) -> None:
+    link = await _get_workspace_store(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+    )
+    used_by_another_workspace = await stores_repo.delete_workspace_store(
+        session,
+        link,
+    )
+    if not used_by_another_workspace:
+        store = await session.get(MarketplaceStore, store_id)
+        if store is not None:
+            await session.delete(store)
+    await session.commit()
 
 
 async def list_store_products(

@@ -13,6 +13,7 @@ from marko.services.matching import Match, Offer, PriceComparison
 from marko.services.parser_models import Product
 
 log = logging.getLogger(__name__)
+_DEFAULT_SCRAPE_CONFIG = ScrapeConfig()
 
 
 def _write_rows(
@@ -113,7 +114,7 @@ def format_comparison(comparison: PriceComparison) -> str:
 def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o", default="products")
     parser.add_argument("--format", "-f", choices=("json", "csv"), default="json")
-    parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument("--delay", type=float, default=_DEFAULT_SCRAPE_CONFIG.delay)
     parser.add_argument("--verbose", "-v", action="store_true")
 
 
@@ -124,6 +125,11 @@ def _parser() -> argparse.ArgumentParser:
     scrape.add_argument("url")
     scrape.add_argument("--max-pages", type=int, default=0)
     scrape.add_argument("--start-page", type=int, default=1)
+    scrape.add_argument(
+        "--concurrency",
+        type=int,
+        default=_DEFAULT_SCRAPE_CONFIG.page_concurrency,
+    )
     _common_arguments(scrape)
     compare = commands.add_parser("compare", help="Compare a product across sellers")
     compare.add_argument("url")
@@ -141,6 +147,7 @@ def _scrape(args: argparse.Namespace) -> int:
             delay=args.delay,
             max_pages=args.max_pages,
             start_page=args.start_page,
+            page_concurrency=args.concurrency,
         )
     ).scrape(args.url)
     path = Path(f"{args.output}.{args.format}")
