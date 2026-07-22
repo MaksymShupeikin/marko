@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - leonid/pricing-engine
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the documented backend test path
+        run: docker compose --profile test run --rm --build backend-test
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Resolve dependencies
+        working-directory: frontend
+        run: flutter pub get
+      - name: Analyze application and tests
+        working-directory: frontend
+        run: dart analyze lib test
+      - name: Run Flutter tests
+        working-directory: frontend
+        run: flutter test
+
+  production-manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql+asyncpg://marko:test@db.internal:5432/marko
+      CELERY_BROKER_URL: rediss://marko:test@redis.internal:6380/0
+      CELERY_RESULT_BACKEND: rediss://marko:test@redis.internal:6380/1
+      ALLOWED_HOSTS: api.ci.internal
+      CORS_ORIGINS: https://app.ci.internal
+      FIREBASE_PROJECT_ID: marko-ci
+      TRUSTED_PROXY_IPS: "*"
+      PUBLIC_API_BASE_URL: https://api.ci.internal
+      FIREBASE_API_KEY: ci-public-value
+      FIREBASE_AUTH_DOMAIN: marko-ci.firebaseapp.com
+      FIREBASE_MESSAGING_SENDER_ID: "123456789"
+      FIREBASE_WEB_APP_ID: 1:123456789:web:ci
+      APP_DOMAIN: app.ci.internal
+      API_DOMAIN: api.ci.internal
+      ACME_EMAIL: ops@ci.internal
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose interpolation and topology
+        run: docker compose -f deploy/compose.production.yaml config --quiet
+      - name: Validate Caddy configuration
+        run: >-
+          docker run --rm
+          -e APP_DOMAIN -e API_DOMAIN -e ACME_EMAIL
+          -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2.10.2-alpine
+          caddy validate --config /etc/caddy/Caddyfile
+      - name: Validate Prometheus configuration and alert rules
+        run: >-
+          docker run --rm
+          --entrypoint /bin/promtool
+          -v "$PWD/deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+          -v "$PWD/deploy/prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro"
+          prom/prometheus:v3.5.0
+          check config /etc/prometheus/prometheus.yml

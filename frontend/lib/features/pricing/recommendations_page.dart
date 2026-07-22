@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../fitment/fitment_candidates_panel.dart';
 import 'catalog_context_dialog.dart';
 import 'pricing_api.dart';
 import 'pricing_controller.dart';
@@ -485,6 +486,10 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
               normalizedOffers: recommendation.normalizedOffersById,
               onOverride: _overrideTier,
             ),
+            const SizedBox(height: 18),
+            const Divider(),
+            const SizedBox(height: 14),
+            FitmentCandidatesPanel(catalogItemId: recommendation.catalogItemId),
           ],
         ],
       ),

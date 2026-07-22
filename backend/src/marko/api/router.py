@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from .routers.v1.auth import router as auth_router
 from .routers.v1.catalog import router as catalog_router
 from .routers.v1.health import router as health_router
+from .routers.v1.fitment import router as fitment_router
 from .routers.v1.jobs import router as jobs_router
 from .routers.v1.operations import router as operations_router
 from .routers.v1.pricing import router as pricing_router
@@ -24,3 +25,4 @@ api_router.include_router(
     tags=["operations"],
 )
 api_router.include_router(pricing_router, prefix="/pricing", tags=["pricing"])
+api_router.include_router(fitment_router, prefix="/fitment", tags=["fitment"])

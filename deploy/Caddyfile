@@ -1,0 +1,34 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+}
+
+:2019 {
+	respond /healthz 200
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+	reverse_proxy frontend:80
+}
+
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	@internal_metrics path /api/v1/operations/metrics/prometheus
+	respond @internal_metrics 404
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+	reverse_proxy api:8000
+}

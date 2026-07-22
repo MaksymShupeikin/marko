@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from sqlalchemy import select, func
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,6 +120,22 @@ async def get_workspace_store(
             WorkspaceStore.workspace_id == workspace_id,
         )
     )
+
+
+async def delete_owned_workspace_store(
+    session: AsyncSession,
+    *,
+    store_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> bool:
+    result = await session.execute(
+        delete(WorkspaceStore).where(
+            WorkspaceStore.store_id == store_id,
+            WorkspaceStore.workspace_id == workspace_id,
+            WorkspaceStore.kind == StoreKind.owned,
+        )
+    )
+    return result.rowcount > 0
 
 
 async def get_active_sync_run(

@@ -17,6 +17,22 @@ groups:
         annotations:
           summary: Marko collection queue is not draining
 
+      - alert: MarkoSchedulerLeaseMissing
+        expr: marko_scheduler_lease_present != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Marko scheduler has no live singleton lease
+
+      - alert: MarkoSchedulerLeaseProbeFailed
+        expr: marko_scheduler_lease_probe_success != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Marko API cannot inspect the scheduler Redis lease
+
       - alert: MarkoTerminalFailureRateHigh
         expr: |
           sum(rate(scrape_items_terminal_total{outcome="failed"}[15m]))

@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
@@ -20,9 +21,26 @@ from marko.services.dead_letters import (
     list_dead_letters,
     replay_dead_letter,
 )
+from marko.services.scraper_metrics import render_latest_operational_prometheus
 from marko.worker.celery_app import celery_app
 
 router = APIRouter()
+
+
+@router.get(
+    "/metrics/prometheus",
+    response_class=PlainTextResponse,
+    include_in_schema=False,
+)
+async def get_internal_operational_metrics(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PlainTextResponse:
+    """Private-network scrape target; the production edge returns 404 for it."""
+
+    return PlainTextResponse(
+        await render_latest_operational_prometheus(session),
+        media_type="text/plain; version=0.0.4",
+    )
 
 
 @router.get("/dead-letters", response_model=DeadLetterPageResponse)

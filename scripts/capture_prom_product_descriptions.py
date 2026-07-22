@@ -18,11 +18,11 @@ import json
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 from marko.parsers.prom.client import HttpClient
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.parser import parse_product_page
+from marko.services.prom_product_urls import validate_product_url
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +30,6 @@ DEFAULT_INPUT = (
     PROJECT_ROOT / ".artifacts" / "metis_next_steps_20260719" / "METIS_30_OE_OFFERS.csv"
 )
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / ".artifacts" / "metis_cross_coverage_20260719"
-_PRODUCT_PATH_RE = re.compile(r"^/(?:[a-z]{2}/)?p(?P<id>\d+)-[\w-]+\.html$", re.I)
 
 
 def main() -> int:
@@ -173,24 +172,6 @@ def main() -> int:
     _write_json(manifest_path, manifest)
     print(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2))
     return 0 if status_counts.get("FAILED", 0) == 0 else 2
-
-
-def validate_product_url(url: str) -> int:
-    parsed = urlsplit(url)
-    if (
-        parsed.scheme.casefold() != "https"
-        or (parsed.hostname or "").casefold() not in {"prom.ua", "www.prom.ua"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.port not in (None, 443)
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError(f"unsafe or unsupported Prom product URL: {url!r}")
-    match = _PRODUCT_PATH_RE.fullmatch(parsed.path)
-    if match is None:
-        raise ValueError(f"unsupported Prom product path: {parsed.path!r}")
-    return int(match.group("id"))
 
 
 def _read_rows(path: Path) -> tuple[list[dict[str, str]], list[str]]:

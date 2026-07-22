@@ -93,7 +93,9 @@ class ProductPersistenceStats:
 
 
 def parse_product_price(product: Product) -> Decimal | None:
-    raw = product.price or product.discounted_price or product.price_original
+    # Discounted price is the active payable price. ``price``/``priceOriginal``
+    # may be the crossed-out reference price in Prom payloads.
+    raw = product.discounted_price or product.price or product.price_original
     if raw is None:
         return None
     normalized = str(raw).replace("\u00a0", "").replace(" ", "").replace(",", ".")

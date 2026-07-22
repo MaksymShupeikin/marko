@@ -1,22 +1,6 @@
-from __future__ import annotations
-
-import importlib.util
-from pathlib import Path
-
 import pytest
 
-
-SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / "scripts"
-    / "capture_prom_product_descriptions.py"
-)
-SPEC = importlib.util.spec_from_file_location(
-    "capture_prom_product_descriptions", SCRIPT
-)
-assert SPEC is not None and SPEC.loader is not None
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+from marko.services.prom_product_urls import validate_product_url
 
 
 @pytest.mark.parametrize(
@@ -29,7 +13,7 @@ SPEC.loader.exec_module(MODULE)
 def test_validate_product_url_accepts_canonical_https_prom_urls(
     url: str, expected: int
 ) -> None:
-    assert MODULE.validate_product_url(url) == expected
+    assert validate_product_url(url) == expected
 
 
 @pytest.mark.parametrize(
@@ -46,4 +30,4 @@ def test_validate_product_url_accepts_canonical_https_prom_urls(
 )
 def test_validate_product_url_rejects_unsafe_or_non_product_urls(url: str) -> None:
     with pytest.raises(ValueError):
-        MODULE.validate_product_url(url)
+        validate_product_url(url)

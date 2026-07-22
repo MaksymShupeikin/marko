@@ -71,6 +71,21 @@ void main() {
     expect(sync.status, 'queued');
   });
 
+  test('deletes an owned store through the custom backend', () async {
+    final service = StoresApi(
+      ApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'DELETE');
+          expect(request.url.path, '/api/v1/stores/store-id');
+          return http.Response('', 204);
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+
+    await service.deleteStore('store-id');
+  });
+
   test('preserves FastAPI error details', () async {
     final client = ApiClient(
       client: MockClient((request) async {

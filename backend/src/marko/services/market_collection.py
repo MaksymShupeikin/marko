@@ -2134,6 +2134,8 @@ async def _persist_payload_observations(
                     catalog_item.category
                 ).policy_key,
                 price=candidate.price,
+                sale_price=candidate.price,
+                reference_price=candidate.reference_price,
                 currency=currency,
                 currency_raw=currency_raw,
                 currency_inferred=False,

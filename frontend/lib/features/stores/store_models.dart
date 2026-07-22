@@ -170,6 +170,7 @@ class StoresState {
   const StoresState({
     this.stores = const [],
     this.isSubmitting = false,
+    this.deletingStoreId,
     this.activeSync,
     this.activeJob,
     this.error,
@@ -177,26 +178,34 @@ class StoresState {
 
   final List<StoreSummary> stores;
   final bool isSubmitting;
+  final String? deletingStoreId;
   final StoreSync? activeSync;
   final SyncRun? activeJob;
   final String? error;
 
   bool get hasActiveJob => activeSync != null && activeJob?.isFinished != true;
+  bool get isDeleting => deletingStoreId != null;
 
   StoresState copyWith({
     List<StoreSummary>? stores,
     bool? isSubmitting,
+    String? deletingStoreId,
     StoreSync? activeSync,
     SyncRun? activeJob,
     String? error,
     bool clearJob = false,
+    bool clearSync = false,
+    bool clearDeletingStore = false,
     bool clearError = false,
   }) {
     return StoresState(
       stores: stores ?? this.stores,
       isSubmitting: isSubmitting ?? this.isSubmitting,
-      activeSync: activeSync ?? this.activeSync,
-      activeJob: clearJob ? null : activeJob ?? this.activeJob,
+      deletingStoreId: clearDeletingStore
+          ? null
+          : deletingStoreId ?? this.deletingStoreId,
+      activeSync: clearSync ? null : activeSync ?? this.activeSync,
+      activeJob: clearSync || clearJob ? null : activeJob ?? this.activeJob,
       error: clearError ? null : error ?? this.error,
     );
   }

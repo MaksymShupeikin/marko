@@ -24,6 +24,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     _Destination(Icons.price_check_rounded, 'Рекомендации'),
     _Destination(Icons.inventory_2_outlined, 'Каталог'),
     _Destination(Icons.storefront_outlined, 'Магазины'),
+    _Destination(Icons.store_mall_directory_outlined, 'Мои магазины'),
     _Destination(Icons.grid_view_rounded, 'Обзор'),
   ];
 
@@ -33,7 +34,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     final content = switch (_selectedIndex) {
       1 => const CatalogPage(),
       2 => const StoresPage(),
-      3 => _Overview(onOpenStores: () => _select(2)),
+      3 => const StoresPage(ownedOnly: true),
+      4 => _Overview(onOpenStores: () => _select(3)),
       _ => RecommendationsPage(onOpenCatalog: () => _select(1)),
     };
 
@@ -219,11 +221,15 @@ class _SidebarItem extends StatelessWidget {
                   color: selected ? colors.brand : colors.muted,
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  destination.label,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: selected ? colors.brand : colors.ink,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                Expanded(
+                  child: Text(
+                    destination.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: selected ? colors.brand : colors.ink,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
                   ),
                 ),
               ],
@@ -357,8 +363,13 @@ class _MobileNavigation extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       item.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
                         color: selected ? colors.brand : colors.muted,
+                        fontSize: 10.5,
+                        letterSpacing: -0.1,
                       ),
                     ),
                   ],

@@ -212,6 +212,22 @@ async def list_store_products(
     return ProductPage(items=items, total=total, limit=limit, offset=offset)
 
 
+async def delete_owned_store(
+    session: AsyncSession,
+    *,
+    store_id: UUID,
+    workspace_id: UUID,
+) -> None:
+    deleted = await stores_repo.delete_owned_workspace_store(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+    )
+    if not deleted:
+        raise StoreNotFoundError(str(store_id))
+    await session.commit()
+
+
 async def get_sync_run(
     session: AsyncSession, *, sync_run_id: UUID, workspace_id: UUID
 ) -> SyncRun:

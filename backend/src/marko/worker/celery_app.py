@@ -14,6 +14,7 @@ celery_app = Celery(
     backend=settings.celery_result_backend,
     include=[
         "marko.worker.tasks.import_store",
+        "marko.worker.tasks.fitment",
         "marko.worker.tasks.pricing",
         "marko.worker.tasks.system",
     ],
@@ -41,6 +42,7 @@ celery_app.conf.update(
         "marko.worker.re_enrich_market_observations": {"queue": "celery"},
         "marko.worker.cleanup_scrape_evidence": {"queue": "celery"},
         "marko.worker.reconcile_scrape_outbox": {"queue": "celery"},
+        "marko.worker.process_fitment_analysis": {"queue": "celery"},
     },
     beat_schedule={
         "cleanup-orphaned-scrape-evidence": {

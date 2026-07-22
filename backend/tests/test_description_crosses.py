@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-import importlib.util
 from pathlib import Path
 
 import pytest
@@ -15,6 +14,7 @@ from metis.pricing import (
     CrossStageCBlocked,
     CrossValidationStatus,
     ProductTier,
+    evaluate_real_fixture_checks,
     extract_cross_candidates,
     load_approved_brand_rules,
     load_cross_config,
@@ -24,13 +24,6 @@ from metis.pricing import (
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-REPLAY_SCRIPT = BACKEND_ROOT.parent / "scripts" / "run_description_crosses_replay.py"
-REPLAY_SPEC = importlib.util.spec_from_file_location(
-    "run_description_crosses_replay", REPLAY_SCRIPT
-)
-assert REPLAY_SPEC is not None and REPLAY_SPEC.loader is not None
-REPLAY_MODULE = importlib.util.module_from_spec(REPLAY_SPEC)
-REPLAY_SPEC.loader.exec_module(REPLAY_MODULE)
 
 
 @pytest.fixture(scope="module")
@@ -269,7 +262,7 @@ def test_real_fixture_gate_does_not_require_an_empty_row(cross_config) -> None:
         [listing(rows[0]["description"], listing_id="real-1")], cross_config
     )
 
-    checks = REPLAY_MODULE._real_fixture_checks(result, rows)
+    checks = evaluate_real_fixture_checks(result, rows)
 
     assert checks["real_empty_or_short_description_safe"] is True
     assert (

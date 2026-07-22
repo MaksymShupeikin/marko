@@ -9,7 +9,9 @@ import 'store_models.dart';
 import 'stores_controller.dart';
 
 class StoresPage extends ConsumerStatefulWidget {
-  const StoresPage({super.key});
+  const StoresPage({this.ownedOnly = false, super.key});
+
+  final bool ownedOnly;
 
   @override
   ConsumerState<StoresPage> createState() => _StoresPageState();
@@ -17,6 +19,45 @@ class StoresPage extends ConsumerStatefulWidget {
 
 class _StoresPageState extends ConsumerState<StoresPage> {
   final _urlController = TextEditingController();
+
+  Future<void> _confirmDeleteStore(
+    StoresController controller,
+    StoreSummary store,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Удалить магазин?'),
+        content: Text(
+          'Магазин «${store.displayName}» и его каталог исчезнут из '
+          'раздела «Мои магазины». Данные на Prom.ua не изменятся.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            key: const ValueKey('confirm-delete-store'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: MarkoTheme.of(dialogContext).negative,
+            ),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final deleted = await controller.deleteStore(store);
+    if (!deleted || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('Магазин «${store.displayName}» удалён')),
+      );
+  }
 
   @override
   void dispose() {
@@ -35,98 +76,120 @@ class _StoresPageState extends ConsumerState<StoresPage> {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) =>
             _RetryView(message: error.toString(), onRetry: controller.refresh),
-        data: (state) => RefreshIndicator(
-          onRefresh: controller.refresh,
-          child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-            children: [
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1120),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const _PageHeading(),
-                      const SizedBox(height: 24),
-                      _AddStorePanel(
-                        urlController: _urlController,
-                        busy: state.isSubmitting,
-                        onSubmit: () async {
-                          final accepted = await controller.addStore(
-                            _urlController.text,
-                          );
-                          if (accepted && mounted) _urlController.clear();
-                        },
-                      ),
-                      if (state.activeSync != null) ...[
-                        const SizedBox(height: 14),
-                        _SyncPanel(
-                          sync: state.activeSync!,
-                          job: state.activeJob,
+        data: (state) {
+          final stores = widget.ownedOnly
+              ? state.stores
+                    .where((store) => store.kind == 'owned')
+                    .toList(growable: false)
+              : state.stores;
+          return RefreshIndicator(
+            onRefresh: controller.refresh,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+              children: [
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1120),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _PageHeading(ownedOnly: widget.ownedOnly),
+                        const SizedBox(height: 24),
+                        _AddStorePanel(
+                          urlController: _urlController,
+                          busy: state.isSubmitting || state.isDeleting,
+                          onSubmit: () async {
+                            final accepted = await controller.addStore(
+                              _urlController.text,
+                            );
+                            if (accepted && mounted) _urlController.clear();
+                          },
                         ),
-                      ],
-                      if (state.error != null) ...[
-                        const SizedBox(height: 14),
-                        MarkoInlineMessage(
-                          message: state.error!,
-                          tone: MarkoMessageTone.error,
-                          action: TextButton(
-                            onPressed: controller.dismissError,
-                            child: const Text('Закрыть'),
+                        if (state.activeSync != null) ...[
+                          const SizedBox(height: 14),
+                          _SyncPanel(
+                            sync: state.activeSync!,
+                            job: state.activeJob,
                           ),
+                        ],
+                        if (state.error != null) ...[
+                          const SizedBox(height: 14),
+                          MarkoInlineMessage(
+                            message: state.error!,
+                            tone: MarkoMessageTone.error,
+                            action: TextButton(
+                              onPressed: controller.dismissError,
+                              child: const Text('Закрыть'),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 30),
+                        _StoresHeading(
+                          count: stores.length,
+                          onRefresh: controller.refresh,
                         ),
-                      ],
-                      const SizedBox(height: 30),
-                      _StoresHeading(
-                        count: state.stores.length,
-                        onRefresh: controller.refresh,
-                      ),
-                      const SizedBox(height: 12),
-                      if (state.stores.isEmpty)
-                        const _EmptyStores()
-                      else
-                        MarkoPanel(
-                          padding: EdgeInsets.zero,
-                          child: Column(
-                            children: [
-                              for (
-                                var index = 0;
-                                index < state.stores.length;
-                                index++
-                              ) ...[
-                                _StoreRow(
-                                  store: state.stores[index],
-                                  syncDisabled:
-                                      state.isSubmitting || state.hasActiveJob,
-                                  onOpen: () => context.pushNamed(
-                                    'store-products',
-                                    pathParameters: {
-                                      'storeId': state.stores[index].id,
-                                    },
+                        const SizedBox(height: 12),
+                        if (stores.isEmpty)
+                          const _EmptyStores()
+                        else
+                          MarkoPanel(
+                            padding: EdgeInsets.zero,
+                            child: Column(
+                              children: [
+                                for (
+                                  var index = 0;
+                                  index < stores.length;
+                                  index++
+                                ) ...[
+                                  _StoreRow(
+                                    store: stores[index],
+                                    syncDisabled:
+                                        state.isSubmitting ||
+                                        state.hasActiveJob ||
+                                        state.isDeleting,
+                                    deleting:
+                                        state.deletingStoreId ==
+                                        stores[index].id,
+                                    deleteDisabled:
+                                        state.isSubmitting || state.isDeleting,
+                                    onOpen: () => context.pushNamed(
+                                      'store-products',
+                                      pathParameters: {
+                                        'storeId': stores[index].id,
+                                      },
+                                    ),
+                                    onSync: () =>
+                                        controller.syncStore(stores[index]),
+                                    onDelete: widget.ownedOnly
+                                        ? () => _confirmDeleteStore(
+                                            controller,
+                                            stores[index],
+                                          )
+                                        : null,
                                   ),
-                                  onSync: () =>
-                                      controller.syncStore(state.stores[index]),
-                                ),
-                                if (index < state.stores.length - 1)
-                                  const Divider(),
+                                  if (index < stores.length - 1)
+                                    const Divider(),
+                                ],
                               ],
-                            ],
+                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 }
 
 class _PageHeading extends StatelessWidget {
-  const _PageHeading();
+  const _PageHeading({required this.ownedOnly});
+
+  final bool ownedOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -135,12 +198,14 @@ class _PageHeading extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Магазины Prom',
+          ownedOnly ? 'Мои магазины' : 'Магазины Prom',
           style: Theme.of(context).textTheme.headlineMedium,
         ),
         const SizedBox(height: 7),
         Text(
-          'Подключайте каталоги и управляйте их синхронизацией.',
+          ownedOnly
+              ? 'Подключайте свои магазины и управляйте синхронизацией каталогов.'
+              : 'Подключайте каталоги и управляйте их синхронизацией.',
           style: Theme.of(
             context,
           ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -365,14 +430,20 @@ class _StoreRow extends StatelessWidget {
   const _StoreRow({
     required this.store,
     required this.syncDisabled,
+    required this.deleting,
+    required this.deleteDisabled,
     required this.onOpen,
     required this.onSync,
+    required this.onDelete,
   });
 
   final StoreSummary store;
   final bool syncDisabled;
+  final bool deleting;
+  final bool deleteDisabled;
   final VoidCallback onOpen;
   final VoidCallback onSync;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -383,65 +454,104 @@ class _StoreRow extends StatelessWidget {
         onTap: onOpen,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: colors.surfaceMuted,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  Icons.storefront_outlined,
-                  size: 20,
-                  color: colors.ink,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      store.displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 560;
+              final description = compact
+                  ? '${store.syncDescription} · ${store.productCount} товаров'
+                  : store.syncDescription;
+              return Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: colors.surfaceMuted,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      store.syncDescription,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.storefront_outlined,
+                      size: 20,
+                      color: colors.ink,
                     ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          store.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          description,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!compact) ...[
+                    const SizedBox(width: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.surfaceMuted,
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Text(
+                        '${store.productCount} товаров',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelMedium?.copyWith(color: colors.ink),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                   ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                decoration: BoxDecoration(
-                  color: colors.surfaceMuted,
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: Text(
-                  '${store.productCount} товаров',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelMedium?.copyWith(color: colors.ink),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Синхронизировать',
-                onPressed: syncDisabled ? null : onSync,
-                icon: const Icon(Icons.sync_rounded, size: 19),
-              ),
-              Icon(Icons.chevron_right_rounded, color: colors.muted, size: 20),
-            ],
+                  IconButton(
+                    tooltip: 'Синхронизировать',
+                    onPressed: syncDisabled ? null : onSync,
+                    icon: const Icon(Icons.sync_rounded, size: 19),
+                  ),
+                  if (onDelete != null)
+                    IconButton(
+                      key: ValueKey('delete-store-${store.id}'),
+                      tooltip: 'Удалить магазин',
+                      onPressed: deleteDisabled ? null : onDelete,
+                      icon: deleting
+                          ? SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: colors.negative,
+                              ),
+                            )
+                          : Icon(
+                              Icons.delete_outline_rounded,
+                              size: 19,
+                              color: deleteDisabled
+                                  ? colors.muted
+                                  : colors.negative,
+                            ),
+                    ),
+                  if (!compact)
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: colors.muted,
+                      size: 20,
+                    ),
+                ],
+              );
+            },
           ),
         ),
       ),

@@ -58,8 +58,11 @@ x-backend-environment: &backend-environment
   SCRAPE_EVIDENCE_GC_BATCH_SIZE: ${SCRAPE_EVIDENCE_GC_BATCH_SIZE:-1000}
   SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS: ${SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS:-3600}
   SCHEDULER_SINGLETON_LOCK_KEY: ${SCHEDULER_SINGLETON_LOCK_KEY:-marko:scheduler:singleton:v1}
-  SCHEDULER_SINGLETON_TTL_SECONDS: ${SCHEDULER_SINGLETON_TTL_SECONDS:-30}
-  SCHEDULER_SINGLETON_REFRESH_SECONDS: ${SCHEDULER_SINGLETON_REFRESH_SECONDS:-10}
+  SCHEDULER_SINGLETON_TTL_SECONDS: ${SCHEDULER_SINGLETON_TTL_SECONDS:-90}
+  SCHEDULER_SINGLETON_REFRESH_SECONDS: ${SCHEDULER_SINGLETON_REFRESH_SECONDS:-20}
+  SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS: ${SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS:-1}
+  SCHEDULER_SINGLETON_REACQUIRE_MAX_SECONDS: ${SCHEDULER_SINGLETON_REACQUIRE_MAX_SECONDS:-30}
+  SCHEDULER_HEALTH_STATE_PATH: /tmp/marko-scheduler-health.json
   PYTHONDONTWRITEBYTECODE: "1"
 
 x-backend: &backend
@@ -97,8 +100,8 @@ services:
         "--forwarded-allow-ips",
         "${TRUSTED_PROXY_IPS:?TRUSTED_PROXY_IPS is required}",
       ]
-    ports:
-      - "127.0.0.1:${API_PORT:-8000}:8000"
+    expose:
+      - "8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -115,6 +118,9 @@ services:
       retries: 10
     mem_limit: ${API_MEMORY_LIMIT:-768m}
     cpus: ${API_CPU_LIMIT:-1.5}
+    networks:
+      - edge
+      - monitoring
 
   worker:
     <<: *backend
@@ -196,6 +202,12 @@ services:
         condition: service_completed_successfully
     mem_limit: ${SCHEDULER_MEMORY_LIMIT:-512m}
     cpus: ${SCHEDULER_CPU_LIMIT:-0.5}
+    healthcheck:
+      test: ["CMD", "python", "-m", "marko.worker.beat_singleton", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
 
   frontend:
     build:
@@ -209,8 +221,8 @@ services:
         FIREBASE_WEB_APP_ID: ${FIREBASE_WEB_APP_ID:?FIREBASE_WEB_APP_ID is required}
         E2E_MODE: "false"
         E2E_AUTH_TOKEN: ""
-    ports:
-      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    expose:
+      - "80"
     depends_on:
       api:
         condition: service_healthy
@@ -224,3 +236,81 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+    networks:
+      - edge
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required}
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - edge
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - monitoring
+
+networks:
+  edge:
+    internal: false
+  monitoring:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  prometheus_data:

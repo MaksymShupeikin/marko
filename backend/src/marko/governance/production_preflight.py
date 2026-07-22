@@ -60,6 +60,10 @@ FIELD_POLICIES: Mapping[str, FieldPolicy] = {
     "PUBLIC_API_BASE_URL": FieldPolicy(
         parser="url", allowed_schemes=("https",), https_required=True
     ),
+    "APP_DOMAIN": FieldPolicy(parser="hostname", local_endpoint_forbidden=True),
+    "API_DOMAIN": FieldPolicy(parser="hostname", local_endpoint_forbidden=True),
+    "ACME_EMAIL": FieldPolicy(parser="email"),
+    "TRUSTED_PROXY_IPS": FieldPolicy(parser="trusted_proxies"),
     "FIREBASE_API_KEY": FieldPolicy(secret=True),
     "FIREBASE_AUTH_DOMAIN": FieldPolicy(),
     "FIREBASE_MESSAGING_SENDER_ID": FieldPolicy(),
@@ -294,6 +298,22 @@ def _validate_static(values: Mapping[str, str], collector: _Collector) -> None:
         and all(_valid_https_origin(origin) for origin in origins),
         "PREFLIGHT_CORS_UNSAFE",
     )
+    app_domain = values.get("APP_DOMAIN", "").strip().casefold()
+    api_domain = values.get("API_DOMAIN", "").strip().casefold()
+    public_api = urlsplit(values.get("PUBLIC_API_BASE_URL", ""))
+    origin_hosts = {
+        (urlsplit(origin).hostname or "").casefold() for origin in origins
+    }
+    collector.add(
+        "PREFLIGHT_EDGE_TOPOLOGY",
+        "P3_TOPOLOGY_AND_SECURITY",
+        bool(app_domain and api_domain)
+        and app_domain != api_domain
+        and app_domain in origin_hosts
+        and (public_api.hostname or "").casefold() == api_domain
+        and api_domain in {host.casefold() for host in hosts},
+        "PREFLIGHT_EDGE_TOPOLOGY_MISMATCH",
+    )
     collector.add(
         "PREFLIGHT_E2E_AUTH_BYPASS",
         "P3_TOPOLOGY_AND_SECURITY",
@@ -381,6 +401,21 @@ def _valid_field(name: str, raw: str | None, policy: FieldPolicy) -> bool:
             return False
     if policy.parser == "origins":
         return all(_valid_https_origin(value) for value in _split_csv(raw))
+    if policy.parser == "hostname":
+        return _valid_public_hostname(raw)
+    if policy.parser == "email":
+        local, separator, domain = raw.rpartition("@")
+        return bool(local and separator and _valid_public_hostname(domain))
+    if policy.parser == "trusted_proxies":
+        proxies = _split_csv(raw)
+        if not proxies:
+            return False
+        if proxies == ("*",):
+            return True
+        try:
+            return all(bool(ipaddress.ip_network(value, strict=False)) for value in proxies)
+        except ValueError:
+            return False
     return True
 
 
@@ -423,6 +458,27 @@ def _valid_https_origin(value: str) -> bool:
         and parsed.hostname
         and not _is_placeholder(parsed.hostname)
         and not _is_local(parsed.hostname)
+    )
+
+
+def _valid_public_hostname(value: str) -> bool:
+    normalized = value.strip().rstrip(".").casefold()
+    if not normalized or _is_placeholder(normalized) or _is_local(normalized):
+        return False
+    if "://" in normalized or "/" in normalized or "@" in normalized:
+        return False
+    try:
+        ascii_hostname = normalized.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+    labels = ascii_hostname.split(".")
+    return len(labels) >= 2 and all(
+        label
+        and len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
     )
 
 

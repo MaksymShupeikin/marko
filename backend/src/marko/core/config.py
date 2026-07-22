@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from functools import cached_property, lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
@@ -111,8 +112,15 @@ class Settings(BaseSettings):
     scrape_outbox_reconcile_batch_size: int = 100
     scrape_outbox_reconcile_interval_seconds: int = 15
     scheduler_singleton_lock_key: str = "marko:scheduler:singleton:v1"
-    scheduler_singleton_ttl_seconds: int = 30
-    scheduler_singleton_refresh_seconds: int = 10
+    scheduler_singleton_ttl_seconds: int = Field(default=90, ge=30, le=600)
+    scheduler_singleton_refresh_seconds: int = Field(default=20, ge=1, le=120)
+    scheduler_singleton_reacquire_initial_seconds: float = Field(
+        default=1.0, ge=0.1, le=60
+    )
+    scheduler_singleton_reacquire_max_seconds: float = Field(
+        default=30.0, ge=0.1, le=300
+    )
+    scheduler_health_state_path: str = "/tmp/marko-scheduler-health.json"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -147,6 +155,23 @@ class Settings(BaseSettings):
             raise ValueError("E2E_TASK_HOLD_SECONDS must not be negative")
         if self.e2e_task_hold_seconds and environment != "e2e":
             raise ValueError("E2E_TASK_HOLD_SECONDS is allowed only in ENVIRONMENT=e2e")
+        if self.scheduler_singleton_refresh_seconds * 2 >= (
+            self.scheduler_singleton_ttl_seconds
+        ):
+            raise ValueError(
+                "SCHEDULER_SINGLETON_REFRESH_SECONDS must be less than half "
+                "SCHEDULER_SINGLETON_TTL_SECONDS"
+            )
+        if (
+            self.scheduler_singleton_reacquire_max_seconds
+            < self.scheduler_singleton_reacquire_initial_seconds
+        ):
+            raise ValueError(
+                "SCHEDULER_SINGLETON_REACQUIRE_MAX_SECONDS must not be less than "
+                "SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS"
+            )
+        if not Path(self.scheduler_health_state_path).is_absolute():
+            raise ValueError("SCHEDULER_HEALTH_STATE_PATH must be absolute")
         if self.cost_privacy_mode == "SERVER_SIDE_ENCRYPTED":
             parse_cost_keyring(
                 active_key_id=self.cost_encryption_active_key_id,

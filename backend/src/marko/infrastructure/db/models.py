@@ -1492,6 +1492,11 @@ class MarketObservation(Base):
         String(120), default="generic_unknown", server_default="generic_unknown"
     )
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    # ``price`` remains the backwards-compatible active-price field.  The two
+    # explicit fields prevent a crossed-out reference price from entering the
+    # market cohort as the current sale price.
+    sale_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    reference_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     currency: Mapped[str] = mapped_column(String(3))
     currency_raw: Mapped[str | None] = mapped_column(String(32))
     currency_inferred: Mapped[bool] = mapped_column(
@@ -2077,5 +2082,784 @@ class RecommendationDecision(Base):
     context_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
     policy_version: Mapped[str] = mapped_column(String(80))
     decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentSource(Base):
+    """Versioned source-policy snapshot; rows are append-only."""
+
+    __tablename__ = "fitment_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "source_key", "policy_version", name="uq_fit_source_policy"
+        ),
+        CheckConstraint(
+            "source_tier IN ('A', 'B', 'C', 'D', 'E')",
+            name="ck_fit_source_tier",
+        ),
+        CheckConstraint(
+            "base_reliability >= 0 AND base_reliability <= 1",
+            name="ck_fit_source_reliability",
+        ),
+        CheckConstraint(
+            "(source_tier = 'A' AND base_reliability BETWEEN 0.95 AND 1.00) OR "
+            "(source_tier = 'B' AND base_reliability BETWEEN 0.75 AND 0.90) OR "
+            "(source_tier = 'C' AND base_reliability BETWEEN 0.55 AND 0.75) OR "
+            "(source_tier = 'D' AND base_reliability BETWEEN 0.30 AND 0.55) OR "
+            "(source_tier = 'E' AND base_reliability BETWEEN 0.10 AND 0.35)",
+            name="ck_fit_source_tier_reliability",
+        ),
+        CheckConstraint(
+            "access_status IN ('PERMITTED', 'OWNER_RISK_ACCEPTED', "
+            "'NOT_PERMITTED', 'UNKNOWN')",
+            name="ck_fit_source_access",
+        ),
+        CheckConstraint(
+            "access_status NOT IN ('PERMITTED', 'OWNER_RISK_ACCEPTED') OR "
+            "(char_length(trim(access_reference)) > 0 AND robots_checked AND terms_checked)",
+            name="ck_fit_source_approved_review",
+        ),
+        Index("ix_fit_source_workspace_key", "workspace_id", "source_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    source_key: Mapped[str] = mapped_column(String(160))
+    source_type: Mapped[str] = mapped_column(String(80))
+    source_tier: Mapped[str] = mapped_column(String(1))
+    base_reliability: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    domain: Mapped[str] = mapped_column(String(255))
+    access_method: Mapped[str] = mapped_column(String(80))
+    access_status: Mapped[str] = mapped_column(String(24))
+    access_reference: Mapped[str] = mapped_column(String(255))
+    robots_checked: Mapped[bool] = mapped_column(Boolean)
+    terms_checked: Mapped[bool] = mapped_column(Boolean)
+    rate_limit: Mapped[str] = mapped_column(String(120))
+    cache_policy: Mapped[str] = mapped_column(String(120))
+    policy_version: Mapped[str] = mapped_column(String(80))
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentSourceDocument(Base):
+    """Immutable query-level retrieval metadata; no bulk catalogue mirror."""
+
+    __tablename__ = "fitment_source_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id", "content_sha256", name="uq_fit_source_document_hash"
+        ),
+        CheckConstraint(
+            "char_length(content_sha256) = 64", name="ck_fit_source_document_hash"
+        ),
+        Index("ix_fit_source_document_retrieved", "source_id", "retrieved_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_sources.id", ondelete="RESTRICT"), index=True
+    )
+    source_url: Mapped[str] = mapped_column(Text)
+    retrieval_query: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    content_locator: Mapped[str | None] = mapped_column(Text)
+    response_metadata: Mapped[dict[str, Any]] = mapped_column(JSON)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SellerRelationRecord(Base):
+    """Append-only workspace seller classification with explicit provenance."""
+
+    __tablename__ = "seller_relation_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_seller_relation_idempotency"
+        ),
+        CheckConstraint(
+            "relation IN ('own', 'related', 'possibly_related', "
+            "'independent', 'unknown')",
+            name="ck_seller_relation_value",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_seller_relation_confidence",
+        ),
+        Index(
+            "ix_seller_relation_current",
+            "workspace_id",
+            "marketplace",
+            "seller_external_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    marketplace: Mapped[str] = mapped_column(String(32))
+    seller_external_id: Mapped[str] = mapped_column(String(255))
+    seller_name: Mapped[str | None] = mapped_column(String(255))
+    relation: Mapped[str] = mapped_column(String(24))
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("seller_relation_records.id", ondelete="RESTRICT"), index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentAnalysis(TimestampMixin, Base):
+    """Idempotent analysis job over one catalog item and evidence snapshot."""
+
+    __tablename__ = "fitment_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_fit_analysis_idempotency"
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'partial', 'failed')",
+            name="ck_fit_analysis_status",
+        ),
+        CheckConstraint(
+            "workflow_state IN ('NEW', 'NORMALIZED', 'TARGET_VERIFICATION_STARTED', "
+            "'TARGET_VERIFIED', 'CANDIDATES_DISCOVERED', 'SELLERS_RESOLVED', "
+            "'EVIDENCE_COLLECTION_STARTED', 'EVIDENCE_COLLECTED', "
+            "'FITMENT_EVALUATED', 'PRICE_COMPARABILITY_EVALUATED', "
+            "'MARKET_ANALYZED', 'RECOMMENDATION_READY', 'NOTIFIED', "
+            "'UNDER_REVIEW', 'ACCEPTED', 'ACCEPTED_WITH_MODIFICATION', "
+            "'REJECTED', 'DEFERRED', 'RESEARCH_REQUESTED', "
+            "'PARTIAL_FAILURE', 'FAILED')",
+            name="ck_fit_analysis_workflow_state",
+        ),
+        CheckConstraint(
+            "candidate_count >= 0 AND completed_candidate_count >= 0 "
+            "AND failed_candidate_count >= 0 AND attempt_count >= 0",
+            name="ck_fit_analysis_counts",
+        ),
+        Index("ix_fit_analysis_product_time", "catalog_item_id", "created_at"),
+        Index("ix_fit_analysis_workspace_status", "workspace_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="CASCADE"), index=True
+    )
+    pricing_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pricing_runs.id", ondelete="SET NULL"), index=True
+    )
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(
+        String(16), default="queued", server_default="queued"
+    )
+    workflow_state: Mapped[str] = mapped_column(
+        String(40), default="NEW", server_default="NEW", index=True
+    )
+    target_identity: Mapped[dict[str, Any]] = mapped_column(JSON)
+    target_commercial_context: Mapped[dict[str, Any]] = mapped_column(JSON)
+    source_policy_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    request_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    contract_version: Mapped[str] = mapped_column(String(80))
+    scoring_version: Mapped[str] = mapped_column(String(80))
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    dispatch_task_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    owner_task_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    completed_candidate_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    failed_candidate_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FitmentCandidateAssessment(Base):
+    """Immutable scoring result for one persisted market observation."""
+
+    __tablename__ = "fitment_candidate_assessments"
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_id", "market_observation_id", name="uq_fit_assessment_candidate"
+        ),
+        CheckConstraint(
+            "compatibility_status IN ('confirmed_compatible', 'likely_compatible', "
+            "'uncertain', 'not_compatible')",
+            name="ck_fit_assessment_status",
+        ),
+        CheckConstraint(
+            "compatibility_probability >= 0 AND compatibility_probability <= 1 "
+            "AND positive_evidence >= 0 AND positive_evidence <= 1 "
+            "AND negative_evidence >= 0 AND negative_evidence <= 1 "
+            "AND coverage >= 0 AND coverage <= 1 "
+            "AND contradiction_rate >= 0 AND contradiction_rate <= 1 "
+            "AND missing_critical_ratio >= 0 AND missing_critical_ratio <= 1",
+            name="ck_fit_assessment_scores",
+        ),
+        CheckConstraint(
+            "price_comparability_status IN ('comparable', 'manual_review', "
+            "'not_comparable')",
+            name="ck_fit_assessment_price_status",
+        ),
+        CheckConstraint(
+            "competitor_weight >= 0 AND competitor_weight <= 1",
+            name="ck_fit_assessment_weight",
+        ),
+        CheckConstraint(
+            "price_unit_status IN ('verified_piece', 'normalized_pair', "
+            "'normalized_axle_set', 'normalized_kit', 'unknown', 'incompatible') "
+            "AND price_unit_certainty BETWEEN 0 AND 1 "
+            "AND (normalized_unit_price IS NULL OR normalized_unit_price > 0)",
+            name="ck_fit_assessment_price_unit",
+        ),
+        CheckConstraint(
+            "NOT automatic_price_change_allowed",
+            name="ck_fit_assessment_no_auto_price",
+        ),
+        Index(
+            "ix_fit_assessment_analysis_status", "analysis_id", "compatibility_status"
+        ),
+        Index("ix_fit_assessment_observation", "market_observation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_analyses.id", ondelete="CASCADE"), index=True
+    )
+    market_observation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+    )
+    seller_relation_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("seller_relation_records.id", ondelete="RESTRICT"), index=True
+    )
+    candidate_identity: Mapped[dict[str, Any]] = mapped_column(JSON)
+    candidate_commercial_context: Mapped[dict[str, Any]] = mapped_column(JSON)
+    compatibility_status: Mapped[str] = mapped_column(String(32))
+    compatibility_probability: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    positive_evidence: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    negative_evidence: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    coverage: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    contradiction_rate: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    missing_critical_ratio: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    hard_rejections: Mapped[list[str]] = mapped_column(JSON)
+    reason_codes: Mapped[list[str]] = mapped_column(JSON)
+    missing_critical_fields: Mapped[list[str]] = mapped_column(JSON)
+    feature_consensus: Mapped[dict[str, Any]] = mapped_column(JSON)
+    authoritative_confirmation: Mapped[bool] = mapped_column(Boolean)
+    requires_manual_review: Mapped[bool] = mapped_column(Boolean)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON)
+    price_comparability_status: Mapped[str] = mapped_column(String(24))
+    price_eligible: Mapped[bool] = mapped_column(Boolean)
+    competitor_weight: Mapped[Decimal] = mapped_column(Numeric(9, 8))
+    normalized_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    price_unit_status: Mapped[str] = mapped_column(
+        String(32), default="unknown", server_default="unknown"
+    )
+    price_unit_certainty: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0.3"), server_default="0.3"
+    )
+    price_factor_trace: Mapped[dict[str, Any]] = mapped_column(JSON)
+    price_reason_codes: Mapped[list[str]] = mapped_column(JSON)
+    automatic_price_change_allowed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    contract_version: Mapped[str] = mapped_column(String(80))
+    scoring_version: Mapped[str] = mapped_column(String(80))
+    assessed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentEvidenceClaim(Base):
+    """Append-only source claim used by a candidate assessment."""
+
+    __tablename__ = "fitment_evidence_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_id", "evidence_key", name="uq_fit_evidence_analysis_key"
+        ),
+        CheckConstraint(
+            "feature IN ('oe_exact', 'oe_supersession', 'cross_confirmed', "
+            "'part_category', 'axle', 'side', 'vehicle_make_model', "
+            "'generation', 'year_overlap', 'engine', 'body', 'vehicle_market', "
+            "'technical_specs')",
+            name="ck_fit_evidence_feature",
+        ),
+        CheckConstraint(
+            "evidence_value IN (-1, -0.5, 0, 0.5, 1)",
+            name="ck_fit_evidence_value",
+        ),
+        CheckConstraint(
+            "source_tier IN ('A', 'B', 'C', 'D', 'E')",
+            name="ck_fit_evidence_source_tier",
+        ),
+        CheckConstraint(
+            "source_reliability BETWEEN 0 AND 1 "
+            "AND extraction_confidence BETWEEN 0 AND 1 "
+            "AND directness BETWEEN 0 AND 1 "
+            "AND independence_factor BETWEEN 0 AND 1 "
+            "AND freshness_factor BETWEEN 0 AND 1",
+            name="ck_fit_evidence_factors",
+        ),
+        CheckConstraint(
+            "polarity IN ('supports', 'contradicts', 'neutral', 'unknown')",
+            name="ck_fit_evidence_polarity",
+        ),
+        CheckConstraint(
+            "statement_status IN ('FACT', 'INFERENCE', 'ASSUMPTION', "
+            "'UNKNOWN', 'CONFLICT')",
+            name="ck_fit_evidence_statement",
+        ),
+        Index("ix_fit_evidence_assessment_feature", "assessment_id", "feature"),
+        Index("ix_fit_evidence_correlation", "analysis_id", "correlation_group"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_analyses.id", ondelete="CASCADE"), index=True
+    )
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_candidate_assessments.id", ondelete="CASCADE"), index=True
+    )
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("fitment_source_documents.id", ondelete="RESTRICT"), index=True
+    )
+    evidence_key: Mapped[str] = mapped_column(String(255))
+    feature: Mapped[str] = mapped_column(String(40))
+    evidence_value: Mapped[Decimal] = mapped_column(Numeric(3, 1))
+    source_external_id: Mapped[str] = mapped_column(String(255))
+    source_type: Mapped[str] = mapped_column(String(80))
+    source_tier: Mapped[str] = mapped_column(String(1))
+    source_reliability: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    extraction_confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    directness: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("1"), server_default="1"
+    )
+    independence_factor: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    freshness_factor: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    correlation_group: Mapped[str] = mapped_column(String(255))
+    polarity: Mapped[str] = mapped_column(String(16))
+    statement_status: Mapped[str] = mapped_column(String(16))
+    claim_value: Mapped[dict[str, Any]] = mapped_column(JSON)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    raw_fragment: Mapped[str | None] = mapped_column(Text)
+    source_document_sha256: Mapped[str | None] = mapped_column(String(64))
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentHumanReview(Base):
+    """Append-only human label for candidate compatibility."""
+
+    __tablename__ = "fitment_human_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_fit_review_idempotency"
+        ),
+        CheckConstraint(
+            "decision IN ('mark_candidate_compatible', 'mark_candidate_incompatible', "
+            "'postpone', 'request_additional_check')",
+            name="ck_fit_review_decision",
+        ),
+        Index("ix_fit_review_assessment_time", "assessment_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_candidate_assessments.id", ondelete="RESTRICT"), index=True
+    )
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(40))
+    reason_code: Mapped[str] = mapped_column(String(80))
+    comment: Mapped[str | None] = mapped_column(Text)
+    system_status_snapshot: Mapped[str] = mapped_column(String(32))
+    system_probability_snapshot: Mapped[Decimal] = mapped_column(Numeric(7, 6))
+    evidence_snapshot_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentCrossReference(Base):
+    """Versioned, append-only internal cross-reference knowledge record."""
+
+    __tablename__ = "fitment_cross_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "record_fingerprint", name="uq_fit_cross_fingerprint"
+        ),
+        CheckConstraint(
+            "relation_status IN ('machine_discovered', 'source_confirmed', "
+            "'human_confirmed', 'human_rejected', 'conflicting', "
+            "'deprecated', 'superseded')",
+            name="ck_fit_cross_status",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1 AND source_count >= 0 "
+            "AND human_feedback_count >= 0",
+            name="ck_fit_cross_metrics",
+        ),
+        Index(
+            "ix_fit_cross_lookup",
+            "workspace_id",
+            "normalized_article",
+            "normalized_oe",
+            "relation_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    brand: Mapped[str] = mapped_column(String(255))
+    normalized_brand: Mapped[str] = mapped_column(String(255), index=True)
+    article: Mapped[str] = mapped_column(String(255))
+    normalized_article: Mapped[str] = mapped_column(String(255), index=True)
+    oe: Mapped[str] = mapped_column(String(255))
+    normalized_oe: Mapped[str] = mapped_column(String(255), index=True)
+    installation_position: Mapped[str | None] = mapped_column(String(80))
+    vehicle_key: Mapped[str | None] = mapped_column(String(255))
+    relation_status: Mapped[str] = mapped_column(String(24))
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON)
+    source_count: Mapped[int] = mapped_column(Integer)
+    human_feedback_count: Mapped[int] = mapped_column(Integer)
+    record_fingerprint: Mapped[str] = mapped_column(String(64))
+    method_version: Mapped[str] = mapped_column(String(80))
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("fitment_cross_references.id", ondelete="RESTRICT"), index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentAuditEvent(Base):
+    """Immutable audit event for all fitment mutations and decisions."""
+
+    __tablename__ = "fitment_audit_events"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "event_key", name="uq_fit_audit_event_key"),
+        Index("ix_fit_audit_entity", "workspace_id", "entity_type", "entity_id"),
+        Index("ix_fit_audit_time", "workspace_id", "occurred_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    event_key: Mapped[str] = mapped_column(String(64))
+    event_type: Mapped[str] = mapped_column(String(80))
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[str] = mapped_column(String(255))
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentSourceCapability(Base):
+    """Versioned, fail-closed declaration of one source adapter capability."""
+
+    __tablename__ = "fitment_source_capabilities"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "capability",
+            "policy_version",
+            name="uq_fit_source_capability_policy",
+        ),
+        CheckConstraint(
+            "capability IN ('search_by_article', 'search_by_oe', "
+            "'search_fitment', 'fetch_document')",
+            name="ck_fit_source_capability_name",
+        ),
+        Index("ix_fit_source_capability_lookup", "source_id", "capability"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_sources.id", ondelete="CASCADE"), index=True
+    )
+    capability: Mapped[str] = mapped_column(String(40))
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    authentication_required: Mapped[bool] = mapped_column(Boolean)
+    rate_limit: Mapped[str] = mapped_column(String(120))
+    retry_policy: Mapped[dict[str, Any]] = mapped_column(JSON)
+    cache_policy: Mapped[dict[str, Any]] = mapped_column(JSON)
+    policy_version: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentSourceReliabilitySnapshot(Base):
+    """Append-only Beta posterior for a source and a concrete claim type."""
+
+    __tablename__ = "fitment_source_reliability_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id", "claim_type", "label_event_key", name="uq_fit_source_beta_event"
+        ),
+        CheckConstraint(
+            "prior_alpha > 0 AND prior_beta > 0 AND confirmed_count >= 0 "
+            "AND rejected_count >= 0 AND reliability BETWEEN 0 AND 1",
+            name="ck_fit_source_beta_values",
+        ),
+        Index(
+            "ix_fit_source_beta_current",
+            "source_id",
+            "claim_type",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_sources.id", ondelete="CASCADE"), index=True
+    )
+    claim_type: Mapped[str] = mapped_column(String(80))
+    source_tier: Mapped[str] = mapped_column(String(1))
+    prior_alpha: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+    prior_beta: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+    confirmed_count: Mapped[int] = mapped_column(Integer)
+    rejected_count: Mapped[int] = mapped_column(Integer)
+    reliability: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    label_event_key: Mapped[str] = mapped_column(String(64))
+    method_version: Mapped[str] = mapped_column(String(80))
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("fitment_source_reliability_snapshots.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentMarketRecommendation(Base):
+    """Immutable advisory recommendation bound to one fitment analysis snapshot."""
+
+    __tablename__ = "fitment_market_recommendations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_fit_market_rec_idempotency"
+        ),
+        UniqueConstraint(
+            "analysis_id", "input_fingerprint", name="uq_fit_market_rec_snapshot"
+        ),
+        CheckConstraint(
+            "action IN ('consider_raise', 'hold', 'consider_reduce', "
+            "'insufficient_evidence', 'manual_research_required')",
+            name="ck_fit_market_rec_action",
+        ),
+        CheckConstraint(
+            "current_price > 0 AND confidence BETWEEN 0 AND 1 "
+            "AND (recommended_price IS NULL OR recommended_price > 0) "
+            "AND NOT automatic_price_change_allowed",
+            name="ck_fit_market_rec_safety",
+        ),
+        Index("ix_fit_market_rec_product_time", "catalog_item_id", "created_at"),
+        Index("ix_fit_market_rec_review", "workspace_id", "action", "confidence"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_analyses.id", ondelete="CASCADE"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="CASCADE"), index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    input_fingerprint: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(32))
+    strategy: Mapped[str] = mapped_column(String(32))
+    current_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    recommended_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    recommended_range_min: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    recommended_range_max: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    absolute_change: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    relative_change: Mapped[Decimal | None] = mapped_column(Numeric(12, 8))
+    market_anchor: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    approved_price_floor: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    confidence_factors: Mapped[dict[str, Any]] = mapped_column(JSON)
+    market_summary: Mapped[dict[str, Any]] = mapped_column(JSON)
+    price_statistics: Mapped[dict[str, Any]] = mapped_column(JSON)
+    candidate_decisions: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    reason_codes: Mapped[list[str]] = mapped_column(JSON)
+    warnings: Mapped[list[str]] = mapped_column(JSON)
+    configuration_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    contract_version: Mapped[str] = mapped_column(String(80))
+    recommendation_version: Mapped[str] = mapped_column(String(80))
+    automatic_price_change_allowed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentRecommendationReview(Base):
+    """Append-only human decision; it never publishes a marketplace price."""
+
+    __tablename__ = "fitment_recommendation_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_fit_rec_review_idempotency"
+        ),
+        CheckConstraint(
+            "decision IN ('accepted', 'accepted_with_modification', 'rejected', "
+            "'deferred', 'research_requested')",
+            name="ck_fit_rec_review_decision",
+        ),
+        CheckConstraint(
+            "(decision IN ('accepted', 'accepted_with_modification') "
+            "AND approved_price IS NOT NULL AND approved_price > 0) OR "
+            "(decision NOT IN ('accepted', 'accepted_with_modification') "
+            "AND approved_price IS NULL)",
+            name="ck_fit_rec_review_price",
+        ),
+        Index("ix_fit_rec_review_time", "recommendation_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    recommendation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_market_recommendations.id", ondelete="RESTRICT"), index=True
+    )
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(40))
+    approved_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    reason_code: Mapped[str] = mapped_column(String(80))
+    comment: Mapped[str | None] = mapped_column(Text)
+    recommendation_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentFeedbackEvent(Base):
+    """Explicit, versioned label used by the guarded learning loop."""
+
+    __tablename__ = "fitment_feedback_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_fit_feedback_idempotency"
+        ),
+        CheckConstraint(
+            "status IN ('active', 'reverted')",
+            name="ck_fit_feedback_status",
+        ),
+        Index("ix_fit_feedback_entity", "workspace_id", "entity_type", "entity_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[str] = mapped_column(String(255))
+    event_type: Mapped[str] = mapped_column(String(80))
+    reason_code: Mapped[str] = mapped_column(String(80))
+    label_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    reverts_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("fitment_feedback_events.id", ondelete="RESTRICT"), index=True
+    )
+    label_version: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FitmentNotification(Base):
+    """Auditable review notification payload with grouping support."""
+
+    __tablename__ = "fitment_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "recommendation_id", "notification_type", name="uq_fit_notification_rec_type"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'delivered', 'read', 'dismissed')",
+            name="ck_fit_notification_status",
+        ),
+        Index("ix_fit_notification_group", "workspace_id", "group_key", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    recommendation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fitment_market_recommendations.id", ondelete="CASCADE"), index=True
+    )
+    notification_type: Mapped[str] = mapped_column(String(80))
+    group_key: Mapped[str] = mapped_column(String(120))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

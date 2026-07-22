@@ -14,6 +14,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis as AsyncRedis
 
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
@@ -1144,6 +1145,92 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+async def render_latest_operational_prometheus(session: AsyncSession) -> str:
+    """Render the latest store and pricing snapshots for internal Prometheus.
+
+    This endpoint is deployment-scoped rather than user-scoped. The production
+    edge must not expose it publicly; Prometheus reaches the API directly over
+    the private Compose network.
+    """
+
+    latest_sync = await session.scalar(
+        select(SyncRun)
+        .where(SyncRun.workspace_id.is_not(None))
+        .order_by(SyncRun.created_at.desc(), SyncRun.id.desc())
+        .limit(1)
+    )
+    latest_pricing = await session.scalar(
+        select(PricingRun)
+        .order_by(PricingRun.created_at.desc(), PricingRun.id.desc())
+        .limit(1)
+    )
+    sections = [
+        "# HELP marko_metrics_snapshot_available Whether a latest operational snapshot exists.",
+        "# TYPE marko_metrics_snapshot_available gauge",
+    ]
+    settings = get_settings()
+    redis = AsyncRedis.from_url(settings.celery_broker_url, decode_responses=True)
+    try:
+        scheduler_token = await redis.get(settings.scheduler_singleton_lock_key)
+        scheduler_ttl = await redis.ttl(settings.scheduler_singleton_lock_key)
+    except Exception:
+        scheduler_token = None
+        scheduler_ttl = -1
+        scheduler_probe_success = 0
+    else:
+        scheduler_probe_success = 1
+    finally:
+        await redis.aclose()
+    sections.extend(
+        (
+            "# HELP marko_scheduler_lease_probe_success Whether Redis lease state could be read.",
+            "# TYPE marko_scheduler_lease_probe_success gauge",
+            f"marko_scheduler_lease_probe_success {scheduler_probe_success}",
+            "# HELP marko_scheduler_lease_present Whether a scheduler lease currently exists.",
+            "# TYPE marko_scheduler_lease_present gauge",
+            f"marko_scheduler_lease_present {int(bool(scheduler_token) and scheduler_ttl > 0)}",
+            "# HELP marko_scheduler_lease_ttl_seconds Remaining scheduler lease TTL.",
+            "# TYPE marko_scheduler_lease_ttl_seconds gauge",
+            f"marko_scheduler_lease_ttl_seconds {max(0, int(scheduler_ttl))}",
+        )
+    )
+    if latest_sync is None or latest_sync.workspace_id is None:
+        sections.append(
+            'marko_metrics_snapshot_available{item_kind="store_sync"} 0'
+        )
+    else:
+        sections.append(
+            'marko_metrics_snapshot_available{item_kind="store_sync"} 1'
+        )
+        sections.append(
+            render_prometheus(
+                await get_store_sync_scraper_metrics(
+                    session,
+                    workspace_id=latest_sync.workspace_id,
+                    sync_run_id=latest_sync.id,
+                )
+            ).rstrip()
+        )
+    if latest_pricing is None:
+        sections.append(
+            'marko_metrics_snapshot_available{item_kind="comparison_job"} 0'
+        )
+    else:
+        sections.append(
+            'marko_metrics_snapshot_available{item_kind="comparison_job"} 1'
+        )
+        sections.append(
+            render_prometheus(
+                await get_pricing_run_scraper_metrics(
+                    session,
+                    workspace_id=latest_pricing.workspace_id,
+                    run_id=latest_pricing.id,
+                )
+            ).rstrip()
+        )
+    return "\n".join(sections) + "\n"
+
+
 def _store_reconciliation(run: SyncRun):
     state = run.scrape_state
     return reconcile_items(
@@ -1956,5 +2043,6 @@ def _escape_label(value: str) -> str:
 __all__ = [
     "get_pricing_run_scraper_metrics",
     "get_store_sync_scraper_metrics",
+    "render_latest_operational_prometheus",
     "render_prometheus",
 ]

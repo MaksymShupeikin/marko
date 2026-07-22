@@ -19,3 +19,39 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Python environments, bytecode, and tool caches
+.venv/
+venv/
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+**/.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Flutter and Dart generated state
+.dart_tool/
+**/.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+frontend/build/
+build/
+
+# Local runtime evidence and generated operator outputs
+.artifacts/
+outputs/
+
+# Local databases and temporary files
+*.db
+*.sqlite
+*.sqlite3
+*.tmp
+*.temp

@@ -210,6 +210,46 @@ class CrossABResult:
     status_counts: Mapping[str, int] = field(default_factory=dict)
 
 
+def evaluate_real_fixture_checks(
+    result: CrossABResult,
+    rows: Sequence[Mapping[str, str]],
+) -> dict[str, bool]:
+    """Evaluate the mandatory safety checks over a real replay corpus."""
+
+    rejections_by_listing: dict[str, set[str]] = {}
+    for rejection in result.rejections:
+        rejections_by_listing.setdefault(rejection.listing_id, set()).add(
+            rejection.reason.value
+        )
+    candidates_by_listing: dict[str, int] = {}
+    for candidate in result.candidates:
+        candidates_by_listing[candidate.listing_id] = (
+            candidates_by_listing.get(candidate.listing_id, 0) + 1
+        )
+    empty_listing_ids = {
+        row["listing_id"]
+        for row in rows
+        if not (row.get("description") or "").strip()
+    }
+    empty_rows_are_safe = not empty_listing_ids or not any(
+        item.listing_id in empty_listing_ids
+        for item in (*result.candidates, *result.rejections)
+    )
+    return {
+        "real_description_with_dimension_filtered": any(
+            "dimension" in reasons for reasons in rejections_by_listing.values()
+        ),
+        "real_description_with_three_analog_numbers_extracted": any(
+            count >= 3 for count in candidates_by_listing.values()
+        ),
+        "real_description_with_phone_and_year_filtered": any(
+            {"phone", "year_or_range"}.issubset(reasons)
+            for reasons in rejections_by_listing.values()
+        ),
+        "real_empty_or_short_description_safe": empty_rows_are_safe,
+    }
+
+
 def load_cross_config(path: str | Path) -> CrossConfig:
     """Load every Stage A-D threshold from a versioned YAML contract."""
 

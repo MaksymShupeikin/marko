@@ -55,6 +55,34 @@ class StoresController extends AsyncNotifier<StoresState> {
     }
   }
 
+  Future<bool> deleteStore(StoreSummary store) async {
+    if (_current.isDeleting) return false;
+    state = AsyncData(
+      _current.copyWith(deletingStoreId: store.id, clearError: true),
+    );
+    try {
+      await _api.deleteStore(store.id);
+      final deletingActiveSync = _current.activeSync?.storeId == store.id;
+      if (deletingActiveSync) _pollGeneration++;
+      state = AsyncData(
+        _current.copyWith(
+          stores: _current.stores
+              .where((item) => item.id != store.id)
+              .toList(growable: false),
+          clearDeletingStore: true,
+          clearSync: deletingActiveSync,
+          clearError: true,
+        ),
+      );
+      return true;
+    } catch (error) {
+      state = AsyncData(
+        _current.copyWith(clearDeletingStore: true, error: error.toString()),
+      );
+      return false;
+    }
+  }
+
   void dismissError() {
     state = AsyncData(_current.copyWith(clearError: true));
   }

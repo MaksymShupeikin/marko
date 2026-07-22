@@ -14,6 +14,7 @@ from marko.services.offer_processing import (
     OfferOutcomeCode,
     RejectedOffer,
     process_offer_candidate,
+    resolve_offer_price_boundary,
 )
 from marko.services.pricing_runs import policy_to_dict
 from marko.services.scraper_contract import PROM_ADAPTER_VERSION
@@ -94,6 +95,29 @@ def test_valid_query_candidate_does_not_invent_retrieval_score() -> None:
     assert isinstance(result, AcceptedCandidate)
     assert result.retrieval_score is None
     assert result.price == Decimal("100.00")
+
+
+@pytest.mark.parametrize(
+    ("payload", "sale", "reference"),
+    [
+        (
+            {"price": "412", "discounted_price": "330"},
+            Decimal("330.00"),
+            Decimal("412.00"),
+        ),
+        (
+            {"sale_price": "330", "reference_price": "412", "price": "412"},
+            Decimal("330.00"),
+            Decimal("412.00"),
+        ),
+        ({"price": "330", "price_original": "412"}, Decimal("330.00"), Decimal("412.00")),
+        ({"price": "330", "reference_price": "300"}, Decimal("330.00"), None),
+    ],
+)
+def test_price_boundary_never_uses_crossed_out_price_as_sale(
+    payload, sale, reference
+) -> None:
+    assert resolve_offer_price_boundary(payload) == (sale, reference)
 
 
 def test_offer_accounting_enforces_conservation_law() -> None:

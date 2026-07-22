@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from marko.api.main import app
+from marko.api.routers.v1.operations import router as operations_router
 from marko.infrastructure.db.models import (
     PriceObservation,
     ScrapeHttpAttempt,
@@ -19,6 +20,13 @@ def test_scraper_metrics_endpoints_are_in_openapi() -> None:
     assert "/api/v1/jobs/{sync_run_id}/scrape-metrics/prometheus" in paths
     assert "/api/v1/pricing/runs/{run_id}/collection-metrics" in paths
     assert "/api/v1/pricing/runs/{run_id}/collection-metrics/prometheus" in paths
+    assert "/api/v1/operations/metrics/prometheus" not in paths
+
+
+def test_internal_prometheus_route_exists_outside_public_openapi() -> None:
+    route_paths = {getattr(route, "path", None) for route in operations_router.routes}
+
+    assert "/metrics/prometheus" in route_paths
 
 
 def test_persistence_models_encode_three_work_levels_and_idempotency() -> None:

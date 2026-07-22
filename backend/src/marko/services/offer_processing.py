@@ -56,6 +56,7 @@ class AcceptedCandidate:
     product: Mapping[str, Any]
     upstream_comparison_evidence: Mapping[str, Any] | None
     price: Decimal
+    reference_price: Decimal | None
     source_listing_id: str
     listing_identity_quality: Decimal
 
@@ -137,21 +138,12 @@ def process_offer_candidate(
             "CANDIDATE_PRODUCT_NOT_MAPPING",
             raw_offer,
         )
-    raw_price = product.get("price")
-    try:
-        price = Decimal(str(raw_price)).quantize(Decimal("0.01"))
-    except (InvalidOperation, TypeError, ValueError):
+    price, reference_price = resolve_offer_price_boundary(product)
+    if price is None:
         return _rejected(
             raw_index,
             OfferOutcomeCode.REJECTED_INVALID_PRICE,
             "PRICE_NOT_DECIMAL",
-            product,
-        )
-    if not price.is_finite() or price <= 0:
-        return _rejected(
-            raw_index,
-            OfferOutcomeCode.REJECTED_INVALID_PRICE,
-            "PRICE_NOT_FINITE_POSITIVE",
             product,
         )
 
@@ -237,9 +229,57 @@ def process_offer_candidate(
         product=dict(product),
         upstream_comparison_evidence=(dict(upstream) if upstream is not None else None),
         price=price,
+        reference_price=reference_price,
         source_listing_id=source_listing_id,
         listing_identity_quality=listing_quality,
     )
+
+
+def resolve_offer_price_boundary(
+    product: Mapping[str, Any],
+) -> tuple[Decimal | None, Decimal | None]:
+    """Return active sale price and optional crossed-out reference price.
+
+    Prom snapshots have used both camelCase and normalized snake_case keys.
+    A valid discounted price wins over ``price``; a higher current/original
+    value is retained only as reference evidence and never enters market math.
+    """
+
+    def parse(value: Any) -> Decimal | None:
+        try:
+            parsed = Decimal(str(value)).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return parsed if parsed.is_finite() and parsed > 0 else None
+
+    explicit_sale = parse(product.get("sale_price", product.get("salePrice")))
+    explicit_reference = parse(
+        product.get("reference_price", product.get("referencePrice"))
+    )
+    current = parse(product.get("price"))
+    discounted = parse(
+        product.get("discounted_price", product.get("discountedPrice"))
+    )
+    original = parse(product.get("price_original", product.get("priceOriginal")))
+    active_discount = explicit_sale or discounted
+    if active_discount is not None:
+        sale = active_discount
+        reference_candidates = [
+            value
+            for value in (explicit_reference, current, original)
+            if value is not None and value > sale
+        ]
+        return sale, max(reference_candidates) if reference_candidates else None
+    sale = current or original
+    if sale is None:
+        return None, None
+    reference_candidates = [
+        value
+        for value in (explicit_reference, original)
+        if value is not None and value > sale
+    ]
+    reference = max(reference_candidates) if reference_candidates else None
+    return sale, reference
 
 
 def assess_source_confidence(

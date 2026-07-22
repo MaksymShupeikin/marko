@@ -30,6 +30,10 @@ def _base() -> dict[str, str]:
         "CORS_ORIGINS": "https://app.prod.marko.internal",
         "FIREBASE_PROJECT_ID": "marko-prod-8a7",
         "PUBLIC_API_BASE_URL": "https://api.prod.marko.internal",
+        "APP_DOMAIN": "app.prod.marko.internal",
+        "API_DOMAIN": "api.prod.marko.internal",
+        "ACME_EMAIL": "ops@prod.marko.internal",
+        "TRUSTED_PROXY_IPS": "*",
         "FIREBASE_API_KEY": "AIzaSyD-safe-public-id-8a7",
         "FIREBASE_AUTH_DOMAIN": "marko-prod-8a7.firebaseapp.com",
         "FIREBASE_MESSAGING_SENDER_ID": "4815162342",
@@ -233,6 +237,17 @@ def test_valid_static_config_passes_without_emitting_canaries(tmp_path: Path) ->
     assert CANARY_DB not in rendered
     assert CANARY_REDIS not in rendered
     assert result.secrets_emitted is False
+
+
+def test_edge_domain_mismatch_fails_static_preflight(tmp_path: Path) -> None:
+    values = _base()
+    values["PUBLIC_API_BASE_URL"] = "https://different.prod.marko.internal"
+    path = _write(tmp_path / "edge-mismatch.env", values)
+
+    result = run_preflight(path, mode="static")
+
+    assert not result.passed
+    assert "PREFLIGHT_EDGE_TOPOLOGY_MISMATCH" in _reason_codes(result)
 
 
 def test_full_mode_cannot_pass_when_connectivity_and_workflow_are_skipped(

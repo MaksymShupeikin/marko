@@ -16,6 +16,7 @@ from metis.pricing import (
     CrossListing,
     CrossStageCBlocked,
     CrossValidationStatus,
+    evaluate_real_fixture_checks,
     load_approved_brand_rules,
     load_cross_config,
     require_stage_c_brand_dictionary,
@@ -66,7 +67,7 @@ def main() -> int:
     _write_availability(availability_path, rows)
     _write_json(availability_json_path, {"rows": _availability_rows(rows)})
 
-    real_fixture_checks = _real_fixture_checks(result, rows)
+    real_fixture_checks = evaluate_real_fixture_checks(result, rows)
     stage_c_status, stage_c_reason = _stage_c_preflight(args.brands, config)
     exact_input_count = len(rows) == args.expected_listings
     description_input_available = result.descriptions_available > 0
@@ -215,44 +216,6 @@ def _listing(row: dict[str, str]) -> CrossListing:
         our_category=row.get("category") or None,
         source_category=None,
     )
-
-
-def _real_fixture_checks(result, rows: list[dict[str, str]]) -> dict[str, bool]:
-    rejections_by_listing: dict[str, set[str]] = {}
-    for rejection in result.rejections:
-        rejections_by_listing.setdefault(rejection.listing_id, set()).add(
-            rejection.reason.value
-        )
-    candidates_by_listing: dict[str, int] = {}
-    for candidate in result.candidates:
-        candidates_by_listing[candidate.listing_id] = (
-            candidates_by_listing.get(candidate.listing_id, 0) + 1
-        )
-    empty_listing_ids = {
-        row["listing_id"]
-        for row in rows
-        if not (row.get("description") or "").strip()
-    }
-    empty_rows_are_safe = not empty_listing_ids or not any(
-        item.listing_id in empty_listing_ids
-        for item in (*result.candidates, *result.rejections)
-    )
-    return {
-        "real_description_with_dimension_filtered": any(
-            "dimension" in reasons for reasons in rejections_by_listing.values()
-        ),
-        "real_description_with_three_analog_numbers_extracted": any(
-            count >= 3 for count in candidates_by_listing.values()
-        ),
-        "real_description_with_phone_and_year_filtered": any(
-            {"phone", "year_or_range"}.issubset(reasons)
-            for reasons in rejections_by_listing.values()
-        ),
-        # When the enriched corpus has no empty descriptions, this check is
-        # not applicable and therefore cannot block a real positive replay.
-        # If empty rows are present, they must produce no candidate evidence.
-        "real_empty_or_short_description_safe": empty_rows_are_safe,
-    }
 
 
 def _stage_c_preflight(brands_path: Path, config) -> tuple[str, str | None]:

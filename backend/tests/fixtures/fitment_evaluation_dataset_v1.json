@@ -1,0 +1,392 @@
+{
+  "schema_version": "metis-fitment-evaluation-v1",
+  "data_class": "synthetic_adversarial",
+  "representative": false,
+  "purpose": "Executable contract coverage for distributed fitment decisions. This dataset is not evidence of live-market precision or recall.",
+  "base_target": {
+    "category": "shock_absorber",
+    "axle": "rear",
+    "side": "right",
+    "vehicle_make": "Toyota",
+    "vehicle_model": "Camry",
+    "generation": "XV40",
+    "year_from": 2006,
+    "year_to": 2011,
+    "engine": "2.4",
+    "body": "sedan",
+    "vehicle_market": "EU",
+    "technical_specs": {"suspension_type": "standard"},
+    "manufacturer_article": "21956RR",
+    "oe_numbers": ["48530-89025"],
+    "side_specific": true
+  },
+  "required_case_types": [
+    "exact_brand_article",
+    "exact_oe",
+    "aftermarket_cross",
+    "supersession",
+    "right_left_conflict",
+    "rear_front_conflict",
+    "same_title_incompatible_oe",
+    "same_oe_wrong_part_title",
+    "different_body",
+    "generation_conflict",
+    "partial_year_overlap",
+    "engine_variant",
+    "same_article_multiple_sellers",
+    "same_owner_multiple_shops",
+    "same_photos_independent_seller",
+    "new_vs_used",
+    "official_vs_prom_conflict",
+    "dependent_catalogs_same_error",
+    "unknown_brand_tier",
+    "missing_article",
+    "missing_oe",
+    "contradictory_oe_claims",
+    "discontinued_article",
+    "article_replacement",
+    "out_of_stock",
+    "currency_error",
+    "different_market",
+    "copied_description_shared_error",
+    "one_piece_vs_pair",
+    "complete_assembly_vs_component",
+    "price_without_vat",
+    "official_source_unavailable",
+    "listing_price_typo",
+    "universal_part",
+    "side_neutral_part",
+    "electronic_vs_standard_suspension"
+  ],
+  "cases": [
+    {
+      "id": "FIT-EVAL-001",
+      "case_type": "exact_oe",
+      "identity_profile": "official_exact",
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "FITMENT_CONFIRMED"
+    },
+  {
+    "id": "FIT-EVAL-002",
+      "case_type": "aftermarket_cross",
+      "identity_profile": "official_cross",
+      "candidate_overrides": {"manufacturer_article": "334701", "oe_numbers": ["334701"]},
+    "expected_physical_status": "likely_compatible",
+    "expected_price_status": "manual_review",
+    "expected_reason": "FITMENT_SCORE_BELOW_CONFIRMED_THRESHOLD"
+    },
+    {
+      "id": "FIT-EVAL-003",
+      "case_type": "supersession",
+      "identity_profile": "official_supersession",
+      "candidate_overrides": {"oe_numbers": ["48530-89925"]},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "FITMENT_CONFIRMED"
+    },
+    {
+      "id": "FIT-EVAL-004",
+      "case_type": "right_left_conflict",
+      "identity_profile": "official_exact",
+      "negative_features": ["side"],
+      "candidate_overrides": {"side": "left", "manufacturer_article": "21956RL"},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "SIDE_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-005",
+      "case_type": "rear_front_conflict",
+      "identity_profile": "official_exact",
+      "negative_features": ["axle"],
+      "candidate_overrides": {"axle": "front"},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "AXLE_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-006",
+      "case_type": "same_title_incompatible_oe",
+      "identity_profile": "negative_exact",
+      "candidate_overrides": {"oe_numbers": ["48510-09A10"]},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "OE_IDENTITY_CONFLICT"
+    },
+    {
+      "id": "FIT-EVAL-007",
+      "case_type": "same_oe_wrong_part_title",
+      "identity_profile": "official_exact",
+      "negative_features": ["part_category"],
+      "candidate_overrides": {"category": "brake_pad"},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "PART_CATEGORY_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-008",
+      "case_type": "different_body",
+      "identity_profile": "official_exact",
+      "negative_features": ["body"],
+      "candidate_overrides": {"body": "wagon"},
+      "expected_physical_status": "likely_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "NEGATIVE_EVIDENCE_PRESENT"
+    },
+    {
+      "id": "FIT-EVAL-009",
+      "case_type": "generation_conflict",
+      "identity_profile": "official_exact",
+      "negative_features": ["generation"],
+      "candidate_overrides": {"generation": "XV50", "year_from": 2011, "year_to": 2017},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "GENERATION_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-010",
+      "case_type": "partial_year_overlap",
+      "identity_profile": "official_exact",
+      "candidate_overrides": {"year_from": 2009, "year_to": 2013},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "FITMENT_CONFIRMED"
+    },
+    {
+      "id": "FIT-EVAL-011",
+      "case_type": "engine_variant",
+      "identity_profile": "official_exact",
+      "negative_features": ["engine"],
+      "candidate_overrides": {"engine": "3.5"},
+      "expected_physical_status": "likely_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "NEGATIVE_EVIDENCE_PRESENT"
+    },
+    {
+      "id": "FIT-EVAL-012",
+      "case_type": "same_article_multiple_sellers",
+      "identity_profile": "official_exact",
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "PRICE_COMPARABILITY_PASS"
+    },
+    {
+      "id": "FIT-EVAL-013",
+      "case_type": "same_owner_multiple_shops",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"seller_relation": "own"},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "OWN_OR_RELATED_SELLER"
+    },
+    {
+      "id": "FIT-EVAL-014",
+      "case_type": "same_photos_independent_seller",
+      "identity_profile": "photo_only",
+      "expected_physical_status": "uncertain",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "MISSING_CRITICAL_EVIDENCE"
+    },
+    {
+      "id": "FIT-EVAL-015",
+      "case_type": "new_vs_used",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"condition": "used"},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "CONDITION_NOT_COMPARABLE"
+    },
+    {
+      "id": "FIT-EVAL-016",
+      "case_type": "official_vs_prom_conflict",
+      "identity_profile": "official_prom_conflict",
+      "expected_physical_status": "likely_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "CONFLICTING_EVIDENCE"
+    },
+    {
+      "id": "FIT-EVAL-017",
+      "case_type": "dependent_catalogs_same_error",
+      "identity_profile": "correlated_tier_b_cross",
+      "candidate_overrides": {"manufacturer_article": "334701", "oe_numbers": ["334701"]},
+      "expected_physical_status": "likely_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "AUTHORITATIVE_CONFIRMATION_MISSING"
+    },
+    {
+      "id": "FIT-EVAL-018",
+      "case_type": "unknown_brand_tier",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"tier": "UNKNOWN"},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "TIER_NOT_COMPARABLE"
+    },
+  {
+    "id": "FIT-EVAL-019",
+      "case_type": "missing_article",
+      "identity_profile": "official_exact",
+      "candidate_overrides": {"manufacturer_article": null},
+    "expected_physical_status": "likely_compatible",
+    "expected_price_status": "manual_review",
+    "expected_reason": "FITMENT_SCORE_BELOW_CONFIRMED_THRESHOLD"
+    },
+    {
+      "id": "FIT-EVAL-020",
+      "case_type": "missing_oe",
+      "identity_profile": "missing_identity",
+      "candidate_overrides": {"oe_numbers": []},
+      "expected_physical_status": "uncertain",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "MISSING_CRITICAL_EVIDENCE"
+    },
+    {
+      "id": "FIT-EVAL-021",
+      "case_type": "contradictory_oe_claims",
+      "identity_profile": "contradictory_exact",
+      "expected_physical_status": "uncertain",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "CRITICAL_EVIDENCE_CONFLICT"
+    },
+    {
+      "id": "FIT-EVAL-022",
+      "case_type": "discontinued_article",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"availability": "out_of_stock"},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "OUT_OF_STOCK"
+    },
+  {
+    "id": "FIT-EVAL-023",
+      "case_type": "article_replacement",
+      "identity_profile": "official_supersession",
+      "candidate_overrides": {"manufacturer_article": "21956RR-N", "oe_numbers": ["48530-89925"]},
+    "expected_physical_status": "likely_compatible",
+    "expected_price_status": "manual_review",
+    "expected_reason": "FITMENT_SCORE_BELOW_CONFIRMED_THRESHOLD"
+    },
+    {
+      "id": "FIT-EVAL-024",
+      "case_type": "out_of_stock",
+      "identity_profile": "official_cross",
+      "candidate_commercial_overrides": {"availability": "out_of_stock"},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "OUT_OF_STOCK"
+    },
+    {
+      "id": "FIT-EVAL-025",
+      "case_type": "currency_error",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"currency": "USD"},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "CURRENCY_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-026",
+      "case_type": "exact_brand_article",
+      "identity_profile": "official_exact",
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "FITMENT_CONFIRMED"
+    },
+    {
+      "id": "FIT-EVAL-027",
+      "case_type": "different_market",
+      "identity_profile": "official_exact",
+      "negative_features": ["vehicle_market"],
+      "candidate_overrides": {"vehicle_market": "US"},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "VEHICLE_MARKET_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-028",
+      "case_type": "copied_description_shared_error",
+      "identity_profile": "correlated_tier_b_cross",
+      "candidate_overrides": {"manufacturer_article": "COPY-1", "oe_numbers": ["COPY-1"]},
+      "expected_physical_status": "likely_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "AUTHORITATIVE_CONFIRMATION_MISSING"
+    },
+    {
+      "id": "FIT-EVAL-029",
+      "case_type": "one_piece_vs_pair",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"package_quantity": "2", "unit_basis": "pair"},
+      "normalize_units": true,
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "PRICE_COMPARABILITY_PASS"
+    },
+    {
+      "id": "FIT-EVAL-030",
+      "case_type": "complete_assembly_vs_component",
+      "identity_profile": "official_exact",
+      "negative_features": ["part_category"],
+      "candidate_overrides": {"category": "shock_absorber_component"},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "PART_CATEGORY_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-031",
+      "case_type": "price_without_vat",
+      "identity_profile": "official_exact",
+      "candidate_commercial_overrides": {"vat_included": false},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "VAT_BASIS_MISMATCH"
+    },
+    {
+      "id": "FIT-EVAL-032",
+      "case_type": "official_source_unavailable",
+      "identity_profile": "missing_identity",
+      "candidate_overrides": {"manufacturer_article": null, "oe_numbers": []},
+      "expected_physical_status": "uncertain",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "MISSING_CRITICAL_EVIDENCE"
+    },
+    {
+      "id": "FIT-EVAL-033",
+      "case_type": "listing_price_typo",
+      "identity_profile": "official_exact",
+      "listing_price": "999999.00",
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "PRICE_COMPARABILITY_PASS"
+    },
+    {
+      "id": "FIT-EVAL-034",
+      "case_type": "universal_part",
+      "identity_profile": "official_exact_missing_side",
+      "candidate_overrides": {"side": null},
+      "expected_physical_status": "likely_compatible",
+      "expected_price_status": "manual_review",
+      "expected_reason": "MISSING_CRITICAL_EVIDENCE"
+    },
+    {
+      "id": "FIT-EVAL-035",
+      "case_type": "side_neutral_part",
+      "identity_profile": "official_exact",
+      "target_overrides": {"side": null, "side_specific": false},
+      "candidate_overrides": {"side": null, "side_specific": false},
+      "expected_physical_status": "confirmed_compatible",
+      "expected_price_status": "comparable",
+      "expected_reason": "FITMENT_CONFIRMED"
+    },
+    {
+      "id": "FIT-EVAL-036",
+      "case_type": "electronic_vs_standard_suspension",
+      "identity_profile": "official_exact",
+      "negative_features": ["technical_specs"],
+      "candidate_overrides": {"technical_specs": {"suspension_type": "electronic"}},
+      "expected_physical_status": "not_compatible",
+      "expected_price_status": "not_comparable",
+      "expected_reason": "CRITICAL_TECHNICAL_MISMATCH"
+    }
+  ]
+}

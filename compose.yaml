@@ -69,8 +69,11 @@ x-backend-environment: &backend-environment
   SCRAPE_EVIDENCE_GC_BATCH_SIZE: ${SCRAPE_EVIDENCE_GC_BATCH_SIZE:-1000}
   SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS: ${SCRAPE_EVIDENCE_GC_INTERVAL_SECONDS:-3600}
   SCHEDULER_SINGLETON_LOCK_KEY: ${SCHEDULER_SINGLETON_LOCK_KEY:-marko:scheduler:singleton:v1}
-  SCHEDULER_SINGLETON_TTL_SECONDS: ${SCHEDULER_SINGLETON_TTL_SECONDS:-30}
-  SCHEDULER_SINGLETON_REFRESH_SECONDS: ${SCHEDULER_SINGLETON_REFRESH_SECONDS:-10}
+  SCHEDULER_SINGLETON_TTL_SECONDS: ${SCHEDULER_SINGLETON_TTL_SECONDS:-90}
+  SCHEDULER_SINGLETON_REFRESH_SECONDS: ${SCHEDULER_SINGLETON_REFRESH_SECONDS:-20}
+  SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS: ${SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS:-1}
+  SCHEDULER_SINGLETON_REACQUIRE_MAX_SECONDS: ${SCHEDULER_SINGLETON_REACQUIRE_MAX_SECONDS:-30}
+  SCHEDULER_HEALTH_STATE_PATH: /tmp/marko-scheduler-health.json
   PYTHONDONTWRITEBYTECODE: 1
 
 x-backend: &backend
@@ -231,12 +234,18 @@ services:
         condition: service_completed_successfully
       broker:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "marko.worker.beat_singleton", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
 
   backend-test:
     profiles: ["test"]
     build:
-      context: ./backend
-      target: test
+      context: .
+      dockerfile: backend/Dockerfile.test
     environment:
       <<: *backend-environment
       FIREBASE_PROJECT_ID: ""
