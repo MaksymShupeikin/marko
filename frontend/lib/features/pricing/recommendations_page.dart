@@ -82,20 +82,23 @@ class _RecommendationsContent extends StatelessWidget {
                     spacing: 16,
                     runSpacing: 14,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Какую цену поставить сейчас',
-                            style: Theme.of(context).textTheme.headlineMedium,
-                          ),
-                          const SizedBox(height: 7),
-                          Text(
-                            'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(color: colors.muted),
-                          ),
-                        ],
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 720),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Сравнение цен',
+                              style: Theme.of(context).textTheme.headlineMedium,
+                            ),
+                            const SizedBox(height: 7),
+                            Text(
+                              'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: colors.muted),
+                            ),
+                          ],
+                        ),
                       ),
                       IconButton(
                         tooltip: 'Обновить',
@@ -129,6 +132,7 @@ class _RecommendationsContent extends StatelessWidget {
                       SizedBox(
                         width: 310,
                         child: DropdownButtonFormField<String>(
+                          isExpanded: true,
                           initialValue: state.sort,
                           decoration: const InputDecoration(
                             labelText: 'Сортировка',
@@ -1074,7 +1078,7 @@ class _EmptyRecommendations extends StatelessWidget {
           ),
           const SizedBox(height: 7),
           Text(
-            'Импортируйте XLSX-каталог и запустите расчёт.',
+            'Подключите магазины и дождитесь заполнения каталога.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),

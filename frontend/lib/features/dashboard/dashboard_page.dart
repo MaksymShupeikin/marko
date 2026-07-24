@@ -21,7 +21,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   int _selectedIndex = 0;
 
   static const _destinations = <_Destination>[
-    _Destination(Icons.price_check_rounded, 'Рекомендации'),
+    _Destination(Icons.price_check_rounded, 'Сравнение цен'),
     _Destination(Icons.inventory_2_outlined, 'Каталог'),
     _Destination(Icons.storefront_outlined, 'Магазины'),
     _Destination(Icons.store_mall_directory_outlined, 'Мои магазины'),
@@ -32,7 +32,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).value?.user;
     final content = switch (_selectedIndex) {
-      1 => const CatalogPage(),
+      1 => CatalogPage(onOpenPriceComparison: () => _select(0)),
       2 => const StoresPage(),
       3 => const StoresPage(ownedOnly: true),
       4 => _Overview(onOpenStores: () => _select(3)),

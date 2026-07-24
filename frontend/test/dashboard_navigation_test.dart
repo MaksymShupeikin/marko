@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:marko_client/core/app_theme.dart';
 import 'package:marko_client/features/auth/auth_controller.dart';
 import 'package:marko_client/features/auth/auth_models.dart';
+import 'package:marko_client/features/catalog/catalog_controller.dart';
+import 'package:marko_client/features/catalog/catalog_models.dart';
 import 'package:marko_client/features/dashboard/dashboard_page.dart';
 import 'package:marko_client/features/pricing/pricing_controller.dart';
 import 'package:marko_client/features/pricing/pricing_models.dart';
@@ -19,6 +21,7 @@ void main() {
 
     await tester.pumpWidget(_testApp());
 
+    expect(find.text('Сравнение цен'), findsWidgets);
     expect(find.text('Магазины'), findsOneWidget);
     expect(find.text('Мои магазины'), findsOneWidget);
 
@@ -62,6 +65,29 @@ void main() {
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('catalog arrow opens the price comparison destination', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(_testApp());
+
+    await tester.tap(find.text('Каталог'));
+    await tester.pumpAndSettle();
+    expect(find.text('Каталог Prom.ua'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byTooltip('Сравнить цены'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Сравнение цен'), findsNWidgets(3));
+    expect(find.text('Каталог Prom.ua'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Widget _testApp() {
@@ -71,6 +97,7 @@ Widget _testApp() {
       recommendationsControllerProvider.overrideWith(
         _TestRecommendationsController.new,
       ),
+      catalogControllerProvider.overrideWith(_TestCatalogController.new),
       storesControllerProvider.overrideWith(_TestStoresController.new),
     ],
     child: MaterialApp(theme: AppTheme.light, home: const DashboardPage()),
@@ -89,6 +116,50 @@ class _TestRecommendationsController extends RecommendationsController {
       page: RecommendationPage(items: [], total: 0, runId: null),
       queue: 'all',
       sort: 'ABSOLUTE_RECOMMENDED_CHANGE',
+    );
+  }
+}
+
+class _TestCatalogController extends CatalogController {
+  @override
+  Future<CatalogState> build() async {
+    return const CatalogState(
+      page: CatalogProductPage(
+        items: [
+          CatalogProduct(
+            id: 'catalog-product',
+            identityKind: 'brand_sku',
+            name: 'KEMP test product',
+            sku: '0331402053',
+            oe: null,
+            modelId: null,
+            brand: 'KEMP',
+            imageUrl: null,
+            priceMin: 450,
+            priceMax: 450,
+            currency: 'UAH',
+            listingCount: 1,
+            stores: [
+              CatalogStorePresence(
+                storeId: 'owned-store',
+                externalId: '2847093',
+                name: 'Kemp',
+                url: 'https://prom.ua/ua/c2847093-kemp.html',
+                listingUrl: 'https://prom.ua/ua/p-kemp-product.html',
+                listingCount: 1,
+                price: 450,
+                currency: 'UAH',
+                isAvailable: true,
+              ),
+            ],
+          ),
+        ],
+        total: 1,
+        catalogTotal: 1,
+        listingTotal: 1,
+        duplicatesRemoved: 0,
+        storeTotal: 1,
+      ),
     );
   }
 }

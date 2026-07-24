@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api_client.dart';
@@ -10,24 +8,20 @@ class CatalogApi {
 
   final ApiClient _client;
 
-  Future<CatalogImportPage> listImports() async {
-    final payload = await _client.getJson(
-      '/api/v1/catalog/imports',
-      queryParameters: {'limit': '100', 'offset': '0'},
-    );
-    return CatalogImportPage.fromJson(payload as Map<String, dynamic>);
-  }
-
-  Future<CatalogImport> upload({
-    required String filename,
-    required Uint8List bytes,
+  Future<CatalogProductPage> listProducts({
+    String query = '',
+    int offset = 0,
+    int limit = 48,
   }) async {
-    final payload = await _client.postMultipart(
-      '/api/v1/catalog/imports',
-      filename: filename,
-      bytes: bytes,
+    final payload = await _client.getJson(
+      '/api/v1/catalog/products',
+      queryParameters: {
+        if (query.trim().isNotEmpty) 'q': query.trim(),
+        'limit': '$limit',
+        'offset': '$offset',
+      },
     );
-    return CatalogImport.fromJson(payload as Map<String, dynamic>);
+    return CatalogProductPage.fromJson(payload as Map<String, dynamic>);
   }
 }
 

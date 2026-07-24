@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from html.parser import HTMLParser
+import re
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
@@ -17,6 +18,13 @@ import requests
 from marko.core.config import Settings, get_settings
 from marko.parsers.prom.config import DEFAULT_HEADERS, USER_AGENTS
 from marko.services.parser_models import Seller
+
+
+_MARKETPLACE_SELLER_PATH_RE = re.compile(
+    r"^/(?:(?P<lang>[a-z]{2})/)?c(?P<company_id>\d+)-"
+    r"(?P<slug>[\w-]+)\.html/?$",
+    re.IGNORECASE,
+)
 
 
 class PromSellerUrlError(ValueError):
@@ -191,12 +199,16 @@ def _seller_from_canonical_url(url: str) -> Seller:
     host = (parsed.hostname or "").casefold().rstrip(".")
     if parsed.scheme.casefold() != "https" or not _is_marketplace_host(host):
         raise PromSellerUrlError("Посилання не є канонічною адресою продавця Prom.ua")
-    try:
-        return Seller.from_url(url)
-    except ValueError as exc:
+    match = _MARKETPLACE_SELLER_PATH_RE.fullmatch(parsed.path)
+    if match is None:
         raise PromSellerUrlError(
             "Очікується адреса продавця на кшталт https://prom.ua/ua/c2847093-kemp.html"
-        ) from exc
+        )
+    return Seller(
+        company_id=match.group("company_id"),
+        slug=match.group("slug"),
+        lang=(match.group("lang") or "ua").casefold(),
+    )
 
 
 def _validate_prom_transport_url(url: str) -> str:

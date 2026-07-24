@@ -23,10 +23,13 @@ from marko.api.schemas.catalog import (
     CatalogImportResponse,
     CatalogItemPageResponse,
     CatalogItemResponse,
+    OwnedCatalogPageResponse,
+    OwnedCatalogProductResponse,
 )
 from marko.core.config import get_settings
 from marko.services.catalog_costs import cost_configuration_map
 from marko.services.cost_privacy import privacy_safe_mapping
+from marko.services.owned_catalog import list_owned_catalog
 from marko.services.xlsx_catalog import (
     MAX_XLSX_BYTES,
     CatalogImportError,
@@ -38,6 +41,33 @@ from marko.services.xlsx_catalog import (
 )
 
 router = APIRouter()
+
+
+@router.get("/products", response_model=OwnedCatalogPageResponse)
+async def get_owned_catalog_products(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    q: Annotated[str | None, Query(max_length=255)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 48,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> OwnedCatalogPageResponse:
+    page = await list_owned_catalog(
+        session,
+        workspace_id=current.workspace_id,
+        query=q,
+        limit=limit,
+        offset=offset,
+    )
+    return OwnedCatalogPageResponse(
+        items=[OwnedCatalogProductResponse.model_validate(item) for item in page.items],
+        total=page.total,
+        catalog_total=page.catalog_total,
+        listing_total=page.listing_total,
+        duplicates_removed=page.duplicates_removed,
+        store_total=page.store_total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.post(

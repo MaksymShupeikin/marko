@@ -70,3 +70,46 @@ class CatalogItemPageResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class OwnedCatalogStoreResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    store_id: UUID
+    external_id: str
+    name: str
+    url: str
+    listing_url: str
+    listing_count: int
+    price: Decimal | None
+    currency: str
+    is_available: bool | None
+
+
+class OwnedCatalogProductResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    identity_kind: str
+    name: str
+    sku: str | None
+    oe: str | None
+    model_id: str | None
+    brand: str | None
+    image_url: str | None
+    price_min: Decimal | None
+    price_max: Decimal | None
+    currency: str | None
+    listing_count: int
+    stores: list[OwnedCatalogStoreResponse]
+
+
+class OwnedCatalogPageResponse(BaseModel):
+    items: list[OwnedCatalogProductResponse]
+    total: int
+    catalog_total: int
+    listing_total: int
+    duplicates_removed: int
+    store_total: int
+    limit: int
+    offset: int

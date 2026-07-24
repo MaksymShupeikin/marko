@@ -1,115 +1,119 @@
-import 'dart:async';
-import 'dart:typed_data';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../pricing/pricing_api.dart';
-import '../pricing/pricing_controller.dart';
-import '../pricing/pricing_models.dart';
 import 'catalog_api.dart';
 import 'catalog_models.dart';
 
 class CatalogState {
   const CatalogState({
-    required this.imports,
-    this.isUploading = false,
-    this.activeRun,
+    required this.page,
+    this.query = '',
+    this.isSearching = false,
+    this.isLoadingMore = false,
     this.error,
   });
 
-  final List<CatalogImport> imports;
-  final bool isUploading;
-  final PricingRunSummary? activeRun;
+  final CatalogProductPage page;
+  final String query;
+  final bool isSearching;
+  final bool isLoadingMore;
   final String? error;
 
   CatalogState copyWith({
-    List<CatalogImport>? imports,
-    bool? isUploading,
-    PricingRunSummary? activeRun,
+    CatalogProductPage? page,
+    String? query,
+    bool? isSearching,
+    bool? isLoadingMore,
     String? error,
-    bool clearRun = false,
     bool clearError = false,
   }) {
     return CatalogState(
-      imports: imports ?? this.imports,
-      isUploading: isUploading ?? this.isUploading,
-      activeRun: clearRun ? null : activeRun ?? this.activeRun,
+      page: page ?? this.page,
+      query: query ?? this.query,
+      isSearching: isSearching ?? this.isSearching,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       error: clearError ? null : error ?? this.error,
     );
   }
 }
 
 class CatalogController extends AsyncNotifier<CatalogState> {
-  int _pollGeneration = 0;
-  CatalogState get _current => state.value ?? const CatalogState(imports: []);
+  int _requestGeneration = 0;
+
+  CatalogApi get _api => ref.read(catalogApiProvider);
+  CatalogState get _current => state.requireValue;
 
   @override
   Future<CatalogState> build() async {
-    ref.onDispose(() => _pollGeneration++);
-    final page = await ref.watch(catalogApiProvider).listImports();
-    return CatalogState(imports: page.items);
+    ref.onDispose(() => _requestGeneration++);
+    final page = await ref.watch(catalogApiProvider).listProducts();
+    return CatalogState(page: page);
   }
 
-  Future<void> upload(String filename, Uint8List bytes) async {
-    if (bytes.length > 25 * 1024 * 1024) {
-      state = AsyncData(_current.copyWith(error: 'Файл больше 25 MB'));
-      return;
-    }
-    state = AsyncData(_current.copyWith(isUploading: true, clearError: true));
+  Future<void> search(String rawQuery) async {
+    final query = rawQuery.trim();
+    final generation = ++_requestGeneration;
+    state = AsyncData(
+      _current.copyWith(query: query, isSearching: true, clearError: true),
+    );
     try {
-      final imported = await ref
-          .read(catalogApiProvider)
-          .upload(filename: filename, bytes: bytes);
+      final page = await _api.listProducts(query: query);
+      if (generation != _requestGeneration) return;
       state = AsyncData(
         _current.copyWith(
-          imports: [
-            imported,
-            ..._current.imports.where((item) => item.id != imported.id),
-          ],
-          isUploading: false,
+          page: page,
+          query: query,
+          isSearching: false,
+          isLoadingMore: false,
           clearError: true,
         ),
       );
     } catch (error) {
+      if (generation != _requestGeneration) return;
       state = AsyncData(
-        _current.copyWith(isUploading: false, error: error.toString()),
+        _current.copyWith(isSearching: false, error: error.toString()),
       );
     }
   }
 
-  Future<void> startRun(CatalogImport imported) async {
-    if (!imported.canRun || _current.activeRun?.isFinished == false) return;
-    try {
-      final run = await ref.read(pricingApiProvider).startRun(imported.id);
-      state = AsyncData(_current.copyWith(activeRun: run, clearError: true));
-      final generation = ++_pollGeneration;
-      unawaited(_followRun(run, generation));
-    } catch (error) {
-      state = AsyncData(_current.copyWith(error: error.toString()));
-    }
-  }
+  Future<void> refresh() => search(_current.query);
 
-  Future<void> _followRun(PricingRunSummary run, int generation) async {
-    var currentRun = run;
-    while (generation == _pollGeneration && !currentRun.isFinished) {
-      await Future<void>.delayed(const Duration(seconds: 2));
-      try {
-        currentRun = await ref.read(pricingApiProvider).getRun(run.id);
-        if (generation != _pollGeneration) return;
-        state = AsyncData(
-          _current.copyWith(activeRun: currentRun, clearError: true),
-        );
-      } catch (error) {
-        state = AsyncData(_current.copyWith(error: error.toString()));
-      }
+  Future<void> loadMore() async {
+    final current = _current;
+    if (current.isLoadingMore || current.isSearching || !current.page.hasMore) {
+      return;
     }
-    if (currentRun.isFinished) {
-      ref.invalidate(recommendationsControllerProvider);
+    final generation = _requestGeneration;
+    state = AsyncData(current.copyWith(isLoadingMore: true, clearError: true));
+    try {
+      final next = await _api.listProducts(
+        query: current.query,
+        offset: current.page.items.length,
+      );
+      if (generation != _requestGeneration) return;
+      state = AsyncData(
+        _current.copyWith(
+          page: CatalogProductPage(
+            items: [...current.page.items, ...next.items],
+            total: next.total,
+            catalogTotal: next.catalogTotal,
+            listingTotal: next.listingTotal,
+            duplicatesRemoved: next.duplicatesRemoved,
+            storeTotal: next.storeTotal,
+          ),
+          isLoadingMore: false,
+          clearError: true,
+        ),
+      );
+    } catch (error) {
+      if (generation != _requestGeneration) return;
+      state = AsyncData(
+        _current.copyWith(isLoadingMore: false, error: error.toString()),
+      );
     }
   }
 }
 
 final catalogControllerProvider =
-    AsyncNotifierProvider<CatalogController, CatalogState>(
+    AsyncNotifierProvider.autoDispose<CatalogController, CatalogState>(
       CatalogController.new,
     );

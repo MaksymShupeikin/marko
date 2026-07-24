@@ -1,18 +1,35 @@
-import 'package:file_picker/file_picker.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
-import '../pricing/pricing_models.dart';
 import 'catalog_controller.dart';
-import 'catalog_models.dart';
+import 'widgets/catalog_product_card.dart';
 
-class CatalogPage extends ConsumerWidget {
-  const CatalogPage({super.key});
+class CatalogPage extends ConsumerStatefulWidget {
+  const CatalogPage({required this.onOpenPriceComparison, super.key});
+
+  final VoidCallback onOpenPriceComparison;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CatalogPage> createState() => _CatalogPageState();
+}
+
+class _CatalogPageState extends ConsumerState<CatalogPage> {
+  final _searchController = TextEditingController();
+  Timer? _searchDebounce;
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final asyncState = ref.watch(catalogControllerProvider);
     return asyncState.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -28,41 +45,63 @@ class CatalogPage extends ConsumerWidget {
       ),
       data: (state) => _CatalogContent(
         state: state,
-        onPickFile: () => _pickFile(ref),
-        onStartRun: (item) =>
-            ref.read(catalogControllerProvider.notifier).startRun(item),
+        searchController: _searchController,
+        onOpenPriceComparison: widget.onOpenPriceComparison,
+        onQueryChanged: _queueSearch,
+        onQuerySubmitted: _searchNow,
+        onClearQuery: _clearSearch,
+        onRefresh: () => ref.read(catalogControllerProvider.notifier).refresh(),
+        onLoadMore: () =>
+            ref.read(catalogControllerProvider.notifier).loadMore(),
       ),
     );
   }
 
-  Future<void> _pickFile(WidgetRef ref) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['xlsx'],
-      withData: true,
-      allowMultiple: false,
-    );
-    final file = result?.files.single;
-    final bytes = file?.bytes;
-    if (file == null || bytes == null) return;
-    await ref.read(catalogControllerProvider.notifier).upload(file.name, bytes);
+  void _queueSearch(String query) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _searchNow(query);
+    });
+    setState(() {});
+  }
+
+  void _searchNow(String query) {
+    _searchDebounce?.cancel();
+    ref.read(catalogControllerProvider.notifier).search(query);
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    _searchNow('');
+    setState(() {});
   }
 }
 
 class _CatalogContent extends StatelessWidget {
   const _CatalogContent({
     required this.state,
-    required this.onPickFile,
-    required this.onStartRun,
+    required this.searchController,
+    required this.onOpenPriceComparison,
+    required this.onQueryChanged,
+    required this.onQuerySubmitted,
+    required this.onClearQuery,
+    required this.onRefresh,
+    required this.onLoadMore,
   });
 
   final CatalogState state;
-  final VoidCallback onPickFile;
-  final ValueChanged<CatalogImport> onStartRun;
+  final TextEditingController searchController;
+  final VoidCallback onOpenPriceComparison;
+  final ValueChanged<String> onQueryChanged;
+  final ValueChanged<String> onQuerySubmitted;
+  final VoidCallback onClearQuery;
+  final VoidCallback onRefresh;
+  final VoidCallback onLoadMore;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
+    final page = state.page;
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
       children: [
@@ -72,85 +111,94 @@ class _CatalogContent extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 18,
-                  runSpacing: 14,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Каталог Prom.ua',
-                          style: Theme.of(context).textTheme.headlineMedium,
-                        ),
-                        const SizedBox(height: 7),
-                        Text(
-                          'Загрузите экспорт Prom.ua или рабочий XLSX «Ввод Юрия».',
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-                        ),
-                      ],
-                    ),
-                    FilledButton.icon(
-                      onPressed: state.isUploading ? null : onPickFile,
-                      icon: state.isUploading
-                          ? const SizedBox.square(
-                              dimension: 17,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.upload_file_rounded, size: 18),
-                      label: Text(
-                        state.isUploading ? 'Импортируем…' : 'Загрузить XLSX',
-                      ),
-                    ),
-                  ],
-                ),
+                _CatalogHeader(onRefresh: onRefresh),
                 const SizedBox(height: 20),
-                const MarkoInlineMessage(
-                  message:
-                      'Обязательны: OE/OEM, название, категория и цена. Статус, возраст запаса и продажи можно заполнить в ячейках. До 25 MB.',
+                TextField(
+                  key: const ValueKey('catalog-oe-search'),
+                  controller: searchController,
+                  onChanged: onQueryChanged,
+                  onSubmitted: onQuerySubmitted,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'Поиск по OE/OEM',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Очистить поиск',
+                            onPressed: onClearQuery,
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                  ),
                 ),
+                if (state.isSearching) ...[
+                  const SizedBox(height: 2),
+                  const LinearProgressIndicator(minHeight: 2),
+                ],
+                const SizedBox(height: 16),
+                _CatalogStats(state: state),
                 if (state.error != null) ...[
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 14),
                   MarkoInlineMessage(
                     message: state.error!,
                     tone: MarkoMessageTone.error,
                   ),
                 ],
-                if (state.activeRun != null) ...[
-                  const SizedBox(height: 16),
-                  _RunProgress(run: state.activeRun!),
-                ],
-                const SizedBox(height: 24),
-                Text(
-                  'История импортов',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 12),
-                if (state.imports.isEmpty)
-                  MarkoPanel(
-                    child: Text(
-                      'Ещё нет загруженных каталогов.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  )
-                else
-                  ...state.imports.map(
-                    (item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _ImportRow(
-                        item: item,
-                        runBusy: state.activeRun?.isFinished == false,
-                        onStart: () => onStartRun(item),
+                const SizedBox(height: 20),
+                if (page.items.isEmpty)
+                  _EmptyCatalog(hasQuery: state.query.isNotEmpty)
+                else ...[
+                  Text(
+                    state.query.isEmpty ? 'Товары' : 'Найдено ${page.total}',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  ...page.items.map(
+                    (product) => Align(
+                      alignment: Alignment.centerLeft,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 780),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: CatalogProductCard(
+                              product: product,
+                              onCompare: onOpenPriceComparison,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
+                  if (page.hasMore) ...[
+                    const SizedBox(height: 6),
+                    Center(
+                      child: OutlinedButton.icon(
+                        onPressed: state.isLoadingMore ? null : onLoadMore,
+                        icon: state.isLoadingMore
+                            ? const SizedBox.square(
+                                dimension: 17,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.expand_more_rounded, size: 18),
+                        label: Text(
+                          'Показать ещё (${page.items.length} из ${page.total})',
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+                const SizedBox(height: 12),
+                Text(
+                  'Дубли объединяются только по подтверждаемому артикулу и бренду. '
+                  'Похожие названия без идентификатора остаются отдельными товарами.',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colors.muted),
+                ),
               ],
             ),
           ),
@@ -160,166 +208,129 @@ class _CatalogContent extends StatelessWidget {
   }
 }
 
-class _ImportRow extends StatelessWidget {
-  const _ImportRow({
-    required this.item,
-    required this.runBusy,
-    required this.onStart,
-  });
+class _CatalogHeader extends StatelessWidget {
+  const _CatalogHeader({required this.onRefresh});
 
-  final CatalogImport item;
-  final bool runBusy;
-  final VoidCallback onStart;
+  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    final hasErrors = item.rejectedRows > 0;
-    return MarkoPanel(
-      padding: const EdgeInsets.all(17),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: hasErrors ? colors.warningSoft : colors.positiveSoft,
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                alignment: Alignment.center,
-                child: Icon(
-                  Icons.table_view_outlined,
-                  color: hasErrors ? colors.warning : colors.positive,
-                  size: 20,
-                ),
+              Text(
+                'Каталог Prom.ua',
+                style: Theme.of(context).textTheme.headlineMedium,
               ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.filename,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${item.importedRows} загружено · ${item.rejectedRows} отклонено · ${item.statusLabel}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: item.canRun && !runBusy ? onStart : null,
-                icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                label: const Text('Запустить расчёт'),
+              const SizedBox(height: 7),
+              Text(
+                'Товары из «Моих магазинов» без повторяющихся объявлений.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: colors.muted),
               ),
             ],
           ),
-          if (item.errors.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Divider(),
-            const SizedBox(height: 6),
-            ...item.errors
-                .take(3)
-                .map(
-                  (error) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      'Строка ${error['row'] ?? '?'}: ${error['message'] ?? error['code'] ?? 'ошибка'}',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: colors.warning),
-                    ),
-                  ),
-                ),
-            if (item.errors.length > 3)
-              Text(
-                'И ещё ${item.errors.length - 3} ошибок',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+        ),
+        IconButton.outlined(
+          tooltip: 'Обновить каталог',
+          onPressed: onRefresh,
+          icon: const Icon(Icons.refresh_rounded, size: 19),
+        ),
+      ],
+    );
+  }
+}
+
+class _CatalogStats extends StatelessWidget {
+  const _CatalogStats({required this.state});
+
+  final CatalogState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final page = state.page;
+    final values = <(String, String)>[
+      ('Уникальных товаров', '${page.catalogTotal}'),
+      ('Объявлений', '${page.listingTotal}'),
+      ('Дублей объединено', '${page.duplicatesRemoved}'),
+      ('Магазинов', '${page.storeTotal}'),
+    ];
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: values
+          .map((value) => _StatChip(label: value.$1, value: value.$2))
+          .toList(growable: false),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  const _StatChip({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border.all(color: colors.border),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$value  ',
+              style: TextStyle(color: colors.ink, fontWeight: FontWeight.w700),
+            ),
+            TextSpan(
+              text: label,
+              style: TextStyle(color: colors.muted),
+            ),
           ],
-        ],
+        ),
+        style: Theme.of(context).textTheme.bodySmall,
       ),
     );
   }
 }
 
-class _RunProgress extends StatelessWidget {
-  const _RunProgress({required this.run});
+class _EmptyCatalog extends StatelessWidget {
+  const _EmptyCatalog({required this.hasQuery});
 
-  final PricingRunSummary run;
+  final bool hasQuery;
 
   @override
   Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    final failed = run.status == 'failed';
-    final done = run.isFinished && !failed;
-    final foreground = failed
-        ? colors.negative
-        : done
-        ? colors.positive
-        : colors.brand;
     return MarkoPanel(
-      color: failed
-          ? colors.negativeSoft
-          : done
-          ? colors.positiveSoft
-          : colors.brandSoft,
-      borderColor: Colors.transparent,
+      padding: const EdgeInsets.all(28),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(
-                failed
-                    ? Icons.error_outline_rounded
-                    : done
-                    ? Icons.check_circle_outline_rounded
-                    : Icons.analytics_outlined,
-                color: foreground,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  done
-                      ? 'Расчёт завершён'
-                      : failed
-                      ? 'Расчёт остановлен с ошибкой'
-                      : 'Собираем рынок и считаем цены',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(color: foreground),
-                ),
-              ),
-              Text(
-                '${run.completedItems}/${run.totalItems}',
-                style: Theme.of(
-                  context,
-                ).textTheme.labelLarge?.copyWith(color: foreground),
-              ),
-            ],
-          ),
+          const Icon(Icons.inventory_2_outlined, size: 30),
           const SizedBox(height: 12),
-          LinearProgressIndicator(value: run.progress, color: foreground),
-          if (run.manualReviewItems > 0 || run.failedItems > 0) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Ручная проверка: ${run.manualReviewItems} · ошибки: ${run.failedItems}',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: foreground),
-            ),
-          ],
+          Text(
+            hasQuery ? 'По OE/OEM ничего не найдено' : 'Каталог пока пуст',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 5),
+          Text(
+            hasQuery
+                ? 'Проверьте номер или попробуйте артикул без пробелов и дефисов.'
+                : 'Добавьте магазин в «Мои магазины» и дождитесь синхронизации.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ],
       ),
     );

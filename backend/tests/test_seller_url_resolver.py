@@ -69,6 +69,13 @@ def test_resolver_passes_through_canonical_marketplace_url() -> None:
     assert seller.listing_url == "https://prom.ua/ua/c2847093-kemp.html"
 
 
+def test_resolver_accepts_canonical_url_without_locale() -> None:
+    seller = resolve_prom_seller_sync("https://prom.ua/c4015921-avtobust.html")
+    assert seller.company_id == "4015921"
+    assert seller.slug == "avtobust"
+    assert seller.listing_url == "https://prom.ua/ua/c4015921-avtobust.html"
+
+
 def test_resolver_extracts_canonical_seller_metadata() -> None:
     html = """
     <html><head>
