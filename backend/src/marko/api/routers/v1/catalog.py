@@ -19,14 +19,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.catalog import (
+    CatalogCompetitorComparisonResponse,
     CatalogImportPageResponse,
     CatalogImportResponse,
     CatalogItemPageResponse,
     CatalogItemResponse,
     OwnedCatalogPageResponse,
     OwnedCatalogProductResponse,
+    OwnedCatalogStoreOptionResponse,
 )
 from marko.core.config import get_settings
+from marko.services.catalog_competitors import (
+    list_catalog_competitors,
+    list_catalog_recommendation_summaries,
+)
 from marko.services.catalog_costs import cost_configuration_map
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.owned_catalog import list_owned_catalog
@@ -43,11 +49,30 @@ from marko.services.xlsx_catalog import (
 router = APIRouter()
 
 
+@router.get("/competitors", response_model=CatalogCompetitorComparisonResponse)
+async def get_catalog_product_competitors(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    sku: Annotated[str | None, Query(max_length=255)] = None,
+    oe: Annotated[str | None, Query(max_length=255)] = None,
+    brand: Annotated[str | None, Query(max_length=255)] = None,
+) -> CatalogCompetitorComparisonResponse:
+    comparison = await list_catalog_competitors(
+        session,
+        workspace_id=current.workspace_id,
+        sku=sku,
+        oe=oe,
+        brand=brand,
+    )
+    return CatalogCompetitorComparisonResponse.model_validate(comparison)
+
+
 @router.get("/products", response_model=OwnedCatalogPageResponse)
 async def get_owned_catalog_products(
     current: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_session)],
     q: Annotated[str | None, Query(max_length=255)] = None,
+    store_id: Annotated[UUID | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 48,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> OwnedCatalogPageResponse:
@@ -55,16 +80,40 @@ async def get_owned_catalog_products(
         session,
         workspace_id=current.workspace_id,
         query=q,
+        store_id=store_id,
         limit=limit,
         offset=offset,
     )
+    recommendations = await list_catalog_recommendation_summaries(
+        session,
+        workspace_id=current.workspace_id,
+        products=page.items,
+    )
+    item_responses = []
+    for item in page.items:
+        response = OwnedCatalogProductResponse.model_validate(item)
+        recommendation = recommendations.get(item.id)
+        if recommendation is not None:
+            response = response.model_copy(
+                update={
+                    "recommended_price": recommendation.recommended_price,
+                    "recommendation_currency": recommendation.currency,
+                    "recommendation_action": recommendation.action,
+                    "recommendation_computed_at": recommendation.computed_at,
+                }
+            )
+        item_responses.append(response)
     return OwnedCatalogPageResponse(
-        items=[OwnedCatalogProductResponse.model_validate(item) for item in page.items],
+        items=item_responses,
         total=page.total,
         catalog_total=page.catalog_total,
         listing_total=page.listing_total,
         duplicates_removed=page.duplicates_removed,
         store_total=page.store_total,
+        stores=[
+            OwnedCatalogStoreOptionResponse.model_validate(store)
+            for store in page.stores
+        ],
         limit=page.limit,
         offset=page.offset,
     )

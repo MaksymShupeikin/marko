@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
+import '../../core/widgets/marko_menu.dart';
 import '../auth/auth_controller.dart';
 import '../catalog/catalog_page.dart';
 import '../pricing/recommendations_page.dart';
@@ -20,22 +22,32 @@ class DashboardPage extends ConsumerStatefulWidget {
 class _DashboardPageState extends ConsumerState<DashboardPage> {
   int _selectedIndex = 0;
 
-  static const _destinations = <_Destination>[
-    _Destination(Icons.price_check_rounded, 'Сравнение цен'),
-    _Destination(Icons.inventory_2_outlined, 'Каталог'),
-    _Destination(Icons.storefront_outlined, 'Магазины'),
-    _Destination(Icons.store_mall_directory_outlined, 'Мои магазины'),
-    _Destination(Icons.grid_view_rounded, 'Обзор'),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).value?.user;
+    final language = ref.watch(appLanguageProvider);
+    final destinations = <_Destination>[
+      _Destination(
+        Icons.price_check_rounded,
+        context.localized(ru: 'Сравнение цен', uk: 'Порівняння цін'),
+      ),
+      _Destination(
+        Icons.inventory_2_outlined,
+        context.localized(ru: 'Каталог', uk: 'Каталог'),
+      ),
+      _Destination(
+        Icons.store_mall_directory_outlined,
+        context.localized(ru: 'Мои магазины', uk: 'Мої магазини'),
+      ),
+      _Destination(
+        Icons.grid_view_rounded,
+        context.localized(ru: 'Обзор', uk: 'Огляд'),
+      ),
+    ];
     final content = switch (_selectedIndex) {
       1 => CatalogPage(onOpenPriceComparison: () => _select(0)),
-      2 => const StoresPage(),
-      3 => const StoresPage(ownedOnly: true),
-      4 => _Overview(onOpenStores: () => _select(3)),
+      2 => const StoresPage(ownedOnly: true),
+      3 => _Overview(onOpenStores: () => _select(2)),
       _ => RecommendationsPage(onOpenCatalog: () => _select(1)),
     };
 
@@ -48,16 +60,18 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
               return Row(
                 children: [
                   _Sidebar(
-                    destinations: _destinations,
+                    destinations: destinations,
                     selectedIndex: _selectedIndex,
                     email: user?.email,
+                    language: language,
                     onSelected: _select,
+                    onLanguageSelected: _selectLanguage,
                     onLogout: _logout,
                   ),
                   Expanded(
                     child: Column(
                       children: [
-                        _PageBar(title: _destinations[_selectedIndex].label),
+                        _PageBar(title: destinations[_selectedIndex].label),
                         Expanded(child: content),
                       ],
                     ),
@@ -67,10 +81,14 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
             }
             return Column(
               children: [
-                _MobileHeader(onLogout: _logout),
+                _MobileHeader(
+                  language: language,
+                  onLanguageSelected: _selectLanguage,
+                  onLogout: _logout,
+                ),
                 Expanded(child: content),
                 _MobileNavigation(
-                  destinations: _destinations,
+                  destinations: destinations,
                   selectedIndex: _selectedIndex,
                   onSelected: _select,
                 ),
@@ -83,6 +101,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   }
 
   void _select(int index) => setState(() => _selectedIndex = index);
+
+  void _selectLanguage(AppLanguage language) =>
+      ref.read(appLanguageProvider.notifier).select(language);
 
   void _logout() => ref.read(authControllerProvider.notifier).logout();
 }
@@ -99,14 +120,18 @@ class _Sidebar extends StatelessWidget {
     required this.destinations,
     required this.selectedIndex,
     required this.email,
+    required this.language,
     required this.onSelected,
+    required this.onLanguageSelected,
     required this.onLogout,
   });
 
   final List<_Destination> destinations;
   final int selectedIndex;
   final String? email;
+  final AppLanguage language;
   final ValueChanged<int> onSelected;
+  final ValueChanged<AppLanguage> onLanguageSelected;
   final VoidCallback onLogout;
 
   @override
@@ -128,7 +153,7 @@ class _Sidebar extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(
-              'РАБОЧАЯ ОБЛАСТЬ',
+              context.localized(ru: 'РАБОЧАЯ ОБЛАСТЬ', uk: 'РОБОЧА ОБЛАСТЬ'),
               style: Theme.of(context).textTheme.labelMedium,
             ),
           ),
@@ -143,47 +168,145 @@ class _Sidebar extends StatelessWidget {
           ),
           const Spacer(),
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 16, 12, 16),
             decoration: BoxDecoration(
               border: Border(top: BorderSide(color: colors.border)),
             ),
-            child: Row(
+            child: Column(
               children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: colors.surfaceMuted,
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  alignment: Alignment.center,
-                  child: Icon(
-                    Icons.person_outline_rounded,
-                    size: 18,
-                    color: colors.muted,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                  child: _LanguageSelector(
+                    language: language,
+                    onSelected: onLanguageSelected,
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    email ?? 'Аккаунт Marko',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colors.ink,
-                      fontWeight: FontWeight.w500,
-                    ),
+                Divider(color: colors.border),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 12, 14),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: colors.surfaceMuted,
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.person_outline_rounded,
+                          size: 18,
+                          color: colors.muted,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          email ??
+                              context.localized(
+                                ru: 'Аккаунт Marko',
+                                uk: 'Обліковий запис Marko',
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: colors.ink,
+                                fontWeight: FontWeight.w500,
+                              ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: context.localized(ru: 'Выйти', uk: 'Вийти'),
+                        onPressed: onLogout,
+                        icon: const Icon(Icons.logout_rounded, size: 18),
+                      ),
+                    ],
                   ),
-                ),
-                IconButton(
-                  tooltip: 'Выйти',
-                  onPressed: onLogout,
-                  icon: const Icon(Icons.logout_rounded, size: 18),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LanguageSelector extends StatelessWidget {
+  const _LanguageSelector({
+    required this.language,
+    required this.onSelected,
+    this.compact = false,
+  });
+
+  final AppLanguage language;
+  final ValueChanged<AppLanguage> onSelected;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return MarkoMenuButton<AppLanguage>(
+      key: const ValueKey('language-selector'),
+      tooltip: context.localized(ru: 'Выбрать язык', uk: 'Обрати мову'),
+      header: context.localized(ru: 'Язык интерфейса', uk: 'Мова інтерфейсу'),
+      selected: language,
+      onSelected: onSelected,
+      minWidth: 220,
+      offset: const Offset(0, -12),
+      entries: AppLanguage.values
+          .map(
+            (item) => MarkoMenuEntry(
+              value: item,
+              label: item.nativeLabel,
+              avatarText: item.shortLabel,
+            ),
+          )
+          .toList(growable: false),
+      child: Container(
+        width: compact ? null : double.infinity,
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 9 : 11,
+          vertical: 9,
+        ),
+        decoration: BoxDecoration(
+          color: colors.surfaceMuted,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: colors.border),
+        ),
+        child: Row(
+          mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+          children: [
+            Icon(Icons.language_rounded, size: 18, color: colors.muted),
+            const SizedBox(width: 9),
+            if (!compact)
+              Expanded(
+                child: Text(
+                  language.nativeLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.ink,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            if (compact)
+              Text(
+                language.shortLabel,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelMedium?.copyWith(color: colors.ink),
+              ),
+            const SizedBox(width: 5),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 18,
+              color: colors.muted,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -278,7 +401,10 @@ class _PageBar extends StatelessWidget {
                 ),
                 const SizedBox(width: 7),
                 Text(
-                  'Система активна',
+                  context.localized(
+                    ru: 'Система активна',
+                    uk: 'Система активна',
+                  ),
                   style: Theme.of(
                     context,
                   ).textTheme.labelMedium?.copyWith(color: colors.positive),
@@ -293,8 +419,14 @@ class _PageBar extends StatelessWidget {
 }
 
 class _MobileHeader extends StatelessWidget {
-  const _MobileHeader({required this.onLogout});
+  const _MobileHeader({
+    required this.language,
+    required this.onLanguageSelected,
+    required this.onLogout,
+  });
 
+  final AppLanguage language;
+  final ValueChanged<AppLanguage> onLanguageSelected;
   final VoidCallback onLogout;
 
   @override
@@ -311,8 +443,14 @@ class _MobileHeader extends StatelessWidget {
         children: [
           const MarkoWordmark(compact: true),
           const Spacer(),
+          _LanguageSelector(
+            language: language,
+            onSelected: onLanguageSelected,
+            compact: true,
+          ),
+          const SizedBox(width: 6),
           IconButton(
-            tooltip: 'Выйти',
+            tooltip: context.localized(ru: 'Выйти', uk: 'Вийти'),
             onPressed: onLogout,
             icon: const Icon(Icons.logout_rounded, size: 19),
           ),
@@ -420,12 +558,18 @@ class _Overview extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Цены под контролем',
+                          context.localized(
+                            ru: 'Цены под контролем',
+                            uk: 'Ціни під контролем',
+                          ),
                           style: Theme.of(context).textTheme.headlineMedium,
                         ),
                         const SizedBox(height: 7),
                         Text(
-                          'Единая картина по магазинам, товарам и конкурентам.',
+                          context.localized(
+                            ru: 'Единая картина по магазинам, товарам и конкурентам.',
+                            uk: 'Єдина картина за магазинами, товарами й конкурентами.',
+                          ),
                           style: Theme.of(
                             context,
                           ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -433,7 +577,10 @@ class _Overview extends ConsumerWidget {
                       ],
                     ),
                     MarkoButton(
-                      label: 'Подключить магазин',
+                      label: context.localized(
+                        ru: 'Подключить магазин',
+                        uk: 'Підключити магазин',
+                      ),
                       onPressed: onOpenStores,
                       icon: Icons.add_rounded,
                     ),
@@ -454,19 +601,28 @@ class _Overview extends ConsumerWidget {
                           width: width,
                           icon: Icons.storefront_outlined,
                           value: storeCount?.toString() ?? '—',
-                          label: 'Подключено магазинов',
+                          label: context.localized(
+                            ru: 'Подключено магазинов',
+                            uk: 'Підключено магазинів',
+                          ),
                         ),
                         _MetricPanel(
                           width: width,
                           icon: Icons.inventory_2_outlined,
                           value: productCount?.toString() ?? '—',
-                          label: 'Товаров в мониторинге',
+                          label: context.localized(
+                            ru: 'Товаров в мониторинге',
+                            uk: 'Товарів у моніторингу',
+                          ),
                         ),
                         _MetricPanel(
                           width: width,
                           icon: Icons.check_circle_outline_rounded,
                           value: syncedCount?.toString() ?? '—',
-                          label: 'Синхронизировано',
+                          label: context.localized(
+                            ru: 'Синхронизировано',
+                            uk: 'Синхронізовано',
+                          ),
                           positive: true,
                         ),
                       ],
@@ -480,12 +636,18 @@ class _Overview extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Как работает Marko',
+                        context.localized(
+                          ru: 'Как работает Marko',
+                          uk: 'Як працює Marko',
+                        ),
                         style: Theme.of(context).textTheme.titleLarge,
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Три шага до понятной картины рынка.',
+                        context.localized(
+                          ru: 'Три шага до понятной картины рынка.',
+                          uk: 'Три кроки до зрозумілої картини ринку.',
+                        ),
                         style: Theme.of(
                           context,
                         ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -566,22 +728,39 @@ class _WorkflowSteps extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final horizontal = constraints.maxWidth >= 700;
-        const steps = [
+        final steps = [
           _WorkflowStep(
             number: '01',
-            title: 'Подключите магазин',
-            description:
-                'Добавьте ссылку Prom — каталог импортируется автоматически.',
+            title: context.localized(
+              ru: 'Подключите магазин',
+              uk: 'Підключіть магазин',
+            ),
+            description: context.localized(
+              ru: 'Добавьте ссылку Prom — каталог импортируется автоматически.',
+              uk: 'Додайте посилання Prom — каталог імпортується автоматично.',
+            ),
           ),
           _WorkflowStep(
             number: '02',
-            title: 'Найдите конкурентов',
-            description: 'Marko сопоставит похожие позиции и соберёт цены.',
+            title: context.localized(
+              ru: 'Найдите конкурентов',
+              uk: 'Знайдіть конкурентів',
+            ),
+            description: context.localized(
+              ru: 'Marko сопоставит похожие позиции и соберёт цены.',
+              uk: 'Marko зіставить схожі позиції та збере ціни.',
+            ),
           ),
           _WorkflowStep(
             number: '03',
-            title: 'Управляйте ценой',
-            description: 'Сравнивайте предложения и замечайте изменения рынка.',
+            title: context.localized(
+              ru: 'Управляйте ценой',
+              uk: 'Керуйте ціною',
+            ),
+            description: context.localized(
+              ru: 'Сравнивайте предложения и замечайте изменения рынка.',
+              uk: 'Порівнюйте пропозиції та помічайте зміни ринку.',
+            ),
           ),
         ];
         if (!horizontal) {

@@ -45,6 +45,26 @@ class CatalogStorePresence {
   }
 }
 
+class CatalogStoreOption {
+  const CatalogStoreOption({
+    required this.storeId,
+    required this.externalId,
+    required this.name,
+  });
+
+  factory CatalogStoreOption.fromJson(Map<String, dynamic> json) {
+    return CatalogStoreOption(
+      storeId: json['store_id'] as String,
+      externalId: json['external_id'] as String,
+      name: json['name'] as String,
+    );
+  }
+
+  final String storeId;
+  final String externalId;
+  final String name;
+}
+
 class CatalogProduct {
   static const primaryStoreExternalId = '2847093';
 
@@ -62,6 +82,10 @@ class CatalogProduct {
     required this.currency,
     required this.listingCount,
     required this.stores,
+    this.recommendedPrice,
+    this.recommendationCurrency,
+    this.recommendationAction,
+    this.recommendationComputedAt,
   });
 
   factory CatalogProduct.fromJson(Map<String, dynamic> json) {
@@ -84,6 +108,12 @@ class CatalogProduct {
                 CatalogStorePresence.fromJson(item as Map<String, dynamic>),
           )
           .toList(growable: false),
+      recommendedPrice: _decimal(json['recommended_price']),
+      recommendationCurrency: json['recommendation_currency'] as String?,
+      recommendationAction: json['recommendation_action'] as String?,
+      recommendationComputedAt: json['recommendation_computed_at'] == null
+          ? null
+          : DateTime.parse(json['recommendation_computed_at'] as String),
     );
   }
 
@@ -100,9 +130,17 @@ class CatalogProduct {
   final String? currency;
   final int listingCount;
   final List<CatalogStorePresence> stores;
+  final double? recommendedPrice;
+  final String? recommendationCurrency;
+  final String? recommendationAction;
+  final DateTime? recommendationComputedAt;
 
   bool get isDuplicate => listingCount > 1;
   bool get isInMultipleStores => stores.length > 1;
+  bool get hasRaiseRecommendation =>
+      recommendationAction == 'RAISE' && recommendedPrice != null;
+  bool get hasLowerRecommendation =>
+      recommendationAction == 'LOWER' && recommendedPrice != null;
 
   CatalogStorePresence? get primaryStore {
     for (final store in stores) {
@@ -139,6 +177,7 @@ class CatalogProductPage {
     required this.listingTotal,
     required this.duplicatesRemoved,
     required this.storeTotal,
+    required this.stores,
   });
 
   factory CatalogProductPage.fromJson(Map<String, dynamic> json) {
@@ -151,6 +190,11 @@ class CatalogProductPage {
       listingTotal: (json['listing_total'] as num).toInt(),
       duplicatesRemoved: (json['duplicates_removed'] as num).toInt(),
       storeTotal: (json['store_total'] as num).toInt(),
+      stores: (json['stores'] as List<dynamic>)
+          .map(
+            (item) => CatalogStoreOption.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -160,8 +204,102 @@ class CatalogProductPage {
   final int listingTotal;
   final int duplicatesRemoved;
   final int storeTotal;
+  final List<CatalogStoreOption> stores;
 
   bool get hasMore => items.length < total;
+}
+
+class CatalogCompetitorOffer {
+  const CatalogCompetitorOffer({
+    required this.observationId,
+    required this.sellerId,
+    required this.sellerName,
+    required this.title,
+    required this.url,
+    required this.price,
+    required this.currency,
+    required this.isAvailable,
+    required this.normalizedPrice,
+    required this.tier,
+    required this.matchConfidence,
+    required this.observedAt,
+  });
+
+  factory CatalogCompetitorOffer.fromJson(Map<String, dynamic> json) {
+    return CatalogCompetitorOffer(
+      observationId: json['observation_id'] as String,
+      sellerId: json['seller_id'] as String,
+      sellerName: json['seller_name'] as String,
+      title: json['title'] as String,
+      url: json['url'] as String,
+      price: _decimal(json['price']) ?? 0,
+      currency: json['currency'] as String,
+      isAvailable: json['is_available'] as bool?,
+      normalizedPrice: _decimal(json['normalized_price']),
+      tier: json['tier'] as String,
+      matchConfidence: _decimal(json['match_confidence']) ?? 0,
+      observedAt: DateTime.parse(json['observed_at'] as String),
+    );
+  }
+
+  final String observationId;
+  final String sellerId;
+  final String sellerName;
+  final String title;
+  final String url;
+  final double price;
+  final String currency;
+  final bool? isAvailable;
+  final double? normalizedPrice;
+  final String tier;
+  final double matchConfidence;
+  final DateTime observedAt;
+}
+
+class CatalogCompetitorComparison {
+  const CatalogCompetitorComparison({
+    required this.recommendationId,
+    required this.comparedAt,
+    required this.currentPrice,
+    required this.fairPrice,
+    required this.recommendedPrice,
+    required this.currency,
+    required this.reasonCodes,
+    required this.items,
+  });
+
+  factory CatalogCompetitorComparison.fromJson(Map<String, dynamic> json) {
+    return CatalogCompetitorComparison(
+      recommendationId: json['recommendation_id'] as String?,
+      comparedAt: json['compared_at'] == null
+          ? null
+          : DateTime.parse(json['compared_at'] as String),
+      currentPrice: _decimal(json['current_price']),
+      fairPrice: _decimal(json['fair_price']),
+      recommendedPrice: _decimal(json['recommended_price']),
+      currency: json['currency'] as String?,
+      reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
+      items: (json['items'] as List<dynamic>? ?? const [])
+          .map(
+            (item) =>
+                CatalogCompetitorOffer.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  final String? recommendationId;
+  final DateTime? comparedAt;
+  final double? currentPrice;
+  final double? fairPrice;
+  final double? recommendedPrice;
+  final String? currency;
+  final List<String> reasonCodes;
+  final List<CatalogCompetitorOffer> items;
+
+  bool get hasComparison => recommendationId != null;
 }
 
 double? _decimal(dynamic value) {

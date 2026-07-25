@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/app_language.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/widgets/marko_cached_image.dart';
 import '../store_models.dart';
@@ -24,7 +25,8 @@ class _ProductCardState extends State<ProductCard> {
     final radius = BorderRadius.circular(16);
 
     return Semantics(
-      label: '${product.name}, ${product.priceLabel}, $_availabilityLabel',
+      label:
+          '${product.name}, ${_priceLabel(context)}, ${_availabilityLabel(context)}',
       image: true,
       excludeSemantics: true,
       child: MouseRegion(
@@ -93,11 +95,15 @@ class _ProductCardState extends State<ProductCard> {
     );
   }
 
-  String get _availabilityLabel => product.isAvailable == true
-      ? 'В наличии'
+  String _availabilityLabel(BuildContext context) => product.isAvailable == true
+      ? context.localized(ru: 'В наличии', uk: 'В наявності')
       : product.isAvailable == false
-      ? 'Нет в наличии'
-      : 'Наличие неизвестно';
+      ? context.localized(ru: 'Нет в наличии', uk: 'Немає в наявності')
+      : context.localized(ru: 'Наличие неизвестно', uk: 'Наявність невідома');
+
+  String _priceLabel(BuildContext context) => product.price == null
+      ? context.localized(ru: 'Цена не указана', uk: 'Ціну не вказано')
+      : product.priceLabel;
 }
 
 class _CardDetails extends StatelessWidget {
@@ -140,7 +146,7 @@ class _CardDetails extends StatelessWidget {
         const SizedBox(height: 8),
         if (product.price == null)
           Text(
-            'Цена не указана',
+            context.localized(ru: 'Цена не указана', uk: 'Ціну не вказано'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(

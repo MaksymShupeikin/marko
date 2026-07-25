@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../../core/widgets/marko_menu.dart';
 import '../fitment/fitment_candidates_panel.dart';
 import 'catalog_context_dialog.dart';
 import 'pricing_api.dart';
@@ -88,12 +90,18 @@ class _RecommendationsContent extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Сравнение цен',
+                              context.localized(
+                                ru: 'Сравнение цен',
+                                uk: 'Порівняння цін',
+                              ),
                               style: Theme.of(context).textTheme.headlineMedium,
                             ),
                             const SizedBox(height: 7),
                             Text(
-                              'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
+                              context.localized(
+                                ru: 'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
+                                uk: 'Спочатку показані найбільші рекомендовані зміни. Ціна на Prom.ua не змінюється автоматично.',
+                              ),
                               style: Theme.of(context).textTheme.bodyMedium
                                   ?.copyWith(color: colors.muted),
                             ),
@@ -101,7 +109,10 @@ class _RecommendationsContent extends StatelessWidget {
                         ),
                       ),
                       IconButton(
-                        tooltip: 'Обновить',
+                        tooltip: context.localized(
+                          ru: 'Обновить',
+                          uk: 'Оновити',
+                        ),
                         onPressed: onRefresh,
                         icon: const Icon(Icons.refresh_rounded),
                       ),
@@ -129,41 +140,7 @@ class _RecommendationsContent extends StatelessWidget {
                     runSpacing: 12,
                     children: [
                       _QueueFilters(selected: state.queue, onSelected: onQueue),
-                      SizedBox(
-                        width: 310,
-                        child: DropdownButtonFormField<String>(
-                          isExpanded: true,
-                          initialValue: state.sort,
-                          decoration: const InputDecoration(
-                            labelText: 'Сортировка',
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'ABSOLUTE_RECOMMENDED_CHANGE',
-                              child: Text('Макс. изменение, ₴'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'PERCENT_RECOMMENDED_CHANGE',
-                              child: Text('Макс. изменение, %'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'EXPECTED_GROSS_UPLIFT',
-                              child: Text('Потенциал валовой маржи'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'CLEARANCE_CAPITAL_LOCK',
-                              child: Text('Замороженный капитал'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'REVIEW_PRIORITY',
-                              child: Text('Приоритет проверки'),
-                            ),
-                          ],
-                          onChanged: (value) {
-                            if (value != null) onSort(value);
-                          },
-                        ),
-                      ),
+                      _SortSelector(selected: state.sort, onSelected: onSort),
                     ],
                   ),
                   const SizedBox(height: 16),
@@ -183,6 +160,113 @@ class _RecommendationsContent extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SortSelector extends StatelessWidget {
+  const _SortSelector({required this.selected, required this.onSelected});
+
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final entries = <MarkoMenuEntry<String>>[
+      MarkoMenuEntry(
+        value: 'ABSOLUTE_RECOMMENDED_CHANGE',
+        label: context.localized(ru: 'Макс. изменение, ₴', uk: 'Макс. зміна, ₴'),
+        icon: Icons.swap_vert_rounded,
+      ),
+      MarkoMenuEntry(
+        value: 'PERCENT_RECOMMENDED_CHANGE',
+        label: context.localized(ru: 'Макс. изменение, %', uk: 'Макс. зміна, %'),
+        icon: Icons.percent_rounded,
+      ),
+      MarkoMenuEntry(
+        value: 'EXPECTED_GROSS_UPLIFT',
+        label: context.localized(
+          ru: 'Потенциал валовой маржи',
+          uk: 'Потенціал валової маржі',
+        ),
+        icon: Icons.trending_up_rounded,
+      ),
+      MarkoMenuEntry(
+        value: 'CLEARANCE_CAPITAL_LOCK',
+        label: context.localized(
+          ru: 'Замороженный капитал',
+          uk: 'Заморожений капітал',
+        ),
+        icon: Icons.inventory_2_outlined,
+      ),
+      MarkoMenuEntry(
+        value: 'REVIEW_PRIORITY',
+        label: context.localized(
+          ru: 'Приоритет проверки',
+          uk: 'Пріоритет перевірки',
+        ),
+        icon: Icons.flag_outlined,
+      ),
+    ];
+    final current = entries.firstWhere(
+      (entry) => entry.value == selected,
+      orElse: () => entries.first,
+    );
+
+    return MarkoMenuButton<String>(
+      key: const ValueKey('recommendations-sort'),
+      tooltip: context.localized(ru: 'Сортировка', uk: 'Сортування'),
+      header: context.localized(ru: 'Сортировка', uk: 'Сортування'),
+      selected: selected,
+      onSelected: onSelected,
+      entries: entries,
+      minWidth: 288,
+      maxWidth: 340,
+      child: Container(
+        width: 310,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: colors.border),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.sort_rounded, size: 18, color: colors.muted),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    context.localized(ru: 'Сортировка', uk: 'Сортування'),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colors.muted,
+                    ),
+                  ),
+                  Text(
+                    current.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: colors.ink,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 18,
+              color: colors.muted,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -211,23 +295,27 @@ class _SummaryRow extends StatelessWidget {
           spacing: 12,
           runSpacing: 12,
           children: [
-            _SummaryMetric(width: width, value: '$total', label: 'Всего'),
+            _SummaryMetric(
+              width: width,
+              value: '$total',
+              label: context.localized(ru: 'Всего', uk: 'Усього'),
+            ),
             _SummaryMetric(
               width: width,
               value: '$raiseCount',
-              label: 'Поднять',
+              label: context.localized(ru: 'Поднять', uk: 'Підвищити'),
               tone: _Tone.positive,
             ),
             _SummaryMetric(
               width: width,
               value: '$lowerCount',
-              label: 'Снизить',
+              label: context.localized(ru: 'Снизить', uk: 'Знизити'),
               tone: _Tone.warning,
             ),
             _SummaryMetric(
               width: width,
               value: '$reviewCount',
-              label: 'Проверить',
+              label: context.localized(ru: 'Проверить', uk: 'Перевірити'),
               tone: _Tone.negative,
             ),
           ],
@@ -291,12 +379,24 @@ class _QueueFilters extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const options = <(String, String)>[
-      ('all', 'Все'),
-      ('raise', 'Недополученная маржа'),
-      ('clearance', 'Высвобождение капитала'),
-      ('review', 'Проверить вручную'),
-      ('hold', 'Без изменения'),
+    final options = <(String, String)>[
+      ('all', context.localized(ru: 'Все', uk: 'Усі')),
+      (
+        'raise',
+        context.localized(ru: 'Недополученная маржа', uk: 'Недоотримана маржа'),
+      ),
+      (
+        'clearance',
+        context.localized(
+          ru: 'Высвобождение капитала',
+          uk: 'Вивільнення капіталу',
+        ),
+      ),
+      (
+        'review',
+        context.localized(ru: 'Проверить вручную', uk: 'Перевірити вручну'),
+      ),
+      ('hold', context.localized(ru: 'Без изменения', uk: 'Без змін')),
     ];
     return Wrap(
       spacing: 8,
@@ -377,7 +477,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             ),
             const SizedBox(width: 12),
             _ActionBadge(
-              label: recommendation.actionLabel,
+              label: _actionLabel(context, recommendation.action),
               foreground: foreground,
               background: background,
             ),
@@ -395,7 +495,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               Text(
-                _priceDecision(recommendation),
+                _priceDecision(context, recommendation),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: foreground,
                   fontWeight: FontWeight.w600,
@@ -436,7 +536,12 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
               OutlinedButton.icon(
                 onPressed: _editContext,
                 icon: const Icon(Icons.inventory_2_outlined, size: 18),
-                label: const Text('Контекст склада'),
+                label: Text(
+                  context.localized(
+                    ru: 'Контекст склада',
+                    uk: 'Контекст складу',
+                  ),
+                ),
               ),
               OutlinedButton.icon(
                 onPressed: _verifyingReplay ? null : _verifyReplay,
@@ -446,7 +551,12 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.verified_outlined, size: 18),
-                label: const Text('Проверить replay'),
+                label: Text(
+                  context.localized(
+                    ru: 'Проверить replay',
+                    uk: 'Перевірити replay',
+                  ),
+                ),
               ),
               if (recommendation.automaticEligible &&
                   recommendation.recommendedPrice != null) ...[
@@ -455,7 +565,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                       ? null
                       : () => _recordDecision('accepted'),
                   icon: const Icon(Icons.check_rounded, size: 18),
-                  label: const Text('Принять'),
+                  label: Text(context.localized(ru: 'Принять', uk: 'Прийняти')),
                 ),
               ],
               OutlinedButton.icon(
@@ -465,15 +575,20 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                 icon: const Icon(Icons.edit_outlined, size: 18),
                 label: Text(
                   recommendation.automaticEligible
-                      ? 'Своя цена'
-                      : 'Ручная цена (audit)',
+                      ? context.localized(ru: 'Своя цена', uk: 'Своя ціна')
+                      : context.localized(
+                          ru: 'Ручная цена (audit)',
+                          uk: 'Ручна ціна (audit)',
+                        ),
                 ),
               ),
               TextButton(
                 onPressed: _savingDecision
                     ? null
                     : () => _recordDecision('rejected'),
-                child: const Text('Отклонить'),
+                child: Text(
+                  context.localized(ru: 'Отклонить', uk: 'Відхилити'),
+                ),
               ),
             ],
           ),
@@ -500,12 +615,20 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
     );
   }
 
-  String _priceDecision(PricingRecommendation item) {
+  String _priceDecision(BuildContext context, PricingRecommendation item) {
     final target = item.recommendedPrice;
     if (target == null && !item.automaticEligible) {
-      return '${_money(item.currentPrice)} — автоцена не сформирована';
+      return context.localized(
+        ru: '${_money(item.currentPrice)} — автоцена не сформирована',
+        uk: '${_money(item.currentPrice)} — автоціну не сформовано',
+      );
     }
-    if (target == null) return '${_money(item.currentPrice)} — без изменений';
+    if (target == null) {
+      return context.localized(
+        ru: '${_money(item.currentPrice)} — без изменений',
+        uk: '${_money(item.currentPrice)} — без змін',
+      );
+    }
     final change =
         item.absoluteRecommendedChange ?? (target - item.currentPrice).abs();
     final percent =
@@ -532,8 +655,14 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
       SnackBar(
         content: Text(
           saved
-              ? 'Контекст сохранён и будет учтён в следующем прогоне.'
-              : 'Не удалось сохранить контекст.',
+              ? context.localized(
+                  ru: 'Контекст сохранён и будет учтён в следующем прогоне.',
+                  uk: 'Контекст збережено, його буде враховано в наступному прогоні.',
+                )
+              : context.localized(
+                  ru: 'Не удалось сохранить контекст.',
+                  uk: 'Не вдалося зберегти контекст.',
+                ),
         ),
       ),
     );
@@ -556,8 +685,14 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
       SnackBar(
         content: Text(
           saved
-              ? 'Решение записано в audit trail.'
-              : 'Не удалось записать решение.',
+              ? context.localized(
+                  ru: 'Решение записано в audit trail.',
+                  uk: 'Рішення записано в audit trail.',
+                )
+              : context.localized(
+                  ru: 'Не удалось записать решение.',
+                  uk: 'Не вдалося записати рішення.',
+                ),
         ),
       ),
     );
@@ -577,9 +712,16 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _verifyingReplay = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Replay недоступен: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.localized(
+              ru: 'Replay недоступен: $error',
+              uk: 'Replay недоступний: $error',
+            ),
+          ),
+        ),
+      );
     }
   }
 
@@ -604,15 +746,27 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             .getEvidence(widget.recommendation.id);
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Tier override сохранён. Новый run пересчитает цену.'),
+        SnackBar(
+          content: Text(
+            context.localized(
+              ru: 'Tier override сохранён. Новый run пересчитает цену.',
+              uk: 'Tier override збережено. Новий run перерахує ціну.',
+            ),
+          ),
         ),
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Не удалось сохранить: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.localized(
+              ru: 'Не удалось сохранить: $error',
+              uk: 'Не вдалося зберегти: $error',
+            ),
+          ),
+        ),
+      );
     }
   }
 }
@@ -643,8 +797,14 @@ class _ReplayStatus extends StatelessWidget {
           Expanded(
             child: Text(
               exact
-                  ? 'Replay совпал: ${replay.contractVersion}'
-                  : 'Обнаружен drift: ${replay.mismatches.keys.join(', ')}',
+                  ? context.localized(
+                      ru: 'Replay совпал: ${replay.contractVersion}',
+                      uk: 'Replay збігається: ${replay.contractVersion}',
+                    )
+                  : context.localized(
+                      ru: 'Обнаружен drift: ${replay.mismatches.keys.join(', ')}',
+                      uk: 'Виявлено drift: ${replay.mismatches.keys.join(', ')}',
+                    ),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: exact ? colors.positive : colors.negative,
                 fontWeight: FontWeight.w600,
@@ -679,7 +839,10 @@ class _MarketEvidenceList extends StatelessWidget {
         }
         if (snapshot.hasError) {
           return Text(
-            'Не удалось загрузить доказательства: ${snapshot.error}',
+            context.localized(
+              ru: 'Не удалось загрузить доказательства: ${snapshot.error}',
+              uk: 'Не вдалося завантажити докази: ${snapshot.error}',
+            ),
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: colors.negative),
@@ -688,7 +851,10 @@ class _MarketEvidenceList extends StatelessWidget {
         final items = snapshot.data ?? const [];
         if (items.isEmpty) {
           return Text(
-            'Валидных рыночных предложений нет.',
+            context.localized(
+              ru: 'Валидных рыночных предложений нет.',
+              uk: 'Валідних ринкових пропозицій немає.',
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           );
         }
@@ -702,7 +868,10 @@ class _MarketEvidenceList extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Evidence: целевой рынок, KEMP reference и исключения',
+              context.localized(
+                ru: 'Evidence: целевой рынок, KEMP reference и исключения',
+                uk: 'Evidence: цільовий ринок, KEMP reference та виключення',
+              ),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 10),
@@ -720,11 +889,23 @@ class _MarketEvidenceList extends StatelessWidget {
                   item.multiplier;
               final coefficientLine =
                   normalizedPrice != null && multiplier != null
-                  ? 'KEMP-эквивалент: ${_money(normalizedPrice)} · '
-                        'm=${multiplier.toStringAsFixed(2)}'
-                  : 'Нормализация: не участвует';
+                  ? context.localized(
+                      ru:
+                          'KEMP-эквивалент: ${_money(normalizedPrice)} · '
+                          'm=${multiplier.toStringAsFixed(2)}',
+                      uk:
+                          'KEMP-еквівалент: ${_money(normalizedPrice)} · '
+                          'm=${multiplier.toStringAsFixed(2)}',
+                    )
+                  : context.localized(
+                      ru: 'Нормализация: не участвует',
+                      uk: 'Нормалізація: не бере участі',
+                    );
               final coefficientEvidence = item.coefficientModel == null
-                  ? 'Коэффициент: нет валидированного evidence'
+                  ? context.localized(
+                      ru: 'Коэффициент: нет валидированного evidence',
+                      uk: 'Коефіцієнт: немає валідованого evidence',
+                    )
                   : '${item.coefficientModel} · coefficient confidence '
                         '${((item.coefficientConfidence ?? 0) * 100).round()}%';
               final listingUri = Uri.tryParse(item.url);
@@ -756,7 +937,7 @@ class _MarketEvidenceList extends StatelessWidget {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              '${item.cohortLabel} · ${item.targetEffect}',
+                              '${_cohortLabel(context, item.cohortRole)} · ${item.targetEffect}',
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
                                     color: item.affectsTargetMedian
@@ -766,28 +947,31 @@ class _MarketEvidenceList extends StatelessWidget {
                                   ),
                             ),
                             Text(
-                              '${item.tierLabel} · match ${(item.matchConfidence * 100).round()}% · tier ${(item.tierConfidence * 100).round()}%',
+                              '${_tierLabel(context, item.tier)} · match ${(item.matchConfidence * 100).round()}% · tier ${(item.tierConfidence * 100).round()}%',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             Text(
                               '$coefficientEvidence · '
-                              '${item.ageHours == null ? 'возраст evidence не зафиксирован' : '${item.ageHours!.toStringAsFixed(1)} ч.'}',
+                              '${item.ageHours == null ? context.localized(ru: 'возраст evidence не зафиксирован', uk: 'вік evidence не зафіксовано') : context.localized(ru: '${item.ageHours!.toStringAsFixed(1)} ч.', uk: '${item.ageHours!.toStringAsFixed(1)} год.')}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             Text(
-                              'Состояние: ${item.conditionState}'
+                              '${context.localized(ru: 'Состояние', uk: 'Стан')}: ${item.conditionState}'
                               '${item.conditionRaw == null ? '' : ' · ${item.conditionRaw}'}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             if (item.exclusionReason != null)
                               Text(
-                                'Исключено: ${PricingRecommendation.reasonLabel(item.exclusionReason!)}',
+                                '${context.localized(ru: 'Исключено', uk: 'Виключено')}: ${_reasonLabel(context, item.exclusionReason!)}',
                                 style: Theme.of(context).textTheme.bodySmall
                                     ?.copyWith(color: colors.negative),
                               ),
                             if (item.crossCandidates.isNotEmpty)
                               Text(
-                                'Cross candidates: ${item.crossCandidates.length} · phase 2 · не automatic identity',
+                                context.localized(
+                                  ru: 'Cross candidates: ${item.crossCandidates.length} · phase 2 · не automatic identity',
+                                  uk: 'Cross candidates: ${item.crossCandidates.length} · phase 2 · не automatic identity',
+                                ),
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                             if (item.url.isEmpty)
@@ -797,8 +981,14 @@ class _MarketEvidenceList extends StatelessWidget {
                               ),
                             Text(
                               item.automaticEligible
-                                  ? 'Сопоставимость: verified'
-                                  : 'Сопоставимость: manual review',
+                                  ? context.localized(
+                                      ru: 'Сопоставимость: verified',
+                                      uk: 'Зіставність: verified',
+                                    )
+                                  : context.localized(
+                                      ru: 'Сопоставимость: manual review',
+                                      uk: 'Зіставність: manual review',
+                                    ),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
                                     color: item.automaticEligible
@@ -831,7 +1021,10 @@ class _MarketEvidenceList extends StatelessWidget {
                         ),
                       ],
                       IconButton(
-                        tooltip: 'Уточнить tier',
+                        tooltip: context.localized(
+                          ru: 'Уточнить tier',
+                          uk: 'Уточнити tier',
+                        ),
                         onPressed: () => onOverride(item),
                         icon: const Icon(Icons.rule_rounded, size: 18),
                       ),
@@ -891,21 +1084,33 @@ class _Evidence extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Расчёт', style: Theme.of(context).textTheme.titleMedium),
+        Text(
+          context.localized(ru: 'Расчёт', uk: 'Розрахунок'),
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         const SizedBox(height: 11),
         _KeyValue(
-          label: 'Справедливая цена',
+          label: context.localized(
+            ru: 'Справедливая цена',
+            uk: 'Справедлива ціна',
+          ),
           value: recommendation.fairPrice == null
-              ? 'не рассчитана'
+              ? context.localized(ru: 'не рассчитана', uk: 'не розрахована')
               : _money(recommendation.fairPrice!),
         ),
         _KeyValue(
-          label: 'Рыночный диапазон',
+          label: context.localized(
+            ru: 'Рыночный диапазон',
+            uk: 'Ринковий діапазон',
+          ),
           value: recommendation.lowerBound == null
               ? '—'
               : '${_money(recommendation.lowerBound!)} — ${_money(recommendation.upperBound!)}',
         ),
-        _KeyValue(label: 'Приоритет', value: recommendation.priorityLabel),
+        _KeyValue(
+          label: context.localized(ru: 'Приоритет', uk: 'Пріоритет'),
+          value: _priorityLabel(context, recommendation),
+        ),
         _KeyValue(
           label: 'Evidence lanes',
           value:
@@ -922,18 +1127,22 @@ class _Evidence extends StatelessWidget {
           ),
         if (estimator != null)
           _KeyValue(
-            label: 'Робастная модель',
+            label: context.localized(
+              ru: 'Робастная модель',
+              uk: 'Робастна модель',
+            ),
             value: '$estimator + ${outlierFilter ?? 'none'}',
           ),
         const SizedBox(height: 8),
         Text(
-          recommendation.reasonSummary,
+          _reasonSummary(context, recommendation),
           style: Theme.of(context).textTheme.bodySmall,
         ),
         if (recommendation.excludedObservations.isNotEmpty) ...[
           const SizedBox(height: 8),
           Text(
-            'Исключено: ${_excludedSummary(recommendation.excludedObservations)}',
+            '${context.localized(ru: 'Исключено', uk: 'Виключено')}: '
+            '${_excludedSummary(context, recommendation.excludedObservations)}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -961,7 +1170,7 @@ class _DataHealth extends StatelessWidget {
         Row(
           children: [
             Text(
-              'Качество данных',
+              context.localized(ru: 'Качество данных', uk: 'Якість даних'),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const Spacer(),
@@ -980,11 +1189,17 @@ class _DataHealth extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _KeyValue(
-          label: 'Валидных конкурентов',
+          label: context.localized(
+            ru: 'Валидных конкурентов',
+            uk: 'Валідних конкурентів',
+          ),
           value: '${recommendation.competitorCount}',
         ),
         _KeyValue(
-          label: 'Видимых / verified sellers',
+          label: context.localized(
+            ru: 'Видимых / verified sellers',
+            uk: 'Видимих / verified sellers',
+          ),
           value:
               '${recommendation.rawCompetitorCount} / ${recommendation.verifiedSellerCount}',
         ),
@@ -998,16 +1213,21 @@ class _DataHealth extends StatelessWidget {
             value: recommendation.comparabilityPolicyId!,
           ),
         _KeyValue(
-          label: 'Эффективная выборка',
+          label: context.localized(
+            ru: 'Эффективная выборка',
+            uk: 'Ефективна вибірка',
+          ),
           value: recommendation.effectiveCompetitorCount.toStringAsFixed(2),
         ),
         _KeyValue(
           label: 'Action gates',
-          value: recommendation.actionGatesPassed ? 'пройдены' : 'не пройдены',
+          value: recommendation.actionGatesPassed
+              ? context.localized(ru: 'пройдены', uk: 'пройдено')
+              : context.localized(ru: 'не пройдены', uk: 'не пройдено'),
         ),
         _KeyValue(
-          label: 'Слабое место',
-          value: _factorLabel(recommendation.weakestFactor),
+          label: context.localized(ru: 'Слабое место', uk: 'Слабке місце'),
+          value: _factorLabel(context, recommendation.weakestFactor),
         ),
         const SizedBox(height: 6),
         Wrap(
@@ -1018,7 +1238,7 @@ class _DataHealth extends StatelessWidget {
                 (entry) => Chip(
                   visualDensity: VisualDensity.compact,
                   label: Text(
-                    '${_factorLabel(entry.key)} ${(entry.value * 100).round()}%',
+                    '${_factorLabel(context, entry.key)} ${(entry.value * 100).round()}%',
                   ),
                 ),
               )
@@ -1073,12 +1293,18 @@ class _EmptyRecommendations extends StatelessWidget {
           Icon(Icons.price_check_rounded, size: 38, color: colors.brand),
           const SizedBox(height: 14),
           Text(
-            'Пока нет рекомендаций',
+            context.localized(
+              ru: 'Пока нет рекомендаций',
+              uk: 'Рекомендацій поки немає',
+            ),
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 7),
           Text(
-            'Подключите магазины и дождитесь заполнения каталога.',
+            context.localized(
+              ru: 'Подключите магазины и дождитесь заполнения каталога.',
+              uk: 'Підключіть магазини та дочекайтеся наповнення каталогу.',
+            ),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
@@ -1087,7 +1313,12 @@ class _EmptyRecommendations extends StatelessWidget {
             FilledButton.icon(
               onPressed: onOpenCatalog,
               icon: const Icon(Icons.upload_file_rounded, size: 18),
-              label: const Text('Открыть каталог'),
+              label: Text(
+                context.localized(
+                  ru: 'Открыть каталог',
+                  uk: 'Відкрити каталог',
+                ),
+              ),
             ),
           ],
         ],
@@ -1112,7 +1343,7 @@ class _LoadError extends StatelessWidget {
           tone: MarkoMessageTone.error,
           action: TextButton(
             onPressed: onRetry,
-            child: const Text('Повторить'),
+            child: Text(context.localized(ru: 'Повторить', uk: 'Повторити')),
           ),
         ),
       ),
@@ -1132,18 +1363,206 @@ int _cohortRank(String role) => switch (role) {
   _ => 6,
 };
 
-String _factorLabel(String? value) => switch (value) {
-  'coverage' => 'покрытие',
-  'dispersion' => 'разброс цен',
-  'freshness' => 'свежесть',
-  'match' => 'совпадение',
-  'tier' => 'уровень товара',
-  'source' => 'источник',
-  null => 'нет',
+String _actionLabel(BuildContext context, String action) => switch (action) {
+  'RAISE' => context.localized(ru: 'Поднять цену', uk: 'Підвищити ціну'),
+  'LOWER' => context.localized(ru: 'Снизить цену', uk: 'Знизити ціну'),
+  'HOLD' => context.localized(ru: 'Оставить', uk: 'Залишити'),
+  'MANUAL_REVIEW' => context.localized(
+    ru: 'Проверить вручную',
+    uk: 'Перевірити вручну',
+  ),
+  'INSUFFICIENT_DATA' => context.localized(ru: 'Мало данных', uk: 'Мало даних'),
+  _ => action,
+};
+
+String _priorityLabel(
+  BuildContext context,
+  PricingRecommendation recommendation,
+) => switch (recommendation.priorityScoreType) {
+  'gross_uplift_opportunity' => context.localized(
+    ru: '${recommendation.priorityScore.toStringAsFixed(0)} ₴/мес. с учётом confidence',
+    uk: '${recommendation.priorityScore.toStringAsFixed(0)} ₴/міс. з урахуванням confidence',
+  ),
+  'clearance_priority' => context.localized(
+    ru: '${recommendation.priorityScore.toStringAsFixed(0)} ₴ замороженного капитала',
+    uk: '${recommendation.priorityScore.toStringAsFixed(0)} ₴ замороженого капіталу',
+  ),
+  'retail_exposure_proxy' =>
+    '${recommendation.priorityScore.toStringAsFixed(2)} · stock exposure proxy',
+  'gap_confidence_proxy' =>
+    '${recommendation.priorityScore.toStringAsFixed(3)} · gap/confidence proxy',
+  _ => '—',
+};
+
+String _reasonSummary(
+  BuildContext context,
+  PricingRecommendation recommendation,
+) {
+  if (recommendation.reasonCodes.isEmpty) {
+    return context.localized(ru: 'Расчёт завершён', uk: 'Розрахунок завершено');
+  }
+  return recommendation.reasonCodes
+      .map((code) => _reasonLabel(context, code))
+      .take(2)
+      .join(' · ');
+}
+
+String _reasonLabel(BuildContext context, String code) => switch (code) {
+  'MARKET_SUPPORTS_RAISE' => context.localized(
+    ru: 'рынок поддерживает повышение',
+    uk: 'ринок підтримує підвищення',
+  ),
+  'MARKET_NOT_ABOVE_RAISE_THRESHOLD' => context.localized(
+    ru: 'рынок не выше текущей цены',
+    uk: 'ринок не вище поточної ціни',
+  ),
+  'CLEARANCE_MARKDOWN' => context.localized(
+    ru: 'цена для высвобождения капитала',
+    uk: 'ціна для вивільнення капіталу',
+  ),
+  'TOO_FEW_COMPETITORS' ||
+  'TOO_FEW_COMPETITORS_FOR_ACTION' => context.localized(
+    ru: 'мало валидных конкурентов',
+    uk: 'мало валідних конкурентів',
+  ),
+  'LOW_CONFIDENCE' => context.localized(
+    ru: 'низкая уверенность',
+    uk: 'низька впевненість',
+  ),
+  'LOW_COVERAGE' => context.localized(ru: 'мало данных', uk: 'мало даних'),
+  'LOW_DISPERSION' || 'HIGH_DISPERSION' => context.localized(
+    ru: 'слишком большой разброс цен',
+    uk: 'надто великий розкид цін',
+  ),
+  'LOW_FRESHNESS' => context.localized(
+    ru: 'данные устарели',
+    uk: 'дані застаріли',
+  ),
+  'LOW_MATCH' => context.localized(
+    ru: 'слабое совпадение товаров',
+    uk: 'слабкий збіг товарів',
+  ),
+  'LOW_TIER' => context.localized(
+    ru: 'смешались уровни товара',
+    uk: 'змішалися рівні товару',
+  ),
+  'LOW_SOURCE' => context.localized(
+    ru: 'низкая надёжность источника',
+    uk: 'низька надійність джерела',
+  ),
+  'SEVERE_DATA_HEALTH_ISSUE' => context.localized(
+    ru: 'критическая проблема данных',
+    uk: 'критична проблема даних',
+  ),
+  'BELOW_COST_ONLY_FOR_DEAD_STOCK' => context.localized(
+    ru: 'цена ниже себестоимости доступна только для неликвида',
+    uk: 'ціна нижче собівартості доступна лише для неліквіду',
+  ),
+  'MISSING_FLOOR' || 'MISSING_COST' => context.localized(
+    ru: 'нужна себестоимость',
+    uk: 'потрібна собівартість',
+  ),
+  'LOW_EFFECTIVE_SAMPLE_SIZE' => context.localized(
+    ru: 'мало независимых конкурентов',
+    uk: 'мало незалежних конкурентів',
+  ),
+  'ESTIMATOR_SENSITIVITY' => context.localized(
+    ru: 'оценка неустойчива к очистке данных',
+    uk: 'оцінка нестійка до очищення даних',
+  ),
+  'ROBUST_MULTIMODAL_COHORT' => context.localized(
+    ru: 'обнаружены разные ценовые кластеры',
+    uk: 'виявлено різні цінові кластери',
+  ),
+  'ROBUST_ESTIMATOR_DISAGREEMENT' => context.localized(
+    ru: 'робастные оценки расходятся',
+    uk: 'робастні оцінки розходяться',
+  ),
+  'ROBUST_BASELINE_ABSTENTION_NOT_RELAXABLE' => context.localized(
+    ru: 'новая модель не может обойти baseline abstention',
+    uk: 'нова модель не може обійти baseline abstention',
+  ),
+  'MANUAL_MISSING_COMPARABILITY_EVIDENCE' => context.localized(
+    ru: 'нет доказательств сопоставимости',
+    uk: 'немає доказів зіставності',
+  ),
+  'MANUAL_MISSING_OE_PROVENANCE' => context.localized(
+    ru: 'нет проверенного OE',
+    uk: 'немає перевіреного OE',
+  ),
+  'MANUAL_MISSING_STABLE_SELLER_ID' => context.localized(
+    ru: 'нет стабильного ID продавца',
+    uk: 'немає стабільного ID продавця',
+  ),
+  'MANUAL_MISSING_SOURCE_PROVENANCE' => context.localized(
+    ru: 'нет проверенного source evidence',
+    uk: 'немає перевіреного source evidence',
+  ),
+  'MANUAL_MISSING_RAW_CURRENCY' => context.localized(
+    ru: 'валюта не указана в source',
+    uk: 'валюту не вказано в source',
+  ),
+  'REJECTED_IDENTITY_CONFLICT' => context.localized(
+    ru: 'конфликт identity товара',
+    uk: 'конфлікт identity товару',
+  ),
+  'REJECTED_COMPARABILITY_CONFLICT' => context.localized(
+    ru: 'коммерчески несопоставимые товары',
+    uk: 'комерційно незрівнянні товари',
+  ),
+  'MISSING_BELOW_COST_AUTHORIZATION' => context.localized(
+    ru: 'нет полного подтверждения продажи ниже себестоимости',
+    uk: 'немає повного підтвердження продажу нижче собівартості',
+  ),
+  'MANUAL_REVIEW_REQUIRED' => context.localized(
+    ru: 'требуется ручная проверка',
+    uk: 'потрібна ручна перевірка',
+  ),
+  _ => code.toLowerCase().replaceAll('_', ' '),
+};
+
+String _tierLabel(BuildContext context, String tier) => switch (tier) {
+  'oem' => 'OEM',
+  'oes' => 'OES',
+  'aftermarket_a' => 'Aftermarket A',
+  'aftermarket_b' => 'Aftermarket B',
+  'budget' => context.localized(ru: 'Бюджет', uk: 'Бюджет'),
+  'kemp' => 'KEMP',
+  'used' => context.localized(ru: 'б/у', uk: 'вживане'),
+  _ => context.localized(ru: 'не определён', uk: 'не визначено'),
+};
+
+String _cohortLabel(BuildContext context, String role) => switch (role) {
+  'TARGET_MARKET' => context.localized(
+    ru: 'Целевой рынок',
+    uk: 'Цільовий ринок',
+  ),
+  'KEMP_REFERENCE' => 'KEMP reference',
+  'OWNED_STORE' => context.localized(ru: 'Свой магазин', uk: 'Свій магазин'),
+  'USED_REJECTED' => context.localized(
+    ru: 'Б/у — исключено',
+    uk: 'Вживане — виключено',
+  ),
+  'DUMPING_DIAGNOSTIC' => 'KEMP dumping diagnostic',
+  'HARD_REJECTED' => context.localized(ru: 'Отклонено', uk: 'Відхилено'),
+  _ => context.localized(ru: 'Ручная проверка', uk: 'Ручна перевірка'),
+};
+
+String _factorLabel(BuildContext context, String? value) => switch (value) {
+  'coverage' => context.localized(ru: 'покрытие', uk: 'покриття'),
+  'dispersion' => context.localized(ru: 'разброс цен', uk: 'розкид цін'),
+  'freshness' => context.localized(ru: 'свежесть', uk: 'свіжість'),
+  'match' => context.localized(ru: 'совпадение', uk: 'збіг'),
+  'tier' => context.localized(ru: 'уровень товара', uk: 'рівень товару'),
+  'source' => context.localized(ru: 'источник', uk: 'джерело'),
+  null => context.localized(ru: 'нет', uk: 'немає'),
   _ => value,
 };
 
-String _excludedSummary(List<Map<String, dynamic>> excluded) {
+String _excludedSummary(
+  BuildContext context,
+  List<Map<String, dynamic>> excluded,
+) {
   final counts = <String, int>{};
   for (final item in excluded) {
     final reason = item['reason']?.toString() ?? 'UNKNOWN';
@@ -1156,9 +1575,6 @@ String _excludedSummary(List<Map<String, dynamic>> excluded) {
     });
   return entries
       .take(4)
-      .map(
-        (entry) =>
-            '${PricingRecommendation.reasonLabel(entry.key)}: ${entry.value}',
-      )
+      .map((entry) => '${_reasonLabel(context, entry.key)}: ${entry.value}')
       .join(' · ');
 }

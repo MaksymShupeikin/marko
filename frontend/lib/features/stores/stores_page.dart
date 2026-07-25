@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
@@ -27,15 +28,26 @@ class _StoresPageState extends ConsumerState<StoresPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Удалить магазин?'),
+        title: Text(
+          dialogContext.localized(
+            ru: 'Удалить магазин?',
+            uk: 'Видалити магазин?',
+          ),
+        ),
         content: Text(
-          'Магазин «${store.displayName}» и его каталог исчезнут из '
-          'раздела «Мои магазины». Данные на Prom.ua не изменятся.',
+          dialogContext.localized(
+            ru:
+                'Магазин «${store.displayName}» и его каталог исчезнут из '
+                'раздела «Мои магазины». Данные на Prom.ua не изменятся.',
+            uk:
+                'Магазин «${store.displayName}» і його каталог зникнуть із '
+                'розділу «Мої магазини». Дані на Prom.ua не зміняться.',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Отмена'),
+            child: Text(dialogContext.localized(ru: 'Отмена', uk: 'Скасувати')),
           ),
           TextButton(
             key: const ValueKey('confirm-delete-store'),
@@ -43,7 +55,7 @@ class _StoresPageState extends ConsumerState<StoresPage> {
             style: TextButton.styleFrom(
               foregroundColor: MarkoTheme.of(dialogContext).negative,
             ),
-            child: const Text('Удалить'),
+            child: Text(dialogContext.localized(ru: 'Удалить', uk: 'Видалити')),
           ),
         ],
       ),
@@ -55,7 +67,14 @@ class _StoresPageState extends ConsumerState<StoresPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(content: Text('Магазин «${store.displayName}» удалён')),
+        SnackBar(
+          content: Text(
+            context.localized(
+              ru: 'Магазин «${store.displayName}» удалён',
+              uk: 'Магазин «${store.displayName}» видалено',
+            ),
+          ),
+        ),
       );
   }
 
@@ -77,7 +96,7 @@ class _StoresPageState extends ConsumerState<StoresPage> {
         error: (error, _) =>
             _RetryView(message: error.toString(), onRetry: controller.refresh),
         data: (state) {
-          final stores = widget.ownedOnly
+          final availableStores = widget.ownedOnly
               ? state.stores
                     .where((store) => store.kind == 'owned')
                     .toList(growable: false)
@@ -119,17 +138,19 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                             tone: MarkoMessageTone.error,
                             action: TextButton(
                               onPressed: controller.dismissError,
-                              child: const Text('Закрыть'),
+                              child: Text(
+                                context.localized(ru: 'Закрыть', uk: 'Закрити'),
+                              ),
                             ),
                           ),
                         ],
                         const SizedBox(height: 30),
                         _StoresHeading(
-                          count: stores.length,
+                          count: availableStores.length,
                           onRefresh: controller.refresh,
                         ),
                         const SizedBox(height: 12),
-                        if (stores.isEmpty)
+                        if (availableStores.isEmpty)
                           const _EmptyStores()
                         else
                           MarkoPanel(
@@ -138,36 +159,37 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                               children: [
                                 for (
                                   var index = 0;
-                                  index < stores.length;
+                                  index < availableStores.length;
                                   index++
                                 ) ...[
                                   _StoreRow(
-                                    store: stores[index],
+                                    store: availableStores[index],
                                     syncDisabled:
                                         state.isSubmitting ||
                                         state.hasActiveJob ||
                                         state.isDeleting,
                                     deleting:
                                         state.deletingStoreId ==
-                                        stores[index].id,
+                                        availableStores[index].id,
                                     deleteDisabled:
                                         state.isSubmitting || state.isDeleting,
                                     onOpen: () => context.pushNamed(
                                       'store-products',
                                       pathParameters: {
-                                        'storeId': stores[index].id,
+                                        'storeId': availableStores[index].id,
                                       },
                                     ),
-                                    onSync: () =>
-                                        controller.syncStore(stores[index]),
+                                    onSync: () => controller.syncStore(
+                                      availableStores[index],
+                                    ),
                                     onDelete: widget.ownedOnly
                                         ? () => _confirmDeleteStore(
                                             controller,
-                                            stores[index],
+                                            availableStores[index],
                                           )
                                         : null,
                                   ),
-                                  if (index < stores.length - 1)
+                                  if (index < availableStores.length - 1)
                                     const Divider(),
                                 ],
                               ],
@@ -198,14 +220,22 @@ class _PageHeading extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          ownedOnly ? 'Мои магазины' : 'Магазины Prom',
+          ownedOnly
+              ? context.localized(ru: 'Мои магазины', uk: 'Мої магазини')
+              : context.localized(ru: 'Магазины Prom', uk: 'Магазини Prom'),
           style: Theme.of(context).textTheme.headlineMedium,
         ),
         const SizedBox(height: 7),
         Text(
           ownedOnly
-              ? 'Подключайте свои магазины и управляйте синхронизацией каталогов.'
-              : 'Подключайте каталоги и управляйте их синхронизацией.',
+              ? context.localized(
+                  ru: 'Подключайте свои магазины и управляйте синхронизацией каталогов.',
+                  uk: 'Підключайте свої магазини та керуйте синхронізацією каталогів.',
+                )
+              : context.localized(
+                  ru: 'Подключайте каталоги и управляйте их синхронизацией.',
+                  uk: 'Підключайте каталоги та керуйте їх синхронізацією.',
+                ),
           style: Theme.of(
             context,
           ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -256,12 +286,18 @@ class _AddStorePanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Подключить магазин',
+                      context.localized(
+                        ru: 'Подключить магазин',
+                        uk: 'Підключити магазин',
+                      ),
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Вставьте публичную ссылку на магазин prom.ua.',
+                      context.localized(
+                        ru: 'Вставьте публичную ссылку на магазин prom.ua.',
+                        uk: 'Вставте публічне посилання на магазин prom.ua.',
+                      ),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -276,15 +312,18 @@ class _AddStorePanel extends StatelessWidget {
                 controller: urlController,
                 enabled: !busy,
                 keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: 'Ссылка на магазин',
+                decoration: InputDecoration(
+                  labelText: context.localized(
+                    ru: 'Ссылка на магазин',
+                    uk: 'Посилання на магазин',
+                  ),
                   hintText: 'https://prom.ua/ua/c2847093-kemp.html',
-                  prefixIcon: Icon(Icons.link_rounded, size: 20),
+                  prefixIcon: const Icon(Icons.link_rounded, size: 20),
                 ),
                 onSubmitted: (_) => busy ? null : onSubmit(),
               );
               final button = MarkoButton(
-                label: 'Подключить',
+                label: context.localized(ru: 'Подключить', uk: 'Підключити'),
                 onPressed: busy ? null : onSubmit,
                 icon: Icons.add_rounded,
                 loading: busy,
@@ -356,14 +395,18 @@ class _SyncPanel extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Импорт каталога: ${job?.statusLabel ?? status}',
+                  '${context.localized(ru: 'Импорт каталога', uk: 'Імпорт каталогу')}: '
+                  '${_syncStatusLabel(context, job?.status ?? status)}',
                   style: Theme.of(
                     context,
                   ).textTheme.titleMedium?.copyWith(color: foreground),
                 ),
               ),
               Text(
-                '${job?.progressCurrent ?? 0} товаров',
+                context.localized(
+                  ru: '${job?.progressCurrent ?? 0} товаров',
+                  uk: '${job?.progressCurrent ?? 0} товарів',
+                ),
                 style: Theme.of(
                   context,
                 ).textTheme.labelMedium?.copyWith(color: foreground),
@@ -402,7 +445,10 @@ class _StoresHeading extends StatelessWidget {
     final colors = MarkoTheme.of(context);
     return Row(
       children: [
-        Text('Подключённые', style: Theme.of(context).textTheme.titleLarge),
+        Text(
+          context.localized(ru: 'Подключённые', uk: 'Підключені'),
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
         const SizedBox(width: 9),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -417,7 +463,10 @@ class _StoresHeading extends StatelessWidget {
         ),
         const Spacer(),
         IconButton(
-          tooltip: 'Обновить список',
+          tooltip: context.localized(
+            ru: 'Обновить список',
+            uk: 'Оновити список',
+          ),
           onPressed: onRefresh,
           icon: const Icon(Icons.refresh_rounded, size: 19),
         ),
@@ -458,8 +507,9 @@ class _StoreRow extends StatelessWidget {
             builder: (context, constraints) {
               final compact = constraints.maxWidth < 560;
               final description = compact
-                  ? '${store.syncDescription} · ${store.productCount} товаров'
-                  : store.syncDescription;
+                  ? '${_storeSyncDescription(context, store)} · '
+                        '${_productCountLabel(context, store.productCount)}'
+                  : _storeSyncDescription(context, store);
               return Row(
                 children: [
                   Container(
@@ -509,7 +559,7 @@ class _StoreRow extends StatelessWidget {
                         borderRadius: BorderRadius.circular(7),
                       ),
                       child: Text(
-                        '${store.productCount} товаров',
+                        _productCountLabel(context, store.productCount),
                         style: Theme.of(
                           context,
                         ).textTheme.labelMedium?.copyWith(color: colors.ink),
@@ -518,14 +568,20 @@ class _StoreRow extends StatelessWidget {
                     const SizedBox(width: 8),
                   ],
                   IconButton(
-                    tooltip: 'Синхронизировать',
+                    tooltip: context.localized(
+                      ru: 'Синхронизировать',
+                      uk: 'Синхронізувати',
+                    ),
                     onPressed: syncDisabled ? null : onSync,
                     icon: const Icon(Icons.sync_rounded, size: 19),
                   ),
                   if (onDelete != null)
                     IconButton(
                       key: ValueKey('delete-store-${store.id}'),
-                      tooltip: 'Удалить магазин',
+                      tooltip: context.localized(
+                        ru: 'Удалить магазин',
+                        uk: 'Видалити магазин',
+                      ),
                       onPressed: deleteDisabled ? null : onDelete,
                       icon: deleting
                           ? SizedBox.square(
@@ -572,12 +628,18 @@ class _EmptyStores extends StatelessWidget {
           Icon(Icons.storefront_outlined, color: colors.muted, size: 28),
           const SizedBox(height: 12),
           Text(
-            'Магазинов пока нет',
+            context.localized(
+              ru: 'Магазинов пока нет',
+              uk: 'Магазинів поки немає',
+            ),
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 5),
           Text(
-            'Добавьте первый магазин по ссылке выше.',
+            context.localized(
+              ru: 'Добавьте первый магазин по ссылке выше.',
+              uk: 'Додайте перший магазин за посиланням вище.',
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -606,11 +668,44 @@ class _RetryView extends StatelessWidget {
                 tone: MarkoMessageTone.error,
               ),
               const SizedBox(height: 14),
-              MarkoButton(label: 'Повторить', onPressed: onRetry),
+              MarkoButton(
+                label: context.localized(ru: 'Повторить', uk: 'Повторити'),
+                onPressed: onRetry,
+              ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+String _storeSyncDescription(BuildContext context, StoreSummary store) {
+  final value = store.lastSyncedAt;
+  if (value == null) {
+    return context.localized(
+      ru: 'ещё не синхронизирован',
+      uk: 'ще не синхронізовано',
+    );
+  }
+  final local = value.toLocal().toString();
+  final formatted = local.length >= 16 ? local.substring(0, 16) : local;
+  return context.localized(
+    ru: 'обновлён $formatted',
+    uk: 'оновлено $formatted',
+  );
+}
+
+String _syncStatusLabel(BuildContext context, String status) {
+  return switch (status) {
+    'queued' => context.localized(ru: 'в очереди', uk: 'у черзі'),
+    'running' => context.localized(ru: 'выполняется', uk: 'виконується'),
+    'completed' => context.localized(ru: 'готово', uk: 'готово'),
+    'failed' => context.localized(ru: 'ошибка', uk: 'помилка'),
+    _ => status,
+  };
+}
+
+String _productCountLabel(BuildContext context, int count) {
+  return context.localized(ru: '$count товаров', uk: '$count товарів');
 }

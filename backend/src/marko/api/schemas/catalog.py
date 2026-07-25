@@ -86,6 +86,14 @@ class OwnedCatalogStoreResponse(BaseModel):
     is_available: bool | None
 
 
+class OwnedCatalogStoreOptionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    store_id: UUID
+    external_id: str
+    name: str
+
+
 class OwnedCatalogProductResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -102,6 +110,10 @@ class OwnedCatalogProductResponse(BaseModel):
     currency: str | None
     listing_count: int
     stores: list[OwnedCatalogStoreResponse]
+    recommended_price: Decimal | None = None
+    recommendation_currency: str | None = None
+    recommendation_action: str | None = None
+    recommendation_computed_at: datetime | None = None
 
 
 class OwnedCatalogPageResponse(BaseModel):
@@ -111,5 +123,36 @@ class OwnedCatalogPageResponse(BaseModel):
     listing_total: int
     duplicates_removed: int
     store_total: int
+    stores: list[OwnedCatalogStoreOptionResponse]
     limit: int
     offset: int
+
+
+class CatalogCompetitorOfferResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    observation_id: UUID
+    seller_id: str
+    seller_name: str
+    title: str
+    url: str
+    price: Decimal
+    currency: str
+    is_available: bool | None
+    normalized_price: Decimal | None
+    tier: str
+    match_confidence: Decimal
+    observed_at: datetime
+
+
+class CatalogCompetitorComparisonResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    recommendation_id: UUID | None
+    compared_at: datetime | None
+    current_price: Decimal | None
+    fair_price: Decimal | None
+    recommended_price: Decimal | None
+    currency: str | None
+    reason_codes: list[str]
+    items: list[CatalogCompetitorOfferResponse]

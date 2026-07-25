@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
@@ -32,7 +33,12 @@ class StoreProductsPage extends ConsumerWidget {
         child: Column(
           children: [
             _ProductsHeader(
-              title: asyncState.value?.store.displayName ?? 'Товары магазина',
+              title:
+                  asyncState.value?.store.displayName ??
+                  context.localized(
+                    ru: 'Товары магазина',
+                    uk: 'Товари магазину',
+                  ),
               count: asyncState.value?.page.total,
               onBack: context.pop,
               onRefresh: controller.reload,
@@ -90,7 +96,10 @@ class _ProductsHeader extends StatelessWidget {
             child: Row(
               children: [
                 IconButton(
-                  tooltip: 'Назад к магазинам',
+                  tooltip: context.localized(
+                    ru: 'Назад к магазинам',
+                    uk: 'Назад до магазинів',
+                  ),
                   onPressed: onBack,
                   icon: const Icon(Icons.arrow_back_rounded, size: 20),
                 ),
@@ -108,7 +117,10 @@ class _ProductsHeader extends StatelessWidget {
                       ),
                       if (count != null)
                         Text(
-                          '$count товаров в каталоге',
+                          context.localized(
+                            ru: '$count товаров в каталоге',
+                            uk: '$count товарів у каталозі',
+                          ),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                     ],
@@ -118,7 +130,7 @@ class _ProductsHeader extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: onRefresh,
                   icon: const Icon(Icons.refresh_rounded, size: 18),
-                  label: const Text('Обновить'),
+                  label: Text(context.localized(ru: 'Обновить', uk: 'Оновити')),
                 ),
               ],
             ),
@@ -263,8 +275,14 @@ class _ProductCatalogState extends State<_ProductCatalog> {
                               )
                             : const Icon(Icons.expand_more_rounded, size: 18),
                         label: Text(
-                          'Показать ещё '
-                          '(${products.length} из ${widget.state.page.total})',
+                          context.localized(
+                            ru:
+                                'Показать ещё '
+                                '(${products.length} из ${widget.state.page.total})',
+                            uk:
+                                'Показати ще '
+                                '(${products.length} з ${widget.state.page.total})',
+                          ),
                         ),
                       ),
                     ),
@@ -312,10 +330,16 @@ class _CatalogHeading extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Каталог', style: Theme.of(context).textTheme.headlineMedium),
+        Text(
+          context.localized(ru: 'Каталог', uk: 'Каталог'),
+          style: Theme.of(context).textTheme.headlineMedium,
+        ),
         const SizedBox(height: 7),
         Text(
-          'Фото и текущая цена каждого импортированного товара.',
+          context.localized(
+            ru: 'Фото и текущая цена каждого импортированного товара.',
+            uk: 'Фото та поточна ціна кожного імпортованого товару.',
+          ),
           style: Theme.of(
             context,
           ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -341,12 +365,18 @@ class _EmptyProducts extends StatelessWidget {
               Icon(Icons.inventory_2_outlined, color: colors.muted, size: 30),
               const SizedBox(height: 13),
               Text(
-                'Каталог пока пуст',
+                context.localized(
+                  ru: 'Каталог пока пуст',
+                  uk: 'Каталог поки порожній',
+                ),
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 5),
               Text(
-                'Запустите синхронизацию магазина, чтобы импортировать товары.',
+                context.localized(
+                  ru: 'Запустите синхронизацию магазина, чтобы импортировать товары.',
+                  uk: 'Запустіть синхронізацію магазину, щоб імпортувати товари.',
+                ),
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -378,7 +408,10 @@ class _ProductsError extends StatelessWidget {
                 tone: MarkoMessageTone.error,
               ),
               const SizedBox(height: 14),
-              MarkoButton(label: 'Повторить', onPressed: onRetry),
+              MarkoButton(
+                label: context.localized(ru: 'Повторить', uk: 'Повторити'),
+                onPressed: onRetry,
+              ),
             ],
           ),
         ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/environment.dart';
 import '../../core/marko_ui.dart';
@@ -76,14 +77,28 @@ class _AuthPageState extends ConsumerState<AuthPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              _register ? 'Создайте аккаунт' : 'С возвращением',
+              _register
+                  ? context.localized(
+                      ru: 'Создайте аккаунт',
+                      uk: 'Створіть обліковий запис',
+                    )
+                  : context.localized(
+                      ru: 'С возвращением',
+                      uk: 'З поверненням',
+                    ),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
             Text(
               _register
-                  ? 'Подключите магазины и держите цены под контролем.'
-                  : 'Войдите, чтобы продолжить работу с ценами.',
+                  ? context.localized(
+                      ru: 'Подключите магазины и держите цены под контролем.',
+                      uk: 'Підключіть магазини та тримайте ціни під контролем.',
+                    )
+                  : context.localized(
+                      ru: 'Войдите, чтобы продолжить работу с ценами.',
+                      uk: 'Увійдіть, щоб продовжити роботу з цінами.',
+                    ),
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -112,13 +127,23 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                     ),
                   ),
                 ),
-                label: const Text('Продолжить с Google'),
+                label: Text(
+                  context.localized(
+                    ru: 'Продолжить с Google',
+                    uk: 'Продовжити з Google',
+                  ),
+                ),
               ),
             if (!showGoogle)
-              const MarkoInlineMessage(
-                message:
-                    'Google-вход недоступен в нативной Windows-версии. '
-                    'Используйте web/PWA или войдите по почте.',
+              MarkoInlineMessage(
+                message: context.localized(
+                  ru:
+                      'Google-вход недоступен в нативной Windows-версии. '
+                      'Используйте web/PWA или войдите по почте.',
+                  uk:
+                      'Вхід через Google недоступний у нативній Windows-версії. '
+                      'Використовуйте web/PWA або увійдіть через пошту.',
+                ),
                 tone: MarkoMessageTone.warning,
               ),
             const SizedBox(height: 22),
@@ -128,7 +153,10 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
-                    'или по почте',
+                    context.localized(
+                      ru: 'или по почте',
+                      uk: 'або через пошту',
+                    ),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -141,10 +169,10 @@ class _AuthPageState extends ConsumerState<AuthPage> {
               enabled: !busy,
               keyboardType: TextInputType.emailAddress,
               autofillHints: const [AutofillHints.email],
-              decoration: const InputDecoration(
-                labelText: 'Почта',
+              decoration: InputDecoration(
+                labelText: context.localized(ru: 'Почта', uk: 'Пошта'),
                 hintText: 'name@company.com',
-                prefixIcon: Icon(Icons.alternate_email_rounded, size: 20),
+                prefixIcon: const Icon(Icons.alternate_email_rounded, size: 20),
               ),
             ),
             const SizedBox(height: 14),
@@ -157,12 +185,18 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                   : const [AutofillHints.password],
               onSubmitted: (_) => busy ? null : _submit(),
               decoration: InputDecoration(
-                labelText: 'Пароль',
+                labelText: context.localized(ru: 'Пароль', uk: 'Пароль'),
                 prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
                 suffixIcon: IconButton(
                   tooltip: _obscurePassword
-                      ? 'Показать пароль'
-                      : 'Скрыть пароль',
+                      ? context.localized(
+                          ru: 'Показать пароль',
+                          uk: 'Показати пароль',
+                        )
+                      : context.localized(
+                          ru: 'Скрыть пароль',
+                          uk: 'Приховати пароль',
+                        ),
                   onPressed: () =>
                       setState(() => _obscurePassword = !_obscurePassword),
                   icon: Icon(
@@ -190,7 +224,12 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             ],
             const SizedBox(height: 18),
             MarkoButton(
-              label: _register ? 'Создать аккаунт' : 'Войти',
+              label: _register
+                  ? context.localized(
+                      ru: 'Создать аккаунт',
+                      uk: 'Створити обліковий запис',
+                    )
+                  : context.localized(ru: 'Войти', uk: 'Увійти'),
               onPressed: busy ? null : _submit,
               loading: busy,
               expand: true,
@@ -202,13 +241,22 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                   : () => setState(() => _register = !_register),
               child: Text(
                 _register
-                    ? 'Уже есть аккаунт? Войти'
-                    : 'Нет аккаунта? Зарегистрироваться',
+                    ? context.localized(
+                        ru: 'Уже есть аккаунт? Войти',
+                        uk: 'Уже є обліковий запис? Увійти',
+                      )
+                    : context.localized(
+                        ru: 'Нет аккаунта? Зарегистрироваться',
+                        uk: 'Немає облікового запису? Зареєструватися',
+                      ),
               ),
             ),
             const SizedBox(height: 12),
             Text(
-              'Авторизация защищена Firebase. Данные магазинов хранятся в Marko.',
+              context.localized(
+                ru: 'Авторизация защищена Firebase. Данные магазинов хранятся в Marko.',
+                uk: 'Авторизацію захищено Firebase. Дані магазинів зберігаються в Marko.',
+              ),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -270,7 +318,10 @@ class _AuthStory extends StatelessWidget {
           const MarkoWordmark(inverse: true),
           const Spacer(),
           Text(
-            'Цены под\nконтролем.',
+            context.localized(
+              ru: 'Цены под\nконтролем.',
+              uk: 'Ціни під\nконтролем.',
+            ),
             style: Theme.of(context).textTheme.displaySmall?.copyWith(
               color: Colors.white,
               fontSize: 42,
@@ -278,8 +329,14 @@ class _AuthStory extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'Следите за конкурентами, находите расхождения и принимайте '
-            'решения на основе актуальных данных.',
+            context.localized(
+              ru:
+                  'Следите за конкурентами, находите расхождения и принимайте '
+                  'решения на основе актуальных данных.',
+              uk:
+                  'Стежте за конкурентами, знаходьте розбіжності та ухвалюйте '
+                  'рішення на основі актуальних даних.',
+            ),
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
               color: Colors.white.withValues(alpha: 0.7),
             ),

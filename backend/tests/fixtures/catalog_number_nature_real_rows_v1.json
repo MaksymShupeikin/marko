@@ -1,0 +1,111 @@
+{
+  "schema_version": "metis-catalog-number-nature-real-fixture-v1",
+  "source_catalog_sha256": "c0337041455cf36ff2a0919e8b8f87158368b82603badcd740072f4b83850af5",
+  "records": [
+    {
+      "source_row": 4,
+      "sku": "1153724209",
+      "oe_raw": "776414",
+      "title": "Амортизатор передний Мерседес 124, 190 83-97 газ",
+      "category": "5,1 Амортизаторы",
+      "brand": "KEMP",
+      "mpn_raw": "115",
+      "search_queries": "776414, 115 070, 115070, Амортизатор передний Mercedes 124",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153724209-amortizator-perednij-mersedes.html",
+      "expected_nature": "KEMP_INTERNAL",
+      "expected_reason": "KEMP_INTERNAL_PATTERN"
+    },
+    {
+      "source_row": 6,
+      "sku": "1153724211",
+      "oe_raw": "056121113D",
+      "title": "Термостат VW (Фольксваген)/Audi (Ауді) 1,5-2,0 75-99",
+      "category": "1,2 Охлаждение/нагрев",
+      "brand": "KEMP",
+      "mpn_raw": "056121113D",
+      "search_queries": "056121113D, 050121113C, 776416, Термостат Audi",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153724211-termostat-folksvagenaudi-audi.html",
+      "expected_nature": "MANUFACTURER_OE",
+      "expected_reason": "DISTINCT_KEMP_INTERNAL_TOKEN"
+    },
+    {
+      "source_row": 52,
+      "sku": "1153724273",
+      "oe_raw": "4A0941699",
+      "title": "Противотуманка Audi (Ауді)-100 91-94 L левая",
+      "category": "1.10 Кузов/Оптика",
+      "brand": "KEMP",
+      "mpn_raw": "4A0941699",
+      "search_queries": "Противотуманка Audi 100, 4A0941699",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153724273-protivotumanka-audi-audi.html",
+      "expected_nature": "MANUFACTURER_OE",
+      "expected_reason": "MANUFACTURER_PATTERN_AND_CONTEXT"
+    },
+    {
+      "source_row": 203,
+      "sku": "1153725452",
+      "oe_raw": "0,034198025",
+      "title": "Прокладки клапанной крышки Audi-100 84-91",
+      "category": "1,9 Двигатель",
+      "brand": "Audi",
+      "mpn_raw": "034198025",
+      "search_queries": "0034198025, 034198025, 7764506",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153725452-prokladki-klap-kriki.html",
+      "expected_nature": "UNKNOWN",
+      "expected_reason": "INVALID_OR_EMPTY_IDENTIFIER"
+    },
+    {
+      "source_row": 243,
+      "sku": "1153725513",
+      "oe_raw": "77644007",
+      "title": "Амортизатор передній Daewoo Sens Lanos Nexia (масло)",
+      "category": "2,1 Амортизаторы",
+      "brand": "KEMP",
+      "mpn_raw": "",
+      "search_queries": "1 Амортизаторы, 7764606, 100338",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153725513-amortizator-perednij-daewoo.html",
+      "expected_nature": "UNKNOWN",
+      "expected_reason": "CONFLICTING_KEMP_IDENTIFIERS"
+    },
+    {
+      "source_row": 765,
+      "sku": "1153728833",
+      "oe_raw": "CVN8619",
+      "title": "Шрус Daewoo Lanos 1.4-1.6 V16 АКП наружный с ABS",
+      "category": "4.12 Шрус",
+      "brand": "KEMP",
+      "mpn_raw": "",
+      "search_queries": "CVN8619, Шрус наружный Daewoo Lanos",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153728833-shrus-daewoo-deo.html",
+      "expected_nature": "UNKNOWN",
+      "expected_reason": "NO_SUFFICIENT_EVIDENCE"
+    },
+    {
+      "source_row": 1598,
+      "sku": "1153733351",
+      "oe_raw": "77644007",
+      "title": "Амортизатор передний Daewoo Sens Lanos Nexia (масло)",
+      "category": "4,1 Амортизаторы",
+      "brand": "KEMP",
+      "mpn_raw": "",
+      "search_queries": "77644007, 100338, амортизатор sachs 100338",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733351-amortizator-perednij-daewoo.html",
+      "expected_nature": "KEMP_INTERNAL",
+      "expected_reason": "KEMP_INTERNAL_PATTERN"
+    },
+    {
+      "source_row": 3714,
+      "sku": "1483068302",
+      "oe_raw": "314216",
+      "title": "Амортизатор передней подвески правый Daewoo Matiz",
+      "category": "4,1 Амортизаторы",
+      "brand": "KEMP",
+      "mpn_raw": "",
+      "search_queries": "314216, 96316745, 77648761",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1483068302-amortizator-perednej-podveski.html",
+      "expected_nature": "MANUFACTURER_OE",
+      "expected_reason": "LIVE_INDEPENDENT_EXACT",
+      "live_independent_exact_count": 1
+    }
+  ]
+}

@@ -3,10 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../../core/widgets/marko_menu.dart';
 import 'catalog_controller.dart';
+import 'catalog_models.dart';
 import 'widgets/catalog_product_card.dart';
+import 'widgets/catalog_product_details_sheet.dart';
 
 class CatalogPage extends ConsumerStatefulWidget {
   const CatalogPage({required this.onOpenPriceComparison, super.key});
@@ -39,17 +43,19 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
           tone: MarkoMessageTone.error,
           action: TextButton(
             onPressed: () => ref.invalidate(catalogControllerProvider),
-            child: const Text('Повторить'),
+            child: Text(context.localized(ru: 'Повторить', uk: 'Повторити')),
           ),
         ),
       ),
       data: (state) => _CatalogContent(
         state: state,
         searchController: _searchController,
-        onOpenPriceComparison: widget.onOpenPriceComparison,
+        onShowProductDetails: _showProductDetails,
         onQueryChanged: _queueSearch,
         onQuerySubmitted: _searchNow,
         onClearQuery: _clearSearch,
+        onStoreChanged: (storeId) =>
+            ref.read(catalogControllerProvider.notifier).selectStore(storeId),
         onRefresh: () => ref.read(catalogControllerProvider.notifier).refresh(),
         onLoadMore: () =>
             ref.read(catalogControllerProvider.notifier).loadMore(),
@@ -75,26 +81,41 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
     _searchNow('');
     setState(() {});
   }
+
+  void _showProductDetails(CatalogProduct product) {
+    unawaited(
+      showCatalogProductDetailsSheet(
+        context: context,
+        product: product,
+        loadCompetitors: () => ref
+            .read(catalogControllerProvider.notifier)
+            .loadCompetitors(product),
+        onCompare: widget.onOpenPriceComparison,
+      ),
+    );
+  }
 }
 
 class _CatalogContent extends StatelessWidget {
   const _CatalogContent({
     required this.state,
     required this.searchController,
-    required this.onOpenPriceComparison,
+    required this.onShowProductDetails,
     required this.onQueryChanged,
     required this.onQuerySubmitted,
     required this.onClearQuery,
+    required this.onStoreChanged,
     required this.onRefresh,
     required this.onLoadMore,
   });
 
   final CatalogState state;
   final TextEditingController searchController;
-  final VoidCallback onOpenPriceComparison;
+  final ValueChanged<CatalogProduct> onShowProductDetails;
   final ValueChanged<String> onQueryChanged;
   final ValueChanged<String> onQuerySubmitted;
   final VoidCallback onClearQuery;
+  final ValueChanged<String?> onStoreChanged;
   final VoidCallback onRefresh;
   final VoidCallback onLoadMore;
 
@@ -120,12 +141,18 @@ class _CatalogContent extends StatelessWidget {
                   onSubmitted: onQuerySubmitted,
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
-                    hintText: 'Поиск по OE/OEM',
+                    hintText: context.localized(
+                      ru: 'Поиск по OEM/OE, артикулу или названию объявления',
+                      uk: 'Пошук за OEM/OE, артикулу або назві оголошення',
+                    ),
                     prefixIcon: const Icon(Icons.search_rounded),
                     suffixIcon: searchController.text.isEmpty
                         ? null
                         : IconButton(
-                            tooltip: 'Очистить поиск',
+                            tooltip: context.localized(
+                              ru: 'Очистить поиск',
+                              uk: 'Очистити пошук',
+                            ),
                             onPressed: onClearQuery,
                             icon: const Icon(Icons.close_rounded),
                           ),
@@ -136,7 +163,7 @@ class _CatalogContent extends StatelessWidget {
                   const LinearProgressIndicator(minHeight: 2),
                 ],
                 const SizedBox(height: 16),
-                _CatalogStats(state: state),
+                _CatalogStats(state: state, onStoreChanged: onStoreChanged),
                 if (state.error != null) ...[
                   const SizedBox(height: 14),
                   MarkoInlineMessage(
@@ -146,10 +173,18 @@ class _CatalogContent extends StatelessWidget {
                 ],
                 const SizedBox(height: 20),
                 if (page.items.isEmpty)
-                  _EmptyCatalog(hasQuery: state.query.isNotEmpty)
+                  _EmptyCatalog(
+                    hasQuery:
+                        state.query.isNotEmpty || state.selectedStoreId != null,
+                  )
                 else ...[
                   Text(
-                    state.query.isEmpty ? 'Товары' : 'Найдено ${page.total}',
+                    state.query.isEmpty
+                        ? context.localized(ru: 'Товары', uk: 'Товари')
+                        : context.localized(
+                            ru: 'Найдено ${page.total}',
+                            uk: 'Знайдено ${page.total}',
+                          ),
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
@@ -164,7 +199,8 @@ class _CatalogContent extends StatelessWidget {
                             padding: const EdgeInsets.only(bottom: 10),
                             child: CatalogProductCard(
                               product: product,
-                              onCompare: onOpenPriceComparison,
+                              onShowDetails: () =>
+                                  onShowProductDetails(product),
                             ),
                           ),
                         ),
@@ -185,7 +221,10 @@ class _CatalogContent extends StatelessWidget {
                               )
                             : const Icon(Icons.expand_more_rounded, size: 18),
                         label: Text(
-                          'Показать ещё (${page.items.length} из ${page.total})',
+                          context.localized(
+                            ru: 'Показать ещё (${page.items.length} из ${page.total})',
+                            uk: 'Показати ще (${page.items.length} з ${page.total})',
+                          ),
                         ),
                       ),
                     ),
@@ -193,8 +232,14 @@ class _CatalogContent extends StatelessWidget {
                 ],
                 const SizedBox(height: 12),
                 Text(
-                  'Дубли объединяются только по подтверждаемому артикулу и бренду. '
-                  'Похожие названия без идентификатора остаются отдельными товарами.',
+                  context.localized(
+                    ru:
+                        'Дубли объединяются только по подтверждаемому артикулу и бренду. '
+                        'Похожие названия без идентификатора остаются отдельными товарами.',
+                    uk:
+                        'Дублі об’єднуються лише за підтвердженим артикулом і брендом. '
+                        'Схожі назви без ідентифікатора залишаються окремими товарами.',
+                  ),
                   style: Theme.of(
                     context,
                   ).textTheme.bodySmall?.copyWith(color: colors.muted),
@@ -224,12 +269,15 @@ class _CatalogHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Каталог Prom.ua',
+                context.localized(ru: 'Каталог Prom.ua', uk: 'Каталог Prom.ua'),
                 style: Theme.of(context).textTheme.headlineMedium,
               ),
               const SizedBox(height: 7),
               Text(
-                'Товары из «Моих магазинов» без повторяющихся объявлений.',
+                context.localized(
+                  ru: 'Товары из «Моих магазинов» без повторяющихся объявлений.',
+                  uk: 'Товари з «Моїх магазинів» без повторюваних оголошень.',
+                ),
                 style: Theme.of(
                   context,
                 ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -238,7 +286,10 @@ class _CatalogHeader extends StatelessWidget {
           ),
         ),
         IconButton.outlined(
-          tooltip: 'Обновить каталог',
+          tooltip: context.localized(
+            ru: 'Обновить каталог',
+            uk: 'Оновити каталог',
+          ),
           onPressed: onRefresh,
           icon: const Icon(Icons.refresh_rounded, size: 19),
         ),
@@ -248,34 +299,120 @@ class _CatalogHeader extends StatelessWidget {
 }
 
 class _CatalogStats extends StatelessWidget {
-  const _CatalogStats({required this.state});
+  const _CatalogStats({required this.state, required this.onStoreChanged});
 
   final CatalogState state;
+  final ValueChanged<String?> onStoreChanged;
 
   @override
   Widget build(BuildContext context) {
     final page = state.page;
     final values = <(String, String)>[
-      ('Уникальных товаров', '${page.catalogTotal}'),
-      ('Объявлений', '${page.listingTotal}'),
-      ('Дублей объединено', '${page.duplicatesRemoved}'),
-      ('Магазинов', '${page.storeTotal}'),
+      (
+        context.localized(ru: 'Уникальных товаров', uk: 'Унікальних товарів'),
+        '${page.catalogTotal}',
+      ),
+      (
+        context.localized(ru: 'Объявлений', uk: 'Оголошень'),
+        '${page.listingTotal}',
+      ),
+      (
+        context.localized(ru: 'Дублей объединено', uk: 'Дублів об’єднано'),
+        '${page.duplicatesRemoved}',
+      ),
     ];
     return Wrap(
       spacing: 8,
       runSpacing: 8,
-      children: values
-          .map((value) => _StatChip(label: value.$1, value: value.$2))
-          .toList(growable: false),
+      children: [
+        ...values.map((value) => _StatChip(label: value.$1, value: value.$2)),
+        _StoreFilterChip(
+          stores: page.stores,
+          storeTotal: page.storeTotal,
+          selectedStoreId: state.selectedStoreId,
+          enabled: !state.isSearching,
+          onChanged: onStoreChanged,
+        ),
+      ],
     );
   }
 }
 
+class _StoreFilterChip extends StatelessWidget {
+  const _StoreFilterChip({
+    required this.stores,
+    required this.storeTotal,
+    required this.selectedStoreId,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  static const _allStoresValue = '__all-catalog-stores__';
+
+  final List<CatalogStoreOption> stores;
+  final int storeTotal;
+  final String? selectedStoreId;
+  final bool enabled;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    CatalogStoreOption? selectedStore;
+    for (final store in stores) {
+      if (store.storeId == selectedStoreId) {
+        selectedStore = store;
+        break;
+      }
+    }
+
+    return MarkoMenuButton<String>(
+      key: const ValueKey('catalog-store-filter'),
+      tooltip: context.localized(ru: 'Выбрать магазин', uk: 'Обрати магазин'),
+      enabled: enabled && stores.isNotEmpty,
+      header: context.localized(ru: 'Магазины', uk: 'Магазини'),
+      selected: selectedStore?.storeId ?? _allStoresValue,
+      onSelected: (value) => onChanged(value == _allStoresValue ? null : value),
+      entries: [
+        MarkoMenuEntry(
+          value: _allStoresValue,
+          label: context.localized(ru: 'Все магазины', uk: 'Усі магазини'),
+          icon: Icons.apps_rounded,
+          trailingLabel: '$storeTotal',
+        ),
+        ...stores.map(
+          (store) => MarkoMenuEntry(
+            value: store.storeId,
+            label: store.name,
+            avatarText: _storeMonogram(store.name),
+            dividerBefore: identical(store, stores.first),
+          ),
+        ),
+      ],
+      child: _StatChip(
+        label: selectedStore == null
+            ? context.localized(ru: 'Магазинов', uk: 'Магазинів')
+            : context.localized(ru: 'Магазин', uk: 'Магазин'),
+        value: selectedStore?.name ?? '$storeTotal',
+        trailing: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+      ),
+    );
+  }
+}
+
+String _storeMonogram(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) {
+    return '?';
+  }
+  return trimmed.characters.first.toUpperCase();
+}
+
 class _StatChip extends StatelessWidget {
-  const _StatChip({required this.label, required this.value});
+  const _StatChip({required this.label, required this.value, this.trailing});
 
   final String label;
   final String value;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -287,20 +424,35 @@ class _StatChip extends StatelessWidget {
         border: Border.all(color: colors.border),
         borderRadius: BorderRadius.circular(9),
       ),
-      child: Text.rich(
-        TextSpan(
-          children: [
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text.rich(
             TextSpan(
-              text: '$value  ',
-              style: TextStyle(color: colors.ink, fontWeight: FontWeight.w700),
+              children: [
+                TextSpan(
+                  text: '$value  ',
+                  style: TextStyle(
+                    color: colors.ink,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                TextSpan(
+                  text: label,
+                  style: TextStyle(color: colors.muted),
+                ),
+              ],
             ),
-            TextSpan(
-              text: label,
-              style: TextStyle(color: colors.muted),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 5),
+            IconTheme(
+              data: IconThemeData(color: colors.muted),
+              child: trailing!,
             ),
           ],
-        ),
-        style: Theme.of(context).textTheme.bodySmall,
+        ],
       ),
     );
   }
@@ -320,14 +472,28 @@ class _EmptyCatalog extends StatelessWidget {
           const Icon(Icons.inventory_2_outlined, size: 30),
           const SizedBox(height: 12),
           Text(
-            hasQuery ? 'По OE/OEM ничего не найдено' : 'Каталог пока пуст',
+            hasQuery
+                ? context.localized(
+                    ru: 'По вашему запросу ничего не найдено',
+                    uk: 'За вашим запитом нічого не знайдено',
+                  )
+                : context.localized(
+                    ru: 'Каталог пока пуст',
+                    uk: 'Каталог поки порожній',
+                  ),
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 5),
           Text(
             hasQuery
-                ? 'Проверьте номер или попробуйте артикул без пробелов и дефисов.'
-                : 'Добавьте магазин в «Мои магазины» и дождитесь синхронизации.',
+                ? context.localized(
+                    ru: 'Ищите по OEM/OE, артикулу, названию объявления или запчасти.',
+                    uk: 'Шукайте за OEM/OE, артикулом, назвою оголошення або запчастини.',
+                  )
+                : context.localized(
+                    ru: 'Добавьте магазин в «Мои магазины» и дождитесь синхронизации.',
+                    uk: 'Додайте магазин у «Мої магазини» та дочекайтеся синхронізації.',
+                  ),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),

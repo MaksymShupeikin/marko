@@ -18,12 +18,15 @@ from marko.infrastructure.db.models import (
 
 async def get_store_by_id(
     session: AsyncSession, store_id: uuid.UUID, workspace_id: uuid.UUID
-) -> tuple[MarketplaceStore, StoreKind, int] | None:
+) -> tuple[MarketplaceStore, StoreKind, int, str | None] | None:
     statement = (
         select(
             MarketplaceStore,
             WorkspaceStore.kind,
             func.count(Listing.id).label("product_count"),
+            func.max(Listing.raw_data["seller_name"].as_string()).label(
+                "prom_store_name"
+            ),
         )
         .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
         .outerjoin(Listing, Listing.store_id == MarketplaceStore.id)
@@ -39,12 +42,15 @@ async def get_store_by_id(
 
 async def list_stores(
     session: AsyncSession, workspace_id: uuid.UUID
-) -> list[tuple[MarketplaceStore, StoreKind, int]]:
+) -> list[tuple[MarketplaceStore, StoreKind, int, str | None]]:
     statement = (
         select(
             MarketplaceStore,
             WorkspaceStore.kind,
             func.count(Listing.id).label("product_count"),
+            func.max(Listing.raw_data["seller_name"].as_string()).label(
+                "prom_store_name"
+            ),
         )
         .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
         .outerjoin(Listing, Listing.store_id == MarketplaceStore.id)
@@ -53,7 +59,7 @@ async def list_stores(
         .order_by(MarketplaceStore.created_at.desc())
     )
     rows = (await session.execute(statement)).all()
-    return [(row[0], row[1], row[2]) for row in rows]
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
 
 
 async def upsert_marketplace_store(

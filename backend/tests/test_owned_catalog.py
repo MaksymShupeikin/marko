@@ -11,6 +11,7 @@ from marko.services.owned_catalog import (
     _owned_catalog_statement,
     build_owned_catalog_page,
     canonical_catalog_sku,
+    extract_labeled_oe,
 )
 
 
@@ -25,12 +26,15 @@ def _listing(
     sku: str,
     name: str = "Втягивающее реле стартера Mercedes",
     brand: str | None = "KEMP",
+    oe_raw: str | None = None,
+    description: str | None = None,
+    store_name: str | None = None,
 ) -> OwnedCatalogListing:
     return OwnedCatalogListing(
         listing_id=uuid4(),
         store_id=store_id,
         store_external_id=external_id,
-        store_name="parts-avto" if store_id == STORE_A else "profparts",
+        store_name=store_name or ("parts-avto" if store_id == STORE_A else "profparts"),
         store_url=f"https://prom.ua/ua/c{external_id}-store.html",
         name=name,
         listing_url=f"https://prom.ua/ua/p{uuid4().int}-product.html",
@@ -41,7 +45,8 @@ def _listing(
         current_price=Decimal("420.00"),
         is_available=True,
         image_url="https://images.prom.ua/product.jpg",
-        oe_raw=None,
+        oe_raw=oe_raw,
+        description=description,
     )
 
 
@@ -105,6 +110,127 @@ def test_owned_catalog_search_normalizes_oe_formatting() -> None:
     assert page.total == 1
     assert page.items[0].sku == "0331402053"
     assert page.catalog_total == 2
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_sku"),
+    [
+        ("0331-402-053", "0331402053"),
+        ("втягивающее реле", "0331402053"),
+        ("стартер Mercedes", "0331402053"),
+        ("гальмівний супорт", "0331402053"),
+    ],
+)
+def test_owned_catalog_searches_article_title_and_part_description(
+    query: str,
+    expected_sku: str,
+) -> None:
+    rows = [
+        _listing(
+            store_id=STORE_A,
+            external_id="3912822",
+            sku="0331402053",
+            description="Гальмівний супорт для ремонту передньої осі",
+        ),
+        _listing(
+            store_id=STORE_B,
+            external_id="3325174",
+            sku="9067600147",
+            name="Кронштейн дверей Mercedes Sprinter",
+        ),
+    ]
+
+    page = build_owned_catalog_page(rows, query=query, limit=50, offset=0)
+
+    assert page.total == 1
+    assert page.items[0].sku == expected_sku
+
+
+def test_owned_catalog_exposes_and_searches_labeled_oe_number() -> None:
+    rows = [
+        _listing(
+            store_id=STORE_A,
+            external_id="3912822",
+            sku="61131369611",
+            name="Кришка запобіжників BMW 3 E21 OEM 6 1131 36 9611",
+        ),
+    ]
+
+    page = build_owned_catalog_page(
+        rows,
+        query="6-1131-36-9611",
+        limit=50,
+        offset=0,
+    )
+
+    assert page.total == 1
+    assert page.items[0].oe == "6 1131 36 9611"
+
+
+def test_owned_catalog_uses_original_prom_store_name() -> None:
+    page = build_owned_catalog_page(
+        [
+            _listing(
+                store_id=STORE_B,
+                external_id="3325174",
+                sku="9067600147",
+                store_name="ПРОФПАРТС",
+            )
+        ],
+        query=None,
+        limit=50,
+        offset=0,
+    )
+
+    assert page.items[0].stores[0].name == "ПРОФПАРТС"
+
+
+def test_owned_catalog_filters_by_store_and_keeps_all_store_options() -> None:
+    page = build_owned_catalog_page(
+        [
+            _listing(
+                store_id=STORE_A,
+                external_id="3912822",
+                sku="0331402053",
+                store_name="Parts Avto",
+            ),
+            _listing(
+                store_id=STORE_B,
+                external_id="3325174",
+                sku="9067600147",
+                store_name="ПРОФПАРТС",
+            ),
+        ],
+        query=None,
+        store_id=STORE_B,
+        limit=50,
+        offset=0,
+    )
+
+    assert page.catalog_total == 1
+    assert page.listing_total == 1
+    assert page.total == 1
+    assert page.items[0].sku == "9067600147"
+    assert page.store_total == 2
+    assert [(store.store_id, store.name) for store in page.stores] == [
+        (STORE_A, "Parts Avto"),
+        (STORE_B, "ПРОФПАРТС"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Кришка BMW OEM 6 1131 36 9611", "6 1131 36 9611"),
+        ("Деталь OE: 4A1422893AA", "4A1422893AA"),
+        ("Ремінь OEM BELT", None),
+    ],
+)
+def test_extract_labeled_oe_requires_a_number(
+    title: str,
+    expected: str | None,
+) -> None:
+    assert extract_labeled_oe(title) == expected
 
 
 def test_owned_catalog_statement_is_tenant_and_owned_store_scoped() -> None:

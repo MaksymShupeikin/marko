@@ -183,7 +183,8 @@ async def _dispatch_sync_run(
 async def list_stores(session: AsyncSession, workspace_id: UUID) -> list[StoreView]:
     rows = await stores_repo.list_stores(session, workspace_id)
     return [
-        _store_view(store, kind, product_count) for store, kind, product_count in rows
+        _store_view(store, kind, product_count, prom_store_name)
+        for store, kind, product_count, prom_store_name in rows
     ]
 
 
@@ -247,13 +248,17 @@ async def _get_workspace_store(
 
 
 def _store_view(
-    store: MarketplaceStore, kind: StoreKind, product_count: int
+    store: MarketplaceStore,
+    kind: StoreKind,
+    product_count: int,
+    prom_store_name: str | None,
 ) -> StoreView:
+    original_name = (prom_store_name or "").strip() or store.name
     return StoreView(
         id=store.id,
         marketplace=store.marketplace,
         external_id=store.external_id,
-        name=store.name,
+        name=original_name,
         url=store.canonical_url,
         kind=kind.value,
         product_count=product_count,

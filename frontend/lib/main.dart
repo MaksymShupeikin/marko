@@ -1,7 +1,9 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'core/app_language.dart';
 import 'core/app_router.dart';
 import 'core/app_theme.dart';
 import 'core/environment.dart';
@@ -55,21 +57,23 @@ class _ConfigurationErrorApp extends StatelessWidget {
       title: 'Marko',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      home: Scaffold(
-        body: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Column(
-                children: [
-                  const MarkoWordmark(),
-                  const SizedBox(height: 24),
-                  MarkoInlineMessage(
-                    message: message,
-                    tone: MarkoMessageTone.error,
-                  ),
-                ],
+      home: SelectionArea(
+        child: Scaffold(
+          body: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: Column(
+                  children: [
+                    const MarkoWordmark(),
+                    const SizedBox(height: 24),
+                    MarkoInlineMessage(
+                      message: message,
+                      tone: MarkoMessageTone.error,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -85,18 +89,29 @@ class MarkoApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
+    final language = ref.watch(appLanguageProvider);
     if (auth.isLoading) {
       return MaterialApp(
         title: 'Marko',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
-        home: const Scaffold(body: _AppLoading()),
+        locale: language.locale,
+        supportedLocales: AppLanguage.values
+            .map((item) => item.locale)
+            .toList(growable: false),
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
+        home: const SelectionArea(child: Scaffold(body: _AppLoading())),
       );
     }
     return MaterialApp.router(
       title: 'Marko',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      locale: language.locale,
+      supportedLocales: AppLanguage.values
+          .map((item) => item.locale)
+          .toList(growable: false),
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       routerConfig: ref.watch(appRouterProvider),
     );
   }

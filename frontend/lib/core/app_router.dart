@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -12,13 +13,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   );
   final router = GoRouter(
     routes: [
-      GoRoute(path: '/', builder: (_, _) => const DashboardPage()),
-      GoRoute(path: '/login', builder: (_, _) => const AuthPage()),
+      GoRoute(
+        path: '/',
+        builder: (_, _) => const SelectionArea(child: DashboardPage()),
+      ),
+      GoRoute(
+        path: '/login',
+        builder: (_, _) => const SelectionArea(child: AuthPage()),
+      ),
       GoRoute(
         path: '/stores/:storeId',
         name: 'store-products',
-        builder: (_, state) =>
-            StoreProductsPage(storeId: state.pathParameters['storeId'] ?? ''),
+        builder: (_, state) => SelectionArea(
+          child: StoreProductsPage(
+            storeId: state.pathParameters['storeId'] ?? '',
+          ),
+        ),
       ),
     ],
     redirect: (_, state) {

@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
+import re
 import unicodedata
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
@@ -36,6 +37,7 @@ class OwnedCatalogListing:
     is_available: bool | None
     image_url: str | None
     oe_raw: str | None
+    description: str | None
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,13 @@ class OwnedCatalogStorePresence:
     price: Decimal | None
     currency: str
     is_available: bool | None
+
+
+@dataclass(frozen=True)
+class OwnedCatalogStoreOption:
+    store_id: UUID
+    external_id: str
+    name: str
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,7 @@ class OwnedCatalogPage:
     listing_total: int
     duplicates_removed: int
     store_total: int
+    stores: tuple[OwnedCatalogStoreOption, ...]
     limit: int
     offset: int
 
@@ -85,6 +95,7 @@ async def list_owned_catalog(
     *,
     workspace_id: UUID,
     query: str | None,
+    store_id: UUID | None,
     limit: int,
     offset: int,
 ) -> OwnedCatalogPage:
@@ -93,6 +104,7 @@ async def list_owned_catalog(
     return build_owned_catalog_page(
         rows,
         query=query,
+        store_id=store_id,
         limit=limit,
         offset=offset,
     )
@@ -104,7 +116,10 @@ def _owned_catalog_statement(workspace_id: UUID):
             Listing.id.label("listing_id"),
             Listing.store_id.label("store_id"),
             MarketplaceStore.external_id.label("store_external_id"),
-            MarketplaceStore.name.label("store_name"),
+            func.coalesce(
+                Listing.raw_data["seller_name"].as_string(),
+                MarketplaceStore.name,
+            ).label("store_name"),
             MarketplaceStore.canonical_url.label("store_url"),
             Listing.name.label("name"),
             Listing.url.label("listing_url"),
@@ -116,6 +131,7 @@ def _owned_catalog_statement(workspace_id: UUID):
             Listing.is_available.label("is_available"),
             Listing.raw_data["image"].as_string().label("image_url"),
             Listing.raw_data["oe_raw"].as_string().label("oe_raw"),
+            Listing.raw_data["description"].as_string().label("description"),
         )
         .join(MarketplaceStore, MarketplaceStore.id == Listing.store_id)
         .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
@@ -137,9 +153,16 @@ def build_owned_catalog_page(
     query: str | None,
     limit: int,
     offset: int,
+    store_id: UUID | None = None,
 ) -> OwnedCatalogPage:
+    store_options = _catalog_store_options(rows)
+    filtered_rows = (
+        [row for row in rows if row.store_id == store_id]
+        if store_id is not None
+        else list(rows)
+    )
     grouped: dict[tuple[str, str], list[OwnedCatalogListing]] = {}
-    for row in rows:
+    for row in filtered_rows:
         grouped.setdefault(catalog_identity(row), []).append(row)
 
     products_with_rows = [
@@ -150,6 +173,11 @@ def build_owned_catalog_page(
 
     normalized_query = normalize_catalog_code(query)
     text_query = (query or "").strip().casefold()
+    normalized_tokens = tuple(
+        token
+        for raw_token in re.split(r"\s+", (query or "").strip())
+        if (token := normalize_catalog_code(raw_token))
+    )
     if normalized_query or text_query:
         products_with_rows = [
             item
@@ -158,12 +186,13 @@ def build_owned_catalog_page(
                 item[0],
                 item[1],
                 normalized_query=normalized_query,
+                normalized_tokens=normalized_tokens,
                 text_query=text_query,
             )
         ]
 
     catalog_total = len(grouped)
-    listing_total = len(rows)
+    listing_total = len(filtered_rows)
     total = len(products_with_rows)
     return OwnedCatalogPage(
         items=tuple(
@@ -173,9 +202,32 @@ def build_owned_catalog_page(
         catalog_total=catalog_total,
         listing_total=listing_total,
         duplicates_removed=max(0, listing_total - catalog_total),
-        store_total=len({row.store_id for row in rows}),
+        store_total=len(store_options),
+        stores=store_options,
         limit=limit,
         offset=offset,
+    )
+
+
+def _catalog_store_options(
+    rows: tuple[OwnedCatalogListing, ...] | list[OwnedCatalogListing],
+) -> tuple[OwnedCatalogStoreOption, ...]:
+    stores: dict[UUID, OwnedCatalogStoreOption] = {}
+    for row in rows:
+        original_name = (row.store_name or "").strip()
+        stores.setdefault(
+            row.store_id,
+            OwnedCatalogStoreOption(
+                store_id=row.store_id,
+                external_id=row.store_external_id,
+                name=original_name or f"Prom {row.store_external_id}",
+            ),
+        )
+    return tuple(
+        sorted(
+            stores.values(),
+            key=lambda store: (store.name.casefold(), store.external_id),
+        )
     )
 
 
@@ -243,7 +295,21 @@ def _catalog_product(
         key=lambda value: (len(normalize_catalog_code(value)), len(value), value),
         default=None,
     )
-    oe = next((row.oe_raw for row in rows if row.oe_raw), None)
+    oe = next(
+        (
+            normalized
+            for row in rows
+            if (normalized := normalize_oe_value(row.oe_raw)) is not None
+        ),
+        None,
+    ) or next(
+        (
+            extracted
+            for row in rows
+            if (extracted := extract_labeled_oe(row.name)) is not None
+        ),
+        None,
+    )
     stable_id = hashlib.sha256(f"{identity[0]}:{identity[1]}".encode()).hexdigest()
     return OwnedCatalogProduct(
         id=stable_id[:32],
@@ -264,10 +330,14 @@ def _catalog_product(
 
 def _store_presence(rows: list[OwnedCatalogListing]) -> OwnedCatalogStorePresence:
     representative = _representative(rows)
+    original_name = next(
+        (name for row in rows if (name := (row.store_name or "").strip())),
+        None,
+    )
     return OwnedCatalogStorePresence(
         store_id=representative.store_id,
         external_id=representative.store_external_id,
-        name=representative.store_name or f"Prom {representative.store_external_id}",
+        name=original_name or f"Prom {representative.store_external_id}",
         url=representative.store_url,
         listing_url=representative.listing_url,
         listing_count=len(rows),
@@ -304,11 +374,32 @@ def _safe_image_url(value: str | None) -> str | None:
     return normalized if normalized.startswith(("https://", "http://")) else None
 
 
+_LABELED_OE_RE = re.compile(
+    r"\b(?:OEM|OE)\s*(?:[:#№-]\s*)?"
+    r"(?P<value>(?=[A-Z0-9 ._/-]{3,32}\b)(?=[A-Z0-9 ._/-]*\d)"
+    r"[A-Z0-9]+(?:[ ._/-]+[A-Z0-9]+){0,5})",
+    re.IGNORECASE,
+)
+
+
+def normalize_oe_value(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    return normalized or None
+
+
+def extract_labeled_oe(value: str | None) -> str | None:
+    match = _LABELED_OE_RE.search(value or "")
+    if match is None:
+        return None
+    return match.group("value").strip(" ._/-")
+
+
 def _matches_query(
     product: OwnedCatalogProduct,
     rows: list[OwnedCatalogListing],
     *,
     normalized_query: str,
+    normalized_tokens: tuple[str, ...],
     text_query: str,
 ) -> bool:
     if text_query and any(text_query in row.name.casefold() for row in rows):
@@ -324,8 +415,15 @@ def _matches_query(
         *(row.sku for row in rows),
         *(row.oe_raw for row in rows),
         *(row.name for row in rows),
+        *(row.description for row in rows),
     )
-    return any(normalized_query in normalize_catalog_code(value) for value in values)
+    normalized_values = tuple(normalize_catalog_code(value) for value in values)
+    if any(normalized_query in value for value in normalized_values):
+        return True
+    return bool(normalized_tokens) and all(
+        any(token in value for value in normalized_values)
+        for token in normalized_tokens
+    )
 
 
 __all__ = [
@@ -336,6 +434,8 @@ __all__ = [
     "build_owned_catalog_page",
     "canonical_catalog_sku",
     "catalog_identity",
+    "extract_labeled_oe",
     "list_owned_catalog",
     "normalize_catalog_code",
+    "normalize_oe_value",
 ]

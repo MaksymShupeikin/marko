@@ -7,6 +7,7 @@ class CatalogState {
   const CatalogState({
     required this.page,
     this.query = '',
+    this.selectedStoreId,
     this.isSearching = false,
     this.isLoadingMore = false,
     this.error,
@@ -14,6 +15,7 @@ class CatalogState {
 
   final CatalogProductPage page;
   final String query;
+  final String? selectedStoreId;
   final bool isSearching;
   final bool isLoadingMore;
   final String? error;
@@ -21,6 +23,8 @@ class CatalogState {
   CatalogState copyWith({
     CatalogProductPage? page,
     String? query,
+    String? selectedStoreId,
+    bool clearSelectedStore = false,
     bool? isSearching,
     bool? isLoadingMore,
     String? error,
@@ -29,6 +33,9 @@ class CatalogState {
     return CatalogState(
       page: page ?? this.page,
       query: query ?? this.query,
+      selectedStoreId: clearSelectedStore
+          ? null
+          : selectedStoreId ?? this.selectedStoreId,
       isSearching: isSearching ?? this.isSearching,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       error: clearError ? null : error ?? this.error,
@@ -51,17 +58,44 @@ class CatalogController extends AsyncNotifier<CatalogState> {
 
   Future<void> search(String rawQuery) async {
     final query = rawQuery.trim();
+    await _reload(query: query, storeId: _current.selectedStoreId);
+  }
+
+  Future<void> selectStore(String? storeId) async {
+    await _reload(query: _current.query, storeId: storeId);
+  }
+
+  Future<CatalogCompetitorComparison> loadCompetitors(CatalogProduct product) {
+    return _api.listCompetitors(
+      sku: product.sku,
+      oe: product.oe,
+      brand: product.brand,
+    );
+  }
+
+  Future<void> _reload({
+    required String query,
+    required String? storeId,
+  }) async {
     final generation = ++_requestGeneration;
     state = AsyncData(
-      _current.copyWith(query: query, isSearching: true, clearError: true),
+      _current.copyWith(
+        query: query,
+        selectedStoreId: storeId,
+        clearSelectedStore: storeId == null,
+        isSearching: true,
+        clearError: true,
+      ),
     );
     try {
-      final page = await _api.listProducts(query: query);
+      final page = await _api.listProducts(query: query, storeId: storeId);
       if (generation != _requestGeneration) return;
       state = AsyncData(
         _current.copyWith(
           page: page,
           query: query,
+          selectedStoreId: storeId,
+          clearSelectedStore: storeId == null,
           isSearching: false,
           isLoadingMore: false,
           clearError: true,
@@ -75,7 +109,8 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     }
   }
 
-  Future<void> refresh() => search(_current.query);
+  Future<void> refresh() =>
+      _reload(query: _current.query, storeId: _current.selectedStoreId);
 
   Future<void> loadMore() async {
     final current = _current;
@@ -87,6 +122,7 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     try {
       final next = await _api.listProducts(
         query: current.query,
+        storeId: current.selectedStoreId,
         offset: current.page.items.length,
       );
       if (generation != _requestGeneration) return;
@@ -99,6 +135,7 @@ class CatalogController extends AsyncNotifier<CatalogState> {
             listingTotal: next.listingTotal,
             duplicatesRemoved: next.duplicatesRemoved,
             storeTotal: next.storeTotal,
+            stores: next.stores,
           ),
           isLoadingMore: false,
           clearError: true,

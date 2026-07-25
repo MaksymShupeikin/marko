@@ -1,0 +1,210 @@
+end_of_response:
+  contract_version: "15.1"
+
+  stage_result:
+    stage:
+      id: MARKET_LEAD_RESEARCH_2026_07_18
+      title: MARKET_LEAD_RESEARCH_UA_PL_RU
+      type: RESEARCH
+      scope_owner: Cross-cutting
+    status: PASS
+    completed_scope:
+      - scope_item_id: SCOPE-LEAD-DATABASE
+        result: A source-backed database of 24 auto-parts sellers across Ukraine, Poland, and Russia was created.
+        artifact_refs:
+          - docs/SALES_LEADS_UA_PL_RU_2026-07-18.md
+          - docs/SALES_LEADS_UA_PL_RU_2026-07-18.csv
+        evidence_refs:
+          - command:python3 CSV schema and row-count validation
+          - public business websites cited in the lead database
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-QUALIFICATION
+        result: Leads were segmented into contact-now, adapter-discovery, and legal-hold cohorts with fit signals and outreach angles.
+        artifact_refs:
+          - docs/SALES_LEADS_UA_PL_RU_2026-07-18.md
+        evidence_refs:
+          - README.md
+          - public business websites cited in the lead database
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+      - scope_item_id: SCOPE-OUTREACH-PREP
+        result: Honest pilot framing, discovery questions, and Ukrainian and Polish first-contact drafts were prepared without sending messages.
+        artifact_refs:
+          - docs/SALES_LEADS_UA_PL_RU_2026-07-18.md
+        evidence_refs:
+          - README.md
+        hard_required: true
+        temporal_state: CURRENT_VERIFIED
+    incomplete_scope: []
+    strongest_verified_result:
+      claim_id: CLM-LEAD-DATABASE-24
+      result: The CSV contains exactly 24 parseable lead records, eight for each requested market.
+      evidence_level: E3
+      evidence_refs:
+        - docs/SALES_LEADS_UA_PL_RU_2026-07-18.csv
+        - command:python3 CSV schema and row-count validation
+      reproduction_status: reproducible
+      limitations:
+        - Public contact details and company claims can change after the verification date.
+    weakest_critical_area:
+      area_id: AREA-BUYER-QUALIFICATION
+      area: Live buyer qualification
+      score: 25
+      evidence_level: E1
+      reason: No lead has yet confirmed authority, budget, pricing workflow, data availability, or pilot interest.
+      downstream_impact: Fit scores are prioritization hypotheses rather than sales-qualified opportunities.
+      required_resolution: Conduct discovery calls and record BANT-style qualification plus a sample-data decision.
+    evidence_quality:
+      highest_level: E3
+      critical_floor: E1
+      material_claim_coverage: 1.0
+      reproducible_claim_coverage: 0.8
+      freshness_status: verified
+      representative_scope: partial
+      limitations:
+        - Desk research does not prove buyer intent.
+        - Several catalog-size signals are company self-descriptions.
+        - Russian outreach requires separate sanctions clearance.
+    production_implication:
+      state: DEVELOPMENT_ONLY
+      production_ready: false
+      evidence_level: E1
+      passed_hard_gates:
+        - LEAD_RESEARCH_ARTIFACT_COMPLETE
+      failed_hard_gates: []
+      blocked_hard_gates:
+        - LIVE_BUYER_QUALIFICATION_NOT_STARTED
+        - RUSSIA_SANCTIONS_CLEARANCE_NOT_OBTAINED
+        - NON_PROM_ADAPTERS_NOT_SCOPED
+      statement: The commercial research deliverable is complete; it does not establish product production readiness or authorize outreach to Russia.
+
+  blockers:
+    overall: BLOCKERS_FOUND
+    assessment_complete: true
+    assessed_categories:
+      - business_decisions
+      - source_access
+      - data
+      - environment_reproducibility
+      - unknowns
+    p0: []
+    p1:
+      - id: BLK-P1-RUSSIA-SANCTIONS
+        priority: P1
+        category: business_decisions
+        description: Commercial software or services to Russia may be prohibited or restricted for an EU or Poland-based seller.
+        blocked_scope:
+          - Russian commercial outreach, demo access, licensing, and service delivery
+        affects_current_gate: false
+        affects_next_stage: false
+        affects_production: true
+        evidence_refs:
+          - https://www.consilium.europa.eu/en/policies/sanctions-against-russia-explained/
+          - https://finance.ec.europa.eu/eu-and-world/sanctions-restrictive-measures/sanctions-adopted-following-russias-military-aggression-against-ukraine/frequently-asked-questions-sanctions-against-russia_en
+        owner: sanctions counsel or competent authority
+        resolution_condition: Written product, counterparty, delivery, and payment-channel classification permits the specific transaction.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+      - id: BLK-P1-PUBLIC-COMPETITOR-SOURCE
+        priority: P1
+        category: source_access
+        description: Live public competitor collection is not authorized by the current Prom source-access gate.
+        blocked_scope:
+          - live competitor collection during a pilot
+        affects_current_gate: false
+        affects_next_stage: true
+        affects_production: true
+        evidence_refs:
+          - README.md
+        owner: source authority and client
+        resolution_condition: A permitted, auditable market-data source is approved for the pilot.
+        can_agent_resolve_now: false
+        risk_score: NOT_CALIBRATED
+    business_decisions:
+      - BLK-P1-RUSSIA-SANCTIONS
+    source_access:
+      - BLK-P1-PUBLIC-COMPETITOR-SOURCE
+    data: []
+    environment_reproducibility: []
+    unknowns:
+      - Buyer authority, budget, current pricing process, and willingness to share a sample catalog are unknown for all leads.
+
+  next_stage:
+    id: OUTREACH_WAVE_1_UA
+    title: OUTREACH_WAVE_1_UKRAINE
+    why_it_is_next:
+      - The five highest-fit Ukrainian leads match the current Prom and XLSX product surface most closely.
+    required_inputs:
+      - input_id: INPUT-OUTREACH-OWNER
+        description: Named sender, reply inbox, and permission to contact the selected businesses
+        source: client
+        required_state: approved
+        currently_available: false
+        evidence_ref: null
+      - input_id: INPUT-PILOT-OFFER
+        description: Final pilot price, duration, data-processing terms, and supported source statement
+        source: product owner
+        required_state: approved
+        currently_available: false
+        evidence_ref: null
+    expected_artifacts:
+      - artifact_id: ART-OUTREACH-LEDGER
+        type: dataset
+        purpose: Must be created to track sends, replies, discovery, qualification, and next dates.
+        required_fields:
+          - lead_id
+          - sent_at
+          - response_status
+          - authority
+          - pricing_process
+          - data_sample
+          - next_action
+          - next_date
+        temporal_state: PLANNED_NOT_STARTED
+    acceptance_criteria:
+      - id: AC-OUTREACH-01
+        predicate: Each message is individually personalized and sent only after sender and offer approval.
+        required_evidence: outreach ledger and message copy
+        threshold: 100%
+      - id: AC-OUTREACH-02
+        predicate: No Russian lead is contacted without written sanctions clearance.
+        required_evidence: clearance record and outreach ledger
+        threshold: 100%
+    stop_condition:
+      gate_key: STOP_GATE_OUTREACH_WAVE_1_UA
+      allowed_states:
+        - PASS
+        - FAIL
+        - BLOCKED
+        - NO_GO
+      auto_continue: false
+    client_decisions_required:
+      - decision_id: DECISION-OUTREACH-SENDER
+        question: Which sender identity and reply inbox should be used for commercial outreach?
+        alternatives:
+          - Founder identity and company inbox
+          - Dedicated sales identity and inbox
+        architecture_impact: Determines message signature, reply ownership, and CRM attribution.
+        blocking: true
+        default_forbidden: true
+        evidence_refs:
+          - user:outreach_sender_not_yet_approved
+      - decision_id: DECISION-PILOT-TERMS
+        question: Which price, duration, data-processing terms, and supported-source statement govern the pilot?
+        alternatives:
+          - Free diagnostic followed by a paid monthly pilot
+          - Paid diagnostic credited toward a monthly pilot
+        architecture_impact: Determines the commercial offer and obligations described in outreach.
+        blocking: true
+        default_forbidden: true
+        evidence_refs:
+          - user:pilot_terms_not_yet_approved
+    started: false
+    authorized: false
+
+  stop_gate:
+    key: STOP_GATE_MARKET_LEAD_RESEARCH_2026_07_18
+    primary_status: PASS
+    secondary_findings: []
+    automatic_transition: false

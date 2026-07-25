@@ -53,11 +53,22 @@ def upgrade() -> None:
         ),
     ):
         op.add_column("market_observations", column)
+    # The table is append-only since 0005, so a populated database rejects this
+    # backfill unless the trigger is suspended for the transaction. The trigger
+    # is restored immediately, exactly as in 0016.
+    op.execute(
+        "ALTER TABLE market_observations "
+        "DISABLE TRIGGER trg_market_observations_append_only"
+    )
     op.execute(
         "UPDATE market_observations "
         "SET description_available = (description IS NOT NULL), "
         "url_absence_reason = CASE WHEN url = '' "
         "THEN 'LEGACY_SOURCE_URL_NOT_AVAILABLE' ELSE NULL END"
+    )
+    op.execute(
+        "ALTER TABLE market_observations "
+        "ENABLE TRIGGER trg_market_observations_append_only"
     )
     op.create_check_constraint(
         "ck_market_observation_condition_state",

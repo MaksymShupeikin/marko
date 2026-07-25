@@ -1,0 +1,9 @@
+target_oe,seller_id,exact_oe_detected,used_marker_detected,kemp_detected
+96943762,2410902,false,false,false
+96943762,2005631,true,false,false
+96943762,3838399,true,false,false
+96943762,4015921,true,false,false
+314216,3710544,true,false,false
+314216,4015921,true,false,true
+77641041,4015921,true,false,false
+863130,2257611,true,true,false
