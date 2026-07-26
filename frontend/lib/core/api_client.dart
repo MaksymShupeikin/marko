@@ -36,7 +36,7 @@ class ApiClient {
 
   Future<dynamic> getJson(
     String path, {
-    Map<String, String>? queryParameters,
+    Map<String, dynamic>? queryParameters,
     bool authenticated = true,
   }) async {
     return _request(
@@ -88,7 +88,7 @@ class ApiClient {
   Future<dynamic> _request(
     String method,
     String path, {
-    Map<String, String>? queryParameters,
+    Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? body,
     required bool authenticated,
   }) async {
@@ -114,7 +114,7 @@ class ApiClient {
   Future<http.Response> _send(
     String method,
     String path, {
-    Map<String, String>? queryParameters,
+    Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? body,
     required bool authenticated,
   }) async {

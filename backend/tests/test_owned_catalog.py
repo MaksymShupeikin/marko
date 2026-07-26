@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
 
 from marko.infrastructure.db.models import StoreKind
+from marko.services import owned_catalog
 from marko.services.owned_catalog import (
     OwnedCatalogListing,
     _owned_catalog_statement,
     build_owned_catalog_page,
     canonical_catalog_sku,
+    enrich_listing_oe,
     extract_labeled_oe,
 )
+from marko.services.source_access import SourceAccessBlocked
 
 
 STORE_A = UUID("10000000-0000-0000-0000-000000000001")
@@ -202,7 +206,7 @@ def test_owned_catalog_filters_by_store_and_keeps_all_store_options() -> None:
             ),
         ],
         query=None,
-        store_id=STORE_B,
+        store_ids=frozenset({STORE_B}),
         limit=50,
         offset=0,
     )
@@ -216,6 +220,33 @@ def test_owned_catalog_filters_by_store_and_keeps_all_store_options() -> None:
         (STORE_A, "Parts Avto"),
         (STORE_B, "ПРОФПАРТС"),
     ]
+
+
+def test_owned_catalog_filters_by_multiple_stores() -> None:
+    page = build_owned_catalog_page(
+        [
+            _listing(
+                store_id=STORE_A,
+                external_id="3912822",
+                sku="0331402053",
+                store_name="Parts Avto",
+            ),
+            _listing(
+                store_id=STORE_B,
+                external_id="3325174",
+                sku="9067600147",
+                store_name="ПРОФПАРТС",
+            ),
+        ],
+        query=None,
+        store_ids=frozenset({STORE_A, STORE_B}),
+        limit=50,
+        offset=0,
+    )
+
+    assert page.listing_total == 2
+    assert page.total == 2
+    assert {item.sku for item in page.items} == {"0331402053", "9067600147"}
 
 
 @pytest.mark.parametrize(
@@ -261,3 +292,138 @@ def test_owned_catalog_paginates_after_deduplication(
 
     assert len(page.items) == expected
     assert page.total == 2
+
+
+@dataclass
+class _FakeListing:
+    url: str
+    raw_data: dict | None = field(default=None)
+
+
+class _FakeSession:
+    def __init__(self) -> None:
+        self.committed = False
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
+@pytest.mark.asyncio
+async def test_enrich_listing_oe_returns_cached_result_without_a_network_call(
+    monkeypatch,
+) -> None:
+    listing = _FakeListing(
+        url="https://prom.ua/ua/p1-product.html",
+        raw_data={"oe_raw": "4A1422893AA", "oe_checked_at": "2026-07-01T00:00:00"},
+    )
+
+    async def fake_owned_listing(*_args, **_kwargs):
+        return listing
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("should not re-fetch an already-checked listing")
+
+    monkeypatch.setattr(owned_catalog, "_owned_listing", fake_owned_listing)
+    monkeypatch.setattr(owned_catalog, "_fetch_listing_oe", fail_if_called)
+
+    oe = await enrich_listing_oe(
+        _FakeSession(),
+        workspace_id=uuid4(),
+        store_id=uuid4(),
+        external_id="1",
+    )
+
+    assert oe == "4A1422893AA"
+
+
+@pytest.mark.asyncio
+async def test_enrich_listing_oe_fetches_and_caches_when_unchecked(monkeypatch) -> None:
+    listing = _FakeListing(url="https://prom.ua/ua/p1-product.html", raw_data={})
+    session = _FakeSession()
+
+    async def fake_owned_listing(*_args, **_kwargs):
+        return listing
+
+    def fake_fetch(url: str, _settings) -> str | None:
+        assert url == listing.url
+        return "6 1131 36 9611"
+
+    monkeypatch.setattr(owned_catalog, "_owned_listing", fake_owned_listing)
+    monkeypatch.setattr(owned_catalog, "_fetch_listing_oe", fake_fetch)
+    monkeypatch.setattr(
+        owned_catalog,
+        "require_live_prom_marketplace_collection",
+        lambda *_a, **_k: None,
+    )
+
+    oe = await enrich_listing_oe(
+        session,
+        workspace_id=uuid4(),
+        store_id=uuid4(),
+        external_id="1",
+    )
+
+    assert oe == "6 1131 36 9611"
+    assert listing.raw_data["oe_raw"] == "6 1131 36 9611"
+    assert listing.raw_data["oe_checked_at"] is not None
+    assert session.committed
+
+
+@pytest.mark.asyncio
+async def test_enrich_listing_oe_returns_none_for_a_foreign_listing(
+    monkeypatch,
+) -> None:
+    async def fake_owned_listing(*_args, **_kwargs):
+        return None
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("should not fetch a listing outside the workspace")
+
+    monkeypatch.setattr(owned_catalog, "_owned_listing", fake_owned_listing)
+    monkeypatch.setattr(owned_catalog, "_fetch_listing_oe", fail_if_called)
+
+    oe = await enrich_listing_oe(
+        _FakeSession(),
+        workspace_id=uuid4(),
+        store_id=uuid4(),
+        external_id="does-not-exist",
+    )
+
+    assert oe is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_listing_oe_respects_the_live_collection_gate(
+    monkeypatch,
+) -> None:
+    listing = _FakeListing(url="https://prom.ua/ua/p1-product.html", raw_data={})
+
+    async def fake_owned_listing(*_args, **_kwargs):
+        return listing
+
+    def blocked(*_args, **_kwargs):
+        raise SourceAccessBlocked(_blocked_status())
+
+    monkeypatch.setattr(owned_catalog, "_owned_listing", fake_owned_listing)
+    monkeypatch.setattr(
+        owned_catalog, "require_live_prom_marketplace_collection", blocked
+    )
+
+    with pytest.raises(SourceAccessBlocked):
+        await enrich_listing_oe(
+            _FakeSession(),
+            workspace_id=uuid4(),
+            store_id=uuid4(),
+            external_id="1",
+        )
+
+
+def _blocked_status():
+    from marko.services.source_access import SourceAccessStatus
+
+    return SourceAccessStatus(
+        source="prom_public_marketplace",
+        verdict="BLOCKED",
+        reference=None,
+        live_collection_allowed=False,
+    )

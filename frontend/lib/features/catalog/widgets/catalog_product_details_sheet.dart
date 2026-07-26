@@ -14,6 +14,7 @@ Future<void> showCatalogProductDetailsSheet({
   required BuildContext context,
   required CatalogProduct product,
   required Future<CatalogCompetitorComparison> Function() loadCompetitors,
+  Future<CatalogCompetitorComparison> Function()? discoverCompetitors,
   required VoidCallback onCompare,
   ValueChanged<String>? onOpenListing,
 }) {
@@ -26,6 +27,7 @@ Future<void> showCatalogProductDetailsSheet({
     pageBuilder: (dialogContext, _, _) => CatalogProductDetailsSheet(
       product: product,
       loadCompetitors: loadCompetitors,
+      discoverCompetitors: discoverCompetitors,
       onCompare: () {
         Navigator.of(dialogContext).pop();
         onCompare();
@@ -57,12 +59,14 @@ class CatalogProductDetailsSheet extends StatefulWidget {
     required this.product,
     required this.loadCompetitors,
     required this.onCompare,
+    this.discoverCompetitors,
     this.onOpenListing,
     super.key,
   });
 
   final CatalogProduct product;
   final Future<CatalogCompetitorComparison> Function() loadCompetitors;
+  final Future<CatalogCompetitorComparison> Function()? discoverCompetitors;
   final VoidCallback onCompare;
   final ValueChanged<String>? onOpenListing;
 
@@ -74,6 +78,8 @@ class CatalogProductDetailsSheet extends StatefulWidget {
 class _CatalogProductDetailsSheetState
     extends State<CatalogProductDetailsSheet> {
   late Future<CatalogCompetitorComparison> _comparison;
+  bool _isDiscovering = false;
+  String? _discoveryError;
 
   @override
   void initState() {
@@ -143,16 +149,61 @@ class _CatalogProductDetailsSheetState
                     color: colors.surface,
                     border: Border(top: BorderSide(color: colors.border)),
                   ),
-                  child: FilledButton.icon(
-                    key: const ValueKey('catalog-details-compare'),
-                    onPressed: widget.onCompare,
-                    icon: const Icon(Icons.price_check_rounded, size: 19),
-                    label: Text(
-                      context.localized(
-                        ru: 'Перейти к сравнению цен',
-                        uk: 'Перейти до порівняння цін',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (widget.discoverCompetitors != null) ...[
+                        FilledButton.icon(
+                          key: const ValueKey('catalog-details-discover'),
+                          onPressed: _isDiscovering ? null : _discover,
+                          icon: _isDiscovering
+                              ? const SizedBox.square(
+                                  dimension: 17,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.travel_explore_rounded,
+                                  size: 19,
+                                ),
+                          label: Text(
+                            _isDiscovering
+                                ? context.localized(
+                                    ru: 'Собираем объявления…',
+                                    uk: 'Збираємо оголошення…',
+                                  )
+                                : context.localized(
+                                    ru: 'Собрать объявления с Prom.ua',
+                                    uk: 'Зібрати оголошення з Prom.ua',
+                                  ),
+                          ),
+                        ),
+                        if (_discoveryError != null) ...[
+                          const SizedBox(height: 7),
+                          Text(
+                            _discoveryError!,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                          ),
+                        ],
+                        const SizedBox(height: 9),
+                      ],
+                      OutlinedButton.icon(
+                        key: const ValueKey('catalog-details-compare'),
+                        onPressed: widget.onCompare,
+                        icon: const Icon(Icons.price_check_rounded, size: 19),
+                        label: Text(
+                          context.localized(
+                            ru: 'Перейти к сравнению цен',
+                            uk: 'Перейти до порівняння цін',
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
               ],
@@ -167,6 +218,32 @@ class _CatalogProductDetailsSheetState
     setState(() {
       _comparison = widget.loadCompetitors();
     });
+  }
+
+  Future<void> _discover() async {
+    final discover = widget.discoverCompetitors;
+    if (discover == null || _isDiscovering) return;
+    setState(() {
+      _isDiscovering = true;
+      _discoveryError = null;
+    });
+    try {
+      final result = await discover();
+      if (!mounted) return;
+      setState(() {
+        _comparison = Future.value(result);
+        _isDiscovering = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isDiscovering = false;
+        _discoveryError = context.localized(
+          ru: 'Сбор не завершён: $error',
+          uk: 'Збір не завершено: $error',
+        );
+      });
+    }
   }
 
   void _openListing(String value) {

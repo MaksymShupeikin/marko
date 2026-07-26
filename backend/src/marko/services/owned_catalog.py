@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
 import re
@@ -12,12 +14,17 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from marko.core.config import Settings, get_settings
 from marko.infrastructure.db.models import (
     Listing,
     MarketplaceStore,
     StoreKind,
     WorkspaceStore,
 )
+from marko.parsers.prom.client import HttpClient
+from marko.parsers.prom.config import ScrapeConfig
+from marko.parsers.prom.parser import parse_product_page
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 
 @dataclass(frozen=True)
@@ -95,7 +102,7 @@ async def list_owned_catalog(
     *,
     workspace_id: UUID,
     query: str | None,
-    store_id: UUID | None,
+    store_ids: frozenset[UUID] | None,
     limit: int,
     offset: int,
 ) -> OwnedCatalogPage:
@@ -104,9 +111,86 @@ async def list_owned_catalog(
     return build_owned_catalog_page(
         rows,
         query=query,
-        store_id=store_id,
+        store_ids=store_ids,
         limit=limit,
         offset=offset,
+    )
+
+
+async def enrich_listing_oe(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    store_id: UUID,
+    external_id: str,
+    settings: Settings | None = None,
+) -> str | None:
+    """Best-effort, cached lookup of one listing's OE/OEM code.
+
+    Prom's search-result feed rarely carries an OE field, so this fetches the
+    listing's own product page on demand (one physical request, only for a
+    listing this workspace owns) instead of re-scraping the whole catalog.
+    A prior result — including a confirmed absence — is cached in
+    ``Listing.raw_data`` so repeat opens never re-request the page.
+    """
+    listing = await _owned_listing(
+        session,
+        workspace_id=workspace_id,
+        store_id=store_id,
+        external_id=external_id,
+    )
+    if listing is None:
+        return None
+
+    raw_data = listing.raw_data or {}
+    if raw_data.get("oe_checked_at") is not None:
+        return normalize_oe_value(raw_data.get("oe_raw"))
+
+    require_live_prom_marketplace_collection(settings)
+    resolved_settings = settings or get_settings()
+    oe = await asyncio.to_thread(_fetch_listing_oe, listing.url, resolved_settings)
+
+    listing.raw_data = {
+        **raw_data,
+        "oe_raw": oe,
+        "oe_checked_at": datetime.now(UTC).isoformat(),
+    }
+    await session.commit()
+    return oe
+
+
+async def _owned_listing(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    store_id: UUID,
+    external_id: str,
+) -> Listing | None:
+    result = await session.execute(
+        select(Listing)
+        .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
+        .where(
+            Listing.store_id == store_id,
+            Listing.external_id == external_id,
+            WorkspaceStore.workspace_id == workspace_id,
+            WorkspaceStore.kind == StoreKind.owned,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+def _fetch_listing_oe(url: str, settings: Settings) -> str | None:
+    config = ScrapeConfig(
+        delay=settings.pricing_scraper_request_delay_seconds,
+        delay_jitter=settings.pricing_scraper_request_jitter_seconds,
+        timeout=settings.pricing_scraper_http_timeout_seconds,
+        max_attempts=max(1, settings.pricing_scraper_http_max_attempts),
+    )
+    with HttpClient(config) as client:
+        html = client.get_html(url)
+    seed = parse_product_page(html)
+    return normalize_oe_value(seed.product.oe_raw) or extract_labeled_oe(
+        seed.product.name
     )
 
 
@@ -153,13 +237,11 @@ def build_owned_catalog_page(
     query: str | None,
     limit: int,
     offset: int,
-    store_id: UUID | None = None,
+    store_ids: frozenset[UUID] | None = None,
 ) -> OwnedCatalogPage:
     store_options = _catalog_store_options(rows)
     filtered_rows = (
-        [row for row in rows if row.store_id == store_id]
-        if store_id is not None
-        else list(rows)
+        [row for row in rows if row.store_id in store_ids] if store_ids else list(rows)
     )
     grouped: dict[tuple[str, str], list[OwnedCatalogListing]] = {}
     for row in filtered_rows:

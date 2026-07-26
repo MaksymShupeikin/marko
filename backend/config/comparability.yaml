@@ -1,0 +1,221 @@
+schema_version: metis-deterministic-candidate-selection-v1
+method_version: deterministic-candidate-gates-v1
+
+# Workspace-owned seller IDs are also loaded from PostgreSQL. These static IDs
+# are Yuri's known Prom network and provide a fail-safe if one connection is
+# temporarily absent from workspace_stores.
+own_seller_ids:
+  - "2847093"
+  - "3912822"
+  - "3325174"
+  - "4015921"
+
+kemp_network_seller_ids:
+  - "2847093"
+  - "3912822"
+  - "3325174"
+  - "4015921"
+
+text_markers:
+  dismantler_seller:
+    substrings:
+      - "розборка"
+      - "розбірка"
+      - "разборка"
+      - "avtorazborka"
+      - "autorazbor"
+      - "razborka"
+      - "авторазбор"
+      - "разбор"
+      - "б у запчасти"
+
+  used:
+    words:
+      - "бу"
+    phrases:
+      - "б у"
+      - "з розборки"
+      - "с разборки"
+      - "знято з"
+      - "снято с"
+      - "second hand"
+      - "ідеальний стан"
+      - "робочий стан"
+      - "не битий"
+    prefixes:
+      - "вживан"
+      - "демонтаж"
+      - "пробіг"
+      - "пробег"
+
+  new:
+    words:
+      - "new"
+      - "новий"
+      - "новая"
+      - "новый"
+      - "нове"
+
+  remanufactured:
+    prefixes:
+      - "відновлен"
+      - "восстановлен"
+      - "reman"
+      - "реставр"
+      - "капремонт"
+    phrases:
+      - "після ремонту"
+
+  pack:
+    words:
+      - "комплект"
+      - "пара"
+      - "набір"
+      - "set"
+    phrases:
+      - "к т"
+    regex:
+      - '(?<!\w)(?:2|4)\s*шт(?:\.|\b)'
+
+max_oem_in_title: 3
+oem_like_token_regex: '(?<![A-Z0-9])(?=[A-Z0-9]{6,14}(?![A-Z0-9]))(?=[A-Z0-9]*\d)[A-Z0-9]{6,14}'
+
+variant_axes:
+  side:
+    left:
+      prefixes: ["лів", "лев"]
+      words: ["left", "l"]
+    right:
+      prefixes: ["прав"]
+      words: ["right", "r"]
+  axle:
+    front:
+      prefixes: ["перед"]
+      words: ["front"]
+    rear:
+      prefixes: ["задн"]
+      words: ["зад", "rear"]
+  height:
+    upper:
+      prefixes: ["верхн"]
+      words: ["upper"]
+    lower:
+      prefixes: ["нижн"]
+      words: ["lower"]
+  position:
+    inner:
+      prefixes: ["внутр"]
+      words: ["inner"]
+    outer:
+      prefixes: ["зовніш", "наруж"]
+      words: ["outer"]
+
+applicability:
+  year_regex: '(?<!\d)(?:19|20)\d{2}(?!\d)'
+  brands:
+    volkswagen:
+      aliases: ["volkswagen", "vw", "фольксваген"]
+    toyota:
+      aliases: ["toyota", "тойота"]
+    mercedes_benz:
+      aliases: ["mercedes benz", "mercedes", "мерседес"]
+    audi:
+      aliases: ["audi", "ауді", "ауди"]
+    skoda:
+      aliases: ["skoda", "шкода"]
+    seat:
+      aliases: ["seat"]
+    bmw:
+      aliases: ["bmw", "бмв"]
+
+  models:
+    transporter:
+      aliases: ["transporter", "транспортер"]
+    multivan:
+      aliases: ["multivan", "мультиван"]
+    caravelle:
+      aliases: ["caravelle", "каравелла"]
+    california:
+      aliases: ["california", "калифорния"]
+    camry:
+      aliases: ["camry", "камри"]
+
+  generations:
+    t5:
+      aliases: ["t5", "т5"]
+    t6:
+      aliases: ["t6", "т6"]
+    xv40:
+      aliases: ["xv40", "v40"]
+
+  platform_families:
+    vw_t5_t6_vans:
+      models: ["transporter", "multivan", "caravelle", "california"]
+
+# Prom search is plain-text, so a generic numeric article such as 2141006 also
+# returns pool ladders, scooters and school notebooks. Prom ships a native
+# root-to-leaf `categoryIds` ancestry on every search row (measured 137/137 on
+# 2026-07-26), which separates those without any text heuristics.
+#
+# Deny semantics are deliberate. Every path below was observed in captured Prom
+# evidence and is quoted with the product that produced it, so the rule stays
+# auditable. A category that has never been seen still passes: an incomplete
+# list can therefore never cause a false SKIP of a real part.
+#
+# `allowed_ancestors` + `allowlist_enforced` implement the opposite, stricter
+# semantics and stay off until an owner approves a list that provably covers
+# the whole automotive taxonomy. Captured evidence already disproves the naive
+# assumption that automotive parts live only under [0, 55, 5502]: genuine oil
+# filler caps were observed under [0, 509, 71906] and [0, 18, 208].
+category_domain:
+  enabled: true
+  allowlist_enforced: false
+  allowed_ancestors: []
+
+  blocked_ancestors:
+    - path: [0, 13, 1808]
+      label: "Басейни та аксесуари"
+      evidence: "Накладка антиковзна для сходів Emaux (2141006)"
+    - path: [0, 18, 20]
+      label: "Дитячий транспорт, самокати"
+      evidence: "Самокат триколісний Skyper із сидінням (Q-3244-12)"
+    - path: [0, 15, 3710]
+      label: "Світильники та освітлення"
+      evidence: "Бра, настінний світильник Goldlux 324412 Elissa G9"
+    - path: [0, 17, 1707]
+      label: "Сувеніри та брелоки"
+      evidence: "Брелок гумовий \"Mario\" зі стрічкою мікс №3244(12)"
+    - path: [0, 50, 6]
+      label: "Побутова техніка для догляду"
+      evidence: "Бритва чоловіча PHILIPS Series 3000 S3244/12"
+    - path: [0, 23, 2306]
+      label: "Пакування та пакети"
+      evidence: "Пакет 32*44*12 Лаванда в глечику арт.280990"
+    - path: [0, 92, 9202]
+      label: "Шкільне приладдя"
+      evidence: "Зошит на 12 аркушів У косу лінію Choose to shine 3244(12к)"
+
+  # Measured unsafe on captured evidence and therefore disabled: on query
+  # 2141006 the vote reached a 0.777778 share at depth 3 and would have removed
+  # four rows, but three of them were genuine comparable oil filler caps that
+  # merely sit in a different branch. Kept implemented and configurable so the
+  # decision can be revisited with numbers rather than reimplemented.
+  majority_vote:
+    enabled: false
+    prefix_depth: 3
+    min_candidates: 5
+    min_share: "0.6"
+
+price_anomaly:
+  minimum_ratio: "0.35"
+  maximum_ratio: "3.0"
+  # Until category coefficients are calibrated, factor 1.0 is deliberately
+  # neutral. Price is diagnostic only and never rejects a candidate.
+  default_tier_premiums:
+    oem: "1.0"
+    oes: "1.0"
+    aftermarket_a: "1.0"
+    aftermarket_b: "1.0"
+    budget: "1.0"
+    kemp: "1.0"
+  category_tier_premiums: {}

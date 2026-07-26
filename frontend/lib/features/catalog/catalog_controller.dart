@@ -7,7 +7,7 @@ class CatalogState {
   const CatalogState({
     required this.page,
     this.query = '',
-    this.selectedStoreId,
+    this.selectedStoreIds = const {},
     this.isSearching = false,
     this.isLoadingMore = false,
     this.error,
@@ -15,7 +15,7 @@ class CatalogState {
 
   final CatalogProductPage page;
   final String query;
-  final String? selectedStoreId;
+  final Set<String> selectedStoreIds;
   final bool isSearching;
   final bool isLoadingMore;
   final String? error;
@@ -23,8 +23,7 @@ class CatalogState {
   CatalogState copyWith({
     CatalogProductPage? page,
     String? query,
-    String? selectedStoreId,
-    bool clearSelectedStore = false,
+    Set<String>? selectedStoreIds,
     bool? isSearching,
     bool? isLoadingMore,
     String? error,
@@ -33,9 +32,7 @@ class CatalogState {
     return CatalogState(
       page: page ?? this.page,
       query: query ?? this.query,
-      selectedStoreId: clearSelectedStore
-          ? null
-          : selectedStoreId ?? this.selectedStoreId,
+      selectedStoreIds: selectedStoreIds ?? this.selectedStoreIds,
       isSearching: isSearching ?? this.isSearching,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       error: clearError ? null : error ?? this.error,
@@ -58,11 +55,11 @@ class CatalogController extends AsyncNotifier<CatalogState> {
 
   Future<void> search(String rawQuery) async {
     final query = rawQuery.trim();
-    await _reload(query: query, storeId: _current.selectedStoreId);
+    await _reload(query: query, storeIds: _current.selectedStoreIds);
   }
 
-  Future<void> selectStore(String? storeId) async {
-    await _reload(query: _current.query, storeId: storeId);
+  Future<void> selectStores(Set<String> storeIds) async {
+    await _reload(query: _current.query, storeIds: storeIds);
   }
 
   Future<CatalogCompetitorComparison> loadCompetitors(CatalogProduct product) {
@@ -73,29 +70,49 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     );
   }
 
+  Future<CatalogCompetitorComparison> discoverCompetitors(
+    CatalogProduct product,
+  ) {
+    return _api.discoverCompetitors(
+      sku: product.sku,
+      oe: product.oe,
+      brand: product.brand,
+      title: product.name,
+      currentPrice: product.primaryStore?.price ?? product.priceMin,
+      currency: product.primaryStore?.currency ?? product.currency,
+    );
+  }
+
+  Future<String?> enrichOe(CatalogProduct product) {
+    final store = product.primaryStore;
+    if (store == null) return Future.value(null);
+    return _api.enrichOe(storeId: store.storeId, externalId: store.externalId);
+  }
+
   Future<void> _reload({
     required String query,
-    required String? storeId,
+    required Set<String> storeIds,
   }) async {
     final generation = ++_requestGeneration;
     state = AsyncData(
       _current.copyWith(
         query: query,
-        selectedStoreId: storeId,
-        clearSelectedStore: storeId == null,
+        selectedStoreIds: storeIds,
         isSearching: true,
         clearError: true,
       ),
     );
     try {
-      final page = await _api.listProducts(query: query, storeId: storeId);
+      final page = await _api.listProducts(
+        query: query,
+        storeIds: storeIds.toList(growable: false),
+      );
       if (generation != _requestGeneration) return;
       state = AsyncData(
         _current.copyWith(
           page: page,
           query: query,
-          selectedStoreId: storeId,
-          clearSelectedStore: storeId == null,
+          selectedStoreIds: storeIds,
           isSearching: false,
           isLoadingMore: false,
           clearError: true,
@@ -110,7 +127,7 @@ class CatalogController extends AsyncNotifier<CatalogState> {
   }
 
   Future<void> refresh() =>
-      _reload(query: _current.query, storeId: _current.selectedStoreId);
+      _reload(query: _current.query, storeIds: _current.selectedStoreIds);
 
   Future<void> loadMore() async {
     final current = _current;
@@ -122,7 +139,7 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     try {
       final next = await _api.listProducts(
         query: current.query,
-        storeId: current.selectedStoreId,
+        storeIds: current.selectedStoreIds.toList(growable: false),
         offset: current.page.items.length,
       );
       if (generation != _requestGeneration) return;

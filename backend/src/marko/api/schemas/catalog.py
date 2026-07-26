@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CatalogImportResponse(BaseModel):
@@ -145,6 +145,60 @@ class CatalogCompetitorOfferResponse(BaseModel):
     observed_at: datetime
 
 
+class CatalogDiscoveredOfferResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    discovery_offer_id: UUID
+    source_listing_id: str
+    seller_id: str
+    seller_name: str
+    title: str
+    url: str
+    sku: str | None
+    brand: str | None
+    sale_price: Decimal
+    reference_price: Decimal | None
+    currency: str
+    measure_unit: str | None
+    is_available: bool | None
+    title_contains_query: bool
+    identity_status: str
+    source_confidence: Decimal
+    reason_codes: list[str]
+    selection_status: str
+    selection_reason: str
+    passed_gates: list[str]
+    selection_flags: list[str]
+    selection_details: dict[str, Any]
+    predicted_tier: str
+    tier_confidence: Decimal
+
+
+class CatalogDiscoveryRequest(BaseModel):
+    sku: str | None = Field(default=None, max_length=255)
+    oe: str | None = Field(default=None, max_length=255)
+    brand: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=2000)
+    current_price: Decimal | None = Field(default=None, gt=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    category: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def require_identifier(self) -> CatalogDiscoveryRequest:
+        if not (self.sku or "").strip() and not (self.oe or "").strip():
+            raise ValueError("sku or oe is required")
+        return self
+
+
+class CatalogOeEnrichmentRequest(BaseModel):
+    store_id: UUID
+    external_id: str = Field(max_length=100)
+
+
+class CatalogOeEnrichmentResponse(BaseModel):
+    oe: str | None
+
+
 class CatalogCompetitorComparisonResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -156,3 +210,26 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     currency: str | None
     reason_codes: list[str]
     items: list[CatalogCompetitorOfferResponse]
+    discovery_run_id: UUID | None
+    discovered_at: datetime | None
+    discovery_query: str | None
+    discovery_status: str | None
+    prom_reported_total: int | None
+    discovered_total: int
+    discovery_retrieved_count: int
+    discovery_persisted_count: int
+    owned_excluded_count: int
+    discovery_rejected_count: int
+    comparable_count: int
+    review_count: int
+    skipped_count: int
+    selection_histogram: dict[str, int]
+    search_pages_fetched: int
+    search_page_limit: int
+    unfetched_count: int
+    coverage_ratio: Decimal | None
+    coverage_reason: str | None
+    selection_method_version: str | None
+    selection_config_sha256: str | None
+    brand_rules_dataset_id: str | None
+    discovery_items: list[CatalogDiscoveredOfferResponse]

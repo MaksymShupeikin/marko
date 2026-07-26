@@ -9,6 +9,11 @@ from marko.services.catalog_competitors import (
     _catalog_item_match_score,
     build_catalog_competitor_comparison,
     build_catalog_recommendation_summaries,
+    empty_catalog_competitor_comparison,
+)
+from marko.services.catalog_discovery import (
+    CatalogDiscoveredOffer,
+    CatalogDiscoverySnapshot,
 )
 
 
@@ -162,3 +167,77 @@ def test_catalog_recommendation_summary_prefers_exact_product_match() -> None:
     summary = summaries["catalog-product"]
     assert summary.recommended_price == Decimal("780")
     assert summary.action == "RAISE"
+
+
+def test_catalog_empty_pricing_result_keeps_discovery_candidates_separate() -> None:
+    discovery_offer = CatalogDiscoveredOffer(
+        discovery_offer_id=uuid4(),
+        source_listing_id="1402874053",
+        seller_id="668922",
+        seller_name="Autoparts IF",
+        title="Замок багажника 7E5827505A",
+        url="https://prom.ua/ua/p1402874053-item.html",
+        sku="DF-11260",
+        brand="Detali IF",
+        sale_price=Decimal("629"),
+        reference_price=None,
+        currency="UAH",
+        measure_unit="шт.",
+        is_available=True,
+        title_contains_query=True,
+        identity_status="QUERY_TOKEN_PRESENT",
+        source_confidence=Decimal("1"),
+        reason_codes=("DISCOVERY_ONLY_NOT_PRICING_EVIDENCE",),
+        selection_status="REVIEW",
+        selection_reason="TIER_UNKNOWN",
+        passed_gates=(
+            "own_seller",
+            "dismantler_seller",
+            "condition",
+            "remanufactured",
+            "oem_identity",
+            "oem_stuffing",
+            "variant",
+            "package",
+            "applicability",
+        ),
+        selection_flags=(),
+        selection_details={"stopped_gate": "tier"},
+        predicted_tier="unknown",
+        tier_confidence=Decimal("0"),
+    )
+    snapshot = CatalogDiscoverySnapshot(
+        run_id=uuid4(),
+        collected_at=datetime(2026, 7, 25, 14, 0, tzinfo=UTC),
+        query="7E5827505A",
+        status="completed",
+        prom_reported_total=91,
+        retrieved_count=29,
+        persisted_count=29,
+        owned_excluded_count=0,
+        rejected_count=0,
+        comparable_count=0,
+        review_count=1,
+        skipped_count=0,
+        selection_histogram={"TIER_UNKNOWN (REVIEW)": 1},
+        search_pages_fetched=1,
+        search_page_limit=1,
+        unfetched_count=62,
+        coverage_ratio=Decimal("0.318681"),
+        coverage_reason="SEARCH_PAGE_LIMIT",
+        selection_method_version="deterministic-candidate-gates-v1",
+        selection_config_sha256="a" * 64,
+        brand_rules_dataset_id="NO_BRAND_DICTIONARY_CONFIGURED",
+        items=(discovery_offer,),
+    )
+
+    result = empty_catalog_competitor_comparison(discovery=snapshot)
+
+    assert result.items == ()
+    assert result.recommendation_id is None
+    assert result.discovery_run_id == snapshot.run_id
+    assert result.discovery_items == (discovery_offer,)
+    assert result.discovered_total == 1
+    assert result.review_count == 1
+    assert result.selection_histogram == {"TIER_UNKNOWN (REVIEW)": 1}
+    assert result.unfetched_count == 62

@@ -593,6 +593,219 @@ class ScrapeEvidenceBlob(Base):
     )
 
 
+class CatalogDiscoveryRun(Base):
+    """One bounded live Prom discovery initiated from an owned catalog card."""
+
+    __tablename__ = "catalog_discovery_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'completed', 'failed')",
+            name="ck_catalog_discovery_run_status",
+        ),
+        CheckConstraint(
+            "request_count >= 0 AND retrieved_count >= 0 "
+            "AND persisted_count >= 0 AND rejected_count >= 0 "
+            "AND owned_excluded_count >= 0 AND comparable_count >= 0 "
+            "AND review_count >= 0 AND skipped_count >= 0 "
+            "AND unfetched_count >= 0 AND search_page_limit > 0",
+            name="ck_catalog_discovery_run_counts",
+        ),
+        CheckConstraint(
+            "reference_price IS NULL OR reference_price > 0",
+            name="ck_catalog_discovery_run_reference_price",
+        ),
+        CheckConstraint(
+            "coverage_ratio IS NULL OR (coverage_ratio >= 0 AND coverage_ratio <= 1)",
+            name="ck_catalog_discovery_run_coverage_ratio",
+        ),
+        Index(
+            "ix_catalog_discovery_workspace_product_time",
+            "workspace_id",
+            "product_key",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    product_key: Mapped[str] = mapped_column(String(64), index=True)
+    query: Mapped[str] = mapped_column(String(255))
+    sku: Mapped[str | None] = mapped_column(String(255))
+    oe_norm: Mapped[str | None] = mapped_column(String(255), index=True)
+    brand: Mapped[str | None] = mapped_column(String(255))
+    reference_title: Mapped[str | None] = mapped_column(Text)
+    reference_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    reference_currency: Mapped[str | None] = mapped_column(String(3))
+    reference_category: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(
+        String(16), default="running", server_default="running", index=True
+    )
+    parser_outcome: Mapped[str | None] = mapped_column(String(40))
+    prom_reported_total: Mapped[int | None] = mapped_column(Integer)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retrieved_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    persisted_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    owned_excluded_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    comparable_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    review_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    search_page_limit: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1"
+    )
+    unfetched_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    coverage_ratio: Mapped[Decimal | None] = mapped_column(Numeric(7, 6))
+    coverage_reason: Mapped[str | None] = mapped_column(String(64))
+    selection_method_version: Mapped[str | None] = mapped_column(String(80))
+    selection_config_sha256: Mapped[str | None] = mapped_column(String(64))
+    brand_rules_dataset_id: Mapped[str | None] = mapped_column(String(255))
+    brand_rules_sha256: Mapped[str | None] = mapped_column(String(64))
+    selection_histogram: Mapped[dict[str, int]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CatalogDiscoveryCapture(Base):
+    """Immutable raw HTTP capture referenced by an owned-catalog discovery."""
+
+    __tablename__ = "catalog_discovery_captures"
+    __table_args__ = (
+        UniqueConstraint(
+            "discovery_run_id",
+            "sequence_no",
+            name="uq_catalog_discovery_capture_sequence",
+        ),
+        CheckConstraint(
+            "sequence_no > 0 AND attempts_total > 0 AND latency_ms >= 0 "
+            "AND raw_size_bytes >= 0",
+            name="ck_catalog_discovery_capture_measurements",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    discovery_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_discovery_runs.id", ondelete="CASCADE"), index=True
+    )
+    evidence_blob_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scrape_evidence_blobs.id", ondelete="RESTRICT"), index=True
+    )
+    sequence_no: Mapped[int] = mapped_column(Integer)
+    request_kind: Mapped[str] = mapped_column(String(40))
+    prepared_url: Mapped[str] = mapped_column(Text)
+    status_code: Mapped[int] = mapped_column(Integer)
+    attempts_total: Mapped[int] = mapped_column(Integer)
+    latency_ms: Mapped[int] = mapped_column(BigInteger)
+    raw_size_bytes: Mapped[int] = mapped_column(BigInteger)
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CatalogDiscoveryOffer(Base):
+    """A parsed discovery candidate, kept separate from pricing evidence."""
+
+    __tablename__ = "catalog_discovery_offers"
+    __table_args__ = (
+        UniqueConstraint(
+            "discovery_run_id",
+            "source_listing_id",
+            name="uq_catalog_discovery_offer_listing",
+        ),
+        CheckConstraint(
+            "raw_offer_index >= 0 AND sale_price > 0 "
+            "AND (reference_price IS NULL OR reference_price > 0) "
+            "AND source_confidence >= 0 AND source_confidence <= 1",
+            name="ck_catalog_discovery_offer_values",
+        ),
+        CheckConstraint(
+            "identity_status IN ('QUERY_TOKEN_PRESENT', 'SEARCH_RESULT_UNVERIFIED')",
+            name="ck_catalog_discovery_offer_identity_status",
+        ),
+        CheckConstraint(
+            "selection_status IN ('COMPARABLE', 'REVIEW', 'SKIP')",
+            name="ck_catalog_discovery_offer_selection_status",
+        ),
+        CheckConstraint(
+            "tier_confidence >= 0 AND tier_confidence <= 1",
+            name="ck_catalog_discovery_offer_tier_confidence",
+        ),
+        Index(
+            "ix_catalog_discovery_offer_run_owned",
+            "discovery_run_id",
+            "is_owned",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    discovery_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_discovery_runs.id", ondelete="CASCADE"), index=True
+    )
+    raw_offer_index: Mapped[int] = mapped_column(Integer)
+    source_listing_id: Mapped[str] = mapped_column(String(255))
+    seller_id: Mapped[str] = mapped_column(String(255))
+    seller_name: Mapped[str] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    sku: Mapped[str | None] = mapped_column(String(255))
+    brand: Mapped[str | None] = mapped_column(String(255))
+    sale_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    reference_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    measure_unit: Mapped[str | None] = mapped_column(String(80))
+    is_available: Mapped[bool | None] = mapped_column(Boolean)
+    is_owned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", index=True
+    )
+    title_contains_query: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    identity_status: Mapped[str] = mapped_column(String(40))
+    source_confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    reason_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    selection_status: Mapped[str] = mapped_column(
+        String(16), default="REVIEW", server_default="REVIEW", index=True
+    )
+    selection_reason: Mapped[str] = mapped_column(
+        String(100),
+        default="LEGACY_UNCLASSIFIED",
+        server_default="LEGACY_UNCLASSIFIED",
+    )
+    passed_gates: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    selection_flags: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    selection_details: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    predicted_tier: Mapped[str] = mapped_column(
+        String(32), default="unknown", server_default="unknown"
+    )
+    tier_confidence: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0"), server_default="0"
+    )
+    raw_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ScrapeHttpRequest(Base):
     """One logical HTTP request within one task execution."""
 
@@ -2356,7 +2569,7 @@ class FitmentCandidateAssessment(Base):
         ForeignKey("fitment_analyses.id", ondelete="CASCADE"), index=True
     )
     market_observation_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+        ForeignKey("market_observations.id", ondelete="RESTRICT")
     )
     seller_relation_record_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("seller_relation_records.id", ondelete="RESTRICT"), index=True
@@ -2645,7 +2858,10 @@ class FitmentSourceReliabilitySnapshot(Base):
     __tablename__ = "fitment_source_reliability_snapshots"
     __table_args__ = (
         UniqueConstraint(
-            "source_id", "claim_type", "label_event_key", name="uq_fit_source_beta_event"
+            "source_id",
+            "claim_type",
+            "label_event_key",
+            name="uq_fit_source_beta_event",
         ),
         CheckConstraint(
             "prior_alpha > 0 AND prior_beta > 0 AND confirmed_count >= 0 "
@@ -2824,7 +3040,9 @@ class FitmentFeedbackEvent(Base):
     event_type: Mapped[str] = mapped_column(String(80))
     reason_code: Mapped[str] = mapped_column(String(80))
     label_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
-    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", server_default="active"
+    )
     reverts_event_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("fitment_feedback_events.id", ondelete="RESTRICT"), index=True
     )
@@ -2840,7 +3058,9 @@ class FitmentNotification(Base):
     __tablename__ = "fitment_notifications"
     __table_args__ = (
         UniqueConstraint(
-            "recommendation_id", "notification_type", name="uq_fit_notification_rec_type"
+            "recommendation_id",
+            "notification_type",
+            name="uq_fit_notification_rec_type",
         ),
         CheckConstraint(
             "status IN ('pending', 'delivered', 'read', 'dismissed')",
@@ -2859,7 +3079,9 @@ class FitmentNotification(Base):
     notification_type: Mapped[str] = mapped_column(String(80))
     group_key: Mapped[str] = mapped_column(String(120))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
-    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -54,8 +54,8 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
         onQueryChanged: _queueSearch,
         onQuerySubmitted: _searchNow,
         onClearQuery: _clearSearch,
-        onStoreChanged: (storeId) =>
-            ref.read(catalogControllerProvider.notifier).selectStore(storeId),
+        onStoreChanged: (storeIds) =>
+            ref.read(catalogControllerProvider.notifier).selectStores(storeIds),
         onRefresh: () => ref.read(catalogControllerProvider.notifier).refresh(),
         onLoadMore: () =>
             ref.read(catalogControllerProvider.notifier).loadMore(),
@@ -90,6 +90,9 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
         loadCompetitors: () => ref
             .read(catalogControllerProvider.notifier)
             .loadCompetitors(product),
+        discoverCompetitors: () => ref
+            .read(catalogControllerProvider.notifier)
+            .discoverCompetitors(product),
         onCompare: widget.onOpenPriceComparison,
       ),
     );
@@ -115,7 +118,7 @@ class _CatalogContent extends StatelessWidget {
   final ValueChanged<String> onQueryChanged;
   final ValueChanged<String> onQuerySubmitted;
   final VoidCallback onClearQuery;
-  final ValueChanged<String?> onStoreChanged;
+  final ValueChanged<Set<String>> onStoreChanged;
   final VoidCallback onRefresh;
   final VoidCallback onLoadMore;
 
@@ -175,7 +178,8 @@ class _CatalogContent extends StatelessWidget {
                 if (page.items.isEmpty)
                   _EmptyCatalog(
                     hasQuery:
-                        state.query.isNotEmpty || state.selectedStoreId != null,
+                        state.query.isNotEmpty ||
+                        state.selectedStoreIds.isNotEmpty,
                   )
                 else ...[
                   Text(
@@ -302,7 +306,7 @@ class _CatalogStats extends StatelessWidget {
   const _CatalogStats({required this.state, required this.onStoreChanged});
 
   final CatalogState state;
-  final ValueChanged<String?> onStoreChanged;
+  final ValueChanged<Set<String>> onStoreChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -329,7 +333,7 @@ class _CatalogStats extends StatelessWidget {
         _StoreFilterChip(
           stores: page.stores,
           storeTotal: page.storeTotal,
-          selectedStoreId: state.selectedStoreId,
+          selectedStoreIds: state.selectedStoreIds,
           enabled: !state.isSearching,
           onChanged: onStoreChanged,
         ),
@@ -342,57 +346,51 @@ class _StoreFilterChip extends StatelessWidget {
   const _StoreFilterChip({
     required this.stores,
     required this.storeTotal,
-    required this.selectedStoreId,
+    required this.selectedStoreIds,
     required this.enabled,
     required this.onChanged,
   });
 
-  static const _allStoresValue = '__all-catalog-stores__';
-
   final List<CatalogStoreOption> stores;
   final int storeTotal;
-  final String? selectedStoreId;
+  final Set<String> selectedStoreIds;
   final bool enabled;
-  final ValueChanged<String?> onChanged;
+  final ValueChanged<Set<String>> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    CatalogStoreOption? selectedStore;
-    for (final store in stores) {
-      if (store.storeId == selectedStoreId) {
-        selectedStore = store;
-        break;
-      }
-    }
+    final selectedStores = stores
+        .where((store) => selectedStoreIds.contains(store.storeId))
+        .toList(growable: false);
 
-    return MarkoMenuButton<String>(
+    return MarkoMultiMenuButton<String>(
       key: const ValueKey('catalog-store-filter'),
-      tooltip: context.localized(ru: 'Выбрать магазин', uk: 'Обрати магазин'),
+      tooltip: context.localized(ru: 'Выбрать магазины', uk: 'Обрати магазини'),
       enabled: enabled && stores.isNotEmpty,
       header: context.localized(ru: 'Магазины', uk: 'Магазини'),
-      selected: selectedStore?.storeId ?? _allStoresValue,
-      onSelected: (value) => onChanged(value == _allStoresValue ? null : value),
-      entries: [
-        MarkoMenuEntry(
-          value: _allStoresValue,
-          label: context.localized(ru: 'Все магазины', uk: 'Усі магазини'),
-          icon: Icons.apps_rounded,
-          trailingLabel: '$storeTotal',
-        ),
-        ...stores.map(
-          (store) => MarkoMenuEntry(
-            value: store.storeId,
-            label: store.name,
-            avatarText: _storeMonogram(store.name),
-            dividerBefore: identical(store, stores.first),
-          ),
-        ),
-      ],
+      allLabel: context.localized(ru: 'Все магазины', uk: 'Усі магазини'),
+      selectedValues: selectedStoreIds,
+      onChanged: onChanged,
+      entries: stores
+          .map(
+            (store) => MarkoMenuEntry(
+              value: store.storeId,
+              label: store.name,
+              avatarText: _storeMonogram(store.name),
+            ),
+          )
+          .toList(growable: false),
       child: _StatChip(
-        label: selectedStore == null
-            ? context.localized(ru: 'Магазинов', uk: 'Магазинів')
-            : context.localized(ru: 'Магазин', uk: 'Магазин'),
-        value: selectedStore?.name ?? '$storeTotal',
+        label: switch (selectedStores.length) {
+          0 => context.localized(ru: 'Магазинов', uk: 'Магазинів'),
+          1 => context.localized(ru: 'Магазин', uk: 'Магазин'),
+          _ => context.localized(ru: 'Магазины', uk: 'Магазини'),
+        },
+        value: switch (selectedStores.length) {
+          0 => '$storeTotal',
+          1 => selectedStores.first.name,
+          final count => '$count',
+        },
         trailing: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
       ),
     );

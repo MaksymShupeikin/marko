@@ -144,7 +144,8 @@ class HttpClient:
                     return response
                 if not self._is_retryable_status(response.status_code):
                     error = RequestFailed(
-                        f"HTTP {response.status_code} для {response.url}"
+                        f"HTTP {response.status_code} для {response.url}",
+                        status_code=response.status_code,
                     )
                     error_category = (
                         "upstream_3xx"
@@ -173,7 +174,10 @@ class HttpClient:
                             status_code=response.status_code,
                         )
                     raise error
-                last_error = RequestFailed(f"HTTP {response.status_code}")
+                last_error = RequestFailed(
+                    f"HTTP {response.status_code}",
+                    status_code=response.status_code,
+                )
                 retry_after_seconds = self._retry_after_seconds(response)
                 if trace is not None and request_trace is not None:
                     attempt_trace = trace.record_attempt(

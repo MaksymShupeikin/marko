@@ -36,7 +36,10 @@ class CatalogCompetitorSection extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         if (comparison.items.isEmpty)
-          _EmptyCompetitors(hasComparison: comparison.hasComparison)
+          _EmptyCompetitors(
+            hasComparison: comparison.hasComparison,
+            hasDiscovery: comparison.hasDiscovery,
+          )
         else
           ...comparison.items.map(
             (offer) => Padding(
@@ -47,6 +50,13 @@ class CatalogCompetitorSection extends StatelessWidget {
               ),
             ),
           ),
+        if (comparison.hasDiscovery) ...[
+          const SizedBox(height: 24),
+          _DiscoverySection(
+            comparison: comparison,
+            onOpenListing: onOpenListing,
+          ),
+        ],
       ],
     );
   }
@@ -77,6 +87,444 @@ class CatalogCompetitorSection extends StatelessWidget {
       uk:
           'В останньому розрахунку ціни$dateSuffix враховано: $count. '
           'Власні магазини та відхилені кандидати виключені.',
+    );
+  }
+}
+
+class _DiscoverySection extends StatelessWidget {
+  const _DiscoverySection({
+    required this.comparison,
+    required this.onOpenListing,
+  });
+
+  final CatalogCompetitorComparison comparison;
+  final ValueChanged<String> onOpenListing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final collectedAt = comparison.discoveredAt;
+    final dateSuffix = collectedAt == null
+        ? ''
+        : ' · ${_dateTime(collectedAt)}';
+    final ownedSuffix = comparison.ownedExcludedCount == 0
+        ? ''
+        : context.localized(
+            ru:
+                ' Собственных объявлений исключено: '
+                '${comparison.ownedExcludedCount}.',
+            uk:
+                ' Власних оголошень виключено: '
+                '${comparison.ownedExcludedCount}.',
+          );
+
+    return Column(
+      key: const ValueKey('catalog-discovery-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          context.localized(ru: 'Найдено парсером', uk: 'Знайдено парсером'),
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 5),
+        Text(
+          context.localized(
+            ru:
+                'По запросу ${comparison.discoveryQuery ?? '—'} найдено '
+                '${comparison.discoveredTotal} внешних кандидатов$dateSuffix.'
+                '$ownedSuffix Они ещё не считаются доказанно '
+                'сопоставимыми и не влияют на цену.',
+            uk:
+                'За запитом ${comparison.discoveryQuery ?? '—'} знайдено '
+                '${comparison.discoveredTotal} зовнішніх кандидатів$dateSuffix.'
+                '$ownedSuffix Вони ще не вважаються доведено '
+                'зіставними та не впливають на ціну.',
+          ),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: colors.muted),
+        ),
+        if (comparison.promReportedTotal != null) ...[
+          const SizedBox(height: 9),
+          _CoverageNotice(comparison: comparison),
+        ],
+        if (comparison.selectionHistogram.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _SelectionHistogram(comparison: comparison),
+        ],
+        const SizedBox(height: 14),
+        if (comparison.discoveryItems.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: colors.surfaceMuted,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              context.localized(
+                ru: 'Внешних кандидатов в этой выдаче нет.',
+                uk: 'Зовнішніх кандидатів у цій видачі немає.',
+              ),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          )
+        else
+          ...comparison.discoveryItems.map(
+            (offer) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _DiscoveredListingCard(
+                offer: offer,
+                onOpen: () => onOpenListing(offer.url),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DiscoveredListingCard extends StatelessWidget {
+  const _DiscoveredListingCard({required this.offer, required this.onOpen});
+
+  final CatalogDiscoveredOffer offer;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final canOpen = offer.url.isNotEmpty;
+    final availabilityColor = switch (offer.isAvailable) {
+      true => colors.positive,
+      false => colors.negative,
+      null => colors.muted,
+    };
+    final availability = switch (offer.isAvailable) {
+      true => context.localized(ru: 'В наличии', uk: 'В наявності'),
+      false => context.localized(ru: 'Нет в наличии', uk: 'Немає в наявності'),
+      null => context.localized(
+        ru: 'Наличие не указано',
+        uk: 'Наявність не вказана',
+      ),
+    };
+
+    return Material(
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(11),
+        side: BorderSide(color: colors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: ValueKey('catalog-discovered-listing-${offer.discoveryOfferId}'),
+        onTap: canOpen ? onOpen : null,
+        child: Padding(
+          padding: const EdgeInsets.all(15),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: colors.brandSoft,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.travel_explore_rounded,
+                  size: 19,
+                  color: colors.brand,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      offer.title,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        offer.sellerName,
+                        if ((offer.brand ?? '').isNotEmpty) offer.brand!,
+                        if ((offer.sku ?? '').isNotEmpty) 'Арт. ${offer.sku}',
+                      ].join(' · '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: colors.muted),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 9,
+                      runSpacing: 5,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          '${offer.salePrice.toStringAsFixed(2)} '
+                          '${offer.currency}',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                        ),
+                        if (offer.referencePrice != null)
+                          Text(
+                            '${offer.referencePrice!.toStringAsFixed(2)} '
+                            '${offer.currency}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: colors.muted,
+                                  decoration: TextDecoration.lineThrough,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                          ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: availabilityColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              availability,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _CandidateVerdictBadge(offer: offer),
+                    const SizedBox(height: 5),
+                    Text(
+                      context.localized(
+                        ru:
+                            'Пройдено ворот: ${offer.passedGates.length} · '
+                            'tier: ${offer.predictedTier.toUpperCase()}'
+                            '${offer.titleContainsQuery ? ' · OE в заголовке' : ''}',
+                        uk:
+                            'Пройдено воріт: ${offer.passedGates.length} · '
+                            'tier: ${offer.predictedTier.toUpperCase()}'
+                            '${offer.titleContainsQuery ? ' · OE у заголовку' : ''}',
+                      ),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: colors.muted),
+                    ),
+                    if (offer.selectionFlags.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        context.localized(
+                          ru: 'Флаги: ${offer.selectionFlags.join(', ')}',
+                          uk: 'Позначки: ${offer.selectionFlags.join(', ')}',
+                        ),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: colors.warning),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (canOpen) ...[
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: context.localized(
+                    ru: 'Открыть на Prom.ua',
+                    uk: 'Відкрити на Prom.ua',
+                  ),
+                  child: Icon(
+                    Icons.open_in_new_rounded,
+                    size: 19,
+                    color: colors.brand,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CandidateVerdictBadge extends StatelessWidget {
+  const _CandidateVerdictBadge({required this.offer});
+
+  final CatalogDiscoveredOffer offer;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final (background, foreground) = switch (offer.selectionStatus) {
+      'COMPARABLE' => (colors.positiveSoft, colors.positive),
+      'SKIP' => (colors.negativeSoft, colors.negative),
+      _ => (colors.warningSoft, colors.warning),
+    };
+    final label = switch (offer.selectionStatus) {
+      'COMPARABLE' => context.localized(
+        ru: 'COMPARABLE · правила пройдены · не допущен к цене',
+        uk: 'COMPARABLE · правила пройдено · не допущено до ціни',
+      ),
+      'SKIP' => context.localized(
+        ru: 'SKIP · ${_reasonLabel(context, offer.selectionReason)}',
+        uk: 'SKIP · ${_reasonLabel(context, offer.selectionReason)}',
+      ),
+      _ => context.localized(
+        ru: 'REVIEW · ${_reasonLabel(context, offer.selectionReason)}',
+        uk: 'REVIEW · ${_reasonLabel(context, offer.selectionReason)}',
+      ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: foreground,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _CoverageNotice extends StatelessWidget {
+  const _CoverageNotice({required this.comparison});
+
+  final CatalogCompetitorComparison comparison;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final total = comparison.promReportedTotal ?? 0;
+    final loaded = comparison.discoveryRetrievedCount;
+    final ratio = comparison.coverageRatio;
+    final percent = ratio == null
+        ? '—'
+        : '${(ratio * 100).toStringAsFixed(1)}%';
+    final isPageLimit =
+        {
+          'SEARCH_PAGE_LIMIT',
+          'SEARCH_PAGE_HARD_CAP',
+        }.contains(comparison.coverageReason) &&
+        comparison.unfetchedCount > 0;
+    final reason = isPageLimit
+        ? context.localized(
+            ru:
+                'Не загружено ${comparison.unfetchedCount}: достигнут '
+                'защитный предел ${comparison.searchPageLimit} страниц.',
+            uk:
+                'Не завантажено ${comparison.unfetchedCount}: досягнуто '
+                'захисної межі ${comparison.searchPageLimit} сторінок.',
+          )
+        : context.localized(
+            ru: 'Причина покрытия: ${comparison.coverageReason ?? 'неизвестна'}.',
+            uk: 'Причина покриття: ${comparison.coverageReason ?? 'невідома'}.',
+          );
+    return Container(
+      key: const ValueKey('catalog-discovery-coverage'),
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: isPageLimit ? colors.warningSoft : colors.surfaceMuted,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        context.localized(
+          ru:
+              'Покрытие Prom: $loaded из $total ($percent), запросов: '
+              '${comparison.searchPagesFetched}. $reason',
+          uk:
+              'Покриття Prom: $loaded із $total ($percent), запитів: '
+              '${comparison.searchPagesFetched}. $reason',
+        ),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: isPageLimit ? colors.warning : colors.muted,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectionHistogram extends StatelessWidget {
+  const _SelectionHistogram({required this.comparison});
+
+  final CatalogCompetitorComparison comparison;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Container(
+      key: const ValueKey('catalog-discovery-histogram'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.surfaceMuted,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            context.localized(
+              ru:
+                  'Результат ворот: COMPARABLE ${comparison.comparableCount} · '
+                  'REVIEW ${comparison.reviewCount} · '
+                  'SKIP ${comparison.skippedCount}',
+              uk:
+                  'Результат воріт: COMPARABLE ${comparison.comparableCount} · '
+                  'REVIEW ${comparison.reviewCount} · '
+                  'SKIP ${comparison.skippedCount}',
+            ),
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: colors.ink),
+          ),
+          const SizedBox(height: 8),
+          ...comparison.selectionHistogram.entries.map(
+            (entry) => Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _histogramLabel(context, entry.key),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  Text(
+                    '${entry.value}',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: colors.ink,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -329,9 +777,13 @@ class CatalogCompetitorError extends StatelessWidget {
 }
 
 class _EmptyCompetitors extends StatelessWidget {
-  const _EmptyCompetitors({required this.hasComparison});
+  const _EmptyCompetitors({
+    required this.hasComparison,
+    required this.hasDiscovery,
+  });
 
   final bool hasComparison;
+  final bool hasDiscovery;
 
   @override
   Widget build(BuildContext context) {
@@ -357,6 +809,17 @@ class _EmptyCompetitors extends StatelessWidget {
                         'В останньому розрахунку не залишилося відповідних '
                         'конкурентних оголошень.',
                   )
+                : hasDiscovery
+                ? context.localized(
+                    ru:
+                        'Ни один найденный кандидат пока не допущен к '
+                        'автоматическому сравнению. Поисковая выдача показана '
+                        'ниже отдельно.',
+                    uk:
+                        'Жодного знайденого кандидата поки не допущено до '
+                        'автоматичного порівняння. Пошукову видачу показано '
+                        'нижче окремо.',
+                  )
                 : context.localized(
                     ru:
                         'Для этого товара конкурентные объявления ещё не '
@@ -372,6 +835,86 @@ class _EmptyCompetitors extends StatelessWidget {
       ),
     );
   }
+}
+
+String _histogramLabel(BuildContext context, String key) {
+  if (key == 'COMPARABLE') return key;
+  if (key.endsWith(' (REVIEW)')) {
+    final reason = key.substring(0, key.length - ' (REVIEW)'.length);
+    return 'REVIEW · ${_reasonLabel(context, reason)}';
+  }
+  return 'SKIP · ${_reasonLabel(context, key)}';
+}
+
+String _reasonLabel(BuildContext context, String reason) {
+  if (reason.startsWith('VARIANT_MISMATCH:')) {
+    final axis = reason.split(':').last;
+    return context.localized(
+      ru: 'не совпадает вариант ($axis)',
+      uk: 'не збігається варіант ($axis)',
+    );
+  }
+  return switch (reason) {
+    'OK' => context.localized(ru: 'ворота пройдены', uk: 'ворота пройдено'),
+    'OWN_SELLER' => context.localized(
+      ru: 'собственный магазин',
+      uk: 'власний магазин',
+    ),
+    'DISMANTLER_SELLER' => context.localized(
+      ru: 'продавец-разборка',
+      uk: 'продавець-розбірка',
+    ),
+    'USED' => context.localized(ru: 'товар б/у', uk: 'товар вживаний'),
+    'CONDITION_CONFLICT' => context.localized(
+      ru: 'конфликт состояния',
+      uk: 'конфлікт стану',
+    ),
+    'REMANUFACTURED' => context.localized(
+      ru: 'восстановленный товар',
+      uk: 'відновлений товар',
+    ),
+    'OEM_NOT_FOUND' => context.localized(
+      ru: 'OE не подтверждён',
+      uk: 'OE не підтверджено',
+    ),
+    'CATEGORY_NOT_AUTOPARTS' => context.localized(
+      ru: 'не автозапчасть (категория Prom)',
+      uk: 'не автозапчастина (категорія Prom)',
+    ),
+    'CATEGORY_OUTLIER_MAJORITY_VOTE' => context.localized(
+      ru: 'категория не совпадает с выдачей',
+      uk: 'категорія не збігається з видачею',
+    ),
+    'PACK_MISMATCH' => context.localized(
+      ru: 'не совпадает упаковка',
+      uk: 'не збігається пакування',
+    ),
+    'BRAND_MISMATCH' => context.localized(
+      ru: 'не совпадает марка автомобиля',
+      uk: 'не збігається марка автомобіля',
+    ),
+    'APPLICABILITY_MISMATCH' => context.localized(
+      ru: 'не совпадает применимость',
+      uk: 'не збігається застосовність',
+    ),
+    'TIER_UNKNOWN' => context.localized(
+      ru: 'tier бренда не определён',
+      uk: 'tier бренду не визначено',
+    ),
+    'USED_BY_TIER' => context.localized(
+      ru: 'tier определён как б/у',
+      uk: 'tier визначено як вживаний',
+    ),
+    'SAME_BRAND_KEMP' => context.localized(
+      ru: 'магазин сети KEMP',
+      uk: 'магазин мережі KEMP',
+    ),
+    'LEGACY_UNCLASSIFIED' => context.localized(
+      ru: 'старый запуск без классификации',
+      uk: 'старий запуск без класифікації',
+    ),
+    _ => reason,
+  };
 }
 
 String _dateTime(DateTime value) {

@@ -73,8 +73,10 @@ class Settings(BaseSettings):
     pricing_scraper_request_jitter_seconds: float = 0.5
     pricing_scraper_max_search_pages: int = 3
     pricing_scraper_max_sellers: int = 10
+    catalog_discovery_max_search_pages: int = Field(default=10, ge=1, le=50)
     pricing_brand_tiers_path: str = ""
     pricing_crosses_path: str = "config/crosses.yaml"
+    pricing_candidate_selection_path: str = "config/comparability.yaml"
     pricing_v3_robust_dispersion_enabled: bool = False
     pricing_v3_activation_artifact: str = ""
     pricing_v3_activation_sha256: str = ""

@@ -177,12 +177,18 @@ class _SortSelector extends StatelessWidget {
     final entries = <MarkoMenuEntry<String>>[
       MarkoMenuEntry(
         value: 'ABSOLUTE_RECOMMENDED_CHANGE',
-        label: context.localized(ru: 'Макс. изменение, ₴', uk: 'Макс. зміна, ₴'),
+        label: context.localized(
+          ru: 'Макс. изменение, ₴',
+          uk: 'Макс. зміна, ₴',
+        ),
         icon: Icons.swap_vert_rounded,
       ),
       MarkoMenuEntry(
         value: 'PERCENT_RECOMMENDED_CHANGE',
-        label: context.localized(ru: 'Макс. изменение, %', uk: 'Макс. зміна, %'),
+        label: context.localized(
+          ru: 'Макс. изменение, %',
+          uk: 'Макс. зміна, %',
+        ),
         icon: Icons.percent_rounded,
       ),
       MarkoMenuEntry(
@@ -243,9 +249,9 @@ class _SortSelector extends StatelessWidget {
                 children: [
                   Text(
                     context.localized(ru: 'Сортировка', uk: 'Сортування'),
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colors.muted,
-                    ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelSmall?.copyWith(color: colors.muted),
                   ),
                   Text(
                     current.label,

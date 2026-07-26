@@ -27,6 +27,21 @@ _PRODUCT_URL_RE = re.compile(
 )
 
 
+def _is_pagination_end(exc: RequestFailed, page_num: int) -> bool:
+    """Tell "there is no such page" apart from "the fetch broke".
+
+    Prom's reported result total can exceed what it actually serves — measured
+    on 2026-07-26, query ``8E0121251L`` reported 67 but served 66 across three
+    pages. The next page then answers ``301`` to the canonical search URL.
+    Treating that as a failure discarded every product already collected, which
+    cost 2 of 30 measured positions. A redirect on the first page is *not*
+    covered here: with no page fetched there is nothing to salvage, and a moved
+    or blocked endpoint must still surface as an error.
+    """
+
+    return page_num > 1 and exc.is_redirect
+
+
 class PromGateway:
     """Access seller catalogs and comparable offers on prom.ua."""
 
@@ -114,6 +129,13 @@ class PromGateway:
             html = client.get_html(seller.listing_url, params=params)
             return parse_listing(html, seller.lang)
         except RequestFailed as exc:
+            if _is_pagination_end(exc, page_num):
+                log.info(
+                    "Сторінка %d відсутня (HTTP %s) — кінець лістингу.",
+                    page_num,
+                    exc.status_code,
+                )
+                return None
             log.error("Сторінку %d не завантажено: %s", page_num, exc)
             if strict:
                 raise
@@ -219,8 +241,10 @@ class PromGateway:
         *,
         strict: bool = False,
     ) -> Iterator[Product]:
-        """Yield search-result products across up to max_search_pages pages."""
+        """Yield unique search products until total, exhaustion, or safety cap."""
         search_url = f"{BASE_URL}/{lang}/search"
+        seen_products: set[tuple[str, str]] = set()
+        reported_total: int | None = None
         for page_num in range(1, self._config.max_search_pages + 1):
             params: dict[str, Any] = {"search_term": query}
             if page_num > 1:
@@ -229,6 +253,14 @@ class PromGateway:
                 html = client.get_html(search_url, params=params)
                 page = parse_search(html, lang)
             except RequestFailed as exc:
+                if _is_pagination_end(exc, page_num):
+                    log.info(
+                        "Пошукова сторінка %d відсутня (HTTP %s) — кінець вибірки, "
+                        "зібране збережено.",
+                        page_num,
+                        exc.status_code,
+                    )
+                    return
                 log.error("Пошукову сторінку %d не завантажено: %s", page_num, exc)
                 if strict:
                     raise
@@ -241,10 +273,46 @@ class PromGateway:
             if page.is_empty:
                 log.info("Пошукова сторінка %d порожня — кінець.", page_num)
                 return
+            if page.total is not None:
+                reported_total = max(reported_total or 0, page.total)
             log.info(
                 "Пошук, стор. %d: %d кандидатів (total: %s)",
                 page_num,
                 len(page.products),
                 page.total,
             )
-            yield from page.products
+            new_on_page = 0
+            for product in page.products:
+                identity = (
+                    ("id", str(product.id))
+                    if product.id is not None
+                    else (
+                        "fallback",
+                        product.url
+                        or "|".join(
+                            (
+                                product.name or "",
+                                product.sku or "",
+                                product.seller_name or "",
+                            )
+                        ),
+                    )
+                )
+                if identity in seen_products:
+                    continue
+                seen_products.add(identity)
+                new_on_page += 1
+                yield product
+            if page.products and new_on_page == 0:
+                log.info(
+                    "Пошукова сторінка %d повторює вже зібрані товари — зупиняюсь.",
+                    page_num,
+                )
+                return
+            if reported_total is not None and len(seen_products) >= reported_total:
+                log.info(
+                    "Зібрано повідомлений Prom total=%d за %d сторінок.",
+                    reported_total,
+                    page_num,
+                )
+                return

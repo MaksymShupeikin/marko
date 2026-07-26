@@ -25,6 +25,10 @@ _FIELDS_PATH_MAP = {
     "is_available": "presence.isAvailable",
     "measure_unit": "measureUnit",
     "category_id": "categoryId",
+    # Root-to-leaf category ancestry, e.g. [0, 55, 5502, 341529, 341550].
+    # Native Prom search field; lets deterministic gates reason about the
+    # product domain without fetching the marketplace category taxonomy.
+    "category_ids": "categoryIds",
     "brand": "manufacturerInfo.name",
     "model_id": "model.id",  # cross-seller model identity (may be absent)
     "seller_id": "company.id",  # present in search results
@@ -86,6 +90,7 @@ class Product:
     is_available: bool | None
     measure_unit: str | None
     category_id: int | None
+    category_ids: list[int] | None
     brand: str | None
     model_id: str | None
     seller_id: int | None

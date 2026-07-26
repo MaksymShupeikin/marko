@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -17,6 +18,11 @@ from marko.infrastructure.db.models import (
     ObservationTierClassification,
     PricingRecommendation,
     PricingRun,
+)
+from marko.services.catalog_discovery import (
+    CatalogDiscoveredOffer,
+    CatalogDiscoverySnapshot,
+    latest_catalog_discovery,
 )
 from marko.services.owned_catalog import (
     OwnedCatalogProduct,
@@ -52,6 +58,29 @@ class CatalogCompetitorComparison:
     currency: str | None
     reason_codes: tuple[str, ...]
     items: tuple[CatalogCompetitorOffer, ...]
+    discovery_run_id: UUID | None = None
+    discovered_at: datetime | None = None
+    discovery_query: str | None = None
+    discovery_status: str | None = None
+    prom_reported_total: int | None = None
+    discovered_total: int = 0
+    discovery_retrieved_count: int = 0
+    discovery_persisted_count: int = 0
+    owned_excluded_count: int = 0
+    discovery_rejected_count: int = 0
+    comparable_count: int = 0
+    review_count: int = 0
+    skipped_count: int = 0
+    selection_histogram: Mapping[str, int] = field(default_factory=dict)
+    search_pages_fetched: int = 0
+    search_page_limit: int = 0
+    unfetched_count: int = 0
+    coverage_ratio: Decimal | None = None
+    coverage_reason: str | None = None
+    selection_method_version: str | None = None
+    selection_config_sha256: str | None = None
+    brand_rules_dataset_id: str | None = None
+    discovery_items: tuple[CatalogDiscoveredOffer, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -77,6 +106,13 @@ async def list_catalog_competitors(
     the source product, never a substitute for competitor evidence.
     """
 
+    discovery = await latest_catalog_discovery(
+        session,
+        workspace_id=workspace_id,
+        sku=sku,
+        oe=oe,
+        brand=brand,
+    )
     match = await _latest_matching_recommendation(
         session,
         workspace_id=workspace_id,
@@ -85,7 +121,7 @@ async def list_catalog_competitors(
         brand=brand,
     )
     if match is None:
-        return empty_catalog_competitor_comparison()
+        return empty_catalog_competitor_comparison(discovery=discovery)
 
     recommendation, _ = match
     rows = await get_recommendation_evidence(
@@ -93,7 +129,11 @@ async def list_catalog_competitors(
         workspace_id=workspace_id,
         recommendation_id=recommendation.id,
     )
-    return build_catalog_competitor_comparison(recommendation, rows)
+    return build_catalog_competitor_comparison(
+        recommendation,
+        rows,
+        discovery=discovery,
+    )
 
 
 async def list_catalog_recommendation_summaries(
@@ -201,7 +241,10 @@ def build_catalog_recommendation_summaries(
     return summaries
 
 
-def empty_catalog_competitor_comparison() -> CatalogCompetitorComparison:
+def empty_catalog_competitor_comparison(
+    *,
+    discovery: CatalogDiscoverySnapshot | None = None,
+) -> CatalogCompetitorComparison:
     return CatalogCompetitorComparison(
         recommendation_id=None,
         compared_at=None,
@@ -211,12 +254,15 @@ def empty_catalog_competitor_comparison() -> CatalogCompetitorComparison:
         currency=None,
         reason_codes=(),
         items=(),
+        **_discovery_fields(discovery),
     )
 
 
 def build_catalog_competitor_comparison(
     recommendation: PricingRecommendation,
     rows: list[tuple[MarketObservation, ObservationTierClassification]],
+    *,
+    discovery: CatalogDiscoverySnapshot | None = None,
 ) -> CatalogCompetitorComparison:
     """Build the catalog panel from the recommendation's actual evidence set."""
 
@@ -261,7 +307,64 @@ def build_catalog_competitor_comparison(
         currency=recommendation.currency,
         reason_codes=tuple(recommendation.reason_codes),
         items=tuple(offers),
+        **_discovery_fields(discovery),
     )
+
+
+def _discovery_fields(
+    discovery: CatalogDiscoverySnapshot | None,
+) -> dict[str, Any]:
+    if discovery is None:
+        return {
+            "discovery_run_id": None,
+            "discovered_at": None,
+            "discovery_query": None,
+            "discovery_status": None,
+            "prom_reported_total": None,
+            "discovered_total": 0,
+            "discovery_retrieved_count": 0,
+            "discovery_persisted_count": 0,
+            "owned_excluded_count": 0,
+            "discovery_rejected_count": 0,
+            "comparable_count": 0,
+            "review_count": 0,
+            "skipped_count": 0,
+            "selection_histogram": {},
+            "search_pages_fetched": 0,
+            "search_page_limit": 0,
+            "unfetched_count": 0,
+            "coverage_ratio": None,
+            "coverage_reason": None,
+            "selection_method_version": None,
+            "selection_config_sha256": None,
+            "brand_rules_dataset_id": None,
+            "discovery_items": (),
+        }
+    return {
+        "discovery_run_id": discovery.run_id,
+        "discovered_at": discovery.collected_at,
+        "discovery_query": discovery.query,
+        "discovery_status": discovery.status,
+        "prom_reported_total": discovery.prom_reported_total,
+        "discovered_total": len(discovery.items),
+        "discovery_retrieved_count": discovery.retrieved_count,
+        "discovery_persisted_count": discovery.persisted_count,
+        "owned_excluded_count": discovery.owned_excluded_count,
+        "discovery_rejected_count": discovery.rejected_count,
+        "comparable_count": discovery.comparable_count,
+        "review_count": discovery.review_count,
+        "skipped_count": discovery.skipped_count,
+        "selection_histogram": dict(discovery.selection_histogram),
+        "search_pages_fetched": discovery.search_pages_fetched,
+        "search_page_limit": discovery.search_page_limit,
+        "unfetched_count": discovery.unfetched_count,
+        "coverage_ratio": discovery.coverage_ratio,
+        "coverage_reason": discovery.coverage_reason,
+        "selection_method_version": discovery.selection_method_version,
+        "selection_config_sha256": discovery.selection_config_sha256,
+        "brand_rules_dataset_id": discovery.brand_rules_dataset_id,
+        "discovery_items": discovery.items,
+    }
 
 
 async def _latest_matching_recommendation(

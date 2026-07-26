@@ -256,6 +256,97 @@ class CatalogCompetitorOffer {
   final DateTime observedAt;
 }
 
+class CatalogDiscoveredOffer {
+  const CatalogDiscoveredOffer({
+    required this.discoveryOfferId,
+    required this.sourceListingId,
+    required this.sellerId,
+    required this.sellerName,
+    required this.title,
+    required this.url,
+    required this.sku,
+    required this.brand,
+    required this.salePrice,
+    required this.referencePrice,
+    required this.currency,
+    required this.measureUnit,
+    required this.isAvailable,
+    required this.titleContainsQuery,
+    required this.identityStatus,
+    required this.sourceConfidence,
+    required this.reasonCodes,
+    this.selectionStatus = 'REVIEW',
+    this.selectionReason = 'LEGACY_UNCLASSIFIED',
+    this.passedGates = const [],
+    this.selectionFlags = const [],
+    this.selectionDetails = const {},
+    this.predictedTier = 'unknown',
+    this.tierConfidence = 0,
+  });
+
+  factory CatalogDiscoveredOffer.fromJson(Map<String, dynamic> json) {
+    return CatalogDiscoveredOffer(
+      discoveryOfferId: json['discovery_offer_id'] as String,
+      sourceListingId: json['source_listing_id'] as String,
+      sellerId: json['seller_id'] as String,
+      sellerName: json['seller_name'] as String,
+      title: json['title'] as String,
+      url: json['url'] as String,
+      sku: json['sku'] as String?,
+      brand: json['brand'] as String?,
+      salePrice: _decimal(json['sale_price']) ?? 0,
+      referencePrice: _decimal(json['reference_price']),
+      currency: json['currency'] as String,
+      measureUnit: json['measure_unit'] as String?,
+      isAvailable: json['is_available'] as bool?,
+      titleContainsQuery: json['title_contains_query'] as bool? ?? false,
+      identityStatus: json['identity_status'] as String,
+      sourceConfidence: _decimal(json['source_confidence']) ?? 0,
+      reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
+      selectionStatus: json['selection_status'] as String? ?? 'REVIEW',
+      selectionReason:
+          json['selection_reason'] as String? ?? 'LEGACY_UNCLASSIFIED',
+      passedGates: (json['passed_gates'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
+      selectionFlags: (json['selection_flags'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
+      selectionDetails:
+          (json['selection_details'] as Map<String, dynamic>?) ?? const {},
+      predictedTier: json['predicted_tier'] as String? ?? 'unknown',
+      tierConfidence: _decimal(json['tier_confidence']) ?? 0,
+    );
+  }
+
+  final String discoveryOfferId;
+  final String sourceListingId;
+  final String sellerId;
+  final String sellerName;
+  final String title;
+  final String url;
+  final String? sku;
+  final String? brand;
+  final double salePrice;
+  final double? referencePrice;
+  final String currency;
+  final String? measureUnit;
+  final bool? isAvailable;
+  final bool titleContainsQuery;
+  final String identityStatus;
+  final double sourceConfidence;
+  final List<String> reasonCodes;
+  final String selectionStatus;
+  final String selectionReason;
+  final List<String> passedGates;
+  final List<String> selectionFlags;
+  final Map<String, dynamic> selectionDetails;
+  final String predictedTier;
+  final double tierConfidence;
+}
+
 class CatalogCompetitorComparison {
   const CatalogCompetitorComparison({
     required this.recommendationId,
@@ -266,6 +357,29 @@ class CatalogCompetitorComparison {
     required this.currency,
     required this.reasonCodes,
     required this.items,
+    this.discoveryRunId,
+    this.discoveredAt,
+    this.discoveryQuery,
+    this.discoveryStatus,
+    this.promReportedTotal,
+    this.discoveredTotal = 0,
+    this.discoveryRetrievedCount = 0,
+    this.discoveryPersistedCount = 0,
+    this.ownedExcludedCount = 0,
+    this.discoveryRejectedCount = 0,
+    this.comparableCount = 0,
+    this.reviewCount = 0,
+    this.skippedCount = 0,
+    this.selectionHistogram = const {},
+    this.searchPagesFetched = 0,
+    this.searchPageLimit = 0,
+    this.unfetchedCount = 0,
+    this.coverageRatio,
+    this.coverageReason,
+    this.selectionMethodVersion,
+    this.selectionConfigSha256,
+    this.brandRulesDatasetId,
+    this.discoveryItems = const [],
   });
 
   factory CatalogCompetitorComparison.fromJson(Map<String, dynamic> json) {
@@ -287,6 +401,41 @@ class CatalogCompetitorComparison {
                 CatalogCompetitorOffer.fromJson(item as Map<String, dynamic>),
           )
           .toList(growable: false),
+      discoveryRunId: json['discovery_run_id'] as String?,
+      discoveredAt: json['discovered_at'] == null
+          ? null
+          : DateTime.parse(json['discovered_at'] as String),
+      discoveryQuery: json['discovery_query'] as String?,
+      discoveryStatus: json['discovery_status'] as String?,
+      promReportedTotal: (json['prom_reported_total'] as num?)?.toInt(),
+      discoveredTotal: (json['discovered_total'] as num?)?.toInt() ?? 0,
+      discoveryRetrievedCount:
+          (json['discovery_retrieved_count'] as num?)?.toInt() ?? 0,
+      discoveryPersistedCount:
+          (json['discovery_persisted_count'] as num?)?.toInt() ?? 0,
+      ownedExcludedCount: (json['owned_excluded_count'] as num?)?.toInt() ?? 0,
+      discoveryRejectedCount:
+          (json['discovery_rejected_count'] as num?)?.toInt() ?? 0,
+      comparableCount: (json['comparable_count'] as num?)?.toInt() ?? 0,
+      reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
+      skippedCount: (json['skipped_count'] as num?)?.toInt() ?? 0,
+      selectionHistogram:
+          (json['selection_histogram'] as Map<String, dynamic>? ?? const {})
+              .map((key, value) => MapEntry(key, (value as num).toInt())),
+      searchPagesFetched: (json['search_pages_fetched'] as num?)?.toInt() ?? 0,
+      searchPageLimit: (json['search_page_limit'] as num?)?.toInt() ?? 0,
+      unfetchedCount: (json['unfetched_count'] as num?)?.toInt() ?? 0,
+      coverageRatio: _decimal(json['coverage_ratio']),
+      coverageReason: json['coverage_reason'] as String?,
+      selectionMethodVersion: json['selection_method_version'] as String?,
+      selectionConfigSha256: json['selection_config_sha256'] as String?,
+      brandRulesDatasetId: json['brand_rules_dataset_id'] as String?,
+      discoveryItems: (json['discovery_items'] as List<dynamic>? ?? const [])
+          .map(
+            (item) =>
+                CatalogDiscoveredOffer.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -298,8 +447,32 @@ class CatalogCompetitorComparison {
   final String? currency;
   final List<String> reasonCodes;
   final List<CatalogCompetitorOffer> items;
+  final String? discoveryRunId;
+  final DateTime? discoveredAt;
+  final String? discoveryQuery;
+  final String? discoveryStatus;
+  final int? promReportedTotal;
+  final int discoveredTotal;
+  final int discoveryRetrievedCount;
+  final int discoveryPersistedCount;
+  final int ownedExcludedCount;
+  final int discoveryRejectedCount;
+  final int comparableCount;
+  final int reviewCount;
+  final int skippedCount;
+  final Map<String, int> selectionHistogram;
+  final int searchPagesFetched;
+  final int searchPageLimit;
+  final int unfetchedCount;
+  final double? coverageRatio;
+  final String? coverageReason;
+  final String? selectionMethodVersion;
+  final String? selectionConfigSha256;
+  final String? brandRulesDatasetId;
+  final List<CatalogDiscoveredOffer> discoveryItems;
 
   bool get hasComparison => recommendationId != null;
+  bool get hasDiscovery => discoveryRunId != null;
 }
 
 double? _decimal(dynamic value) {

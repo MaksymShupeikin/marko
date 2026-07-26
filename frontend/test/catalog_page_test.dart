@@ -60,9 +60,15 @@ void main() {
 
     expect(find.text('Все магазины'), findsOneWidget);
     expect(find.text('Parts Avto'), findsOneWidget);
-    expect(find.textContaining('ПРОФПАРТС'), findsOneWidget);
+    expect(find.text('ПРОФПАРТС'), findsOneWidget);
 
     await tester.tap(find.text('ПРОФПАРТС'));
+    await tester.pumpAndSettle();
+
+    // Multi-select keeps the menu open so more than one store can be picked.
+    expect(find.textContaining('ПРОФПАРТС'), findsNWidgets(2));
+
+    await tester.tap(find.text('Готово'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('ПРОФПАРТС'), findsOneWidget);
@@ -208,6 +214,41 @@ void main() {
     expect(find.text('KEMP Автозапчастини'), findsNothing);
     expect(find.text('Parts Avto'), findsNothing);
   });
+
+  testWidgets(
+    'discovery button shows parsed candidates without pricing claim',
+    (tester) async {
+      await tester.pumpWidget(_testApp(comparison: _emptyComparison));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Показать конкурентов'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('catalog-details-discover')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('catalog-discovery-section')),
+        findsOneWidget,
+      );
+      expect(find.text('Найдено парсером'), findsOneWidget);
+      expect(find.text('Замок багажника 7E5827505A'), findsOneWidget);
+      expect(find.text('629.00 UAH'), findsOneWidget);
+      expect(find.text('REVIEW · tier бренда не определён'), findsNWidgets(2));
+      expect(
+        find.byKey(const ValueKey('catalog-discovery-histogram')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('catalog-discovery-coverage')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('достигнут защитный предел 10 страниц'),
+        findsOneWidget,
+      );
+      expect(find.text('Учитывается в сравнении'), findsNothing);
+    },
+  );
 }
 
 Widget _testApp({
@@ -249,14 +290,14 @@ class _TestCatalogController extends CatalogController {
   ) async => comparison;
 
   @override
-  Future<void> selectStore(String? storeId) async {
+  Future<CatalogCompetitorComparison> discoverCompetitors(
+    CatalogProduct product,
+  ) async => _discoveryComparison;
+
+  @override
+  Future<void> selectStores(Set<String> storeIds) async {
     final current = state.requireValue;
-    state = AsyncData(
-      current.copyWith(
-        selectedStoreId: storeId,
-        clearSelectedStore: storeId == null,
-      ),
-    );
+    state = AsyncData(current.copyWith(selectedStoreIds: storeIds));
   }
 }
 
@@ -295,6 +336,79 @@ const _emptyComparison = CatalogCompetitorComparison(
   currency: null,
   reasonCodes: [],
   items: [],
+);
+
+final _discoveryComparison = CatalogCompetitorComparison(
+  recommendationId: null,
+  comparedAt: null,
+  currentPrice: null,
+  fairPrice: null,
+  recommendedPrice: null,
+  currency: null,
+  reasonCodes: const [],
+  items: const [],
+  discoveryRunId: 'discovery-run',
+  discoveredAt: DateTime.utc(2026, 7, 25, 14),
+  discoveryQuery: '7E5827505A',
+  discoveryStatus: 'completed',
+  promReportedTotal: 91,
+  discoveredTotal: 1,
+  discoveryRetrievedCount: 29,
+  discoveryPersistedCount: 29,
+  comparableCount: 0,
+  reviewCount: 1,
+  skippedCount: 28,
+  selectionHistogram: const {
+    'DISMANTLER_SELLER': 2,
+    'OEM_NOT_FOUND': 1,
+    'TIER_UNKNOWN (REVIEW)': 26,
+  },
+  searchPagesFetched: 10,
+  searchPageLimit: 10,
+  unfetchedCount: 62,
+  coverageRatio: 29 / 91,
+  coverageReason: 'SEARCH_PAGE_HARD_CAP',
+  selectionMethodVersion: 'deterministic-candidate-gates-v1',
+  selectionConfigSha256: 'aaaaaaaa',
+  brandRulesDatasetId: 'NO_BRAND_DICTIONARY_CONFIGURED',
+  discoveryItems: const [
+    CatalogDiscoveredOffer(
+      discoveryOfferId: 'discovery-offer',
+      sourceListingId: '1402874053',
+      sellerId: '668922',
+      sellerName: 'Autoparts IF',
+      title: 'Замок багажника 7E5827505A',
+      url: 'https://prom.ua/ua/p1402874053-item.html',
+      sku: 'DF-11260',
+      brand: 'Detali IF',
+      salePrice: 629,
+      referencePrice: null,
+      currency: 'UAH',
+      measureUnit: 'шт.',
+      isAvailable: true,
+      titleContainsQuery: true,
+      identityStatus: 'QUERY_TOKEN_PRESENT',
+      sourceConfidence: 1,
+      reasonCodes: ['DISCOVERY_ONLY_NOT_PRICING_EVIDENCE'],
+      selectionStatus: 'REVIEW',
+      selectionReason: 'TIER_UNKNOWN',
+      passedGates: [
+        'own_seller',
+        'dismantler_seller',
+        'condition',
+        'remanufactured',
+        'oem_identity',
+        'oem_stuffing',
+        'variant',
+        'package',
+        'applicability',
+      ],
+      selectionFlags: [],
+      selectionDetails: {'stopped_gate': 'tier'},
+      predictedTier: 'unknown',
+      tierConfidence: 0,
+    ),
+  ],
 );
 
 const _page = CatalogProductPage(

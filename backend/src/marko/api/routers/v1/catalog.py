@@ -20,22 +20,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.catalog import (
     CatalogCompetitorComparisonResponse,
+    CatalogDiscoveryRequest,
     CatalogImportPageResponse,
     CatalogImportResponse,
     CatalogItemPageResponse,
     CatalogItemResponse,
+    CatalogOeEnrichmentRequest,
+    CatalogOeEnrichmentResponse,
     OwnedCatalogPageResponse,
     OwnedCatalogProductResponse,
     OwnedCatalogStoreOptionResponse,
 )
 from marko.core.config import get_settings
+from marko.parsers.prom.exceptions import ParseError, RequestFailed
 from marko.services.catalog_competitors import (
     list_catalog_competitors,
     list_catalog_recommendation_summaries,
 )
+from marko.services.catalog_discovery import (
+    CatalogDiscoveryError,
+    collect_catalog_discovery,
+)
 from marko.services.catalog_costs import cost_configuration_map
 from marko.services.cost_privacy import privacy_safe_mapping
-from marko.services.owned_catalog import list_owned_catalog
+from marko.services.owned_catalog import enrich_listing_oe, list_owned_catalog
+from marko.services.source_access import SourceAccessBlocked
 from marko.services.xlsx_catalog import (
     MAX_XLSX_BYTES,
     CatalogImportError,
@@ -67,12 +76,76 @@ async def get_catalog_product_competitors(
     return CatalogCompetitorComparisonResponse.model_validate(comparison)
 
 
+@router.post(
+    "/competitors/discover",
+    response_model=CatalogCompetitorComparisonResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def discover_catalog_product_competitors(
+    payload: CatalogDiscoveryRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogCompetitorComparisonResponse:
+    try:
+        await collect_catalog_discovery(
+            session,
+            workspace_id=current.workspace_id,
+            sku=payload.sku,
+            oe=payload.oe,
+            brand=payload.brand,
+            title=payload.title,
+            current_price=payload.current_price,
+            currency=payload.currency,
+            category=payload.category,
+        )
+    except SourceAccessBlocked as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except CatalogDiscoveryError as exc:
+        status_code = (
+            status.HTTP_422_UNPROCESSABLE_ENTITY
+            if exc.code == "CATALOG_DISCOVERY_IDENTIFIER_REQUIRED"
+            else status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    comparison = await list_catalog_competitors(
+        session,
+        workspace_id=current.workspace_id,
+        sku=payload.sku,
+        oe=payload.oe,
+        brand=payload.brand,
+    )
+    return CatalogCompetitorComparisonResponse.model_validate(comparison)
+
+
+@router.post("/products/oe", response_model=CatalogOeEnrichmentResponse)
+async def enrich_catalog_product_oe(
+    payload: CatalogOeEnrichmentRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogOeEnrichmentResponse:
+    try:
+        oe = await enrich_listing_oe(
+            session,
+            workspace_id=current.workspace_id,
+            store_id=payload.store_id,
+            external_id=payload.external_id,
+        )
+    except SourceAccessBlocked as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (RequestFailed, ParseError):
+        oe = None
+    return CatalogOeEnrichmentResponse(oe=oe)
+
+
 @router.get("/products", response_model=OwnedCatalogPageResponse)
 async def get_owned_catalog_products(
     current: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_session)],
     q: Annotated[str | None, Query(max_length=255)] = None,
-    store_id: Annotated[UUID | None, Query()] = None,
+    store_id: Annotated[list[UUID] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 48,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> OwnedCatalogPageResponse:
@@ -80,7 +153,7 @@ async def get_owned_catalog_products(
         session,
         workspace_id=current.workspace_id,
         query=q,
-        store_id=store_id,
+        store_ids=frozenset(store_id) if store_id else None,
         limit=limit,
         offset=offset,
     )
