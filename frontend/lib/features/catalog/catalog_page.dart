@@ -13,9 +13,14 @@ import 'widgets/catalog_product_card.dart';
 import 'widgets/catalog_product_details_sheet.dart';
 
 class CatalogPage extends ConsumerStatefulWidget {
-  const CatalogPage({required this.onOpenPriceComparison, super.key});
+  const CatalogPage({
+    required this.onOpenPriceComparison,
+    this.canAdministerWorkspace = false,
+    super.key,
+  });
 
   final VoidCallback onOpenPriceComparison;
+  final bool canAdministerWorkspace;
 
   @override
   ConsumerState<CatalogPage> createState() => _CatalogPageState();
@@ -90,9 +95,11 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
         loadCompetitors: () => ref
             .read(catalogControllerProvider.notifier)
             .loadCompetitors(product),
-        discoverCompetitors: () => ref
-            .read(catalogControllerProvider.notifier)
-            .discoverCompetitors(product),
+        discoverCompetitors: widget.canAdministerWorkspace
+            ? () => ref
+                  .read(catalogControllerProvider.notifier)
+                  .discoverCompetitors(product)
+            : null,
         onCompare: widget.onOpenPriceComparison,
       ),
     );

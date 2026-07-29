@@ -33,9 +33,10 @@ router = APIRouter()
     include_in_schema=False,
 )
 async def get_internal_operational_metrics(
+    _current: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PlainTextResponse:
-    """Private-network scrape target; the production edge returns 404 for it."""
+    """Authenticated scrape target; the production edge may restrict it further."""
 
     return PlainTextResponse(
         await render_latest_operational_prometheus(session),

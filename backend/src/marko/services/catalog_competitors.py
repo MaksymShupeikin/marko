@@ -54,6 +54,8 @@ class CatalogCompetitorComparison:
     compared_at: datetime | None
     current_price: Decimal | None
     fair_price: Decimal | None
+    confidence_grade: str | None
+    dispersion: Decimal | None
     recommended_price: Decimal | None
     currency: str | None
     reason_codes: tuple[str, ...]
@@ -68,9 +70,9 @@ class CatalogCompetitorComparison:
     discovery_persisted_count: int = 0
     owned_excluded_count: int = 0
     discovery_rejected_count: int = 0
-    comparable_count: int = 0
-    review_count: int = 0
-    skipped_count: int = 0
+    pricing_evidence_count: int = 0
+    reference_only_count: int = 0
+    rejected_candidate_count: int = 0
     selection_histogram: Mapping[str, int] = field(default_factory=dict)
     search_pages_fetched: int = 0
     search_page_limit: int = 0
@@ -80,7 +82,14 @@ class CatalogCompetitorComparison:
     selection_method_version: str | None = None
     selection_config_sha256: str | None = None
     brand_rules_dataset_id: str | None = None
+    # Everything the run produced, rejected candidates included, for the
+    # diagnostic view.
     discovery_items: tuple[CatalogDiscoveredOffer, ...] = ()
+    # The two customer-facing lists.  They are built here rather than in the
+    # client so that "counts towards the price" is decided once, on the server,
+    # next to the gate chain that decided it.
+    pricing_evidence: tuple[CatalogDiscoveredOffer, ...] = ()
+    reference_only: tuple[CatalogDiscoveredOffer, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -250,6 +259,8 @@ def empty_catalog_competitor_comparison(
         compared_at=None,
         current_price=None,
         fair_price=None,
+        confidence_grade=None,
+        dispersion=None,
         recommended_price=None,
         currency=None,
         reason_codes=(),
@@ -303,6 +314,8 @@ def build_catalog_competitor_comparison(
         compared_at=recommendation.computed_at,
         current_price=recommendation.current_price,
         fair_price=recommendation.fair_price,
+        confidence_grade=recommendation.confidence_grade,
+        dispersion=recommendation.dispersion,
         recommended_price=recommendation.recommended_price,
         currency=recommendation.currency,
         reason_codes=tuple(recommendation.reason_codes),
@@ -326,9 +339,9 @@ def _discovery_fields(
             "discovery_persisted_count": 0,
             "owned_excluded_count": 0,
             "discovery_rejected_count": 0,
-            "comparable_count": 0,
-            "review_count": 0,
-            "skipped_count": 0,
+            "pricing_evidence_count": 0,
+            "reference_only_count": 0,
+            "rejected_candidate_count": 0,
             "selection_histogram": {},
             "search_pages_fetched": 0,
             "search_page_limit": 0,
@@ -339,6 +352,8 @@ def _discovery_fields(
             "selection_config_sha256": None,
             "brand_rules_dataset_id": None,
             "discovery_items": (),
+            "pricing_evidence": (),
+            "reference_only": (),
         }
     return {
         "discovery_run_id": discovery.run_id,
@@ -351,9 +366,9 @@ def _discovery_fields(
         "discovery_persisted_count": discovery.persisted_count,
         "owned_excluded_count": discovery.owned_excluded_count,
         "discovery_rejected_count": discovery.rejected_count,
-        "comparable_count": discovery.comparable_count,
-        "review_count": discovery.review_count,
-        "skipped_count": discovery.skipped_count,
+        "pricing_evidence_count": discovery.pricing_evidence_count,
+        "reference_only_count": discovery.reference_only_count,
+        "rejected_candidate_count": discovery.rejected_candidate_count,
         "selection_histogram": dict(discovery.selection_histogram),
         "search_pages_fetched": discovery.search_pages_fetched,
         "search_page_limit": discovery.search_page_limit,
@@ -364,6 +379,16 @@ def _discovery_fields(
         "selection_config_sha256": discovery.selection_config_sha256,
         "brand_rules_dataset_id": discovery.brand_rules_dataset_id,
         "discovery_items": discovery.items,
+        "pricing_evidence": tuple(
+            item
+            for item in discovery.items
+            if item.selection_status == "PRICING_EVIDENCE"
+        ),
+        "reference_only": tuple(
+            item
+            for item in discovery.items
+            if item.selection_status == "REFERENCE_ONLY"
+        ),
     }
 
 

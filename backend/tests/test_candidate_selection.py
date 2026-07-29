@@ -27,6 +27,10 @@ APPROVED_POLCAR = {
     "POLCAR": ProductTier.AFTERMARKET_B,
     "KEMP": ProductTier.KEMP,
 }
+# A validated coefficient for the reference category, so tests about identity
+# gates and soft flags reach the end of the chain instead of stopping at
+# ``PREMIUM_NOT_CALIBRATED``.  Calibration itself is covered separately.
+CALIBRATED_PREMIUMS = {("body_lock", ProductTier.AFTERMARKET_B): Decimal("1.0")}
 
 
 def _reference(**overrides) -> ReferenceItem:
@@ -73,7 +77,7 @@ def test_owned_seller_stops_at_first_gate() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "OWN_SELLER"
     assert verdict.passed_gates == ()
 
@@ -96,7 +100,7 @@ def test_dismantler_seller_is_detected_before_condition(
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == expected
     assert verdict.passed_gates == ("own_seller",)
 
@@ -110,9 +114,10 @@ def test_used_marker_does_not_match_inside_buffer_word() -> None:
         ),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
 
 
 def test_used_and_new_conflict_goes_to_review() -> None:
@@ -122,7 +127,7 @@ def test_used_and_new_conflict_goes_to_review() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.REVIEW
+    assert verdict.status is CandidateStatus.REFERENCE_ONLY
     assert verdict.reason == "CONDITION_CONFLICT"
     assert verdict.details["stopped_gate"] == "condition"
 
@@ -139,9 +144,9 @@ def test_used_and_remanufactured_are_distinct_early_exit_reasons() -> None:
         CONFIG,
     )
 
-    assert (used.status, used.reason) == (CandidateStatus.SKIP, "USED")
+    assert (used.status, used.reason) == (CandidateStatus.REJECTED, "USED")
     assert (reman.status, reman.reason) == (
-        CandidateStatus.SKIP,
+        CandidateStatus.REJECTED,
         "REMANUFACTURED",
     )
 
@@ -186,7 +191,7 @@ def test_missing_oem_stops_before_variant_and_tier() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "OEM_NOT_FOUND"
     assert "variant" not in verdict.passed_gates
 
@@ -200,9 +205,10 @@ def test_oem_stuffing_is_a_flag_not_a_skip() -> None:
         ),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert "OEM_STUFFED" in verdict.flags
     assert verdict.details["gates"]["oem_stuffing"]["token_count"] == (
         CONFIG.max_oem_in_title + 1
@@ -216,7 +222,7 @@ def test_explicit_side_mismatch_is_skipped() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "VARIANT_MISMATCH:side"
 
 
@@ -226,9 +232,10 @@ def test_matching_explicit_side_is_not_skipped() -> None:
         _candidate(title=("Амортизатор задний правый Toyota Camry V40 7E5827505A")),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert verdict.reason == "OK"
 
 
@@ -238,9 +245,10 @@ def test_one_sided_variant_knowledge_remains_fail_closed_without_skip() -> None:
         _candidate(title="Амортизатор задний Toyota Camry V40 7E5827505A"),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert verdict.reason == "OK"
 
 
@@ -256,9 +264,10 @@ def test_all_ambiguous_variant_axes_are_preserved_as_flags() -> None:
         ),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert "VARIANT_AMBIGUOUS:side" in verdict.flags
     assert "VARIANT_AMBIGUOUS:axle" in verdict.flags
 
@@ -270,7 +279,7 @@ def test_pack_mismatch_is_skipped() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "PACK_MISMATCH"
 
 
@@ -282,9 +291,10 @@ def test_same_platform_is_retained_with_soft_flag() -> None:
         ),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert "SAME_PLATFORM" in verdict.flags
 
 
@@ -295,7 +305,7 @@ def test_different_vehicle_brand_is_skipped() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "BRAND_MISMATCH"
 
 
@@ -306,7 +316,7 @@ def test_unknown_applicability_is_a_soft_flag() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.REVIEW
+    assert verdict.status is CandidateStatus.REFERENCE_ONLY
     assert verdict.reason == "TIER_UNKNOWN"
     assert "APPLICABILITY_UNKNOWN" in verdict.flags
 
@@ -317,19 +327,27 @@ def test_missing_reference_generation_does_not_create_false_mismatch() -> None:
         _candidate(title="Замок VW Transporter T6 7E5827505A"),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert "APPLICABILITY_UNKNOWN" in verdict.flags
 
 
-def test_unknown_tier_is_review_after_all_identity_gates() -> None:
+def test_unknown_tier_is_reference_only_after_all_identity_gates() -> None:
+    """An unapproved brand must cost the candidate its price vote, not its seat.
+
+    This is the case that used to empty the whole result set: with only KEMP
+    approved in the brand dictionary, every external brand lands here.
+    """
+
     verdict = check_candidate(_reference(), _candidate(), CONFIG)
 
-    assert verdict.status is CandidateStatus.REVIEW
+    assert verdict.status is CandidateStatus.REFERENCE_ONLY
     assert verdict.reason == "TIER_UNKNOWN"
-    assert verdict.details["stopped_gate"] == "tier"
-    assert verdict.passed_gates[-1] == "applicability"
+    assert verdict.details["stopped_gate"] == "tier_known"
+    assert verdict.passed_gates[-1] == "own_brand"
+    assert "applicability" in verdict.passed_gates
 
 
 def test_price_anomaly_is_a_flag_and_never_a_skip() -> None:
@@ -338,9 +356,10 @@ def test_price_anomaly_is_a_flag_and_never_a_skip() -> None:
         _candidate(price=Decimal("400")),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert verdict.reason == "OK"
     assert "PRICE_ANOMALY" in verdict.flags
     assert verdict.passed_gates[-1] == "price_anomaly"
@@ -353,9 +372,10 @@ def test_price_anomaly_boundaries_are_inclusive(candidate_price: Decimal) -> Non
         _candidate(price=candidate_price),
         CONFIG,
         brand_tiers=APPROVED_POLCAR,
+        calibrated_premiums=CALIBRATED_PREMIUMS,
     )
 
-    assert verdict.status is CandidateStatus.COMPARABLE
+    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
     assert "PRICE_ANOMALY" not in verdict.flags
 
 
@@ -369,7 +389,7 @@ def test_empty_reference_and_candidate_oem_fields_fail_closed() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "OEM_NOT_FOUND"
 
 
@@ -380,11 +400,11 @@ def test_mixed_script_brand_does_not_gain_an_unverified_tier() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.REVIEW
+    assert verdict.status is CandidateStatus.REFERENCE_ONLY
     assert verdict.reason == "TIER_UNKNOWN"
 
 
-def test_histogram_preserves_review_semantics() -> None:
+def test_histogram_names_the_outcome_and_the_cause() -> None:
     verdicts = [
         check_candidate(_reference(), _candidate(), CONFIG),
         check_candidate(
@@ -395,8 +415,8 @@ def test_histogram_preserves_review_semantics() -> None:
     ]
 
     assert verdict_histogram(verdicts) == {
-        "DISMANTLER_SELLER": 1,
-        "TIER_UNKNOWN (REVIEW)": 1,
+        "REFERENCE_ONLY:TIER_UNKNOWN": 1,
+        "REJECTED:DISMANTLER_SELLER": 1,
     }
 
 
@@ -427,7 +447,7 @@ def test_category_gate_skips_proven_non_automotive_domain() -> None:
         CONFIG,
     )
 
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "CATEGORY_NOT_AUTOPARTS"
     details = verdict.details["gates"]["category_domain"]
     assert details["mode"] == "BLOCKLIST"
@@ -541,7 +561,7 @@ def test_majority_vote_boundary_share_is_inclusive() -> None:
         config,
         category_context=context,
     )
-    assert verdict.status is CandidateStatus.SKIP
+    assert verdict.status is CandidateStatus.REJECTED
     assert verdict.reason == "CATEGORY_OUTLIER_MAJORITY_VOTE"
 
 
@@ -574,7 +594,7 @@ def test_enforced_allowlist_rejects_everything_outside_the_list() -> None:
     )
 
     assert allowed.reason != "CATEGORY_NOT_AUTOPARTS"
-    assert rejected.status is CandidateStatus.SKIP
+    assert rejected.status is CandidateStatus.REJECTED
     assert rejected.reason == "CATEGORY_NOT_AUTOPARTS"
 
 

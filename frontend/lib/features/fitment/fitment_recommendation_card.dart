@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import '../../core/presentation_formatters.dart';
 import 'fitment_models.dart';
 
 typedef RecommendationReviewCallback =
@@ -103,7 +104,7 @@ class FitmentRecommendationCard extends StatelessWidget {
           ),
           if (recommendation.reasonCodes.isNotEmpty)
             Text(
-              'Причины: ${recommendation.reasonCodes.take(4).join(', ')}',
+              'Причины: ${summarizeLimited(recommendation.reasonCodes, limit: 4, separator: ', ', overflowLabel: (hidden) => 'и ещё $hidden')}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           if (recommendation.warnings.isNotEmpty)

@@ -117,16 +117,23 @@ def test_raise_is_capped_by_maximum_single_step() -> None:
     result = recommend_price(context(), market_prices(), BUDGET_COEFFICIENTS)
 
     assert result.action == RecommendationAction.RAISE
-    assert result.recommended_price == Decimal("920")
-    assert result.recommended_price <= Decimal("800") * Decimal("1.15")
+    assert result.recommended_price == Decimal("1000")
+    assert result.recommended_price <= Decimal("800") * Decimal("1.25")
+    assert "STEP_CAPPED" in result.reasons
 
 
-def test_fresh_product_can_follow_supported_market_downward() -> None:
+def test_fresh_product_below_market_is_never_advised_downward() -> None:
+    """A selling item is never told to cut: the tool only shows headroom.
+
+    The customer accepted the asymmetry explicitly — the worst thing the
+    system may do is stay silent.
+    """
+
     result = recommend_price(context("1500"), market_prices(), BUDGET_COEFFICIENTS)
 
-    assert result.action == RecommendationAction.LOWER
-    assert result.recommended_price == result.fair_price
-    assert "FRESH_MARKET_SUPPORTS_LOWER" in result.reasons
+    assert result.action == RecommendationAction.HOLD
+    assert result.recommended_price is None
+    assert "PRICE_ALREADY_AT_OR_ABOVE_TARGET" in result.reasons
 
 
 def test_two_competitors_are_insufficient() -> None:
@@ -215,7 +222,7 @@ def test_non_dumping_kemp_offer_is_reference_only_not_a_guardrail() -> None:
     result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
     assert result.action == RecommendationAction.RAISE
-    assert result.recommended_price == Decimal("920")
+    assert result.recommended_price == Decimal("1000")
     assert result.target_market_count == 5
     assert result.kemp_reference_count == 1
 
@@ -228,11 +235,33 @@ def test_dumping_kemp_offer_is_excluded_from_center_and_guardrail() -> None:
 
     result = recommend_price(context(), offers, BUDGET_COEFFICIENTS)
 
-    assert result.recommended_price == Decimal("920")
+    assert result.recommended_price == Decimal("1000")
     assert any(item.reason == "KEMP_DUMPING" for item in result.excluded)
 
 
-def test_stale_stock_markdown_is_not_floored_by_sunk_cost() -> None:
+def test_dead_stock_markdown_is_not_floored_by_sunk_cost() -> None:
+    """Liquidation still ignores what the stock cost; only dead stock reaches it."""
+
+    result = recommend_price(
+        context(
+            "1500",
+            stock_status=StockStatus.DEAD_STOCK,
+            cost=Decimal("1200"),
+            stock_qty=Decimal("10"),
+            stock_age_days=Decimal("500"),
+        ),
+        market_prices(),
+        BUDGET_COEFFICIENTS,
+    )
+
+    assert result.action == RecommendationAction.LOWER
+    assert result.recommended_price < Decimal("1500")
+    assert result.priority_score_type == PriorityScoreType.CLEARANCE_PRIORITY
+
+
+def test_stale_stock_above_the_cheapest_offer_stays_silent() -> None:
+    """A slow mover priced above the market is left alone, not marked down."""
+
     result = recommend_price(
         context(
             "1500",
@@ -245,9 +274,26 @@ def test_stale_stock_markdown_is_not_floored_by_sunk_cost() -> None:
         BUDGET_COEFFICIENTS,
     )
 
-    assert result.action == RecommendationAction.LOWER
-    assert result.recommended_price < Decimal("1500")
-    assert result.priority_score_type == PriorityScoreType.CLEARANCE_PRIORITY
+    assert result.action == RecommendationAction.HOLD
+    assert result.recommended_price is None
+    assert "STALE_NOT_BELOW_CHEAPEST_COMPETITOR" in result.reasons
+
+
+def test_stale_stock_below_the_cheapest_offer_is_raised_to_it() -> None:
+    result = recommend_price(
+        context(
+            "800",
+            stock_status=StockStatus.STALE,
+            stock_qty=Decimal("10"),
+            stock_age_days=Decimal("500"),
+        ),
+        market_prices(),
+        BUDGET_COEFFICIENTS,
+    )
+
+    assert result.action == RecommendationAction.RAISE
+    assert result.recommended_price == Decimal("1000")
+    assert "STALE_CAPPED_AT_CHEAPEST" in result.reasons
 
 
 def test_dead_stock_sunk_cost_context_does_not_change_market_target() -> None:
@@ -308,7 +354,9 @@ def test_raise_priority_uses_expected_monthly_units_and_confidence() -> None:
 
     assert result.priority_score_type == PriorityScoreType.GROSS_UPLIFT_OPPORTUNITY
     assert result.priority_score > Decimal("0")
-    assert result.priority_score <= Decimal("1200")
+    # The step cap is 25% rather than 15%, so the same market supports a larger
+    # uplift per unit and therefore a larger opportunity score.
+    assert result.priority_score <= Decimal("2000")
 
 
 def test_low_confidence_dead_stock_gets_separate_review_priority() -> None:

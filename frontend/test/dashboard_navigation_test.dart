@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:marko_client/core/app_language.dart';
 import 'package:marko_client/core/app_theme.dart';
+import 'package:marko_client/core/system_status.dart';
 import 'package:marko_client/features/auth/auth_controller.dart';
 import 'package:marko_client/features/auth/auth_models.dart';
 import 'package:marko_client/features/catalog/catalog_controller.dart';
@@ -13,8 +14,13 @@ import 'package:marko_client/features/pricing/pricing_controller.dart';
 import 'package:marko_client/features/pricing/pricing_models.dart';
 import 'package:marko_client/features/stores/store_models.dart';
 import 'package:marko_client/features/stores/stores_controller.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('only Мои магазины remains as the desktop store destination', (
     tester,
   ) async {
@@ -117,7 +123,7 @@ void main() {
     expect(find.text('Русский'), findsOneWidget);
     expect(
       tester.getBottomLeft(selector).dy,
-      lessThan(tester.getTopLeft(find.text('Аккаунт Marko')).dy),
+      lessThan(tester.getTopLeft(find.text('owner@example.test')).dy),
     );
 
     await tester.tap(selector);
@@ -129,7 +135,7 @@ void main() {
     expect(find.text('Мої магазини'), findsOneWidget);
     expect(find.text('Огляд'), findsOneWidget);
     expect(find.text('РОБОЧА ОБЛАСТЬ'), findsOneWidget);
-    expect(find.text('Обліковий запис Marko'), findsOneWidget);
+    expect(find.text('owner@example.test'), findsOneWidget);
     expect(find.text('Українська'), findsOneWidget);
     expect(find.text('Рекомендацій поки немає'), findsOneWidget);
 
@@ -161,6 +167,7 @@ Widget _testApp() {
       ),
       catalogControllerProvider.overrideWith(_TestCatalogController.new),
       storesControllerProvider.overrideWith(_TestStoresController.new),
+      systemStatusProvider.overrideWith((ref) async => SystemHealth.active),
     ],
     child: Consumer(
       builder: (context, ref, _) {
@@ -179,7 +186,19 @@ Widget _testApp() {
 
 class _TestAuthController extends AuthController {
   @override
-  Future<MarkoAuthState> build() async => MarkoAuthState.initial;
+  Future<MarkoAuthState> build() async => const MarkoAuthState(
+    user: AuthUser(
+      id: 'user-1',
+      email: 'owner@example.test',
+      displayName: 'Owner',
+      avatarUrl: null,
+      workspaceId: 'workspace-1',
+      workspaceRole: 'owner',
+    ),
+    busy: false,
+    error: null,
+    notice: null,
+  );
 }
 
 class _TestRecommendationsController extends RecommendationsController {

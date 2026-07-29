@@ -17,6 +17,13 @@ bool isSupportedPromStoreUrl(String rawUrl) {
 }
 
 class StoresController extends AsyncNotifier<StoresState> {
+  StoresController({
+    this.pollBaseDelay = const Duration(seconds: 2),
+    this.maxConsecutivePollFailures = 5,
+  });
+
+  final Duration pollBaseDelay;
+  final int maxConsecutivePollFailures;
   int _pollGeneration = 0;
 
   StoresApi get _api => ref.read(storesApiProvider);
@@ -87,6 +94,14 @@ class StoresController extends AsyncNotifier<StoresState> {
     state = AsyncData(_current.copyWith(clearError: true));
   }
 
+  void retryMonitoring() {
+    final sync = _current.activeSync;
+    if (sync == null) return;
+    state = AsyncData(_current.copyWith(clearJob: true, clearError: true));
+    final generation = ++_pollGeneration;
+    unawaited(_followSync(sync, generation));
+  }
+
   Future<bool> _startSync(Future<StoreSync> Function() request) async {
     state = AsyncData(_current.copyWith(isSubmitting: true, clearError: true));
     try {
@@ -110,20 +125,58 @@ class StoresController extends AsyncNotifier<StoresState> {
   }
 
   Future<void> _followSync(StoreSync sync, int generation) async {
+    var consecutiveFailures = 0;
     while (generation == _pollGeneration) {
+      var delay = pollBaseDelay;
       try {
         final job = await _api.getJob(sync.syncRunId);
         if (generation != _pollGeneration) return;
+        consecutiveFailures = 0;
         state = AsyncData(_current.copyWith(activeJob: job, clearError: true));
         if (job.isFinished) {
           await refresh();
           return;
         }
       } catch (error) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= maxConsecutivePollFailures) {
+          const message =
+              'Не удалось получить статус синхронизации после нескольких попыток. '
+              'Проверьте соединение и повторите отслеживание.';
+          state = AsyncData(
+            _current.copyWith(
+              activeJob: const SyncRun(
+                status: 'monitoring_failed',
+                progressCurrent: 0,
+                progressTotal: null,
+                error: message,
+              ),
+              error: message,
+            ),
+          );
+          return;
+        }
         state = AsyncData(_current.copyWith(error: error.toString()));
+        delay = _pollFailureDelay(consecutiveFailures);
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
+      await Future<void>.delayed(delay);
     }
+  }
+
+  Duration _pollFailureDelay(int consecutiveFailures) {
+    if (pollBaseDelay == Duration.zero) return Duration.zero;
+    final exponent = consecutiveFailures <= 1
+        ? 0
+        : consecutiveFailures >= 5
+        ? 4
+        : consecutiveFailures - 1;
+    final milliseconds = pollBaseDelay.inMilliseconds * (1 << exponent);
+    final bounded = milliseconds < 1
+        ? 1
+        : milliseconds > 30000
+        ? 30000
+        : milliseconds;
+    return Duration(milliseconds: bounded);
   }
 }
 

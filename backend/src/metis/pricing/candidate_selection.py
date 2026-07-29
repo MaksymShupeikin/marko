@@ -1,8 +1,19 @@
 """Deterministic early-exit gates for Prom discovery candidates.
 
-This module classifies discovery records only. A ``COMPARABLE`` verdict means
-that the configured rule chain did not find a contradiction; it does not turn
-the record into pricing evidence or bypass Metis comparability/provenance gates.
+The chain answers two independent questions and keeps them apart.
+
+*Is this the same part?*  Identity gates run first and end in ``REJECTED``.
+A rejected candidate is wrong, not merely unusable, so it is never shown.
+
+*Is this the same level of quality?*  Comparability gates run second and end in
+``REFERENCE_ONLY``.  Such a candidate is the same part at an unknown or
+unconvertible level: its price cannot enter the calculation, but the customer
+still sees it and can check it by eye.  Only a candidate that clears both
+phases becomes ``PRICING_EVIDENCE``.
+
+Merging the two questions is what produced runs with nothing to show: an
+unapproved brand dictionary made every tier ``UNKNOWN``, and a fail-closed
+policy then suppressed the entire result set.
 """
 
 from __future__ import annotations
@@ -25,7 +36,10 @@ from .types import ProductTier
 
 
 CANDIDATE_SELECTION_SCHEMA_VERSION = "metis-deterministic-candidate-selection-v1"
-CANDIDATE_GATE_ORDER = (
+
+#: Identity gates.  Ordered cheapest-first; every one of them can only end in
+#: ``REJECTED``, because each proves the candidate is a different product.
+CANDIDATE_IDENTITY_GATES = (
     "own_seller",
     "dismantler_seller",
     # Cheap integer comparison with high selectivity against text collisions,
@@ -38,9 +52,22 @@ CANDIDATE_GATE_ORDER = (
     "variant",
     "package",
     "applicability",
-    "tier",
+)
+
+#: Comparability gates.  They decide how a candidate is *used*, never whether
+#: it is shown, so their terminal outcome is ``REFERENCE_ONLY``.  The single
+#: exception is ``tier_classification``, which rejects a listing the tier model
+#: proves to be second-hand — that is an identity fact reached late because it
+#: needs the classifier.
+CANDIDATE_COMPARABILITY_GATES = (
+    "tier_classification",
+    "own_brand",
+    "tier_known",
+    "premium_calibration",
     "price_anomaly",
 )
+
+CANDIDATE_GATE_ORDER = CANDIDATE_IDENTITY_GATES + CANDIDATE_COMPARABILITY_GATES
 
 
 class CandidateSelectionConfigError(ValueError):
@@ -48,9 +75,15 @@ class CandidateSelectionConfigError(ValueError):
 
 
 class CandidateStatus(StrEnum):
-    COMPARABLE = "COMPARABLE"
-    REVIEW = "REVIEW"
-    SKIP = "SKIP"
+    """What a candidate may be used for, not how confident the chain feels."""
+
+    #: Same part, level known, level convertible: enters the fair-price basis.
+    PRICING_EVIDENCE = "PRICING_EVIDENCE"
+    #: Same part, level unknown or unconvertible: shown to the customer with a
+    #: link, deliberately excluded from the calculation.
+    REFERENCE_ONLY = "REFERENCE_ONLY"
+    #: Proven to be a different product, second-hand, or our own listing.
+    REJECTED = "REJECTED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,11 +219,14 @@ class CandidateVerdict:
 
     @property
     def histogram_key(self) -> str:
-        if self.status is CandidateStatus.COMPARABLE:
-            return "COMPARABLE"
-        if self.status is CandidateStatus.REVIEW:
-            return f"{self.reason} (REVIEW)"
-        return self.reason
+        """Group verdicts by outcome and cause in one human-readable key.
+
+        The status is always part of the key, including for
+        ``PRICING_EVIDENCE``: a histogram that hides the successful bucket
+        behind a bare reason code is unreadable next to the other two.
+        """
+
+        return f"{self.status.value}:{self.reason}"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -384,8 +420,16 @@ def check_candidate(
     confirmed_cross_oems: frozenset[str] | set[str] = frozenset(),
     brand_tiers: Mapping[str, ProductTier] | None = None,
     category_context: CategoryDomainContext | None = None,
+    calibrated_premiums: Mapping[tuple[str, ProductTier], Decimal] | None = None,
 ) -> CandidateVerdict:
-    """Run cheap-to-expensive gates and stop at the first terminal result."""
+    """Run cheap-to-expensive gates and stop at the first terminal result.
+
+    ``calibrated_premiums`` carries the validated ``(category, tier)``
+    coefficients produced by calibration.  It defaults to empty, which is the
+    honest state of a workspace that has not calibrated yet: every candidate at
+    a level other than ours becomes ``REFERENCE_ONLY`` instead of silently
+    entering the price basis at an unconverted price.
+    """
 
     effective_owned = frozenset(owned_seller_ids) | config.own_seller_ids
     cross_oems = frozenset(norm_oem(value) for value in confirmed_cross_oems)
@@ -444,12 +488,27 @@ def check_candidate(
             lambda: _gate_applicability(our_item, candidate, config),
         ),
         (
-            "tier",
-            lambda: _gate_tier(
+            "tier_classification",
+            lambda: _gate_tier_classification(
                 our_item,
                 candidate,
-                config,
                 brand_tiers=brand_tiers,
+            ),
+        ),
+        (
+            "own_brand",
+            lambda: _gate_own_brand(candidate, config, tier=predicted_tier),
+        ),
+        (
+            "tier_known",
+            lambda: _gate_tier_known(predicted_tier),
+        ),
+        (
+            "premium_calibration",
+            lambda: _gate_premium_calibration(
+                our_item,
+                tier=predicted_tier,
+                calibrated_premiums=calibrated_premiums,
             ),
         ),
         (
@@ -497,7 +556,7 @@ def check_candidate(
         passed.append(gate_name)
 
     return CandidateVerdict(
-        status=CandidateStatus.COMPARABLE,
+        status=CandidateStatus.PRICING_EVIDENCE,
         reason="OK",
         passed_gates=tuple(passed),
         flags=tuple(flags),
@@ -529,7 +588,7 @@ def _gate_own_seller(
 ) -> _GateResult:
     owned = candidate.seller_id.strip() in owned_seller_ids
     return _GateResult(
-        action=CandidateStatus.SKIP if owned else None,
+        action=CandidateStatus.REJECTED if owned else None,
         reason="OWN_SELLER" if owned else None,
         details={"seller_id": candidate.seller_id, "owned": owned},
     )
@@ -542,7 +601,7 @@ def _gate_dismantler(
     seller = norm_text(candidate.seller_name)
     matched = _matched_markers(seller, config.dismantler_markers)
     return _GateResult(
-        action=CandidateStatus.SKIP if matched else None,
+        action=CandidateStatus.REJECTED if matched else None,
         reason="DISMANTLER_SELLER" if matched else None,
         details={"matched_markers": matched},
     )
@@ -620,7 +679,7 @@ def _gate_category_domain(
         details["mode"] = "BLOCKLIST"
         details["matched_ancestor"] = list(blocked)
         return _GateResult(
-            action=CandidateStatus.SKIP,
+            action=CandidateStatus.REJECTED,
             reason="CATEGORY_NOT_AUTOPARTS",
             details=details,
         )
@@ -630,7 +689,7 @@ def _gate_category_domain(
         details["mode"] = "ALLOWLIST"
         if allowed is None:
             return _GateResult(
-                action=CandidateStatus.SKIP,
+                action=CandidateStatus.REJECTED,
                 reason="CATEGORY_NOT_AUTOPARTS",
                 details=details,
             )
@@ -645,7 +704,7 @@ def _gate_category_domain(
         details["candidate_prefix"] = list(prefix)
         if prefix != context.mode_prefix:
             return _GateResult(
-                action=CandidateStatus.SKIP,
+                action=CandidateStatus.REJECTED,
                 reason="CATEGORY_OUTLIER_MAJORITY_VOTE",
                 details=details,
             )
@@ -663,13 +722,13 @@ def _gate_condition(
     new = _matched_markers(search_field, config.new_markers)
     if used and new:
         return _GateResult(
-            action=CandidateStatus.REVIEW,
+            action=CandidateStatus.REFERENCE_ONLY,
             reason="CONDITION_CONFLICT",
             details={"used_markers": used, "new_markers": new},
         )
     if used:
         return _GateResult(
-            action=CandidateStatus.SKIP,
+            action=CandidateStatus.REJECTED,
             reason="USED",
             details={"used_markers": used, "new_markers": new},
         )
@@ -682,7 +741,7 @@ def _gate_remanufactured(
 ) -> _GateResult:
     matched = _matched_markers(search_field, config.remanufactured_markers)
     return _GateResult(
-        action=CandidateStatus.SKIP if matched else None,
+        action=CandidateStatus.REJECTED if matched else None,
         reason="REMANUFACTURED" if matched else None,
         details={"matched_markers": matched},
     )
@@ -708,7 +767,7 @@ def _gate_oem_identity(
         evidence = "CROSS_TABLE"
     if evidence is None:
         return _GateResult(
-            action=CandidateStatus.SKIP,
+            action=CandidateStatus.REJECTED,
             reason="OEM_NOT_FOUND",
             details={
                 "expected_oem": expected,
@@ -764,7 +823,7 @@ def _gate_variant(
         if len(our_values) == 1 and len(candidate_values) == 1:
             if our_values != candidate_values:
                 return _GateResult(
-                    action=CandidateStatus.SKIP,
+                    action=CandidateStatus.REJECTED,
                     reason=f"VARIANT_MISMATCH:{axis}",
                     details=details,
                 )
@@ -787,7 +846,7 @@ def _gate_package(
     )
     mismatch = bool(our_markers) != bool(candidate_markers)
     return _GateResult(
-        action=CandidateStatus.SKIP if mismatch else None,
+        action=CandidateStatus.REJECTED if mismatch else None,
         reason="PACK_MISMATCH" if mismatch else None,
         details={
             "reference_is_pack": bool(our_markers),
@@ -815,7 +874,7 @@ def _gate_applicability(
         and reference.brands.isdisjoint(current.brands)
     ):
         return _GateResult(
-            action=CandidateStatus.SKIP,
+            action=CandidateStatus.REJECTED,
             reason="BRAND_MISMATCH",
             details=details,
         )
@@ -834,7 +893,7 @@ def _gate_applicability(
             if _years_overlap(reference.years, current.years):
                 return _GateResult(flag="YEARS_PARTIAL", details=details)
             return _GateResult(
-                action=CandidateStatus.SKIP,
+                action=CandidateStatus.REJECTED,
                 reason="APPLICABILITY_MISMATCH",
                 details=details,
             )
@@ -854,19 +913,25 @@ def _gate_applicability(
         details["shared_platform"] = platform
         return _GateResult(flag="SAME_PLATFORM", details=details)
     return _GateResult(
-        action=CandidateStatus.SKIP,
+        action=CandidateStatus.REJECTED,
         reason="APPLICABILITY_MISMATCH",
         details=details,
     )
 
 
-def _gate_tier(
+def _gate_tier_classification(
     our_item: ReferenceItem,
     candidate: CandidateItem,
-    config: CandidateSelectionConfig,
     *,
     brand_tiers: Mapping[str, ProductTier] | None,
 ) -> _GateResult:
+    """Classify the candidate's level and reject only proven second-hand goods.
+
+    This gate never stops a listing for an *unknown* level.  Not knowing the
+    level is a limit of our brand dictionary, not a property of the listing,
+    and the customer is entitled to see it either way.
+    """
+
     classification = classify_tier(
         brand=candidate.brand,
         title=candidate.title,
@@ -874,51 +939,118 @@ def _gate_tier(
         condition=candidate.condition,
         brand_tiers=brand_tiers,
     )
+    reference_tier = our_item.tier
+    if reference_tier is None:
+        reference_tier = classify_tier(
+            brand=our_item.brand,
+            title=our_item.title,
+            brand_tiers=brand_tiers,
+        ).tier
     details = {
         "tier": classification.tier.value,
         "confidence": str(classification.confidence),
         "reasons": list(classification.reasons),
+        "reference_tier": reference_tier.value,
     }
-    if classification.tier is ProductTier.UNKNOWN:
-        return _GateResult(
-            action=CandidateStatus.REVIEW,
-            reason="TIER_UNKNOWN",
-            details=details,
-            predicted_tier=classification.tier,
-            tier_confidence=classification.confidence,
-        )
     if classification.tier is ProductTier.USED:
         return _GateResult(
-            action=CandidateStatus.SKIP,
+            action=CandidateStatus.REJECTED,
             reason="USED_BY_TIER",
             details=details,
             predicted_tier=classification.tier,
             tier_confidence=classification.confidence,
         )
-    our_tier = our_item.tier
-    if our_tier is None:
-        our_tier = classify_tier(
-            brand=our_item.brand,
-            title=our_item.title,
-            brand_tiers=brand_tiers,
-        ).tier
-    same_kemp_network = (
-        classification.tier is not ProductTier.UNKNOWN
-        and classification.tier is our_tier
-        and candidate.seller_id in config.kemp_network_seller_ids
-    )
-    if same_kemp_network:
-        return _GateResult(
-            action=CandidateStatus.SKIP,
-            reason="SAME_BRAND_KEMP",
-            details={**details, "reference_tier": our_tier.value},
-            predicted_tier=classification.tier,
-            tier_confidence=classification.confidence,
-        )
     return _GateResult(
-        details={**details, "reference_tier": our_tier.value},
+        details=details,
         predicted_tier=classification.tier,
         tier_confidence=classification.confidence,
+    )
+
+
+def _gate_own_brand(
+    candidate: CandidateItem,
+    config: CandidateSelectionConfig,
+    *,
+    tier: ProductTier,
+) -> _GateResult:
+    """Hold back our own brand from the target basis, but keep it visible.
+
+    Another shop reselling our own brand prices our product, not the market we
+    price against, so its price must not move ours.  It is still shown, and it
+    remains available to premium calibration as the KEMP anchor — those are two
+    different sets and the calibration path reads its own.
+    """
+
+    by_tier = tier is ProductTier.KEMP
+    by_seller = candidate.seller_id in config.kemp_network_seller_ids
+    if not (by_tier or by_seller):
+        return _GateResult(details={"is_own_brand": False})
+    return _GateResult(
+        action=CandidateStatus.REFERENCE_ONLY,
+        reason="OWN_BRAND",
+        details={
+            "is_own_brand": True,
+            "matched_by": "TIER" if by_tier else "SELLER_NETWORK",
+            "tier": tier.value,
+        },
+    )
+
+
+def _gate_tier_known(tier: ProductTier) -> _GateResult:
+    if tier is ProductTier.UNKNOWN:
+        return _GateResult(
+            action=CandidateStatus.REFERENCE_ONLY,
+            reason="TIER_UNKNOWN",
+            details={"tier": tier.value},
+        )
+    return _GateResult(details={"tier": tier.value})
+
+
+def _gate_premium_calibration(
+    our_item: ReferenceItem,
+    *,
+    tier: ProductTier,
+    calibrated_premiums: Mapping[tuple[str, ProductTier], Decimal] | None,
+) -> _GateResult:
+    """Require a validated coefficient before a price may be converted.
+
+    Without one there is no defensible way to express a competitor's price at
+    our own level, and comparing raw prices across levels is exactly the error
+    that would recommend raising a budget part to the price of an original.
+    A candidate at our own level needs no coefficient: the ratio is one by
+    construction.
+    """
+
+    category = (our_item.category or "").strip().casefold()
+    reference_tier = our_item.tier
+    if reference_tier is not None and reference_tier is tier:
+        return _GateResult(
+            details={
+                "premium": "1",
+                "source": "SAME_TIER_IDENTITY",
+                "category": category,
+                "tier": tier.value,
+            }
+        )
+    premium = (calibrated_premiums or {}).get((category, tier))
+    if premium is None or premium <= 0 or not premium.is_finite():
+        return _GateResult(
+            action=CandidateStatus.REFERENCE_ONLY,
+            reason="PREMIUM_NOT_CALIBRATED",
+            details={
+                "premium": None if premium is None else str(premium),
+                "source": "VALIDATED_COEFFICIENT_MISSING",
+                "category": category,
+                "tier": tier.value,
+            },
+        )
+    return _GateResult(
+        details={
+            "premium": str(premium),
+            "source": "VALIDATED_COEFFICIENT",
+            "category": category,
+            "tier": tier.value,
+        }
     )
 
 
@@ -1277,7 +1409,9 @@ def _tier_premiums(
 
 
 __all__ = [
+    "CANDIDATE_COMPARABILITY_GATES",
     "CANDIDATE_GATE_ORDER",
+    "CANDIDATE_IDENTITY_GATES",
     "CANDIDATE_SELECTION_SCHEMA_VERSION",
     "CandidateItem",
     "CandidateSelectionConfig",

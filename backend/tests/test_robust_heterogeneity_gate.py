@@ -6,6 +6,7 @@ from dataclasses import replace
 from decimal import Decimal
 import random
 
+from metis.pricing.raise_policy import default_raise_policy
 from metis.pricing import (
     CoefficientModel,
     CompetitorOffer,
@@ -298,11 +299,18 @@ def test_r018_non_finite_zero_negative_are_hard_rejected() -> None:
 
 
 def test_r019_baseline_abstention_cannot_be_relaxed() -> None:
+    # The raise-policy confidence gate would abstain on this deliberately
+    # bimodal cohort before the non-relaxation rule is ever consulted, which
+    # would make the test pass for the wrong reason.  Widening that one
+    # threshold keeps the original path under test.
     permissive_candidate = replace(
         V31,
         robust_disagreement_threshold=Decimal("1000"),
         robust_cluster_improvement_threshold=Decimal("1"),
         sensitivity_tolerance=Decimal("1"),
+        raise_policy=replace(
+            default_raise_policy(), medium_max_robust_cv=Decimal("100")
+        ),
     )
     result = recommend_price(
         _context(),

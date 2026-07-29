@@ -143,9 +143,36 @@ class HttpClient:
                         trace.finish_success(request_trace, response)
                     return response
                 if not self._is_retryable_status(response.status_code):
+                    try:
+                        self._consume_bounded_response(response)
+                    except UnsafeResponse as error:
+                        if trace is not None and request_trace is not None:
+                            trace.record_attempt(
+                                request_trace,
+                                attempt_no=attempt,
+                                outcome="terminal_failure",
+                                status_code=response.status_code,
+                                latency_ms=round(
+                                    (time.perf_counter() - attempt_started) * 1000
+                                ),
+                                local_rate_wait_ms=local_wait_ms,
+                                global_rate_wait_ms=global_wait_ms,
+                                error_category="unsafe_response",
+                                error_detail=str(error),
+                            )
+                            trace.finish_failure(
+                                request_trace,
+                                outcome="terminal_failure",
+                                error_category="unsafe_response",
+                                error_detail=str(error),
+                                status_code=response.status_code,
+                            )
+                        raise
                     error = RequestFailed(
                         f"HTTP {response.status_code} для {response.url}",
                         status_code=response.status_code,
+                        request_url=response.url,
+                        redirect_location=response.headers.get("Location"),
                     )
                     error_category = (
                         "upstream_3xx"
@@ -166,12 +193,12 @@ class HttpClient:
                             error_category=error_category,
                             error_detail=str(error),
                         )
-                        trace.finish_failure(
+                        trace.finish_response_failure(
                             request_trace,
+                            response,
                             outcome="terminal_failure",
                             error_category=error_category,
                             error_detail=str(error),
-                            status_code=response.status_code,
                         )
                     raise error
                 last_error = RequestFailed(

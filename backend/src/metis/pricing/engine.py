@@ -13,6 +13,11 @@ from .comparability import (
     ComparabilityDecision,
     evaluate_comparison_evidence,
 )
+from .raise_policy import (
+    RaiseOutcome,
+    decide_raise,
+    default_raise_policy,
+)
 from .statistics import (
     clamp01,
     effective_sample_size,
@@ -24,7 +29,6 @@ from .statistics import (
     median,
     percentile,
     robust_price_dispersion,
-    round_down_to_tick,
     round_to_tick,
     winsorize,
 )
@@ -527,7 +531,10 @@ def _recommend_price_core(
         )
         return _enforce_invariants(result, context)
 
-    if context.stock_status in {StockStatus.STALE, StockStatus.DEAD_STOCK}:
+    # Only genuine dead stock is liquidated.  A slow mover is still selling, so
+    # it goes through the raise path, where its own guard applies: it is pushed
+    # up only while it is the cheapest offer on the market.
+    if context.stock_status is StockStatus.DEAD_STOCK:
         action, recommended, mode_reasons, cost_floor = _clearance_recommendation(
             context, prices, policy
         )
@@ -920,38 +927,26 @@ def _raise_recommendation(
     cleaned_offers: list[NormalizedOffer],
     policy: PricingPolicy,
 ) -> tuple[RecommendationAction, Decimal | None, tuple[str, ...]]:
-    del cleaned_offers
-    raise_threshold = context.current_price * (ONE + policy.min_raise_threshold)
-    lower_threshold = context.current_price * (ONE - policy.min_lower_threshold)
-    if fair_price >= raise_threshold:
-        targets = [
-            fair_price * policy.safety_discount,
-            context.current_price * (ONE + policy.max_raise_step),
-        ]
-        if policy.lower_market_support_enabled:
-            targets.append(lower_bound)
-        recommended = round_down_to_tick(min(targets), policy.price_tick)
-        if recommended < context.current_price * (ONE + policy.min_action_change):
-            return (
-                RecommendationAction.HOLD,
-                None,
-                ("CONSERVATIVE_TARGET_NOT_ACTIONABLE",),
-            )
-        return RecommendationAction.RAISE, recommended, ("MARKET_SUPPORTS_RAISE",)
-    if fair_price <= lower_threshold:
-        recommended = round_to_tick(fair_price, policy.price_tick)
-        if recommended > context.current_price * (ONE - policy.min_action_change):
-            return (
-                RecommendationAction.HOLD,
-                None,
-                ("MARKET_CHANGE_BELOW_ACTION_THRESHOLD",),
-            )
-        return (
-            RecommendationAction.LOWER,
-            recommended,
-            ("FRESH_MARKET_SUPPORTS_LOWER",),
-        )
-    return RecommendationAction.HOLD, None, ("MARKET_WITHIN_ACTION_BAND",)
+    """Propose a higher price, or stay silent.
+
+    Anything still selling is never advised downwards: the tool exists to show
+    where money is being left on the table, and a wrong cut costs margin on
+    every unit sold.  Silence is the safe failure.
+    """
+
+    del fair_price, lower_bound
+    decision = decide_raise(
+        current_price=context.current_price,
+        prices=[offer.normalized_price for offer in cleaned_offers],
+        stock_status=context.stock_status,
+        policy=policy.raise_policy or default_raise_policy(),
+    )
+    reasons = decision.reasons + decision.flags
+    if decision.outcome is RaiseOutcome.RAISE:
+        return RecommendationAction.RAISE, decision.recommended_price, reasons
+    if decision.outcome is RaiseOutcome.SHOW_BUT_FLAG:
+        return RecommendationAction.MANUAL_REVIEW, None, reasons
+    return RecommendationAction.HOLD, None, reasons
 
 
 def _clearance_recommendation(

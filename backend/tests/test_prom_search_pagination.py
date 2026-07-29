@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import pytest
 
 import marko.parsers.prom.gateway as gateway_module
@@ -21,7 +23,16 @@ class _PageClient:
         page_number = int(params.get("page", 1))
         self.requested_pages.append(page_number)
         if self._fail_from is not None and page_number >= self._fail_from:
-            raise RequestFailed(f"HTTP {self._status}", status_code=self._status)
+            request_url = f"{_url}?{urlencode(params)}"
+            canonical_params = {
+                key: value for key, value in params.items() if key != "page"
+            }
+            raise RequestFailed(
+                f"HTTP {self._status}",
+                status_code=self._status,
+                request_url=request_url,
+                redirect_location=f"{_url}?{urlencode(canonical_params)}",
+            )
         return str(page_number)
 
 
@@ -216,22 +227,41 @@ def test_request_failed_without_a_status_code_is_not_a_pagination_end() -> None:
     assert gateway_module._is_pagination_end(RequestFailed("boom"), 5) is False
 
 
+def test_seller_catalog_last_page_redirect_is_a_pagination_end() -> None:
+    error = RequestFailed(
+        "HTTP 301",
+        status_code=301,
+        request_url="https://prom.ua/ua/c2847093-kemp.html?page=346",
+        redirect_location="/ua/c2847093-kemp.html",
+    )
+
+    assert gateway_module._is_pagination_end(error, 346) is True
+
+
 @pytest.mark.parametrize(
-    ("status", "page_num", "expected"),
+    ("status", "page_num", "location", "expected"),
     [
-        (301, 2, True),
-        (302, 9, True),
-        (399, 2, True),
-        (301, 1, False),
-        (400, 2, False),
-        (299, 2, False),
+        (301, 2, "/ua/search?search_term=OE", True),
+        (302, 9, "/ua/search?search_term=OE", False),
+        (308, 2, "/ua/search?search_term=OE", False),
+        (301, 1, "/ua/search?search_term=OE", False),
+        (301, 2, "/ua/search?search_term=OTHER", False),
+        (301, 2, "https://evil.example/challenge", False),
+        (301, 2, None, False),
+        (400, 2, "/ua/search?search_term=OE", False),
     ],
 )
 def test_pagination_end_boundaries(
     status: int,
     page_num: int,
+    location: str | None,
     expected: bool,
 ) -> None:
-    error = RequestFailed(f"HTTP {status}", status_code=status)
+    error = RequestFailed(
+        f"HTTP {status}",
+        status_code=status,
+        request_url=f"https://prom.ua/ua/search?search_term=OE&page={page_num}",
+        redirect_location=location,
+    )
 
     assert gateway_module._is_pagination_end(error, page_num) is expected

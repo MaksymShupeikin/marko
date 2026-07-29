@@ -22,7 +22,9 @@ void main() {
         ],
         child: MaterialApp(
           theme: AppTheme.light,
-          home: const Scaffold(body: StoresPage(ownedOnly: true)),
+          home: const Scaffold(
+            body: StoresPage(ownedOnly: true, canAdministerWorkspace: true),
+          ),
         ),
       ),
     );
@@ -35,6 +37,38 @@ void main() {
     expect(find.text('profparts'), findsNothing);
 
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('member sees stores but not administrative controls', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storesControllerProvider.overrideWith(_TestStoresController.new),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.light,
+          home: const Scaffold(body: StoresPage(ownedOnly: true)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('KEMP'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'Подключение, синхронизация и удаление магазинов доступны',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Подключить магазин'), findsNothing);
+    expect(find.byTooltip('Удалить магазин'), findsNothing);
   });
 }
 

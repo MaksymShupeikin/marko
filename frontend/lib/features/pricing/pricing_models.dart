@@ -1,3 +1,5 @@
+import '../../core/presentation_formatters.dart';
+
 double? _decimal(dynamic value) =>
     value == null ? null : double.tryParse(value.toString());
 
@@ -58,12 +60,14 @@ class PricingRecommendation {
     required this.calibrationDatasetHash,
     required this.currency,
     required this.priceTick,
+    required this.priceTickScale,
     required this.priceTickVersion,
     required this.computedAt,
   });
 
   factory PricingRecommendation.fromJson(Map<String, dynamic> json) {
     final rawFactors = json['factor_scores'] as Map<String, dynamic>? ?? {};
+    final rawPriceTick = json['price_tick'];
     return PricingRecommendation(
       id: json['id'] as String,
       runId: json['pricing_run_id'] as String,
@@ -144,7 +148,8 @@ class PricingRecommendation {
       coefficientVersion: json['coefficient_version']?.toString(),
       calibrationDatasetHash: json['calibration_dataset_hash']?.toString(),
       currency: json['currency']?.toString() ?? 'UAH',
-      priceTick: _decimal(json['price_tick']) ?? 1,
+      priceTick: _decimal(rawPriceTick) ?? 1,
+      priceTickScale: decimalScale(rawPriceTick, fallback: 0),
       priceTickVersion: json['price_tick_version']?.toString() ?? 'legacy',
       computedAt: DateTime.parse(json['computed_at'] as String),
     );
@@ -205,6 +210,7 @@ class PricingRecommendation {
   final String? calibrationDatasetHash;
   final String currency;
   final double priceTick;
+  final int priceTickScale;
   final String priceTickVersion;
   final DateTime computedAt;
 
@@ -227,9 +233,9 @@ class PricingRecommendation {
 
   String get priorityLabel => switch (priorityScoreType) {
     'gross_uplift_opportunity' =>
-      '${priorityScore.toStringAsFixed(0)} ₴/мес. с учётом confidence',
+      '${formatMoney(priorityScore, currency: currency, priceTick: priceTick, fractionDigits: priceTickScale)}/мес. с учётом confidence',
     'clearance_priority' =>
-      '${priorityScore.toStringAsFixed(0)} ₴ замороженного капитала',
+      '${formatMoney(priorityScore, currency: currency, priceTick: priceTick, fractionDigits: priceTickScale)} замороженного капитала',
     'retail_exposure_proxy' =>
       '${priorityScore.toStringAsFixed(2)} · stock exposure proxy',
     'gap_confidence_proxy' =>
@@ -248,7 +254,12 @@ class PricingRecommendation {
 
   String get reasonSummary {
     if (reasonCodes.isEmpty) return 'Расчёт завершён';
-    return reasonCodes.map(reasonLabel).take(2).join(' · ');
+    return summarizeLimited(
+      reasonCodes.map(reasonLabel),
+      limit: 2,
+      separator: ' · ',
+      overflowLabel: (hidden) => 'и ещё $hidden',
+    );
   }
 
   static String reasonLabel(String code) => switch (code) {
@@ -259,7 +270,7 @@ class PricingRecommendation {
     'TOO_FEW_COMPETITORS_FOR_ACTION' => 'мало валидных конкурентов',
     'LOW_CONFIDENCE' => 'низкая уверенность',
     'LOW_COVERAGE' => 'мало данных',
-    'LOW_DISPERSION' => 'слишком большой разброс цен',
+    'LOW_DISPERSION' => 'слишком низкий разброс цен',
     'HIGH_DISPERSION' => 'слишком большой разброс цен',
     'LOW_FRESHNESS' => 'данные устарели',
     'LOW_MATCH' => 'слабое совпадение товаров',
@@ -409,7 +420,7 @@ class RecommendationEvidence {
       currencyRaw: json['currency_raw']?.toString(),
       currencyInferred: json['currency_inferred'] as bool? ?? false,
       matchConfidence: _decimal(json['match_confidence']) ?? 0,
-      sourceConfidence: _decimal(json['source_confidence']) ?? 1,
+      sourceConfidence: _decimal(json['source_confidence']),
       ageHours: _decimal(json['age_hours']),
       tier: json['tier'] as String,
       tierConfidence: _decimal(json['tier_confidence']) ?? 0,
@@ -445,7 +456,7 @@ class RecommendationEvidence {
   final String? currencyRaw;
   final bool currencyInferred;
   final double matchConfidence;
-  final double sourceConfidence;
+  final double? sourceConfidence;
   final double? ageHours;
   final String tier;
   final double tierConfidence;

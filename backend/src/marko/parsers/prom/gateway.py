@@ -7,7 +7,11 @@ import re
 from typing import Any, Iterator
 
 from .config import BASE_URL, ScrapeConfig
-from .exceptions import ParseError, RequestFailed
+from .exceptions import (
+    ParseError,
+    RequestFailed,
+    is_canonical_pagination_redirect,
+)
 from marko.services.matching import (
     ComparisonParams,
     PriceComparison,
@@ -39,7 +43,12 @@ def _is_pagination_end(exc: RequestFailed, page_num: int) -> bool:
     or blocked endpoint must still surface as an error.
     """
 
-    return page_num > 1 and exc.is_redirect
+    return is_canonical_pagination_redirect(
+        status_code=exc.status_code,
+        request_url=exc.request_url,
+        redirect_location=exc.redirect_location,
+        page_num=page_num,
+    )
 
 
 class PromGateway:

@@ -530,20 +530,34 @@ def test_competitor_url_is_preserved_only_for_openable_http_protocols() -> None:
     assert _validated_listing_url(None) == ("", "SOURCE_URL_NOT_AVAILABLE")
 
 
-def test_fresh_market_lower_case_produces_manual_lower_candidate() -> None:
+def test_fresh_item_priced_above_the_market_is_left_alone() -> None:
+    """Contract revision 2026-07-28: no downward advice for a selling item.
+
+    The customer chose the asymmetry: the tool exists to show where a price can
+    go up.  Being wrong about a cut costs margin on every unit sold, so above
+    the target the engine holds and says why.
+    """
+
     result = recommend_price(_context("1500"), _market(), _coefficients())
 
-    assert result.action == RecommendationAction.LOWER
-    assert result.recommended_price is not None
-    assert result.recommended_price < result.current_price
-    assert "FRESH_MARKET_SUPPORTS_LOWER" in result.reasons
+    assert result.action == RecommendationAction.HOLD
+    assert result.recommended_price is None
+    assert "PRICE_ALREADY_AT_OR_ABOVE_TARGET" in result.reasons
 
 
-def test_stale_age_pressure_is_monotonic_and_continuous() -> None:
+def test_dead_stock_markdown_is_saturated_and_does_not_depend_on_age() -> None:
+    """Dead stock is liquidated at full pressure from day one.
+
+    ``dead_stock_markdown_beta`` is 1, so age cannot deepen a markdown that is
+    already at the market floor.  The age ramp it replaced belonged to the
+    stale path, which contract revision 2026-07-28 removed: a slow mover is no
+    longer marked down at all, so that ramp now has no reachable caller.
+    """
+
     younger = recommend_price(
         _context(
             "1500",
-            stock_status=StockStatus.STALE,
+            stock_status=StockStatus.DEAD_STOCK,
             stock_age_days=Decimal("365"),
         ),
         _market(),
@@ -552,7 +566,7 @@ def test_stale_age_pressure_is_monotonic_and_continuous() -> None:
     older = recommend_price(
         _context(
             "1500",
-            stock_status=StockStatus.STALE,
+            stock_status=StockStatus.DEAD_STOCK,
             stock_age_days=Decimal("730"),
         ),
         _market(),
@@ -561,15 +575,33 @@ def test_stale_age_pressure_is_monotonic_and_continuous() -> None:
 
     assert younger.recommended_price is not None
     assert older.recommended_price is not None
-    assert older.recommended_price < younger.recommended_price
+    assert older.recommended_price == younger.recommended_price
 
 
-def test_dead_stock_target_is_not_higher_than_stale_for_same_age() -> None:
-    stale = recommend_price(
+def test_slow_mover_is_never_marked_down_by_age() -> None:
+    """A stale item above the cheapest offer gets silence, not a discount."""
+
+    aged = recommend_price(
         _context(
             "1500",
             stock_status=StockStatus.STALE,
             stock_age_days=Decimal("730"),
+        ),
+        _market(),
+        _coefficients(),
+    )
+
+    assert aged.action == RecommendationAction.HOLD
+    assert aged.recommended_price is None
+    assert "STALE_NOT_BELOW_CHEAPEST_COMPETITOR" in aged.reasons
+
+
+def test_dead_stock_target_is_not_higher_than_the_current_price() -> None:
+    stale = recommend_price(
+        _context(
+            "1500",
+            stock_status=StockStatus.DEAD_STOCK,
+            stock_age_days=Decimal("365"),
         ),
         _market(),
         _coefficients(),
@@ -618,7 +650,7 @@ def test_missing_cost_does_not_block_market_clearance_recommendation() -> None:
     result = recommend_price(
         _context(
             "1500",
-            stock_status=StockStatus.STALE,
+            stock_status=StockStatus.DEAD_STOCK,
             stock_age_days=Decimal("730"),
             cost=None,
         ),

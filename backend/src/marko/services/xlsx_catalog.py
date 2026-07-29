@@ -8,6 +8,7 @@ so leading zeroes remain intact when they are present in the workbook.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping, Sequence
 import hashlib
 import json
 import re
@@ -24,8 +25,18 @@ from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.core.config import Settings, get_settings
+from marko.core.config import Settings, backend_config_path, get_settings
 from marko.infrastructure.db.models import CatalogImportBatch, CatalogItem
+from marko.services.catalog_characteristics import (
+    HOMOGLYPH_FOLDING,
+    CharacteristicsConfig,
+    CharacteristicsExtraction,
+    characteristic_column_pairs,
+    collect_characteristics,
+    extract_characteristics,
+    load_characteristics_config,
+    normalize_characteristic_name,
+)
 from marko.services.catalog_costs import add_encrypted_cost_record
 from marko.services.cost_privacy import (
     CostPrivacyMode,
@@ -42,22 +53,9 @@ MAX_ERROR_LOG = 2_000
 _HEADER_CLEAN_RE = re.compile(r"[^a-zа-яёіїґєԁөү0-9]+", re.IGNORECASE)
 _IDENTIFIER_SPLIT_RE = re.compile(r"[,;|\n\r]+")
 _IDENTIFIER_CLEAN_RE = re.compile(r"[^A-Z0-9]+")
-_HOMOGLYPHS = str.maketrans(
-    {
-        "А": "A",
-        "В": "B",
-        "С": "C",
-        "Е": "E",
-        "Н": "H",
-        "К": "K",
-        "М": "M",
-        "О": "O",
-        "Р": "P",
-        "Т": "T",
-        "Х": "X",
-        "І": "I",
-    }
-)
+# Single source of truth with the characteristics parser, so an identifier and
+# a characteristic name never fold differently.
+_HOMOGLYPHS = HOMOGLYPH_FOLDING
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "sku": (
@@ -244,6 +242,11 @@ class ParsedCatalogRow:
     cost: Decimal | None
     manual_priority: Decimal
     raw_row: dict[str, Any]
+    part_numbers_raw: list[str]
+    part_numbers_norm: list[str]
+    applicability_brands: list[str]
+    applicability_models: list[str]
+    characteristics_raw: dict[str, list[str]]
 
 
 @dataclass(frozen=True)
@@ -253,6 +256,7 @@ class ParsedCatalog:
     column_mapping: dict[str, str]
     total_rows: int
     sensitive_costs: dict[int, Decimal]
+    characteristics_report: dict[str, Any]
 
 
 def normalize_identifier(value: Any) -> str:
@@ -268,6 +272,7 @@ def parse_catalog_xlsx(
     explicit_mapping: dict[str, str] | None = None,
     sheet_name: str | None = None,
     allow_encrypted_cost_input: bool = False,
+    characteristics_config: CharacteristicsConfig | None = None,
 ) -> ParsedCatalog:
     if not content:
         raise CatalogImportError("Файл пуст")
@@ -296,7 +301,8 @@ def parse_catalog_xlsx(
                 raise CatalogImportError(f"Лист {sheet_name!r} не найден")
             sheet = workbook[sheet_name]
         else:
-            sheet = workbook.active
+            sheet = _default_sheet(workbook)
+        sheet_title = str(sheet.title)
         iterator = sheet.iter_rows(values_only=True)
         try:
             header_values = next(iterator)
@@ -308,6 +314,14 @@ def parse_catalog_xlsx(
             )
         headers = _unique_headers(header_values)
         resolved = resolve_column_mapping(headers, explicit_mapping)
+        config = characteristics_config or load_characteristics_config(
+            backend_config_path(get_settings().catalog_characteristics_path)
+        )
+        columns = characteristic_column_pairs(headers, config)
+        recognized_names: dict[str, int] = {}
+        unrecognized_names: dict[str, int] = {}
+        anomaly_counts: dict[str, int] = {}
+        self_reference_total = 0
         cost_indexes = [
             index for index, header in enumerate(headers) if is_raw_cost_label(header)
         ]
@@ -335,6 +349,17 @@ def parse_catalog_xlsx(
                 for index, header in enumerate(headers)
                 if not is_raw_cost_label(header)
             }
+            # Characteristic names are counted for every non-empty row, even one
+            # that later fails validation: the report describes the workbook, not
+            # the subset that survived.
+            collected = collect_characteristics(values, columns.pairs)
+            for name in collected:
+                target = (
+                    recognized_names
+                    if normalize_characteristic_name(name) in config.rules_by_name
+                    else unrecognized_names
+                )
+                target[name] = target.get(name, 0) + 1
             try:
                 raw_cost = (
                     values[cost_index]
@@ -346,7 +371,18 @@ def parse_catalog_xlsx(
                     raise SensitiveCatalogImportBlocked(
                         "Себестоимость заполнена, но защищённый серверный импорт не включён"
                     )
-                parsed = _parse_row(source_row, values, resolved, raw_row)
+                parsed, extraction = _parse_row(
+                    source_row,
+                    values,
+                    resolved,
+                    raw_row,
+                    collected=collected,
+                    config=config,
+                    columns_balanced=columns.balanced,
+                )
+                for code in extraction.anomalies:
+                    anomaly_counts[code] = anomaly_counts.get(code, 0) + 1
+                self_reference_total += extraction.dropped_self_references
                 if parsed.sku in seen_skus:
                     raise CatalogImportError(f"Дублирующийся SKU: {parsed.sku}")
                 seen_skus.add(parsed.sku)
@@ -406,7 +442,62 @@ def parse_catalog_xlsx(
             for row, value in sensitive_costs.items()
             if row in accepted_source_rows
         },
+        characteristics_report={
+            "schema_version": config.schema_version,
+            "method_version": config.method_version,
+            "config_sha256": config.source_sha256,
+            "sheet": sheet_title,
+            "self_references_dropped": self_reference_total,
+            "column_pairs": len(columns.pairs),
+            "columns_balanced": columns.balanced,
+            "recognized": dict(sorted(recognized_names.items())),
+            "unrecognized": dict(sorted(unrecognized_names.items())),
+            "anomalies": dict(sorted(anomaly_counts.items())),
+            "rows_with_part_numbers": sum(1 for row in rows if row.part_numbers_norm),
+            "part_numbers_total": sum(len(row.part_numbers_norm) for row in rows),
+            "rows_with_applicability_brand": sum(
+                1 for row in rows if row.applicability_brands
+            ),
+            "rows_with_applicability_model": sum(
+                1 for row in rows if row.applicability_models
+            ),
+        },
     )
+
+
+def _default_sheet(workbook: Any) -> Any:
+    """Pick the sheet to import, refusing to guess between equal candidates.
+
+    A real Prom export was observed with three sheets where the *active* one was
+    a seventeen-row scratch sheet carrying the same headers as the real
+    forty-nine-hundred-row product sheet.  Trusting ``workbook.active`` there
+    imports 16 products out of 4901 and reports success, which is the worst
+    possible outcome: silent, plausible, and wrong.  When more than one sheet
+    could be a catalog, the caller must say which.
+    """
+
+    candidates: list[str] = []
+    for worksheet in workbook.worksheets:
+        try:
+            header_values = next(worksheet.iter_rows(values_only=True))
+        except StopIteration:
+            continue
+        if len(header_values) > MAX_COLUMNS:
+            continue
+        try:
+            resolve_column_mapping(_unique_headers(header_values))
+        except CatalogImportError:
+            continue
+        candidates.append(worksheet.title)
+    if len(candidates) > 1:
+        raise CatalogImportError(
+            "Каталог найден на нескольких листах ("
+            + ", ".join(repr(title) for title in candidates)
+            + "); укажите лист явно"
+        )
+    if candidates:
+        return workbook[candidates[0]]
+    return workbook.active
 
 
 def resolve_column_mapping(
@@ -508,6 +599,7 @@ async def import_catalog_xlsx(
         imported_rows=len(parsed.rows),
         rejected_rows=len(parsed.issues),
         error_log=[asdict(issue) for issue in parsed.issues[:MAX_ERROR_LOG]],
+        characteristics_report=parsed.characteristics_report,
         started_at=now,
     )
     session.add(batch)
@@ -630,7 +722,11 @@ def _parse_row(
     values: tuple[Any, ...],
     mapping: dict[str, int],
     raw_row: dict[str, Any],
-) -> ParsedCatalogRow:
+    *,
+    collected: Mapping[str, Sequence[str]],
+    config: CharacteristicsConfig,
+    columns_balanced: bool,
+) -> tuple[ParsedCatalogRow, CharacteristicsExtraction]:
     def get(field: str) -> Any:
         index = mapping.get(field)
         return values[index] if index is not None and index < len(values) else None
@@ -677,6 +773,14 @@ def _parse_row(
         raise CatalogImportError(
             "ссылка на товар должна начинаться с http:// или https://"
         )
+    # The row's own codes are excluded from its cross list: a number cannot be
+    # its own cross, and ``cross_links`` rejects such a pair by check constraint.
+    extraction = extract_characteristics(
+        collected,
+        config,
+        self_numbers=(oe_raw, sku, mpn_raw),
+        columns_balanced=columns_balanced,
+    )
     return ParsedCatalogRow(
         source_row=source_row,
         sku=sku,
@@ -706,7 +810,12 @@ def _parse_row(
         cost=None,
         manual_priority=priority,
         raw_row=raw_row,
-    )
+        part_numbers_raw=list(extraction.part_numbers_raw),
+        part_numbers_norm=list(extraction.part_numbers_norm),
+        applicability_brands=list(extraction.applicability_brands),
+        applicability_models=list(extraction.applicability_models),
+        characteristics_raw=dict(extraction.characteristics_raw),
+    ), extraction
 
 
 def _prom_export_mapping(headers: list[str]) -> dict[str, int]:

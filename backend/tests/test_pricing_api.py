@@ -261,7 +261,7 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["action"] == "RAISE"
-    assert body["recommended_price"] == "920"
+    assert body["recommended_price"] == "1000"
     assert body["competitor_count"] == 5
     assert body["priority_score_type"] == "gross_uplift_opportunity"
     assert body["raw_competitor_count"] == 5

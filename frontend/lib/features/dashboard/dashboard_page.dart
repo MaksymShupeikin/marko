@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../../core/system_status.dart';
 import '../../core/widgets/marko_button.dart';
 import '../../core/widgets/marko_menu.dart';
 import '../auth/auth_controller.dart';
@@ -25,6 +26,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).value?.user;
+    final canAdministerWorkspace = user?.canAdministerWorkspace ?? false;
     final language = ref.watch(appLanguageProvider);
     final destinations = <_Destination>[
       _Destination(
@@ -45,10 +47,22 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
       ),
     ];
     final content = switch (_selectedIndex) {
-      1 => CatalogPage(onOpenPriceComparison: () => _select(0)),
-      2 => const StoresPage(ownedOnly: true),
-      3 => _Overview(onOpenStores: () => _select(2)),
-      _ => RecommendationsPage(onOpenCatalog: () => _select(1)),
+      1 => CatalogPage(
+        onOpenPriceComparison: () => _select(0),
+        canAdministerWorkspace: canAdministerWorkspace,
+      ),
+      2 => StoresPage(
+        ownedOnly: true,
+        canAdministerWorkspace: canAdministerWorkspace,
+      ),
+      3 => _Overview(
+        onOpenStores: () => _select(2),
+        canAdministerWorkspace: canAdministerWorkspace,
+      ),
+      _ => RecommendationsPage(
+        onOpenCatalog: () => _select(1),
+        canAdministerWorkspace: canAdministerWorkspace,
+      ),
     };
 
     return Scaffold(
@@ -364,14 +378,39 @@ class _SidebarItem extends StatelessWidget {
   }
 }
 
-class _PageBar extends StatelessWidget {
+class _PageBar extends ConsumerWidget {
   const _PageBar({required this.title});
 
   final String title;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MarkoTheme.of(context);
+    final status = ref.watch(systemStatusProvider);
+    final (label, foreground, background) = status.when(
+      loading: () => (
+        context.localized(ru: 'Проверка системы', uk: 'Перевірка системи'),
+        colors.muted,
+        colors.surfaceMuted,
+      ),
+      error: (_, _) => (
+        context.localized(ru: 'Система недоступна', uk: 'Система недоступна'),
+        colors.negative,
+        colors.negativeSoft,
+      ),
+      data: (health) => switch (health) {
+        SystemHealth.active => (
+          context.localized(ru: 'Система активна', uk: 'Система активна'),
+          colors.positive,
+          colors.positiveSoft,
+        ),
+        SystemHealth.collectionLimited => (
+          context.localized(ru: 'Сбор ограничен', uk: 'Збір обмежено'),
+          colors.warning,
+          colors.warningSoft,
+        ),
+      },
+    );
     return Container(
       height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -386,7 +425,7 @@ class _PageBar extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: colors.positiveSoft,
+              color: background,
               borderRadius: BorderRadius.circular(7),
             ),
             child: Row(
@@ -395,19 +434,16 @@ class _PageBar extends StatelessWidget {
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: colors.positive,
+                    color: foreground,
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 7),
                 Text(
-                  context.localized(
-                    ru: 'Система активна',
-                    uk: 'Система активна',
-                  ),
+                  label,
                   style: Theme.of(
                     context,
-                  ).textTheme.labelMedium?.copyWith(color: colors.positive),
+                  ).textTheme.labelMedium?.copyWith(color: foreground),
                 ),
               ],
             ),
@@ -522,9 +558,13 @@ class _MobileNavigation extends StatelessWidget {
 }
 
 class _Overview extends ConsumerWidget {
-  const _Overview({required this.onOpenStores});
+  const _Overview({
+    required this.onOpenStores,
+    required this.canAdministerWorkspace,
+  });
 
   final VoidCallback onOpenStores;
+  final bool canAdministerWorkspace;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -581,7 +621,7 @@ class _Overview extends ConsumerWidget {
                         ru: 'Подключить магазин',
                         uk: 'Підключити магазин',
                       ),
-                      onPressed: onOpenStores,
+                      onPressed: canAdministerWorkspace ? onOpenStores : null,
                       icon: Icons.add_rounded,
                     ),
                   ],

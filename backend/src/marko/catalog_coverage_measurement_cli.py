@@ -42,7 +42,7 @@ from metis.pricing import (
 
 _COHORT_TITLES = {
     COHORT_BASELINE: "A. baseline_exact_article (сопоставимо с 2026-07-19)",
-    COHORT_IDENTITY: "B. identity_any_evidence (потолок после словаря)",
+    COHORT_IDENTITY: "B. identity_any_evidence (discovery upper bound)",
     COHORT_PLAN_S: "C. plan_s_set (§2.3, требует COMPARABLE)",
 }
 
@@ -163,7 +163,13 @@ async def _report(args: argparse.Namespace) -> int:
         print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
     else:
         print(format_coverage_report(report))
-    return 0
+    return report_exit_code(report)
+
+
+def report_exit_code(report: CoverageReport) -> int:
+    """Make an incomplete checkpoint fail automation even after emitting output."""
+
+    return 1 if report.failed_rows else 0
 
 
 def _fmt(value: object) -> str:

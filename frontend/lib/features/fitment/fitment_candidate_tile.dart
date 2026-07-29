@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_theme.dart';
+import '../../core/presentation_formatters.dart';
 import 'fitment_models.dart';
 
 typedef CandidateReviewCallback =
@@ -19,14 +20,14 @@ class FitmentCandidateTile extends StatelessWidget {
     required this.candidate,
     required this.isSubmitting,
     required this.onReview,
-    required this.onSellerReview,
+    this.onSellerReview,
     super.key,
   });
 
   final FitmentCandidate candidate;
   final bool isSubmitting;
   final CandidateReviewCallback onReview;
-  final SellerReviewCallback onSellerReview;
+  final SellerReviewCallback? onSellerReview;
 
   @override
   Widget build(BuildContext context) {
@@ -124,7 +125,7 @@ class FitmentCandidateTile extends StatelessWidget {
           Text(
             candidate.priceEligible
                 ? 'Цена допущена · W=${candidate.competitorWeight.toStringAsFixed(4)}'
-                : 'Цена не допущена: ${candidate.priceReasonCodes.take(3).join(', ')}',
+                : 'Цена не допущена: ${summarizeLimited(candidate.priceReasonCodes, limit: 3, separator: ', ', overflowLabel: (hidden) => 'и ещё $hidden')}',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: candidate.priceEligible ? colors.positive : colors.warning,
             ),
@@ -192,18 +193,20 @@ class FitmentCandidateTile extends StatelessWidget {
                       ),
                 child: const Text('Нужна проверка'),
               ),
-              TextButton(
-                onPressed: isSubmitting
-                    ? null
-                    : () => _markSeller(context, relation: 'own'),
-                child: const Text('Наш магазин'),
-              ),
-              TextButton(
-                onPressed: isSubmitting
-                    ? null
-                    : () => _markSeller(context, relation: 'related'),
-                child: const Text('Связанный продавец'),
-              ),
+              if (onSellerReview != null) ...[
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => _markSeller(context, relation: 'own'),
+                  child: const Text('Наш магазин'),
+                ),
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => _markSeller(context, relation: 'related'),
+                  child: const Text('Связанный продавец'),
+                ),
+              ],
             ],
           ),
         ],
@@ -271,7 +274,7 @@ class FitmentCandidateTile extends StatelessWidget {
     );
     controller.dispose();
     if (reason != null && context.mounted) {
-      await onSellerReview(relation: relation, reason: reason);
+      await onSellerReview?.call(relation: relation, reason: reason);
     }
   }
 }
@@ -300,7 +303,9 @@ class _CandidatePrice extends StatelessWidget {
         ),
         if (candidate.normalizedUnitPrice != null)
           Text(
-            '${candidate.normalizedUnitPrice!.toStringAsFixed(2)} / шт · ${(candidate.priceUnitCertainty * 100).toStringAsFixed(0)}%',
+            candidate.priceUnitCertainty == null
+                ? '${candidate.normalizedUnitPrice!.toStringAsFixed(2)} / шт · точность не измерена'
+                : '${candidate.normalizedUnitPrice!.toStringAsFixed(2)} / шт · ${(candidate.priceUnitCertainty! * 100).toStringAsFixed(0)}%',
             style: Theme.of(context).textTheme.bodySmall,
           )
         else

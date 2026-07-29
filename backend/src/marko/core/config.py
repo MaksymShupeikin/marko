@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     pricing_brand_tiers_path: str = ""
     pricing_crosses_path: str = "config/crosses.yaml"
     pricing_candidate_selection_path: str = "config/comparability.yaml"
+    catalog_characteristics_path: str = "config/catalog_characteristics.yaml"
+    pricing_raise_policy_path: str = "config/raise_policy.yaml"
     pricing_v3_robust_dispersion_enabled: bool = False
     pricing_v3_activation_artifact: str = ""
     pricing_v3_activation_sha256: str = ""
@@ -266,3 +268,21 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def backend_config_path(raw_path: str) -> Path:
+    """Resolve a configured path against the backend root when it is relative.
+
+    ``catalog_discovery.resolve_backend_path`` does the same for the pricing
+    configs; this copy exists so the importer does not have to import a module
+    that pulls in the whole scraping stack to read one YAML file.
+    """
+
+    path = Path(raw_path).expanduser()
+    if path.is_file():
+        return path
+    if not path.is_absolute():
+        candidate = Path(__file__).resolve().parents[3] / path
+        if candidate.is_file():
+            return candidate
+    return path

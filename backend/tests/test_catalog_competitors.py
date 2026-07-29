@@ -56,6 +56,8 @@ def test_catalog_competitors_only_include_actual_target_market_evidence() -> Non
         fair_price=Decimal("700"),
         recommended_price=Decimal("710"),
         currency="UAH",
+        confidence_grade="HIGH",
+        dispersion=Decimal("0.08"),
         reason_codes=[],
         evidence_observation_ids=[
             str(competitor.id),
@@ -216,9 +218,9 @@ def test_catalog_empty_pricing_result_keeps_discovery_candidates_separate() -> N
         persisted_count=29,
         owned_excluded_count=0,
         rejected_count=0,
-        comparable_count=0,
-        review_count=1,
-        skipped_count=0,
+        pricing_evidence_count=0,
+        reference_only_count=1,
+        rejected_candidate_count=0,
         selection_histogram={"TIER_UNKNOWN (REVIEW)": 1},
         search_pages_fetched=1,
         search_page_limit=1,
@@ -238,6 +240,6 @@ def test_catalog_empty_pricing_result_keeps_discovery_candidates_separate() -> N
     assert result.discovery_run_id == snapshot.run_id
     assert result.discovery_items == (discovery_offer,)
     assert result.discovered_total == 1
-    assert result.review_count == 1
+    assert result.reference_only_count == 1
     assert result.selection_histogram == {"TIER_UNKNOWN (REVIEW)": 1}
     assert result.unfetched_count == 62

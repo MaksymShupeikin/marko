@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/marko_ui.dart';
+import '../../core/presentation_formatters.dart';
 import 'pricing_models.dart';
 
 Future<Map<String, dynamic>?> showRecommendationDecisionDialog(
@@ -42,7 +43,13 @@ class _RecommendationDecisionDialogState
   void initState() {
     super.initState();
     _price = TextEditingController(
-      text: widget.recommendation.recommendedPrice?.toStringAsFixed(2) ?? '',
+      text: widget.recommendation.recommendedPrice == null
+          ? ''
+          : formatDecimalAmount(
+              widget.recommendation.recommendedPrice!,
+              priceTick: widget.recommendation.priceTick,
+              fractionDigits: widget.recommendation.priceTickScale,
+            ),
     );
     _reason = TextEditingController(text: _defaultReason(widget.decision));
   }
@@ -73,7 +80,7 @@ class _RecommendationDecisionDialogState
                 Text(
                   target == null
                       ? 'Цена не указана'
-                      : 'Целевая цена: ${_money(target)}',
+                      : 'Целевая цена: ${_money(widget.recommendation, target)}',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               if (widget.decision == 'overridden') ...[
@@ -83,7 +90,9 @@ class _RecommendationDecisionDialogState
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: const InputDecoration(labelText: 'Ваша цена, ₴'),
+                  decoration: InputDecoration(
+                    labelText: 'Ваша цена, ${widget.recommendation.currency}',
+                  ),
                   onChanged: (_) => setState(() {
                     _error = null;
                     _declareBelowCost = false;
@@ -208,13 +217,23 @@ class _RecommendationDecisionDialogState
       'reason': _reason.text.trim(),
     };
     if (widget.decision == 'overridden' && target != null) {
-      payload['new_price'] = target.toStringAsFixed(2);
+      payload['new_price'] = formatDecimalAmount(
+        target,
+        priceTick: widget.recommendation.priceTick,
+        fractionDigits: widget.recommendation.priceTickScale,
+      );
     }
     Navigator.of(context).pop(payload);
   }
 }
 
-String _money(double value) => '${value.toStringAsFixed(0)} ₴';
+String _money(PricingRecommendation recommendation, double value) =>
+    formatMoney(
+      value,
+      currency: recommendation.currency,
+      priceTick: recommendation.priceTick,
+      fractionDigits: recommendation.priceTickScale,
+    );
 
 String _title(String decision) => switch (decision) {
   'accepted' => 'Принять рекомендацию',

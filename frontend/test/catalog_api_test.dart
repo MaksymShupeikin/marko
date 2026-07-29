@@ -136,9 +136,9 @@ void main() {
                   'discovery_persisted_count': 29,
                   'owned_excluded_count': 0,
                   'discovery_rejected_count': 0,
-                  'comparable_count': 0,
-                  'review_count': 1,
-                  'skipped_count': 28,
+                  'pricing_evidence_count': 0,
+                  'reference_only_count': 1,
+                  'rejected_candidate_count': 28,
                   'selection_histogram': {
                     'TIER_UNKNOWN (REVIEW)': 1,
                     'OEM_NOT_FOUND': 28,
@@ -214,7 +214,7 @@ void main() {
       expect(comparison.promReportedTotal, 91);
       expect(comparison.discoveryItems.single.sellerName, 'Autoparts IF');
       expect(comparison.discoveryItems.single.salePrice, 629);
-      expect(comparison.reviewCount, 1);
+      expect(comparison.referenceOnlyCount, 1);
       expect(comparison.unfetchedCount, 62);
       expect(comparison.discoveryItems.single.selectionReason, 'TIER_UNKNOWN');
       expect(comparison.discoveryItems.single.passedGates, hasLength(9));

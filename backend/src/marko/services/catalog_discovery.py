@@ -33,6 +33,7 @@ from marko.infrastructure.db.models import (
     WorkspaceStore,
 )
 from marko.parsers.prom.config import ScrapeConfig
+from marko.parsers.prom.exceptions import is_canonical_pagination_redirect
 from marko.parsers.prom.parser import parse_search
 from marko.services.offer_processing import (
     AcceptedCandidate,
@@ -41,6 +42,7 @@ from marko.services.offer_processing import (
     process_offer_candidate,
 )
 from marko.services.owned_catalog import normalize_catalog_code
+from marko.services.pricing_runs import load_tier_coefficients
 from marko.services.scrape_runtime import (
     LogicalRequestTrace,
     ScrapeExecutionTrace,
@@ -115,9 +117,9 @@ class CatalogDiscoverySnapshot:
     persisted_count: int
     owned_excluded_count: int
     rejected_count: int
-    comparable_count: int
-    review_count: int
-    skipped_count: int
+    pricing_evidence_count: int
+    reference_only_count: int
+    rejected_candidate_count: int
     selection_histogram: Mapping[str, int]
     search_pages_fetched: int
     search_page_limit: int
@@ -147,6 +149,9 @@ class _SelectionRuntime:
     brand_tiers: Mapping[str, ProductTier]
     brand_rules_dataset_id: str
     brand_rules_sha256: str | None
+    # Validated ``(category, tier)`` multipliers. Empty until calibration has
+    # run, which keeps every off-level candidate out of the price basis.
+    calibrated_premiums: Mapping[tuple[str, ProductTier], Decimal]
 
 
 def catalog_product_key(
@@ -234,6 +239,11 @@ async def collect_catalog_discovery(
         brand_tiers=brand_rules.tiers,
         brand_rules_dataset_id=brand_rules.dataset_id,
         brand_rules_sha256=brand_rules.source_sha256,
+        calibrated_premiums=await _validated_tier_premiums(
+            session,
+            workspace_id=workspace_id,
+            category=reference.category,
+        ),
     )
     search_page_limit = resolved_settings.catalog_discovery_max_search_pages
     run = CatalogDiscoveryRun(
@@ -377,7 +387,16 @@ def usable_search_requests(
     tolerated = tuple(
         request
         for request in requests
-        if id(request) not in usable_ids and request.error_category == "upstream_3xx"
+        if id(request) not in usable_ids
+        and request.error_category == "upstream_3xx"
+        and is_canonical_pagination_redirect(
+            status_code=request.response_status_code,
+            request_url=request.prepared_url,
+            redirect_location=request.response_redirect_location,
+            page_num=request.sequence_no,
+        )
+        and request.raw_body is not None
+        and request.content_sha256 is not None
     )
     if not usable or len(usable) + len(tolerated) != len(requests):
         raise CatalogDiscoveryError(
@@ -433,7 +452,7 @@ def _collect_live(
             totals.append(page.total)
     return _LiveDiscoveryResult(
         output=output,
-        requests=usable,
+        requests=requests,
         parser_outcome=parser_outcome,
         prom_reported_total=max(totals) if totals else None,
     )
@@ -446,6 +465,13 @@ async def _persist_live_result(
     live: _LiveDiscoveryResult,
     selection: _SelectionRuntime,
 ) -> None:
+    # ``CatalogDiscoveryRun.request_count`` is exposed to the API as
+    # ``search_pages_fetched`` and therefore keeps its original meaning:
+    # successfully fetched result pages. Terminal pagination probes are still
+    # persisted below as captures and counted by HTTP telemetry, but must not
+    # turn a canonical upstream gap into a false SEARCH_PAGE_HARD_CAP.
+    successful_request_count = len(usable_search_requests(live.requests))
+
     for request in live.requests:
         assert request.raw_body is not None
         content_sha256 = hashlib.sha256(request.raw_body).hexdigest()
@@ -564,6 +590,7 @@ async def _persist_live_result(
             confirmed_cross_oems=selection.confirmed_cross_oems,
             brand_tiers=selection.brand_tiers,
             category_context=category_context,
+            calibrated_premiums=selection.calibrated_premiums,
         )
         verdicts.append(verdict)
         reason_codes.extend(
@@ -618,26 +645,26 @@ async def _persist_live_result(
     unfetched_count, coverage_ratio, coverage_reason = _coverage_summary(
         reported_total=reported_total,
         retrieved_count=retrieved_count,
-        request_count=len(live.requests),
+        request_count=successful_request_count,
         search_page_limit=run.search_page_limit,
     )
 
     run.status = "completed"
     run.parser_outcome = live.parser_outcome
     run.prom_reported_total = reported_total
-    run.request_count = len(live.requests)
+    run.request_count = successful_request_count
     run.retrieved_count = retrieved_count
     run.persisted_count = len(accepted_by_listing)
     run.rejected_count = rejected_count
     run.owned_excluded_count = owned_excluded_count
-    run.comparable_count = sum(
-        verdict.status is CandidateStatus.COMPARABLE for verdict in verdicts
+    run.pricing_evidence_count = sum(
+        verdict.status is CandidateStatus.PRICING_EVIDENCE for verdict in verdicts
     )
-    run.review_count = sum(
-        verdict.status is CandidateStatus.REVIEW for verdict in verdicts
+    run.reference_only_count = sum(
+        verdict.status is CandidateStatus.REFERENCE_ONLY for verdict in verdicts
     )
-    run.skipped_count = sum(
-        verdict.status is CandidateStatus.SKIP for verdict in verdicts
+    run.rejected_candidate_count = sum(
+        verdict.status is CandidateStatus.REJECTED for verdict in verdicts
     )
     run.selection_histogram = histogram
     run.unfetched_count = unfetched_count
@@ -690,6 +717,34 @@ async def _owned_seller_ids(
             )
         ).all()
         if str(value).strip()
+    }
+
+
+async def _validated_tier_premiums(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    category: str | None,
+) -> Mapping[tuple[str, ProductTier], Decimal]:
+    """Read the validated baseline coefficients for the reference category.
+
+    Only validated ones are returned, and the key is normalized the same way
+    the gate normalizes it, so a category that differs by case or padding does
+    not silently look uncalibrated.
+    """
+
+    normalized = (category or "").strip()
+    if not normalized:
+        return {}
+    coefficients = await load_tier_coefficients(
+        session,
+        workspace_id=workspace_id,
+        category=normalized,
+    )
+    return {
+        (key[0].strip().casefold(), key[1]): coefficient.multiplier
+        for key, coefficient in coefficients.items()
+        if coefficient.validated
     }
 
 
@@ -791,8 +846,15 @@ async def _snapshot_for_run(
                 )
                 .order_by(
                     case(
-                        (CatalogDiscoveryOffer.selection_status == "COMPARABLE", 0),
-                        (CatalogDiscoveryOffer.selection_status == "REVIEW", 1),
+                        (
+                            CatalogDiscoveryOffer.selection_status
+                            == "PRICING_EVIDENCE",
+                            0,
+                        ),
+                        (
+                            CatalogDiscoveryOffer.selection_status == "REFERENCE_ONLY",
+                            1,
+                        ),
                         else_=2,
                     ),
                     CatalogDiscoveryOffer.title_contains_query.desc(),
@@ -813,9 +875,9 @@ async def _snapshot_for_run(
         persisted_count=run.persisted_count,
         owned_excluded_count=run.owned_excluded_count,
         rejected_count=run.rejected_count,
-        comparable_count=run.comparable_count,
-        review_count=run.review_count,
-        skipped_count=run.skipped_count,
+        pricing_evidence_count=run.pricing_evidence_count,
+        reference_only_count=run.reference_only_count,
+        rejected_candidate_count=run.rejected_candidate_count,
         selection_histogram=dict(run.selection_histogram or {}),
         search_pages_fetched=run.request_count,
         search_page_limit=run.search_page_limit,

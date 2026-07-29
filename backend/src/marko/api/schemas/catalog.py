@@ -208,6 +208,10 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     fair_price: Decimal | None
     recommended_price: Decimal | None
     currency: str | None
+    # How trustworthy the basis was, and how widely it was spread, so the
+    # card can show the arithmetic instead of only its conclusion.
+    confidence_grade: str | None
+    dispersion: Decimal | None
     reason_codes: list[str]
     items: list[CatalogCompetitorOfferResponse]
     discovery_run_id: UUID | None
@@ -220,9 +224,9 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     discovery_persisted_count: int
     owned_excluded_count: int
     discovery_rejected_count: int
-    comparable_count: int
-    review_count: int
-    skipped_count: int
+    pricing_evidence_count: int
+    reference_only_count: int
+    rejected_candidate_count: int
     selection_histogram: dict[str, int]
     search_pages_fetched: int
     search_page_limit: int
@@ -233,3 +237,8 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     selection_config_sha256: str | None
     brand_rules_dataset_id: str | None
     discovery_items: list[CatalogDiscoveredOfferResponse]
+    # Counts towards the fair price.
+    pricing_evidence: list[CatalogDiscoveredOfferResponse]
+    # Same part, level unknown or unconvertible: shown with a link, never
+    # priced against.
+    reference_only: list[CatalogDiscoveredOfferResponse]

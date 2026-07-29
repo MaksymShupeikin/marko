@@ -153,7 +153,9 @@ class FitmentCandidate {
           ? null
           : _decimal(json['normalized_unit_price']),
       priceUnitStatus: json['price_unit_status']?.toString() ?? 'unknown',
-      priceUnitCertainty: _decimal(json['price_unit_certainty'] ?? 0.3),
+      priceUnitCertainty: json['price_unit_certainty'] == null
+          ? null
+          : _decimal(json['price_unit_certainty']),
       priceReasonCodes: strings('price_reason_codes'),
       automaticPriceChangeAllowed:
           json['automatic_price_change_allowed'] as bool? ?? false,
@@ -188,7 +190,7 @@ class FitmentCandidate {
   final double competitorWeight;
   final double? normalizedUnitPrice;
   final String priceUnitStatus;
-  final double priceUnitCertainty;
+  final double? priceUnitCertainty;
   final List<String> priceReasonCodes;
   final bool automaticPriceChangeAllowed;
 

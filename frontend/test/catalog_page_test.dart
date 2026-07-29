@@ -126,6 +126,11 @@ void main() {
     expect(find.text('Parts Avto'), findsNothing);
     expect(find.text('Основной'), findsNothing);
     expect(find.text('OE/OEM: 6 1131 36 9611'), findsOneWidget);
+    expect(
+      find.text('Сопоставление с объявлениями конкурентов'),
+      findsOneWidget,
+    );
+    expect(find.text('Перейти к сравнению цен'), findsNothing);
     expect(comparisons, 0);
 
     await tester.tap(find.byKey(const ValueKey('catalog-details-compare')));
@@ -188,7 +193,7 @@ void main() {
 
     expect(find.text('Конкурентні оголошення'), findsOneWidget);
     expect(find.text('Враховується у порівнянні'), findsOneWidget);
-    expect(find.text('Перейти до порівняння цін'), findsOneWidget);
+    expect(find.text('Зіставлення з оголошеннями конкурентів'), findsOneWidget);
   });
 
   testWidgets('panel never substitutes owned stores for missing competitors', (
@@ -233,7 +238,23 @@ void main() {
       expect(find.text('Найдено парсером'), findsOneWidget);
       expect(find.text('Замок багажника 7E5827505A'), findsOneWidget);
       expect(find.text('629.00 UAH'), findsOneWidget);
-      expect(find.text('REVIEW · tier бренда не определён'), findsNWidgets(2));
+      expect(
+        find.byKey(const ValueKey('catalog-pricing-evidence-block')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('catalog-reference-only-block')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Показаны справочно · в расчёт не входят · 1'),
+        findsOneWidget,
+      );
+      // Once as the listing badge, once as the histogram row.
+      expect(
+        find.text('Справочно · уровень бренда не определён'),
+        findsNWidgets(2),
+      );
       expect(
         find.byKey(const ValueKey('catalog-discovery-histogram')),
         findsOneWidget,
@@ -270,6 +291,7 @@ Widget _testApp({
       home: Scaffold(
         body: CatalogPage(
           onOpenPriceComparison: onOpenPriceComparison ?? () {},
+          canAdministerWorkspace: true,
         ),
       ),
     ),
@@ -355,13 +377,13 @@ final _discoveryComparison = CatalogCompetitorComparison(
   discoveredTotal: 1,
   discoveryRetrievedCount: 29,
   discoveryPersistedCount: 29,
-  comparableCount: 0,
-  reviewCount: 1,
-  skippedCount: 28,
+  pricingEvidenceCount: 0,
+  referenceOnlyCount: 1,
+  rejectedCandidateCount: 28,
   selectionHistogram: const {
-    'DISMANTLER_SELLER': 2,
-    'OEM_NOT_FOUND': 1,
-    'TIER_UNKNOWN (REVIEW)': 26,
+    'REJECTED:DISMANTLER_SELLER': 2,
+    'REJECTED:OEM_NOT_FOUND': 1,
+    'REFERENCE_ONLY:TIER_UNKNOWN': 26,
   },
   searchPagesFetched: 10,
   searchPageLimit: 10,
@@ -390,7 +412,7 @@ final _discoveryComparison = CatalogCompetitorComparison(
       identityStatus: 'QUERY_TOKEN_PRESENT',
       sourceConfidence: 1,
       reasonCodes: ['DISCOVERY_ONLY_NOT_PRICING_EVIDENCE'],
-      selectionStatus: 'REVIEW',
+      selectionStatus: 'REFERENCE_ONLY',
       selectionReason: 'TIER_UNKNOWN',
       passedGates: [
         'own_seller',
@@ -404,7 +426,47 @@ final _discoveryComparison = CatalogCompetitorComparison(
         'applicability',
       ],
       selectionFlags: [],
-      selectionDetails: {'stopped_gate': 'tier'},
+      selectionDetails: {'stopped_gate': 'tier_known'},
+      predictedTier: 'unknown',
+      tierConfidence: 0,
+    ),
+  ],
+  referenceOnly: const [
+    CatalogDiscoveredOffer(
+      discoveryOfferId: 'discovery-offer',
+      sourceListingId: '1402874053',
+      sellerId: '668922',
+      sellerName: 'Autoparts IF',
+      title: 'Замок багажника 7E5827505A',
+      url: 'https://prom.ua/ua/p1402874053-item.html',
+      sku: 'DF-11260',
+      brand: 'Detali IF',
+      salePrice: 629,
+      referencePrice: null,
+      currency: 'UAH',
+      measureUnit: 'шт.',
+      isAvailable: true,
+      titleContainsQuery: true,
+      identityStatus: 'QUERY_TOKEN_PRESENT',
+      sourceConfidence: 1,
+      reasonCodes: ['DISCOVERY_ONLY_NOT_PRICING_EVIDENCE'],
+      selectionStatus: 'REFERENCE_ONLY',
+      selectionReason: 'TIER_UNKNOWN',
+      passedGates: [
+        'own_seller',
+        'dismantler_seller',
+        'condition',
+        'remanufactured',
+        'oem_identity',
+        'oem_stuffing',
+        'variant',
+        'package',
+        'applicability',
+        'tier_classification',
+        'own_brand',
+      ],
+      selectionFlags: [],
+      selectionDetails: {'stopped_gate': 'tier_known'},
       predictedTier: 'unknown',
       tierConfidence: 0,
     ),

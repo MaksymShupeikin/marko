@@ -70,6 +70,7 @@ class LogicalRequestTrace:
     response_status_code: int | None = None
     response_encoding: str | None = None
     response_content_type: str | None = None
+    response_redirect_location: str | None = None
     raw_body: bytes | None = None
     content_sha256: str | None = None
     total_rate_wait_ms: int = 0
@@ -235,6 +236,29 @@ class ScrapeExecutionTrace:
     ) -> None:
         request.outcome = outcome
         request.response_status_code = status_code
+        request.error_category = error_category
+        request.error_detail = error_detail
+        self._finish(request)
+
+    def finish_response_failure(
+        self,
+        request: LogicalRequestTrace,
+        response: requests.Response,
+        *,
+        outcome: str,
+        error_category: str,
+        error_detail: str,
+    ) -> None:
+        """Finish a non-success HTTP response while retaining bounded evidence."""
+
+        body = response.content
+        request.outcome = outcome
+        request.response_status_code = response.status_code
+        request.response_encoding = response.encoding
+        request.response_content_type = response.headers.get("Content-Type")
+        request.response_redirect_location = response.headers.get("Location")
+        request.raw_body = body
+        request.content_sha256 = hashlib.sha256(body).hexdigest()
         request.error_category = error_category
         request.error_detail = error_detail
         self._finish(request)

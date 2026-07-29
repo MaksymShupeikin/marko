@@ -19,13 +19,21 @@ from marko.services.scraper_contract import (
 )
 
 
-def _response(status: int, body: bytes = b"<html>ok</html>") -> requests.Response:
+def _response(
+    status: int,
+    body: bytes = b"<html>ok</html>",
+    *,
+    url: str = "https://prom.ua/ua/p1-product.html",
+    location: str | None = None,
+) -> requests.Response:
     response = requests.Response()
     response.status_code = status
-    response.url = "https://prom.ua/ua/p1-product.html"
+    response.url = url
     response._content = body  # noqa: SLF001 - requests test fixture
     response.encoding = "utf-8"
     response.headers["Content-Type"] = "text/html; charset=utf-8"
+    if location is not None:
+        response.headers["Location"] = location
     return response
 
 
@@ -218,6 +226,33 @@ def test_terminal_http_failure_does_not_open_retry_circuit() -> None:
         client.get_html("https://prom.ua/ua/p1-product.html")
 
     assert guard.failures == 0
+
+
+def test_terminal_redirect_retains_bounded_body_and_location_in_trace() -> None:
+    url = "https://prom.ua/ua/search?search_term=OE&page=4"
+    response = _response(
+        301,
+        b"",
+        url=url,
+        location="/ua/search?search_term=OE",
+    )
+    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    client._session.get = Mock(return_value=response)  # noqa: SLF001
+    trace = ScrapeExecutionTrace(item_kind="catalog_discovery", execution_no=1)
+
+    with scrape_execution(trace), pytest.raises(RequestFailed) as captured:
+        client.get_html(url)
+
+    request = trace.drain_completed_requests()[0]
+    assert captured.value.status_code == 301
+    assert captured.value.request_url == url
+    assert captured.value.redirect_location == "/ua/search?search_term=OE"
+    assert request.response_status_code == 301
+    assert request.response_redirect_location == "/ua/search?search_term=OE"
+    assert request.raw_body == b""
+    assert request.content_sha256 == (
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
 
 
 @pytest.mark.parametrize(

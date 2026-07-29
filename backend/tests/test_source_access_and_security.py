@@ -181,6 +181,20 @@ async def test_source_status_is_explicit_and_live_run_is_blocked() -> None:
 
 
 @pytest.mark.asyncio
+async def test_operational_metrics_require_authentication() -> None:
+    application = api_main.create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/v1/operations/metrics/prometheus")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required"
+
+
+@pytest.mark.asyncio
 async def test_member_cannot_start_admin_workflow() -> None:
     application = api_main.create_app()
 

@@ -28,6 +28,10 @@ def test_unknown_cyrillic_text_does_not_create_a_brand_rule() -> None:
     assert normalize_brand("Аналог") == ""
 
 
+def test_unknown_mixed_script_brand_does_not_collapse_to_ascii_noise() -> None:
+    assert normalize_brand("ВОSСН") == ""
+
+
 def test_used_marker_is_excluded_before_brand_tier() -> None:
     result = classify_tier(brand="Bosch", title="Датчик Bosch б/у")
 
@@ -64,6 +68,19 @@ def test_oem_text_conflicting_with_budget_brand_abstains() -> None:
 
     assert result.tier == ProductTier.UNKNOWN
     assert result.exclusion_reason == "TIER_CONFLICT"
+
+
+def test_kemp_text_conflicting_with_explicit_brand_rule_abstains() -> None:
+    result = classify_tier(
+        brand="Bosch",
+        title="Brake pad set",
+        description="Analogue of KEMP part number 123",
+        brand_tiers={"BOSCH": ProductTier.OES},
+    )
+
+    assert result.tier == ProductTier.UNKNOWN
+    assert result.exclusion_reason == "TIER_CONFLICT"
+    assert result.reasons == ("KEMP_TEXT_BRAND_CONFLICT",)
 
 
 def test_manual_override_is_auditable_reason() -> None:

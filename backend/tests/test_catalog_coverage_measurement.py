@@ -18,7 +18,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from marko.catalog_coverage_measurement_cli import report_exit_code
 from marko.infrastructure.db.models import CatalogDiscoveryOffer
+from marko.services.parser_models import ListingPage
 from marko.services import catalog_coverage_measurement as measurement
 from marko.services.catalog_coverage_measurement import (
     COHORT_BASELINE,
@@ -144,7 +146,7 @@ def _offer(**overrides: Any) -> CatalogDiscoveryOffer:
         "title": "Замок кришки багажника VW T5",
         "is_owned": False,
         "is_available": True,
-        "selection_status": "REVIEW",
+        "selection_status": "REFERENCE_ONLY",
         "selection_details": {"gates": {"oem_identity": {"evidence": "ARTICLE_FIELD"}}},
         "raw_snapshot": {},
     }
@@ -244,13 +246,13 @@ def test_title_only_evidence_is_excluded_from_the_baseline_cohort() -> None:
 
 
 def test_kemp_brand_is_excluded_from_every_cohort() -> None:
-    facts = offer_facts(_offer(brand="KEMP", selection_status="COMPARABLE"))
+    facts = offer_facts(_offer(brand="KEMP", selection_status="PRICING_EVIDENCE"))
 
     assert cohort_membership("7E5827505A", facts) == frozenset()
 
 
 def test_cyrillic_kemp_lookalike_is_still_excluded() -> None:
-    facts = offer_facts(_offer(brand="КЕМП", selection_status="COMPARABLE"))
+    facts = offer_facts(_offer(brand="КЕМП", selection_status="PRICING_EVIDENCE"))
 
     assert cohort_membership("7E5827505A", facts) == frozenset()
 
@@ -259,7 +261,7 @@ def test_used_marker_excludes_from_baseline_and_plan_cohorts() -> None:
     facts = offer_facts(
         _offer(
             title="Замок кришки багажника VW T5 б/у",
-            selection_status="COMPARABLE",
+            selection_status="PRICING_EVIDENCE",
         )
     )
     membership = cohort_membership("7E5827505A", facts)
@@ -269,22 +271,26 @@ def test_used_marker_excludes_from_baseline_and_plan_cohorts() -> None:
 
 
 def test_owned_seller_is_excluded_from_every_cohort() -> None:
-    facts = offer_facts(_offer(is_owned=True, selection_status="COMPARABLE"))
+    facts = offer_facts(_offer(is_owned=True, selection_status="PRICING_EVIDENCE"))
 
     assert cohort_membership("7E5827505A", facts) == frozenset()
 
 
-def test_plan_cohort_requires_a_comparable_verdict() -> None:
-    review = offer_facts(_offer(selection_status="REVIEW"))
-    comparable = offer_facts(_offer(selection_status="COMPARABLE"))
+def test_plan_cohort_requires_a_pricing_evidence_verdict() -> None:
+    review = offer_facts(_offer(selection_status="REFERENCE_ONLY"))
+    comparable = offer_facts(_offer(selection_status="PRICING_EVIDENCE"))
 
     assert COHORT_PLAN_S not in cohort_membership("7E5827505A", review)
     assert COHORT_PLAN_S in cohort_membership("7E5827505A", comparable)
 
 
 def test_plan_cohort_drops_explicitly_unavailable_offers_but_keeps_unknown() -> None:
-    unavailable = offer_facts(_offer(selection_status="COMPARABLE", is_available=False))
-    unknown = offer_facts(_offer(selection_status="COMPARABLE", is_available=None))
+    unavailable = offer_facts(
+        _offer(selection_status="PRICING_EVIDENCE", is_available=False)
+    )
+    unknown = offer_facts(
+        _offer(selection_status="PRICING_EVIDENCE", is_available=None)
+    )
 
     assert COHORT_PLAN_S not in cohort_membership("7E5827505A", unavailable)
     assert COHORT_PLAN_S in cohort_membership("7E5827505A", unknown)
@@ -542,14 +548,42 @@ def test_pending_skips_completed_and_retries_failed(tmp_path: Path) -> None:
         _write_targets(tmp_path, _targets_document(count=3))
     ).targets
     checkpoint = MeasurementCheckpoint.open(tmp_path / "cp.jsonl", _identity())
-    checkpoint.record(_outcome(1))
-    checkpoint.record(_outcome(2, status="failed"))
+    # The OE must match the frozen list: pending() is fail-closed on it, so a
+    # placeholder here would exercise the mismatch guard instead of resumption.
+    checkpoint.record(_outcome(1, oe_norm=targets[0].oe_norm))
+    checkpoint.record(_outcome(2, status="failed", oe_norm=targets[1].oe_norm))
 
     retried = checkpoint.pending(targets)
     left_alone = checkpoint.pending(targets, retry_failed=False)
 
     assert [target.sample_no for target in retried] == [2, 3]
     assert [target.sample_no for target in left_alone] == [3]
+
+
+def test_pending_refuses_checkpoint_oe_mismatch(tmp_path: Path) -> None:
+    targets = load_coverage_targets(
+        _write_targets(tmp_path, _targets_document(count=1))
+    ).targets
+    checkpoint = MeasurementCheckpoint.open(tmp_path / "cp.jsonl", _identity())
+    checkpoint.record(_outcome(1, oe_norm="DIFFERENT"))
+
+    with pytest.raises(CoverageMeasurementError) as error:
+        checkpoint.pending(targets)
+
+    assert error.value.code == "COVERAGE_CHECKPOINT_TARGET_MISMATCH"
+
+
+def test_pending_refuses_checkpoint_sample_outside_target_set(tmp_path: Path) -> None:
+    targets = load_coverage_targets(
+        _write_targets(tmp_path, _targets_document(count=1))
+    ).targets
+    checkpoint = MeasurementCheckpoint.open(tmp_path / "cp.jsonl", _identity())
+    checkpoint.record(_outcome(99, oe_norm="UNLISTED"))
+
+    with pytest.raises(CoverageMeasurementError) as error:
+        checkpoint.pending(targets)
+
+    assert error.value.code == "COVERAGE_CHECKPOINT_TARGET_MISMATCH"
 
 
 # --------------------------------------------------------------------------
@@ -728,32 +762,58 @@ PROM_AMBIENT_CAPTCHA_MARKUP = (
 def test_ambient_recaptcha_config_on_a_full_page_is_not_a_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(measurement, "parsed_product_count", lambda *_a, **_k: 29)
+    monkeypatch.setattr(
+        measurement,
+        "parse_search",
+        lambda *_a, **_k: ListingPage(
+            products=[object()] * 29,
+            total=29,
+            lang="ua",
+            outcome="RESULTS",
+        ),
+    )
 
     assessment = measurement.assess_capture_body(PROM_AMBIENT_CAPTCHA_MARKUP)
 
     assert assessment.product_count == 29
+    assert assessment.parser_outcome == "RESULTS"
     assert assessment.markers == ()
     assert assessment.is_suspected_block is False
     assert assessment.yielded_no_products is False
 
 
-def test_same_markers_on_a_page_without_products_are_a_suspected_block(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(measurement, "parsed_product_count", lambda *_a, **_k: 0)
-
+def test_same_markers_on_a_page_without_products_are_a_suspected_block() -> None:
     assessment = measurement.assess_capture_body(PROM_AMBIENT_CAPTCHA_MARKUP)
 
+    assert assessment.parser_outcome.startswith("UNPARSEABLE:")
     assert assessment.markers == ("captcha", "recaptcha")
     assert assessment.is_suspected_block is True
 
 
-def test_empty_page_without_markers_is_counted_but_not_called_a_block(
+def test_valid_empty_market_with_ambient_recaptcha_is_not_a_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(measurement, "parsed_product_count", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        measurement,
+        "parse_search",
+        lambda *_a, **_k: ListingPage(
+            products=[],
+            total=0,
+            lang="ua",
+            outcome="EMPTY_SEARCH_RESULT",
+        ),
+    )
 
+    assessment = measurement.assess_capture_body(PROM_AMBIENT_CAPTCHA_MARKUP)
+
+    assert assessment.product_count == 0
+    assert assessment.parser_outcome == "EMPTY_SEARCH_RESULT"
+    assert assessment.markers == ()
+    assert assessment.yielded_no_products is True
+    assert assessment.is_suspected_block is False
+
+
+def test_empty_page_without_markers_is_counted_but_not_called_a_block() -> None:
     assessment = measurement.assess_capture_body("<html>Нічого не знайдено</html>")
 
     assert assessment.yielded_no_products is True
@@ -777,3 +837,11 @@ def test_telemetry_carries_block_counters() -> None:
     assert telemetry.pages_without_products == 2
     assert telemetry.scanned_blob_count == 3
     assert telemetry.as_dict()["suspected_block_count"] == 1
+
+
+def test_report_exit_code_fails_an_incomplete_checkpoint() -> None:
+    complete = type("Report", (), {"failed_rows": ()})()
+    incomplete = type("Report", (), {"failed_rows": (object(),)})()
+
+    assert report_exit_code(complete) == 0
+    assert report_exit_code(incomplete) == 1

@@ -1,0 +1,36 @@
+schema_version: metis-raise-policy-v1
+method_version: raise-policy-v1
+
+# Какую точку рынка занимаем. Меняется заказчиком, не инженером.
+#   aggressive — быть дешевле большинства, брать оборотом
+#   balanced   — встать в середину рынка своего уровня
+#   premium    — верхняя часть диапазона
+# По умолчанию balanced: заказчик формулировал цель как «быть привлекательным
+# по цене, но не терять маржу», а это медиана.
+active_strategy: balanced
+
+strategies:
+  aggressive:
+    target_quantile: "0.25"
+  balanced:
+    target_quantile: "0.50"
+  premium:
+    target_quantile: "0.75"
+
+guards:
+  # Меньше трёх приведённых цен — не база, а совпадение.
+  min_evidence: 3
+  # Не дёргать заказчика ради +2%.
+  min_change_pct: "0.03"
+  # Скачок цены втрое — почти всегда ошибка матчинга, а не рынок.
+  max_step_pct: "0.25"
+  # Округление всегда вниз, чтобы предложение не перескочило целевую точку.
+  psychological_step: "10"
+
+confidence:
+  # Сравнение строгое (<), а не нестрогое: когорта ровно на границе лучшую
+  # оценку не получает. Проверенный пример: n=4, robust_CV=0.1516 → MEDIUM.
+  high_min_evidence: 4
+  high_max_robust_cv: "0.15"
+  medium_min_evidence: 3
+  medium_max_robust_cv: "0.35"

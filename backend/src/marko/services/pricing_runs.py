@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -16,7 +16,7 @@ from celery import Celery
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.core.config import Settings, get_settings
+from marko.core.config import Settings, backend_config_path, get_settings
 from marko.core.cost_encryption import CostCiphertextError
 from marko.infrastructure.db.models import (
     CatalogImportBatch,
@@ -40,6 +40,12 @@ from marko.services.catalog_costs import (
 from marko.services.cost_privacy import (
     CostPrivacyBlocked,
     privacy_safe_mapping,
+)
+from metis.pricing.raise_policy import (
+    RaisePolicy,
+    RaisePolicyConfigError,
+    default_raise_policy,
+    load_raise_policy,
 )
 from metis.pricing import (
     CalibrationPair,
@@ -155,7 +161,23 @@ def _validate_decision_price(
 
 
 def policy_to_dict(policy: PricingPolicy) -> dict[str, Any]:
-    return _json_safe(asdict(policy))
+    """Serialize a run's policy without the deployment-owned raise policy.
+
+    The raise policy comes from ``config/raise_policy.yaml`` and is identified
+    by its own hash, so persisting a copy inside every run would create a
+    second, silently divergent source of truth.  Its identity is recorded
+    separately instead.
+    """
+
+    payload = _json_safe(asdict(policy))
+    raise_policy = payload.pop("raise_policy", None)
+    if isinstance(raise_policy, Mapping):
+        payload["raise_policy_identity"] = {
+            "strategy": raise_policy.get("strategy"),
+            "method_version": raise_policy.get("method_version"),
+            "source_sha256": raise_policy.get("source_sha256"),
+        }
+    return payload
 
 
 def _json_safe(value: Any) -> Any:
@@ -171,10 +193,17 @@ def _json_safe(value: Any) -> Any:
 
 
 def policy_from_dict(config: Mapping[str, Any] | None) -> PricingPolicy:
-    defaults = PricingPolicy()
+    raise_policy = _configured_raise_policy()
+    defaults = replace(PricingPolicy(), raise_policy=raise_policy)
     if not config:
         return defaults
-    allowed = {field.name for field in fields(PricingPolicy)}
+    # The raise target and its guards are owned by the deployment's policy file,
+    # not by a per-run override, so a stray key is an error rather than a silent
+    # second source of truth.
+    allowed = {field.name for field in fields(PricingPolicy)} - {"raise_policy"}
+    config = {
+        key: value for key, value in config.items() if key != "raise_policy_identity"
+    }
     unknown = set(config) - allowed
     if unknown:
         raise PricingRunError(
@@ -213,12 +242,25 @@ def policy_from_dict(config: Mapping[str, Any] | None) -> PricingPolicy:
         except (InvalidOperation, TypeError, ValueError) as exc:
             raise PricingRunError(f"Invalid policy value for {name}") from exc
         converted[name] = value
+    converted["raise_policy"] = raise_policy
     try:
         policy = PricingPolicy(**converted)
         _validate_policy(policy)
     except ValueError as exc:
         raise PricingRunError(str(exc)) from exc
     return policy
+
+
+def _configured_raise_policy() -> RaisePolicy:
+    """Materialize the raise policy from the deployment's config file."""
+
+    configured = get_settings().pricing_raise_policy_path.strip()
+    if not configured:
+        return default_raise_policy()
+    try:
+        return load_raise_policy(backend_config_path(configured))
+    except RaisePolicyConfigError as exc:
+        raise PricingRunError(f"Invalid raise policy: {exc}") from exc
 
 
 def _validate_policy(policy: PricingPolicy) -> None:

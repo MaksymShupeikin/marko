@@ -605,8 +605,8 @@ class CatalogDiscoveryRun(Base):
         CheckConstraint(
             "request_count >= 0 AND retrieved_count >= 0 "
             "AND persisted_count >= 0 AND rejected_count >= 0 "
-            "AND owned_excluded_count >= 0 AND comparable_count >= 0 "
-            "AND review_count >= 0 AND skipped_count >= 0 "
+            "AND owned_excluded_count >= 0 AND pricing_evidence_count >= 0 "
+            "AND reference_only_count >= 0 AND rejected_candidate_count >= 0 "
             "AND unfetched_count >= 0 AND search_page_limit > 0",
             name="ck_catalog_discovery_run_counts",
         ),
@@ -651,11 +651,15 @@ class CatalogDiscoveryRun(Base):
     owned_excluded_count: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
     )
-    comparable_count: Mapped[int] = mapped_column(
+    pricing_evidence_count: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
     )
-    review_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    skipped_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    reference_only_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    rejected_candidate_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
     search_page_limit: Mapped[int] = mapped_column(
         Integer, default=1, server_default="1"
     )
@@ -735,7 +739,7 @@ class CatalogDiscoveryOffer(Base):
             name="ck_catalog_discovery_offer_identity_status",
         ),
         CheckConstraint(
-            "selection_status IN ('COMPARABLE', 'REVIEW', 'SKIP')",
+            "selection_status IN ('PRICING_EVIDENCE', 'REFERENCE_ONLY', 'REJECTED')",
             name="ck_catalog_discovery_offer_selection_status",
         ),
         CheckConstraint(
@@ -778,7 +782,10 @@ class CatalogDiscoveryOffer(Base):
         JSON, default=list, server_default="[]"
     )
     selection_status: Mapped[str] = mapped_column(
-        String(16), default="REVIEW", server_default="REVIEW", index=True
+        String(24),
+        default="REFERENCE_ONLY",
+        server_default="REFERENCE_ONLY",
+        index=True,
     )
     selection_reason: Mapped[str] = mapped_column(
         String(100),
@@ -972,6 +979,12 @@ class CatalogImportBatch(TimestampMixin, Base):
     imported_rows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     rejected_rows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error_log: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # Frequency of every characteristic name the workbook carried, split into
+    # recognized and unrecognized, plus extraction anomalies.  A seller renaming
+    # a field has to show up as a number here instead of as missing identity.
+    characteristics_report: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -1051,6 +1064,25 @@ class CatalogItem(TimestampMixin, Base):
         Numeric(8, 4), default=Decimal("1"), server_default="1"
     )
     raw_row: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Identity read out of the Prom characteristics block.  ``part_numbers_norm``
+    # is the seller's own cross list and is what breaks the deadlock where a
+    # confirmed cross could only ever come from an observation that itself
+    # required a confirmed cross to be collected.
+    part_numbers_raw: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    part_numbers_norm: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    applicability_brands: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    applicability_models: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    characteristics_raw: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
 
 
 class CatalogItemOverride(Base):

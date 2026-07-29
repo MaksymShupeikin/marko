@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../../core/presentation_formatters.dart';
 import '../../core/widgets/marko_menu.dart';
 import '../fitment/fitment_candidates_panel.dart';
 import 'catalog_context_dialog.dart';
@@ -15,9 +16,14 @@ import 'recommendation_decision_dialog.dart';
 import 'tier_override_dialog.dart';
 
 class RecommendationsPage extends ConsumerWidget {
-  const RecommendationsPage({this.onOpenCatalog, super.key});
+  const RecommendationsPage({
+    this.onOpenCatalog,
+    this.canAdministerWorkspace = false,
+    super.key,
+  });
 
   final VoidCallback? onOpenCatalog;
+  final bool canAdministerWorkspace;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -30,6 +36,7 @@ class RecommendationsPage extends ConsumerWidget {
       ),
       data: (state) => _RecommendationsContent(
         state: state,
+        canAdministerWorkspace: canAdministerWorkspace,
         onOpenCatalog: onOpenCatalog,
         onRefresh: () =>
             ref.read(recommendationsControllerProvider.notifier).refresh(),
@@ -46,6 +53,7 @@ class RecommendationsPage extends ConsumerWidget {
 class _RecommendationsContent extends StatelessWidget {
   const _RecommendationsContent({
     required this.state,
+    required this.canAdministerWorkspace,
     required this.onOpenCatalog,
     required this.onRefresh,
     required this.onQueue,
@@ -53,6 +61,7 @@ class _RecommendationsContent extends StatelessWidget {
   });
 
   final RecommendationsState state;
+  final bool canAdministerWorkspace;
   final VoidCallback? onOpenCatalog;
   final VoidCallback onRefresh;
   final ValueChanged<String> onQueue;
@@ -152,6 +161,7 @@ class _RecommendationsContent extends StatelessWidget {
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _RecommendationCard(
                           recommendation: recommendation,
+                          canAdministerWorkspace: canAdministerWorkspace,
                         ),
                       ),
                     ),
@@ -178,8 +188,8 @@ class _SortSelector extends StatelessWidget {
       MarkoMenuEntry(
         value: 'ABSOLUTE_RECOMMENDED_CHANGE',
         label: context.localized(
-          ru: 'Макс. изменение, ₴',
-          uk: 'Макс. зміна, ₴',
+          ru: 'Макс. изменение цены',
+          uk: 'Макс. зміна ціни',
         ),
         icon: Icons.swap_vert_rounded,
       ),
@@ -421,9 +431,13 @@ class _QueueFilters extends StatelessWidget {
 }
 
 class _RecommendationCard extends ConsumerStatefulWidget {
-  const _RecommendationCard({required this.recommendation});
+  const _RecommendationCard({
+    required this.recommendation,
+    required this.canAdministerWorkspace,
+  });
 
   final PricingRecommendation recommendation;
+  final bool canAdministerWorkspace;
 
   @override
   ConsumerState<_RecommendationCard> createState() =>
@@ -540,7 +554,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: _editContext,
+                onPressed: widget.canAdministerWorkspace ? _editContext : null,
                 icon: const Icon(Icons.inventory_2_outlined, size: 18),
                 label: Text(
                   context.localized(
@@ -609,12 +623,15 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             _MarketEvidenceList(
               future: _evidence!,
               normalizedOffers: recommendation.normalizedOffersById,
-              onOverride: _overrideTier,
+              onOverride: widget.canAdministerWorkspace ? _overrideTier : null,
             ),
             const SizedBox(height: 18),
             const Divider(),
             const SizedBox(height: 14),
-            FitmentCandidatesPanel(catalogItemId: recommendation.catalogItemId),
+            FitmentCandidatesPanel(
+              catalogItemId: recommendation.catalogItemId,
+              canAdministerWorkspace: widget.canAdministerWorkspace,
+            ),
           ],
         ],
       ),
@@ -625,14 +642,14 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
     final target = item.recommendedPrice;
     if (target == null && !item.automaticEligible) {
       return context.localized(
-        ru: '${_money(item.currentPrice)} — автоцена не сформирована',
-        uk: '${_money(item.currentPrice)} — автоціну не сформовано',
+        ru: '${_recommendationMoney(item, item.currentPrice)} — автоцена не сформирована',
+        uk: '${_recommendationMoney(item, item.currentPrice)} — автоціну не сформовано',
       );
     }
     if (target == null) {
       return context.localized(
-        ru: '${_money(item.currentPrice)} — без изменений',
-        uk: '${_money(item.currentPrice)} — без змін',
+        ru: '${_recommendationMoney(item, item.currentPrice)} — без изменений',
+        uk: '${_recommendationMoney(item, item.currentPrice)} — без змін',
       );
     }
     final change =
@@ -641,8 +658,10 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
         item.percentageRecommendedChange ??
         (item.currentPrice == 0 ? 0 : change / item.currentPrice);
     final sign = target >= item.currentPrice ? '+' : '−';
-    return '${_money(item.currentPrice)} → ${_money(target)} · '
-        '$sign${_money(change)} (${(percent * 100).toStringAsFixed(1)}%)';
+    return '${_recommendationMoney(item, item.currentPrice)} → '
+        '${_recommendationMoney(item, target)} · '
+        '$sign${_recommendationMoney(item, change)} '
+        '(${(percent * 100).toStringAsFixed(1)}%)';
   }
 
   Future<void> _editContext() async {
@@ -832,7 +851,7 @@ class _MarketEvidenceList extends StatelessWidget {
 
   final Future<List<RecommendationEvidence>> future;
   final Map<String, Map<String, dynamic>> normalizedOffers;
-  final Future<void> Function(RecommendationEvidence) onOverride;
+  final Future<void> Function(RecommendationEvidence)? onOverride;
 
   @override
   Widget build(BuildContext context) {
@@ -897,10 +916,10 @@ class _MarketEvidenceList extends StatelessWidget {
                   normalizedPrice != null && multiplier != null
                   ? context.localized(
                       ru:
-                          'KEMP-эквивалент: ${_money(normalizedPrice)} · '
+                          'KEMP-эквивалент: ${_money(normalizedPrice, currency: item.currency)} · '
                           'm=${multiplier.toStringAsFixed(2)}',
                       uk:
-                          'KEMP-еквівалент: ${_money(normalizedPrice)} · '
+                          'KEMP-еквівалент: ${_money(normalizedPrice, currency: item.currency)} · '
                           'm=${multiplier.toStringAsFixed(2)}',
                     )
                   : context.localized(
@@ -1009,7 +1028,7 @@ class _MarketEvidenceList extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           Text(
-                            _money(item.price),
+                            _money(item.price, currency: item.currency),
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           Text(
@@ -1026,14 +1045,15 @@ class _MarketEvidenceList extends StatelessWidget {
                           color: colors.brand,
                         ),
                       ],
-                      IconButton(
-                        tooltip: context.localized(
-                          ru: 'Уточнить tier',
-                          uk: 'Уточнити tier',
+                      if (onOverride != null)
+                        IconButton(
+                          tooltip: context.localized(
+                            ru: 'Уточнить tier',
+                            uk: 'Уточнити tier',
+                          ),
+                          onPressed: () => onOverride!(item),
+                          icon: const Icon(Icons.rule_rounded, size: 18),
                         ),
-                        onPressed: () => onOverride(item),
-                        icon: const Icon(Icons.rule_rounded, size: 18),
-                      ),
                     ],
                   ),
                 ),
@@ -1102,7 +1122,7 @@ class _Evidence extends StatelessWidget {
           ),
           value: recommendation.fairPrice == null
               ? context.localized(ru: 'не рассчитана', uk: 'не розрахована')
-              : _money(recommendation.fairPrice!),
+              : _recommendationMoney(recommendation, recommendation.fairPrice!),
         ),
         _KeyValue(
           label: context.localized(
@@ -1111,7 +1131,8 @@ class _Evidence extends StatelessWidget {
           ),
           value: recommendation.lowerBound == null
               ? '—'
-              : '${_money(recommendation.lowerBound!)} — ${_money(recommendation.upperBound!)}',
+              : '${_recommendationMoney(recommendation, recommendation.lowerBound!)} — '
+                    '${_recommendationMoney(recommendation, recommendation.upperBound!)}',
         ),
         _KeyValue(
           label: context.localized(ru: 'Приоритет', uk: 'Пріоритет'),
@@ -1357,7 +1378,18 @@ class _LoadError extends StatelessWidget {
   }
 }
 
-String _money(double value) => '${value.toStringAsFixed(0)} ₴';
+String _money(double value, {required String currency}) =>
+    formatMoney(value, currency: currency);
+
+String _recommendationMoney(
+  PricingRecommendation recommendation,
+  double value,
+) => formatMoney(
+  value,
+  currency: recommendation.currency,
+  priceTick: recommendation.priceTick,
+  fractionDigits: recommendation.priceTickScale,
+);
 
 int _cohortRank(String role) => switch (role) {
   'TARGET_MARKET' => 0,
@@ -1386,12 +1418,12 @@ String _priorityLabel(
   PricingRecommendation recommendation,
 ) => switch (recommendation.priorityScoreType) {
   'gross_uplift_opportunity' => context.localized(
-    ru: '${recommendation.priorityScore.toStringAsFixed(0)} ₴/мес. с учётом confidence',
-    uk: '${recommendation.priorityScore.toStringAsFixed(0)} ₴/міс. з урахуванням confidence',
+    ru: '${_recommendationMoney(recommendation, recommendation.priorityScore)}/мес. с учётом confidence',
+    uk: '${_recommendationMoney(recommendation, recommendation.priorityScore)}/міс. з урахуванням confidence',
   ),
   'clearance_priority' => context.localized(
-    ru: '${recommendation.priorityScore.toStringAsFixed(0)} ₴ замороженного капитала',
-    uk: '${recommendation.priorityScore.toStringAsFixed(0)} ₴ замороженого капіталу',
+    ru: '${_recommendationMoney(recommendation, recommendation.priorityScore)} замороженного капитала',
+    uk: '${_recommendationMoney(recommendation, recommendation.priorityScore)} замороженого капіталу',
   ),
   'retail_exposure_proxy' =>
     '${recommendation.priorityScore.toStringAsFixed(2)} · stock exposure proxy',
@@ -1407,10 +1439,13 @@ String _reasonSummary(
   if (recommendation.reasonCodes.isEmpty) {
     return context.localized(ru: 'Расчёт завершён', uk: 'Розрахунок завершено');
   }
-  return recommendation.reasonCodes
-      .map((code) => _reasonLabel(context, code))
-      .take(2)
-      .join(' · ');
+  return summarizeLimited(
+    recommendation.reasonCodes.map((code) => _reasonLabel(context, code)),
+    limit: 2,
+    separator: ' · ',
+    overflowLabel: (hidden) =>
+        context.localized(ru: 'и ещё $hidden', uk: 'і ще $hidden'),
+  );
 }
 
 String _reasonLabel(BuildContext context, String code) => switch (code) {
@@ -1436,7 +1471,11 @@ String _reasonLabel(BuildContext context, String code) => switch (code) {
     uk: 'низька впевненість',
   ),
   'LOW_COVERAGE' => context.localized(ru: 'мало данных', uk: 'мало даних'),
-  'LOW_DISPERSION' || 'HIGH_DISPERSION' => context.localized(
+  'LOW_DISPERSION' => context.localized(
+    ru: 'слишком низкий разброс цен',
+    uk: 'надто низький розкид цін',
+  ),
+  'HIGH_DISPERSION' => context.localized(
     ru: 'слишком большой разброс цен',
     uk: 'надто великий розкид цін',
   ),
@@ -1579,8 +1618,13 @@ String _excludedSummary(
       final byCount = right.value.compareTo(left.value);
       return byCount != 0 ? byCount : left.key.compareTo(right.key);
     });
-  return entries
-      .take(4)
-      .map((entry) => '${_reasonLabel(context, entry.key)}: ${entry.value}')
-      .join(' · ');
+  return summarizeLimited(
+    entries.map(
+      (entry) => '${_reasonLabel(context, entry.key)}: ${entry.value}',
+    ),
+    limit: 4,
+    separator: ' · ',
+    overflowLabel: (hidden) =>
+        context.localized(ru: 'и ещё $hidden', uk: 'і ще $hidden'),
+  );
 }

@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from .raise_policy import RaisePolicy
 
 
 ZERO = Decimal("0")
@@ -401,6 +404,11 @@ class PricingPolicy:
     age_reference_days: Decimal = Decimal("365")
     sales_recency_half_life_days: Decimal = Decimal("90")
     price_tick_version: str = "uah-integer-v1"
+    # How the raise target and its guards are configured.  Annotated lazily and
+    # defaulted to ``None`` so this module stays free of a cycle with
+    # ``raise_policy``, which needs ``StockStatus`` from here.  The engine
+    # substitutes the balanced preset when a deployment supplies nothing.
+    raise_policy: RaisePolicy | None = None
 
     def __post_init__(self) -> None:
         selected_method = self.dispersion_method

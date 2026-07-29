@@ -117,4 +117,35 @@ void main() {
     expect(page.total, 0);
     expect(page.analysisId, isNull);
   });
+
+  test('keeps missing price-unit certainty explicit', () {
+    final candidate = FitmentCandidate.fromJson({
+      'id': 'assessment-1',
+      'market_observation_id': 'observation-1',
+      'seller_id': 'seller-1',
+      'seller_name': 'Seller',
+      'title': 'Part',
+      'url': 'https://prom.ua/ua/p1-part.html',
+      'price': '100',
+      'currency': 'UAH',
+      'compatibility_status': 'manual_review',
+      'compatibility_probability': '0',
+      'coverage': '0',
+      'hard_rejections': <dynamic>[],
+      'reason_codes': <dynamic>[],
+      'missing_critical_fields': <dynamic>[],
+      'authoritative_confirmation': false,
+      'requires_manual_review': true,
+      'evidence_ids': <dynamic>[],
+      'evidence_claim_ids': <dynamic>[],
+      'evidence': <dynamic>[],
+      'price_comparability_status': 'manual_review',
+      'price_eligible': false,
+      'competitor_weight': '0',
+      'price_reason_codes': <dynamic>[],
+      'automatic_price_change_allowed': false,
+    });
+
+    expect(candidate.priceUnitCertainty, isNull);
+  });
 }

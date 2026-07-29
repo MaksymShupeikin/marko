@@ -75,7 +75,7 @@ void main() {
     expect(item.percentageRecommendedChange, 0.15);
     expect(item.effectiveCompetitorCount, 4.8);
     expect(item.actionGatesPassed, isTrue);
-    expect(item.priorityLabel, contains('₴/мес.'));
+    expect(item.priorityLabel, contains('UAH/мес.'));
   });
 
   test('marks abstention as manual review', () {
@@ -150,6 +150,24 @@ void main() {
     expect(evidence.tierLabel, 'OEM');
     expect(evidence.affectsTargetMedian, isTrue);
     expect(evidence.conditionState, 'NEW');
+  });
+
+  test('does not invent maximum source confidence when it is absent', () {
+    final evidence = RecommendationEvidence.fromJson({
+      'observation_id': 'obs-1',
+      'seller_name': 'Seller',
+      'title': 'Part',
+      'description_available': false,
+      'condition_state': 'UNKNOWN',
+      'url': 'https://example.test/item',
+      'price': '100',
+      'currency': 'UAH',
+      'tier': 'unknown',
+      'is_dumping': false,
+      'observed_at': '2026-07-16T12:00:00Z',
+    });
+
+    expect(evidence.sourceConfidence, isNull);
   });
 
   test('parses field-level recommendation replay drift', () {

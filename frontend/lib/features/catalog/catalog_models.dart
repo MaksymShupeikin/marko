@@ -367,9 +367,9 @@ class CatalogCompetitorComparison {
     this.discoveryPersistedCount = 0,
     this.ownedExcludedCount = 0,
     this.discoveryRejectedCount = 0,
-    this.comparableCount = 0,
-    this.reviewCount = 0,
-    this.skippedCount = 0,
+    this.pricingEvidenceCount = 0,
+    this.referenceOnlyCount = 0,
+    this.rejectedCandidateCount = 0,
     this.selectionHistogram = const {},
     this.searchPagesFetched = 0,
     this.searchPageLimit = 0,
@@ -379,7 +379,11 @@ class CatalogCompetitorComparison {
     this.selectionMethodVersion,
     this.selectionConfigSha256,
     this.brandRulesDatasetId,
+    this.confidenceGrade,
+    this.dispersion,
     this.discoveryItems = const [],
+    this.pricingEvidence = const [],
+    this.referenceOnly = const [],
   });
 
   factory CatalogCompetitorComparison.fromJson(Map<String, dynamic> json) {
@@ -416,21 +420,37 @@ class CatalogCompetitorComparison {
       ownedExcludedCount: (json['owned_excluded_count'] as num?)?.toInt() ?? 0,
       discoveryRejectedCount:
           (json['discovery_rejected_count'] as num?)?.toInt() ?? 0,
-      comparableCount: (json['comparable_count'] as num?)?.toInt() ?? 0,
-      reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
-      skippedCount: (json['skipped_count'] as num?)?.toInt() ?? 0,
+      pricingEvidenceCount:
+          (json['pricing_evidence_count'] as num?)?.toInt() ?? 0,
+      referenceOnlyCount: (json['reference_only_count'] as num?)?.toInt() ?? 0,
+      rejectedCandidateCount:
+          (json['rejected_candidate_count'] as num?)?.toInt() ?? 0,
       selectionHistogram:
           (json['selection_histogram'] as Map<String, dynamic>? ?? const {})
               .map((key, value) => MapEntry(key, (value as num).toInt())),
       searchPagesFetched: (json['search_pages_fetched'] as num?)?.toInt() ?? 0,
       searchPageLimit: (json['search_page_limit'] as num?)?.toInt() ?? 0,
       unfetchedCount: (json['unfetched_count'] as num?)?.toInt() ?? 0,
+      confidenceGrade: json['confidence_grade'] as String?,
+      dispersion: _decimal(json['dispersion']),
       coverageRatio: _decimal(json['coverage_ratio']),
       coverageReason: json['coverage_reason'] as String?,
       selectionMethodVersion: json['selection_method_version'] as String?,
       selectionConfigSha256: json['selection_config_sha256'] as String?,
       brandRulesDatasetId: json['brand_rules_dataset_id'] as String?,
       discoveryItems: (json['discovery_items'] as List<dynamic>? ?? const [])
+          .map(
+            (item) =>
+                CatalogDiscoveredOffer.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
+      pricingEvidence: (json['pricing_evidence'] as List<dynamic>? ?? const [])
+          .map(
+            (item) =>
+                CatalogDiscoveredOffer.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
+      referenceOnly: (json['reference_only'] as List<dynamic>? ?? const [])
           .map(
             (item) =>
                 CatalogDiscoveredOffer.fromJson(item as Map<String, dynamic>),
@@ -457,9 +477,9 @@ class CatalogCompetitorComparison {
   final int discoveryPersistedCount;
   final int ownedExcludedCount;
   final int discoveryRejectedCount;
-  final int comparableCount;
-  final int reviewCount;
-  final int skippedCount;
+  final int pricingEvidenceCount;
+  final int referenceOnlyCount;
+  final int rejectedCandidateCount;
   final Map<String, int> selectionHistogram;
   final int searchPagesFetched;
   final int searchPageLimit;
@@ -469,7 +489,15 @@ class CatalogCompetitorComparison {
   final String? selectionMethodVersion;
   final String? selectionConfigSha256;
   final String? brandRulesDatasetId;
+  final String? confidenceGrade;
+  final double? dispersion;
   final List<CatalogDiscoveredOffer> discoveryItems;
+
+  /// Counts towards the fair price.
+  final List<CatalogDiscoveredOffer> pricingEvidence;
+
+  /// Same part, level unknown or unconvertible: shown, never priced against.
+  final List<CatalogDiscoveredOffer> referenceOnly;
 
   bool get hasComparison => recommendationId != null;
   bool get hasDiscovery => discoveryRunId != null;

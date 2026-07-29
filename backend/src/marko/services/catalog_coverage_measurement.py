@@ -437,12 +437,26 @@ class MeasurementCheckpoint:
         *,
         retry_failed: bool = True,
     ) -> tuple[CoverageTarget, ...]:
+        targets_by_sample = {target.sample_no: target for target in targets}
+        unexpected = sorted(set(self._outcomes) - set(targets_by_sample))
+        if unexpected:
+            raise CoverageMeasurementError(
+                "COVERAGE_CHECKPOINT_TARGET_MISMATCH",
+                "Чекпоинт содержит sample_no вне замороженного списка целей: "
+                + ", ".join(map(str, unexpected)),
+            )
         pending: list[CoverageTarget] = []
-        for target in targets:
+        for target in targets_by_sample.values():
             recorded = self._outcomes.get(target.sample_no)
             if recorded is None:
                 pending.append(target)
                 continue
+            if recorded.oe_norm != target.oe_norm:
+                raise CoverageMeasurementError(
+                    "COVERAGE_CHECKPOINT_TARGET_MISMATCH",
+                    f"sample_no {target.sample_no}: чекпоинт содержит OE "
+                    f"{recorded.oe_norm!r}, ожидается {target.oe_norm!r}.",
+                )
             if recorded.is_completed:
                 continue
             if retry_failed:
@@ -678,7 +692,7 @@ def cohort_membership(target_oe: str, facts: OfferFacts) -> frozenset[str]:
         memberships.add(COHORT_IDENTITY)
 
     in_stock = facts.is_available is not False
-    if facts.selection_status == "COMPARABLE" and not excluded and in_stock:
+    if facts.selection_status == "PRICING_EVIDENCE" and not excluded and in_stock:
         memberships.add(COHORT_PLAN_S)
 
     return frozenset(memberships)
@@ -891,11 +905,16 @@ def parsed_product_count(body: str, language: str = "ua") -> int:
 @dataclass(frozen=True, slots=True)
 class CaptureAssessment:
     product_count: int
+    parser_outcome: str
     markers: tuple[str, ...]
 
     @property
     def is_suspected_block(self) -> bool:
-        return self.product_count == 0 and bool(self.markers)
+        return (
+            self.product_count == 0
+            and self.parser_outcome != "EMPTY_SEARCH_RESULT"
+            and bool(self.markers)
+        )
 
     @property
     def yielded_no_products(self) -> bool:
@@ -905,10 +924,22 @@ class CaptureAssessment:
 def assess_capture_body(body: str, language: str = "ua") -> CaptureAssessment:
     """Decide whether one captured response looks like an anti-bot response."""
 
-    count = parsed_product_count(body, language)
+    try:
+        page = parse_search(body, language)
+    except Exception as exc:  # noqa: BLE001 - the outcome is diagnostic evidence
+        count = 0
+        parser_outcome = f"UNPARSEABLE:{type(exc).__name__}"
+    else:
+        count = len(page.products)
+        parser_outcome = page.outcome
     return CaptureAssessment(
         product_count=count,
-        markers=scan_blocking_markers(body) if count == 0 else (),
+        parser_outcome=parser_outcome,
+        markers=(
+            scan_blocking_markers(body)
+            if count == 0 and parser_outcome != "EMPTY_SEARCH_RESULT"
+            else ()
+        ),
     )
 
 

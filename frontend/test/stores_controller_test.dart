@@ -62,6 +62,100 @@ void main() {
       isNull,
     );
   });
+
+  test('stops job polling after a bounded number of failures', () async {
+    var jobRequests = 0;
+    var jobAvailable = false;
+    final api = StoresApi(
+      ApiClient(
+        client: MockClient((request) async {
+          if (request.method == 'GET' && request.url.path == '/api/v1/stores') {
+            return http.Response('[]', 200);
+          }
+          if (request.method == 'POST' &&
+              request.url.path == '/api/v1/stores') {
+            return http.Response(
+              jsonEncode({
+                'store_id': 'store-id',
+                'sync_run_id': 'sync-id',
+                'status': 'queued',
+              }),
+              202,
+            );
+          }
+          if (request.method == 'GET' &&
+              request.url.path == '/api/v1/jobs/sync-id') {
+            jobRequests += 1;
+            if (jobAvailable) {
+              return http.Response(
+                jsonEncode({
+                  'status': 'completed',
+                  'progress_current': 12,
+                  'progress_total': 12,
+                  'error': null,
+                }),
+                200,
+              );
+            }
+            return http.Response('temporarily unavailable', 503);
+          }
+          return http.Response('not found', 404);
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        storesApiProvider.overrideWithValue(api),
+        storesControllerProvider.overrideWith(
+          () => StoresController(
+            pollBaseDelay: Duration.zero,
+            maxConsecutivePollFailures: 3,
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(storesControllerProvider.future);
+
+    final accepted = await container
+        .read(storesControllerProvider.notifier)
+        .addStore('https://prom.ua/ua/c2847093-kemp.html');
+    expect(accepted, isTrue);
+    await _waitForMonitoringFailure(container);
+
+    final state = container.read(storesControllerProvider).requireValue;
+    expect(jobRequests, 3);
+    expect(state.activeJob?.status, 'monitoring_failed');
+    expect(state.activeJob?.isFinished, isTrue);
+    expect(state.error, contains('нескольких попыток'));
+
+    jobAvailable = true;
+    container.read(storesControllerProvider.notifier).retryMonitoring();
+    await _waitForJobStatus(container, 'completed');
+
+    expect(jobRequests, 4);
+    expect(container.read(storesControllerProvider).requireValue.error, isNull);
+  });
+}
+
+Future<void> _waitForMonitoringFailure(ProviderContainer container) =>
+    _waitForJobStatus(container, 'monitoring_failed');
+
+Future<void> _waitForJobStatus(
+  ProviderContainer container,
+  String expectedStatus,
+) async {
+  for (var attempt = 0; attempt < 50; attempt++) {
+    final status = container
+        .read(storesControllerProvider)
+        .value
+        ?.activeJob
+        ?.status;
+    if (status == expectedStatus) return;
+    await Future<void>.delayed(Duration.zero);
+  }
+  fail('Polling did not reach $expectedStatus');
 }
 
 Map<String, dynamic> _storeJson() => {

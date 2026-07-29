@@ -421,19 +421,26 @@ def test_cost_never_changes_fair_market_price() -> None:
 
 
 @pytest.mark.parametrize("current_price", ["500", "800", "1100", "1500", "2500"])
-def test_fresh_items_follow_market_in_both_directions(current_price: str) -> None:
+def test_fresh_items_move_up_or_stay_put_but_never_down(current_price: str) -> None:
+    """Direction is asymmetric on purpose: raise or say nothing.
+
+    Above the target the engine holds instead of proposing a cut, so an item
+    that is already expensive keeps its margin rather than being talked down.
+    """
+
     result = recommend_price(
         context(current_price, stock_status=StockStatus.FRESH),
         market(),
         BUDGET_COEFFICIENTS,
     )
 
+    assert result.action != RecommendationAction.LOWER
     if Decimal(current_price) < Decimal("1000"):
         assert result.action == RecommendationAction.RAISE
-    elif Decimal(current_price) > Decimal("1200"):
-        assert result.action == RecommendationAction.LOWER
+        assert result.recommended_price > Decimal(current_price)
     else:
         assert result.action == RecommendationAction.HOLD
+        assert result.recommended_price is None
 
 
 def test_raise_priority_increases_with_expected_units() -> None:

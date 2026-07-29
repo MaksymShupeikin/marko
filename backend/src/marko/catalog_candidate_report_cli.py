@@ -23,6 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--run-id", type=UUID)
     selector.add_argument("--query")
+    parser.add_argument("--workspace-id", type=UUID, required=True)
     parser.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
@@ -31,6 +32,7 @@ async def _run(args: argparse.Namespace) -> int:
     async with async_session_factory() as session:
         report = await load_candidate_selection_report(
             session,
+            workspace_id=args.workspace_id,
             run_id=args.run_id,
             query=args.query,
         )

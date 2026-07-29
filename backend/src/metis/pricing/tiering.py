@@ -206,6 +206,11 @@ def normalize_brand(value: str | None) -> str:
     alias = _CYRILLIC_BRAND_ALIASES.get(unicode_token)
     if alias is not None:
         return alias
+    if any(
+        character.isalpha() and not ("A" <= character <= "Z")
+        for character in unicode_token
+    ):
+        return ""
     return _NON_ALNUM.sub("", normalized)
 
 
@@ -255,7 +260,8 @@ def classify_tier(
         )
 
     brand_tier = rules.get(normalized_brand)
-    if normalized_brand == "KEMP" or re.search(r"\bkemp\b", text):
+    has_kemp_marker = re.search(r"\bkemp\b", text) is not None
+    if normalized_brand == "KEMP":
         return TierClassification(
             tier=ProductTier.KEMP,
             confidence=Decimal("0.99"),
@@ -263,6 +269,17 @@ def classify_tier(
             is_kemp=True,
             exclusion_reason=None,
             reasons=("KEMP_MARKER",),
+            method_version=method_version,
+        )
+
+    if has_kemp_marker and brand_tier not in (None, ProductTier.KEMP):
+        return TierClassification(
+            tier=ProductTier.UNKNOWN,
+            confidence=Decimal("0.20"),
+            is_used=False,
+            is_kemp=False,
+            exclusion_reason="TIER_CONFLICT",
+            reasons=("KEMP_TEXT_BRAND_CONFLICT",),
             method_version=method_version,
         )
 
@@ -283,9 +300,20 @@ def classify_tier(
             tier=brand_tier,
             confidence=Decimal("0.95"),
             is_used=False,
-            is_kemp=False,
+            is_kemp=brand_tier == ProductTier.KEMP,
             exclusion_reason=None,
             reasons=("EXACT_BRAND_RULE",),
+            method_version=method_version,
+        )
+
+    if has_kemp_marker:
+        return TierClassification(
+            tier=ProductTier.KEMP,
+            confidence=Decimal("0.99"),
+            is_used=False,
+            is_kemp=True,
+            exclusion_reason=None,
+            reasons=("KEMP_MARKER",),
             method_version=method_version,
         )
 

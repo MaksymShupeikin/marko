@@ -82,13 +82,17 @@ class SyncRun {
   final int? progressTotal;
   final String? error;
 
-  bool get isFinished => status == 'completed' || status == 'failed';
+  bool get isFinished =>
+      status == 'completed' ||
+      status == 'failed' ||
+      status == 'monitoring_failed';
 
   String get statusLabel => switch (status) {
     'queued' => 'в очереди',
     'running' => 'выполняется',
     'completed' => 'готово',
     'failed' => 'ошибка',
+    'monitoring_failed' => 'слежение остановлено',
     _ => status,
   };
 
@@ -140,7 +144,11 @@ class StoreProduct {
   String get details => [
     ?brand,
     if (sku != null) 'SKU $sku',
-    isAvailable == true ? 'В наличии' : 'Нет в наличии',
+    switch (isAvailable) {
+      true => 'В наличии',
+      false => 'Нет в наличии',
+      null => 'Наличие не указано',
+    },
   ].join(' · ');
 
   String get priceLabel => price == null

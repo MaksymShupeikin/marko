@@ -4,10 +4,14 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from marko.services.catalog_candidate_report import (
+    CandidateReportError,
     CandidateSelectionReport,
     _candidate_gate_metrics,
     format_candidate_selection_report,
+    load_candidate_selection_report,
 )
 from metis.pricing import CANDIDATE_GATE_ORDER
 
@@ -17,13 +21,13 @@ def test_candidate_report_contains_histogram_and_coverage_reason() -> None:
         run_id=uuid4(),
         query="7E5827505A",
         histogram={
-            "DISMANTLER_SELLER": 2,
-            "OEM_NOT_FOUND": 1,
-            "TIER_UNKNOWN (REVIEW)": 26,
+            "REJECTED:DISMANTLER_SELLER": 2,
+            "REJECTED:OEM_NOT_FOUND": 1,
+            "REFERENCE_ONLY:TIER_UNKNOWN": 26,
         },
-        comparable_count=0,
-        review_count=26,
-        skipped_count=3,
+        pricing_evidence_count=0,
+        reference_only_count=26,
+        rejected_candidate_count=3,
         prom_reported_total=90,
         retrieved_count=29,
         persisted_count=29,
@@ -57,7 +61,7 @@ def test_candidate_report_contains_histogram_and_coverage_reason() -> None:
     text = format_candidate_selection_report(report)
     payload = report.as_dict()
 
-    assert "TIER_UNKNOWN (REVIEW)" in text
+    assert "REFERENCE_ONLY:TIER_UNKNOWN" in text
     assert "29/90" in text
     assert "не загружено 61" in text
     assert "SEARCH_PAGE_LIMIT" in text
@@ -65,9 +69,9 @@ def test_candidate_report_contains_histogram_and_coverage_reason() -> None:
     assert "CONFIRMED=0" in text
     assert "own_seller: reached=29" in text
     assert payload["status_counts"] == {
-        "COMPARABLE": 0,
-        "REVIEW": 26,
-        "SKIP": 3,
+        "PRICING_EVIDENCE": 0,
+        "REFERENCE_ONLY": 26,
+        "REJECTED": 3,
     }
 
 
@@ -80,19 +84,19 @@ def test_candidate_gate_metrics_use_conditional_reached_denominator() -> None:
         passed_gates=[],
         selection_details={"stopped_gate": "own_seller"},
     )
-    tier_review = SimpleNamespace(
-        passed_gates=list(CANDIDATE_GATE_ORDER[:9]),
-        selection_details={"stopped_gate": "tier"},
+    tier_reference_only = SimpleNamespace(
+        passed_gates=list(CANDIDATE_GATE_ORDER[:12]),
+        selection_details={"stopped_gate": "tier_known"},
     )
 
-    metrics = _candidate_gate_metrics([comparable, own_skip, tier_review])
+    metrics = _candidate_gate_metrics([comparable, own_skip, tier_reference_only])
 
     assert metrics["own_seller"] == {
         "reached": 3,
         "terminal": 1,
         "conditional_selectivity": "0.333333",
     }
-    assert metrics["tier"] == {
+    assert metrics["tier_known"] == {
         "reached": 2,
         "terminal": 1,
         "conditional_selectivity": "0.500000",
@@ -102,3 +106,27 @@ def test_candidate_gate_metrics_use_conditional_reached_denominator() -> None:
         "terminal": 0,
         "conditional_selectivity": "0.000000",
     }
+
+
+@pytest.mark.asyncio
+async def test_candidate_report_query_is_scoped_to_workspace() -> None:
+    workspace_id = uuid4()
+
+    class CapturingSession:
+        statement = None
+
+        async def scalar(self, statement):
+            self.statement = statement
+            return None
+
+    session = CapturingSession()
+    with pytest.raises(CandidateReportError, match="not found"):
+        await load_candidate_selection_report(
+            session,  # type: ignore[arg-type]
+            workspace_id=workspace_id,
+            query="7E5827505A",
+        )
+
+    compiled = session.statement.compile()
+    assert "workspace_id" in str(compiled)
+    assert workspace_id in compiled.params.values()

@@ -35,6 +35,10 @@ class CatalogCompetitorSection extends StatelessWidget {
           ).textTheme.bodySmall?.copyWith(color: colors.muted),
         ),
         const SizedBox(height: 14),
+        if (comparison.hasComparison) ...[
+          _PriceCalculationCard(comparison: comparison),
+          const SizedBox(height: 16),
+        ],
         if (comparison.items.isEmpty)
           _EmptyCompetitors(
             hasComparison: comparison.hasComparison,
@@ -152,25 +156,123 @@ class _DiscoverySection extends StatelessWidget {
           const SizedBox(height: 12),
           _SelectionHistogram(comparison: comparison),
         ],
-        const SizedBox(height: 14),
-        if (comparison.discoveryItems.isEmpty)
+        const SizedBox(height: 18),
+        _OutcomeBlock(
+          key: const ValueKey('catalog-pricing-evidence-block'),
+          title: context.localized(
+            ru: 'Учитываются в расчёте',
+            uk: 'Враховуються в розрахунку',
+          ),
+          subtitle: context.localized(
+            ru:
+                'Та же деталь, уровень известен и приводится к вашему. '
+                'Эти цены формируют справедливую цену.',
+            uk:
+                'Та сама деталь, рівень відомий і приводиться до вашого. '
+                'Ці ціни формують справедливу ціну.',
+          ),
+          emptyLabel: context.localized(
+            ru:
+                'Пока ни одно объявление не допущено к расчёту цены. '
+                'Причины перечислены выше.',
+            uk:
+                'Поки жодне оголошення не допущене до розрахунку ціни. '
+                'Причини перелічені вище.',
+          ),
+          offers: comparison.pricingEvidence,
+          onOpenListing: onOpenListing,
+          accent: colors.positive,
+        ),
+        const SizedBox(height: 20),
+        _OutcomeBlock(
+          key: const ValueKey('catalog-reference-only-block'),
+          title: context.localized(
+            ru: 'Показаны справочно · в расчёт не входят',
+            uk: 'Показані довідково · у розрахунок не входять',
+          ),
+          subtitle: context.localized(
+            ru:
+                'Та же деталь, но уровень не определён или его нельзя '
+                'привести к вашему. Проверьте по ссылке и решите сами.',
+            uk:
+                'Та сама деталь, але рівень не визначено або його не можна '
+                'привести до вашого. Перевірте за посиланням і вирішіть самі.',
+          ),
+          emptyLabel: context.localized(
+            ru: 'Справочных объявлений нет.',
+            uk: 'Довідкових оголошень немає.',
+          ),
+          offers: comparison.referenceOnly,
+          onOpenListing: onOpenListing,
+          accent: colors.muted,
+        ),
+      ],
+    );
+  }
+}
+
+class _OutcomeBlock extends StatelessWidget {
+  const _OutcomeBlock({
+    required this.title,
+    required this.subtitle,
+    required this.emptyLabel,
+    required this.offers,
+    required this.onOpenListing,
+    required this.accent,
+    super.key,
+  });
+
+  final String title;
+  final String subtitle;
+  final String emptyLabel;
+  final List<CatalogDiscoveredOffer> offers;
+  final ValueChanged<String> onOpenListing;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Container(width: 3, height: 16, color: accent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$title · ${offers.length}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Padding(
+          padding: const EdgeInsets.only(left: 11),
+          child: Text(
+            subtitle,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.muted),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (offers.isEmpty)
           Container(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: colors.surfaceMuted,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
-              context.localized(
-                ru: 'Внешних кандидатов в этой выдаче нет.',
-                uk: 'Зовнішніх кандидатів у цій видачі немає.',
-              ),
+              emptyLabel,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           )
         else
-          ...comparison.discoveryItems.map(
+          ...offers.map(
             (offer) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: _DiscoveredListingCard(
@@ -374,22 +476,22 @@ class _CandidateVerdictBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final (background, foreground) = switch (offer.selectionStatus) {
-      'COMPARABLE' => (colors.positiveSoft, colors.positive),
-      'SKIP' => (colors.negativeSoft, colors.negative),
+      'PRICING_EVIDENCE' => (colors.positiveSoft, colors.positive),
+      'REJECTED' => (colors.negativeSoft, colors.negative),
       _ => (colors.warningSoft, colors.warning),
     };
     final label = switch (offer.selectionStatus) {
-      'COMPARABLE' => context.localized(
-        ru: 'COMPARABLE · правила пройдены · не допущен к цене',
-        uk: 'COMPARABLE · правила пройдено · не допущено до ціни',
+      'PRICING_EVIDENCE' => context.localized(
+        ru: 'В расчёте цены',
+        uk: 'У розрахунку ціни',
       ),
-      'SKIP' => context.localized(
-        ru: 'SKIP · ${_reasonLabel(context, offer.selectionReason)}',
-        uk: 'SKIP · ${_reasonLabel(context, offer.selectionReason)}',
+      'REJECTED' => context.localized(
+        ru: 'Отброшен · ${_reasonLabel(context, offer.selectionReason)}',
+        uk: 'Відкинуто · ${_reasonLabel(context, offer.selectionReason)}',
       ),
       _ => context.localized(
-        ru: 'REVIEW · ${_reasonLabel(context, offer.selectionReason)}',
-        uk: 'REVIEW · ${_reasonLabel(context, offer.selectionReason)}',
+        ru: 'Справочно · ${_reasonLabel(context, offer.selectionReason)}',
+        uk: 'Довідково · ${_reasonLabel(context, offer.selectionReason)}',
       ),
     };
     return Container(
@@ -407,6 +509,196 @@ class _CandidateVerdictBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+class _PriceCalculationCard extends StatelessWidget {
+  /// Shows the arithmetic, not only its conclusion.
+  ///
+  /// The prices listed are the ones already converted to our own level, so the
+  /// customer can check the median by eye; when the engine stayed silent, the
+  /// card says which guard stopped it instead of leaving a blank space.
+  const _PriceCalculationCard({required this.comparison});
+
+  final CatalogCompetitorComparison comparison;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final theme = Theme.of(context);
+    final currency = comparison.currency ?? '';
+    final normalized =
+        comparison.items
+            .map((offer) => offer.normalizedPrice ?? offer.price)
+            .toList(growable: false)
+          ..sort();
+    final dispersion = comparison.dispersion;
+    final grade = comparison.confidenceGrade;
+
+    return Container(
+      key: const ValueKey('catalog-price-calculation'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceMuted,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            context.localized(
+              ru:
+                  'Расчёт: ${normalized.length} конкурентов вашего уровня, '
+                  'цены приведены',
+              uk:
+                  'Розрахунок: ${normalized.length} конкурентів вашого рівня, '
+                  'ціни приведені',
+            ),
+            style: theme.textTheme.labelMedium?.copyWith(color: colors.ink),
+          ),
+          if (normalized.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              normalized.map((price) => price.toStringAsFixed(0)).join('  ·  '),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          _CalculationRow(
+            label: context.localized(ru: 'Ваша цена', uk: 'Ваша ціна'),
+            value: _price(comparison.currentPrice, currency),
+          ),
+          _CalculationRow(
+            label: context.localized(
+              ru: 'Справедливая цена',
+              uk: 'Справедлива ціна',
+            ),
+            value: _price(comparison.fairPrice, currency),
+          ),
+          if (dispersion != null || grade != null)
+            _CalculationRow(
+              label: context.localized(
+                ru: 'Разброс · уверенность',
+                uk: 'Розкид · впевненість',
+              ),
+              value:
+                  '${dispersion == null ? '—' : '${(dispersion * 100).toStringAsFixed(1)}%'}'
+                  ' · ${grade ?? '—'}',
+            ),
+          const SizedBox(height: 8),
+          Text(
+            _verdict(context),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: comparison.recommendedPrice == null
+                  ? colors.muted
+                  : colors.positive,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _verdict(BuildContext context) {
+    final recommended = comparison.recommendedPrice;
+    final current = comparison.currentPrice;
+    if (recommended != null && current != null && current > 0) {
+      final delta = (recommended - current) / current * 100;
+      return context.localized(
+        ru:
+            'Рекомендация: ${recommended.toStringAsFixed(0)} '
+            '${comparison.currency ?? ''} (${delta >= 0 ? '+' : ''}'
+            '${delta.toStringAsFixed(1)}%)',
+        uk:
+            'Рекомендація: ${recommended.toStringAsFixed(0)} '
+            '${comparison.currency ?? ''} (${delta >= 0 ? '+' : ''}'
+            '${delta.toStringAsFixed(1)}%)',
+      );
+    }
+    for (final code in comparison.reasonCodes) {
+      final explained = _silenceLabel(context, code);
+      if (explained != null) return explained;
+    }
+    return context.localized(
+      ru: 'Рекомендация не выдаётся.',
+      uk: 'Рекомендація не видається.',
+    );
+  }
+}
+
+String? _silenceLabel(BuildContext context, String code) {
+  return switch (code) {
+    'PRICE_ALREADY_AT_OR_ABOVE_TARGET' => context.localized(
+      ru: 'Рекомендация не выдаётся: вы уже в рынке.',
+      uk: 'Рекомендація не видається: ви вже в ринку.',
+    ),
+    'CHANGE_BELOW_SIGNIFICANCE_THRESHOLD' => context.localized(
+      ru: 'Рекомендация не выдаётся: изменение ниже порога значимости.',
+      uk: 'Рекомендація не видається: зміна нижча за поріг значущості.',
+    ),
+    'STALE_NOT_BELOW_CHEAPEST_COMPETITOR' => context.localized(
+      ru:
+          'Рекомендация не выдаётся: товар лежалый и не дешевле самого '
+          'дешёвого конкурента.',
+      uk:
+          'Рекомендація не видається: товар залежаний і не дешевший за '
+          'найдешевшого конкурента.',
+    ),
+    'LOW_CONFIDENCE_BASIS' => context.localized(
+      ru: 'Расчёт показан, но база слишком разнородна для рекомендации.',
+      uk: 'Розрахунок показано, але база надто різнорідна для рекомендації.',
+    ),
+    'TOO_FEW_PRICING_EVIDENCE' => context.localized(
+      ru: 'Рекомендация не выдаётся: меньше трёх приведённых цен.',
+      uk: 'Рекомендація не видається: менше трьох приведених цін.',
+    ),
+    'ROUNDING_REMOVED_THE_CHANGE' => context.localized(
+      ru: 'Рекомендация не выдаётся: после округления изменения не осталось.',
+      uk: 'Рекомендація не видається: після округлення зміни не залишилось.',
+    ),
+    _ => null,
+  };
+}
+
+class _CalculationRow extends StatelessWidget {
+  const _CalculationRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: colors.muted),
+            ),
+          ),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: colors.ink,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _price(double? value, String currency) {
+  if (value == null) return '—';
+  return '${value.toStringAsFixed(0)} $currency'.trim();
 }
 
 class _CoverageNotice extends StatelessWidget {
@@ -488,13 +780,15 @@ class _SelectionHistogram extends StatelessWidget {
           Text(
             context.localized(
               ru:
-                  'Результат ворот: COMPARABLE ${comparison.comparableCount} · '
-                  'REVIEW ${comparison.reviewCount} · '
-                  'SKIP ${comparison.skippedCount}',
+                  'Результат ворот: в расчёте '
+                  '${comparison.pricingEvidenceCount} · справочно '
+                  '${comparison.referenceOnlyCount} · отброшено '
+                  '${comparison.rejectedCandidateCount}',
               uk:
-                  'Результат воріт: COMPARABLE ${comparison.comparableCount} · '
-                  'REVIEW ${comparison.reviewCount} · '
-                  'SKIP ${comparison.skippedCount}',
+                  'Результат воріт: у розрахунку '
+                  '${comparison.pricingEvidenceCount} · довідково '
+                  '${comparison.referenceOnlyCount} · відкинуто '
+                  '${comparison.rejectedCandidateCount}',
             ),
             style: Theme.of(
               context,
@@ -838,12 +1132,20 @@ class _EmptyCompetitors extends StatelessWidget {
 }
 
 String _histogramLabel(BuildContext context, String key) {
-  if (key == 'COMPARABLE') return key;
-  if (key.endsWith(' (REVIEW)')) {
-    final reason = key.substring(0, key.length - ' (REVIEW)'.length);
-    return 'REVIEW · ${_reasonLabel(context, reason)}';
-  }
-  return 'SKIP · ${_reasonLabel(context, key)}';
+  final separator = key.indexOf(':');
+  if (separator < 0) return key;
+  final status = key.substring(0, separator);
+  final reason = key.substring(separator + 1);
+  final prefix = switch (status) {
+    'PRICING_EVIDENCE' => context.localized(
+      ru: 'В расчёте',
+      uk: 'У розрахунку',
+    ),
+    'REJECTED' => context.localized(ru: 'Отброшен', uk: 'Відкинуто'),
+    _ => context.localized(ru: 'Справочно', uk: 'Довідково'),
+  };
+  if (reason == 'OK') return prefix;
+  return '$prefix · ${_reasonLabel(context, reason)}';
 }
 
 String _reasonLabel(BuildContext context, String reason) {
@@ -898,8 +1200,16 @@ String _reasonLabel(BuildContext context, String reason) {
       uk: 'не збігається застосовність',
     ),
     'TIER_UNKNOWN' => context.localized(
-      ru: 'tier бренда не определён',
-      uk: 'tier бренду не визначено',
+      ru: 'уровень бренда не определён',
+      uk: 'рівень бренду не визначено',
+    ),
+    'OWN_BRAND' => context.localized(
+      ru: 'наш собственный бренд',
+      uk: 'наш власний бренд',
+    ),
+    'PREMIUM_NOT_CALIBRATED' => context.localized(
+      ru: 'коэффициент уровня не откалиброван',
+      uk: 'коефіцієнт рівня не відкалібровано',
     ),
     'USED_BY_TIER' => context.localized(
       ru: 'tier определён как б/у',

@@ -309,7 +309,7 @@ abstract final class AppTheme {
           foregroundColor: colors.muted,
           hoverColor: colors.surfaceMuted,
           highlightColor: Colors.transparent,
-          minimumSize: const Size.square(40),
+          minimumSize: const Size.square(44),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),

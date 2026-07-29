@@ -13,7 +13,9 @@ from .calibration import (
     fit_simple_coefficients,
 )
 from .candidate_selection import (
+    CANDIDATE_COMPARABILITY_GATES,
     CANDIDATE_GATE_ORDER,
+    CANDIDATE_IDENTITY_GATES,
     CANDIDATE_SELECTION_SCHEMA_VERSION,
     CandidateItem,
     CandidateSelectionConfig,
@@ -133,7 +135,9 @@ __all__ = [
     "CalibrationPair",
     "ApprovedBrandRules",
     "BRAND_RULES_SCHEMA_VERSION",
+    "CANDIDATE_COMPARABILITY_GATES",
     "CANDIDATE_GATE_ORDER",
+    "CANDIDATE_IDENTITY_GATES",
     "BrandRuleContractError",
     "CANDIDATE_SELECTION_SCHEMA_VERSION",
     "CandidateItem",

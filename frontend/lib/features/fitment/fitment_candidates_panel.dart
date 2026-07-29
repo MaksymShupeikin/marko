@@ -7,9 +7,14 @@ import 'fitment_controller.dart';
 import 'fitment_recommendation_card.dart';
 
 class FitmentCandidatesPanel extends ConsumerWidget {
-  const FitmentCandidatesPanel({required this.catalogItemId, super.key});
+  const FitmentCandidatesPanel({
+    required this.catalogItemId,
+    this.canAdministerWorkspace = false,
+    super.key,
+  });
 
   final String catalogItemId;
+  final bool canAdministerWorkspace;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -76,18 +81,26 @@ class FitmentCandidatesPanel extends ConsumerWidget {
               )
             else ...[
               if (recommendation == null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FilledButton.icon(
-                    onPressed: state.isSubmitting
-                        ? null
-                        : () => ref
-                              .read(provider.notifier)
-                              .generateRecommendation(),
-                    icon: const Icon(Icons.calculate_outlined, size: 18),
-                    label: const Text('Рассчитать совет'),
-                  ),
-                )
+                if (canAdministerWorkspace)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      onPressed: state.isSubmitting
+                          ? null
+                          : () => ref
+                                .read(provider.notifier)
+                                .generateRecommendation(),
+                      icon: const Icon(Icons.calculate_outlined, size: 18),
+                      label: const Text('Рассчитать совет'),
+                    ),
+                  )
+                else
+                  Text(
+                    'Расчёт нового совета доступен владельцу или администратору.',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: colors.muted),
+                  )
               else
                 FitmentRecommendationCard(
                   recommendation: recommendation,
@@ -132,13 +145,15 @@ class FitmentCandidatesPanel extends ConsumerWidget {
                             comment: comment,
                             evidenceVerdicts: evidenceVerdicts,
                           ),
-                  onSellerReview: ({required relation, required reason}) => ref
-                      .read(provider.notifier)
-                      .markSeller(
-                        candidate,
-                        relation: relation,
-                        reason: reason,
-                      ),
+                  onSellerReview: canAdministerWorkspace
+                      ? ({required relation, required reason}) => ref
+                            .read(provider.notifier)
+                            .markSeller(
+                              candidate,
+                              relation: relation,
+                              reason: reason,
+                            )
+                      : null,
                 ),
               ),
             ],

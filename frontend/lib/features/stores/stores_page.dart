@@ -10,9 +10,14 @@ import 'store_models.dart';
 import 'stores_controller.dart';
 
 class StoresPage extends ConsumerStatefulWidget {
-  const StoresPage({this.ownedOnly = false, super.key});
+  const StoresPage({
+    this.ownedOnly = false,
+    this.canAdministerWorkspace = false,
+    super.key,
+  });
 
   final bool ownedOnly;
+  final bool canAdministerWorkspace;
 
   @override
   ConsumerState<StoresPage> createState() => _StoresPageState();
@@ -114,16 +119,25 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                       children: [
                         _PageHeading(ownedOnly: widget.ownedOnly),
                         const SizedBox(height: 24),
-                        _AddStorePanel(
-                          urlController: _urlController,
-                          busy: state.isSubmitting || state.isDeleting,
-                          onSubmit: () async {
-                            final accepted = await controller.addStore(
-                              _urlController.text,
-                            );
-                            if (accepted && mounted) _urlController.clear();
-                          },
-                        ),
+                        if (widget.canAdministerWorkspace)
+                          _AddStorePanel(
+                            urlController: _urlController,
+                            busy: state.isSubmitting || state.isDeleting,
+                            onSubmit: () async {
+                              final accepted = await controller.addStore(
+                                _urlController.text,
+                              );
+                              if (accepted && mounted) _urlController.clear();
+                            },
+                          )
+                        else
+                          MarkoInlineMessage(
+                            message: context.localized(
+                              ru: 'Подключение, синхронизация и удаление магазинов доступны владельцу или администратору.',
+                              uk: 'Підключення, синхронізація та видалення магазинів доступні власнику або адміністратору.',
+                            ),
+                            tone: MarkoMessageTone.info,
+                          ),
                         if (state.activeSync != null) ...[
                           const SizedBox(height: 14),
                           _SyncPanel(
@@ -137,9 +151,20 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                             message: state.error!,
                             tone: MarkoMessageTone.error,
                             action: TextButton(
-                              onPressed: controller.dismissError,
+                              onPressed:
+                                  state.activeJob?.status == 'monitoring_failed'
+                                  ? controller.retryMonitoring
+                                  : controller.dismissError,
                               child: Text(
-                                context.localized(ru: 'Закрыть', uk: 'Закрити'),
+                                state.activeJob?.status == 'monitoring_failed'
+                                    ? context.localized(
+                                        ru: 'Повторить отслеживание',
+                                        uk: 'Повторити відстеження',
+                                      )
+                                    : context.localized(
+                                        ru: 'Закрыть',
+                                        uk: 'Закрити',
+                                      ),
                               ),
                             ),
                           ),
@@ -165,6 +190,7 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                                   _StoreRow(
                                     store: availableStores[index],
                                     syncDisabled:
+                                        !widget.canAdministerWorkspace ||
                                         state.isSubmitting ||
                                         state.hasActiveJob ||
                                         state.isDeleting,
@@ -182,7 +208,9 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                                     onSync: () => controller.syncStore(
                                       availableStores[index],
                                     ),
-                                    onDelete: widget.ownedOnly
+                                    onDelete:
+                                        widget.ownedOnly &&
+                                            widget.canAdministerWorkspace
                                         ? () => _confirmDeleteStore(
                                             controller,
                                             availableStores[index],
@@ -361,7 +389,7 @@ class _SyncPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final status = job?.status ?? sync.status;
-    final failed = status == 'failed';
+    final failed = status == 'failed' || status == 'monitoring_failed';
     final completed = status == 'completed';
     final foreground = failed
         ? colors.negative

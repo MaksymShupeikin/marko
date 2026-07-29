@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
 
 import pytest
 from pydantic import ValidationError
@@ -49,17 +50,23 @@ def _trace(
     status_code: int | None = 200,
     body: bytes | None = b"<html></html>",
     error_category: str | None = None,
+    redirect_location: str | None = None,
 ) -> LogicalRequestTrace:
+    prepared_url = "https://prom.ua/ua/search?search_term=OE" + (
+        f"&page={sequence_no}" if sequence_no > 1 else ""
+    )
     return LogicalRequestTrace(
         sequence_no=sequence_no,
         request_kind="search",
-        prepared_url=f"https://prom.ua/ua/search?page={sequence_no}",
+        prepared_url=prepared_url,
         request_key=f"key-{sequence_no}",
         started_at=datetime(2026, 7, 26, tzinfo=UTC),
         started_perf=0.0,
         outcome=outcome,
         response_status_code=status_code,
+        response_redirect_location=redirect_location,
         raw_body=body,
+        content_sha256=(hashlib.sha256(body).hexdigest() if body is not None else None),
         error_category=error_category,
     )
 
@@ -69,8 +76,9 @@ def _redirect_trace(sequence_no: int) -> LogicalRequestTrace:
         sequence_no,
         outcome="terminal_failure",
         status_code=301,
-        body=None,
+        body=b"",
         error_category="upstream_3xx",
+        redirect_location="/ua/search?search_term=OE",
     )
 
 
@@ -87,6 +95,34 @@ def test_trailing_redirect_probe_does_not_invalidate_collected_pages() -> None:
 def test_a_run_whose_only_request_redirected_has_no_evidence() -> None:
     with pytest.raises(CatalogDiscoveryError) as error:
         usable_search_requests((_redirect_trace(1),))
+
+    assert error.value.code == "CATALOG_DISCOVERY_HTTP_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "location"),
+    [
+        (302, "/ua/search?search_term=OE"),
+        (301, "/ua/search?search_term=OTHER"),
+        (301, "https://example.net/challenge"),
+        (301, None),
+    ],
+)
+def test_noncanonical_redirect_is_not_a_pagination_end(
+    status_code: int,
+    location: str | None,
+) -> None:
+    redirect = _trace(
+        2,
+        outcome="terminal_failure",
+        status_code=status_code,
+        body=b"",
+        error_category="upstream_3xx",
+        redirect_location=location,
+    )
+
+    with pytest.raises(CatalogDiscoveryError) as error:
+        usable_search_requests((_trace(1), redirect))
 
     assert error.value.code == "CATALOG_DISCOVERY_HTTP_INCOMPLETE"
 

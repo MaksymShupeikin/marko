@@ -28,9 +28,9 @@ class CandidateSelectionReport:
     run_id: UUID
     query: str
     histogram: dict[str, int]
-    comparable_count: int
-    review_count: int
-    skipped_count: int
+    pricing_evidence_count: int
+    reference_only_count: int
+    rejected_candidate_count: int
     prom_reported_total: int | None
     retrieved_count: int
     persisted_count: int
@@ -56,9 +56,9 @@ class CandidateSelectionReport:
             "query": self.query,
             "histogram": self.histogram,
             "status_counts": {
-                "COMPARABLE": self.comparable_count,
-                "REVIEW": self.review_count,
-                "SKIP": self.skipped_count,
+                "PRICING_EVIDENCE": self.pricing_evidence_count,
+                "REFERENCE_ONLY": self.reference_only_count,
+                "REJECTED": self.rejected_candidate_count,
             },
             "coverage": {
                 "prom_reported_total": self.prom_reported_total,
@@ -104,13 +104,15 @@ class CandidateSelectionReport:
 async def load_candidate_selection_report(
     session: AsyncSession,
     *,
+    workspace_id: UUID,
     run_id: UUID | None = None,
     query: str | None = None,
 ) -> CandidateSelectionReport:
     if run_id is None and not (query or "").strip():
         raise CandidateReportError("run_id or query is required")
     statement = select(CatalogDiscoveryRun).where(
-        CatalogDiscoveryRun.status == "completed"
+        CatalogDiscoveryRun.workspace_id == workspace_id,
+        CatalogDiscoveryRun.status == "completed",
     )
     if run_id is not None:
         statement = statement.where(CatalogDiscoveryRun.id == run_id)
@@ -169,9 +171,9 @@ async def load_candidate_selection_report(
         run_id=run.id,
         query=run.query,
         histogram=dict(run.selection_histogram or {}),
-        comparable_count=run.comparable_count,
-        review_count=run.review_count,
-        skipped_count=run.skipped_count,
+        pricing_evidence_count=run.pricing_evidence_count,
+        reference_only_count=run.reference_only_count,
+        rejected_candidate_count=run.rejected_candidate_count,
         prom_reported_total=run.prom_reported_total,
         retrieved_count=run.retrieved_count,
         persisted_count=run.persisted_count,
@@ -205,9 +207,9 @@ def format_candidate_selection_report(report: CandidateSelectionReport) -> str:
             f"Query: {report.query}",
             (
                 "Статусы: "
-                f"COMPARABLE={report.comparable_count}, "
-                f"REVIEW={report.review_count}, "
-                f"SKIP={report.skipped_count}"
+                f"PRICING_EVIDENCE={report.pricing_evidence_count}, "
+                f"REFERENCE_ONLY={report.reference_only_count}, "
+                f"REJECTED={report.rejected_candidate_count}"
             ),
             (
                 "Покрытие: "

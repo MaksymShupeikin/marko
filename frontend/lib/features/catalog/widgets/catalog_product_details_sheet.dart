@@ -195,11 +195,16 @@ class _CatalogProductDetailsSheetState
                       OutlinedButton.icon(
                         key: const ValueKey('catalog-details-compare'),
                         onPressed: widget.onCompare,
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: colors.surface,
+                          foregroundColor: colors.ink,
+                          side: BorderSide(color: colors.border),
+                        ),
                         icon: const Icon(Icons.price_check_rounded, size: 19),
                         label: Text(
                           context.localized(
-                            ru: 'Перейти к сравнению цен',
-                            uk: 'Перейти до порівняння цін',
+                            ru: 'Сопоставление с объявлениями конкурентов',
+                            uk: 'Зіставлення з оголошеннями конкурентів',
                           ),
                         ),
                       ),
