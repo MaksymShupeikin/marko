@@ -60,3 +60,25 @@ groups:
           severity: warning
         annotations:
           summary: Retry amplification is consuming source capacity
+
+      - alert: MarkoDiscoveryRetrievalEmpty
+        expr: |
+          marko_discovery_funnel_snapshot_available == 1
+          and marko_discovery_candidates_reported_count > 0
+          and marko_discovery_candidates_retrieved_count == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Discovery reports available candidates but retrieves none
+
+      - alert: MarkoDiscoveryIdentityCeilingEmpty
+        expr: |
+          marko_discovery_funnel_snapshot_available == 1
+          and marko_discovery_gate_reached_count{gate="oem_identity"} > 0
+          and marko_discovery_gate_survival_ceiling_ratio{gate="oem_identity"} == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: No discovery candidate survives the OEM identity gate

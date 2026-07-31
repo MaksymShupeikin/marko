@@ -1,15 +1,18 @@
+import '../../core/presentation_formatters.dart';
+
 class CatalogStorePresence {
-  const CatalogStorePresence({
+  CatalogStorePresence({
     required this.storeId,
     required this.externalId,
     required this.name,
     required this.url,
     required this.listingUrl,
     required this.listingCount,
-    required this.price,
+    required Object? price,
     required this.currency,
     required this.isAvailable,
-  });
+    this.isOwned = true,
+  }) : price = DecimalValue.tryParse(price);
 
   factory CatalogStorePresence.fromJson(Map<String, dynamic> json) {
     return CatalogStorePresence(
@@ -19,9 +22,10 @@ class CatalogStorePresence {
       url: json['url'] as String,
       listingUrl: json['listing_url'] as String,
       listingCount: (json['listing_count'] as num).toInt(),
-      price: _decimal(json['price']),
+      price: json['price'],
       currency: json['currency'] as String,
       isAvailable: json['is_available'] as bool?,
+      isOwned: json['is_owned'] as bool? ?? true,
     );
   }
 
@@ -31,9 +35,10 @@ class CatalogStorePresence {
   final String url;
   final String listingUrl;
   final int listingCount;
-  final double? price;
+  final DecimalValue? price;
   final String currency;
   final bool? isAvailable;
+  final bool isOwned;
 
   String get tooltip {
     final parts = <String>[
@@ -66,9 +71,7 @@ class CatalogStoreOption {
 }
 
 class CatalogProduct {
-  static const primaryStoreExternalId = '2847093';
-
-  const CatalogProduct({
+  CatalogProduct({
     required this.id,
     required this.identityKind,
     required this.name,
@@ -77,16 +80,18 @@ class CatalogProduct {
     required this.modelId,
     required this.brand,
     required this.imageUrl,
-    required this.priceMin,
-    required this.priceMax,
+    required Object? priceMin,
+    required Object? priceMax,
     required this.currency,
     required this.listingCount,
     required this.stores,
-    this.recommendedPrice,
+    Object? recommendedPrice,
     this.recommendationCurrency,
     this.recommendationAction,
     this.recommendationComputedAt,
-  });
+  }) : priceMin = DecimalValue.tryParse(priceMin),
+       priceMax = DecimalValue.tryParse(priceMax),
+       recommendedPrice = DecimalValue.tryParse(recommendedPrice);
 
   factory CatalogProduct.fromJson(Map<String, dynamic> json) {
     return CatalogProduct(
@@ -98,8 +103,8 @@ class CatalogProduct {
       modelId: json['model_id'] as String?,
       brand: json['brand'] as String?,
       imageUrl: json['image_url'] as String?,
-      priceMin: _decimal(json['price_min']),
-      priceMax: _decimal(json['price_max']),
+      priceMin: json['price_min'],
+      priceMax: json['price_max'],
       currency: json['currency'] as String?,
       listingCount: (json['listing_count'] as num).toInt(),
       stores: (json['stores'] as List<dynamic>)
@@ -108,7 +113,7 @@ class CatalogProduct {
                 CatalogStorePresence.fromJson(item as Map<String, dynamic>),
           )
           .toList(growable: false),
-      recommendedPrice: _decimal(json['recommended_price']),
+      recommendedPrice: json['recommended_price'],
       recommendationCurrency: json['recommendation_currency'] as String?,
       recommendationAction: json['recommendation_action'] as String?,
       recommendationComputedAt: json['recommendation_computed_at'] == null
@@ -125,12 +130,12 @@ class CatalogProduct {
   final String? modelId;
   final String? brand;
   final String? imageUrl;
-  final double? priceMin;
-  final double? priceMax;
+  final DecimalValue? priceMin;
+  final DecimalValue? priceMax;
   final String? currency;
   final int listingCount;
   final List<CatalogStorePresence> stores;
-  final double? recommendedPrice;
+  final DecimalValue? recommendedPrice;
   final String? recommendationCurrency;
   final String? recommendationAction;
   final DateTime? recommendationComputedAt;
@@ -144,9 +149,9 @@ class CatalogProduct {
 
   CatalogStorePresence? get primaryStore {
     for (final store in stores) {
-      if (store.externalId == primaryStoreExternalId) return store;
+      if (store.isOwned) return store;
     }
-    return stores.isEmpty ? null : stores.first;
+    return null;
   }
 
   String get primaryPriceLabel {
@@ -178,6 +183,8 @@ class CatalogProductPage {
     required this.duplicatesRemoved,
     required this.storeTotal,
     required this.stores,
+    this.limit = 48,
+    this.offset = 0,
   });
 
   factory CatalogProductPage.fromJson(Map<String, dynamic> json) {
@@ -195,6 +202,8 @@ class CatalogProductPage {
             (item) => CatalogStoreOption.fromJson(item as Map<String, dynamic>),
           )
           .toList(growable: false),
+      limit: (json['limit'] as num?)?.toInt() ?? 48,
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -205,25 +214,28 @@ class CatalogProductPage {
   final int duplicatesRemoved;
   final int storeTotal;
   final List<CatalogStoreOption> stores;
+  final int limit;
+  final int offset;
 
-  bool get hasMore => items.length < total;
+  bool get hasMore => offset + items.length < total;
 }
 
 class CatalogCompetitorOffer {
-  const CatalogCompetitorOffer({
+  CatalogCompetitorOffer({
     required this.observationId,
     required this.sellerId,
     required this.sellerName,
     required this.title,
     required this.url,
-    required this.price,
+    required Object price,
     required this.currency,
     required this.isAvailable,
-    required this.normalizedPrice,
+    required Object? normalizedPrice,
     required this.tier,
     required this.matchConfidence,
     required this.observedAt,
-  });
+  }) : price = DecimalValue.from(price),
+       normalizedPrice = DecimalValue.tryParse(normalizedPrice);
 
   factory CatalogCompetitorOffer.fromJson(Map<String, dynamic> json) {
     return CatalogCompetitorOffer(
@@ -232,10 +244,10 @@ class CatalogCompetitorOffer {
       sellerName: json['seller_name'] as String,
       title: json['title'] as String,
       url: json['url'] as String,
-      price: _decimal(json['price']) ?? 0,
+      price: json['price'] ?? 0,
       currency: json['currency'] as String,
       isAvailable: json['is_available'] as bool?,
-      normalizedPrice: _decimal(json['normalized_price']),
+      normalizedPrice: json['normalized_price'],
       tier: json['tier'] as String,
       matchConfidence: _decimal(json['match_confidence']) ?? 0,
       observedAt: DateTime.parse(json['observed_at'] as String),
@@ -247,17 +259,17 @@ class CatalogCompetitorOffer {
   final String sellerName;
   final String title;
   final String url;
-  final double price;
+  final DecimalValue price;
   final String currency;
   final bool? isAvailable;
-  final double? normalizedPrice;
+  final DecimalValue? normalizedPrice;
   final String tier;
   final double matchConfidence;
   final DateTime observedAt;
 }
 
 class CatalogDiscoveredOffer {
-  const CatalogDiscoveredOffer({
+  CatalogDiscoveredOffer({
     required this.discoveryOfferId,
     required this.sourceListingId,
     required this.sellerId,
@@ -266,8 +278,8 @@ class CatalogDiscoveredOffer {
     required this.url,
     required this.sku,
     required this.brand,
-    required this.salePrice,
-    required this.referencePrice,
+    required Object salePrice,
+    required Object? referencePrice,
     required this.currency,
     required this.measureUnit,
     required this.isAvailable,
@@ -282,7 +294,8 @@ class CatalogDiscoveredOffer {
     this.selectionDetails = const {},
     this.predictedTier = 'unknown',
     this.tierConfidence = 0,
-  });
+  }) : salePrice = DecimalValue.from(salePrice),
+       referencePrice = DecimalValue.tryParse(referencePrice);
 
   factory CatalogDiscoveredOffer.fromJson(Map<String, dynamic> json) {
     return CatalogDiscoveredOffer(
@@ -294,8 +307,8 @@ class CatalogDiscoveredOffer {
       url: json['url'] as String,
       sku: json['sku'] as String?,
       brand: json['brand'] as String?,
-      salePrice: _decimal(json['sale_price']) ?? 0,
-      referencePrice: _decimal(json['reference_price']),
+      salePrice: json['sale_price'] ?? 0,
+      referencePrice: json['reference_price'],
       currency: json['currency'] as String,
       measureUnit: json['measure_unit'] as String?,
       isAvailable: json['is_available'] as bool?,
@@ -329,8 +342,8 @@ class CatalogDiscoveredOffer {
   final String url;
   final String? sku;
   final String? brand;
-  final double salePrice;
-  final double? referencePrice;
+  final DecimalValue salePrice;
+  final DecimalValue? referencePrice;
   final String currency;
   final String? measureUnit;
   final bool? isAvailable;
@@ -348,12 +361,12 @@ class CatalogDiscoveredOffer {
 }
 
 class CatalogCompetitorComparison {
-  const CatalogCompetitorComparison({
+  CatalogCompetitorComparison({
     required this.recommendationId,
     required this.comparedAt,
-    required this.currentPrice,
-    required this.fairPrice,
-    required this.recommendedPrice,
+    required Object? currentPrice,
+    required Object? fairPrice,
+    required Object? recommendedPrice,
     required this.currency,
     required this.reasonCodes,
     required this.items,
@@ -384,7 +397,9 @@ class CatalogCompetitorComparison {
     this.discoveryItems = const [],
     this.pricingEvidence = const [],
     this.referenceOnly = const [],
-  });
+  }) : currentPrice = DecimalValue.tryParse(currentPrice),
+       fairPrice = DecimalValue.tryParse(fairPrice),
+       recommendedPrice = DecimalValue.tryParse(recommendedPrice);
 
   factory CatalogCompetitorComparison.fromJson(Map<String, dynamic> json) {
     return CatalogCompetitorComparison(
@@ -392,9 +407,9 @@ class CatalogCompetitorComparison {
       comparedAt: json['compared_at'] == null
           ? null
           : DateTime.parse(json['compared_at'] as String),
-      currentPrice: _decimal(json['current_price']),
-      fairPrice: _decimal(json['fair_price']),
-      recommendedPrice: _decimal(json['recommended_price']),
+      currentPrice: json['current_price'],
+      fairPrice: json['fair_price'],
+      recommendedPrice: json['recommended_price'],
       currency: json['currency'] as String?,
       reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
@@ -461,9 +476,9 @@ class CatalogCompetitorComparison {
 
   final String? recommendationId;
   final DateTime? comparedAt;
-  final double? currentPrice;
-  final double? fairPrice;
-  final double? recommendedPrice;
+  final DecimalValue? currentPrice;
+  final DecimalValue? fairPrice;
+  final DecimalValue? recommendedPrice;
   final String? currency;
   final List<String> reasonCodes;
   final List<CatalogCompetitorOffer> items;

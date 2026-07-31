@@ -3,22 +3,45 @@
 // Файл создан агентом-аудитором согласно CONSTRAINT_6(a).
 // После remediation тесты фиксируют исправленное поведение Wave 0.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:marko_client/core/api_client.dart';
 import 'package:marko_client/core/app_language.dart';
+import 'package:marko_client/core/app_theme.dart';
 import 'package:marko_client/core/presentation_formatters.dart';
+import 'package:marko_client/core/system_status.dart';
+import 'package:marko_client/core/widgets/marko_button.dart';
+import 'package:marko_client/features/auth/auth_controller.dart';
+import 'package:marko_client/features/auth/auth_models.dart';
+import 'package:marko_client/features/auth/auth_page.dart';
+import 'package:marko_client/features/catalog/catalog_api.dart';
+import 'package:marko_client/features/catalog/catalog_controller.dart';
+import 'package:marko_client/features/catalog/catalog_models.dart';
+import 'package:marko_client/features/catalog/catalog_page.dart';
+import 'package:marko_client/features/catalog/widgets/catalog_product_details_sheet.dart';
+import 'package:marko_client/features/dashboard/dashboard_page.dart';
 import 'package:marko_client/features/fitment/fitment_api.dart';
+import 'package:marko_client/features/fitment/fitment_candidates_panel.dart';
+import 'package:marko_client/features/fitment/fitment_controller.dart';
 import 'package:marko_client/features/fitment/fitment_models.dart';
 import 'package:marko_client/features/fitment/fitment_recommendation_card.dart';
+import 'package:marko_client/features/pricing/catalog_context_dialog.dart';
+import 'package:marko_client/features/pricing/pricing_controller.dart';
 import 'package:marko_client/features/pricing/pricing_models.dart';
+import 'package:marko_client/features/pricing/recommendations_page.dart';
 import 'package:marko_client/features/pricing/recommendation_decision_dialog.dart';
+import 'package:marko_client/features/pricing/tier_override_dialog.dart';
 import 'package:marko_client/features/stores/store_models.dart';
+import 'package:marko_client/features/stores/store_products_page.dart';
+import 'package:marko_client/features/stores/stores_controller.dart';
+import 'package:marko_client/features/stores/stores_page.dart';
 
 Map<String, dynamic> _recommendationJson({
   String action = 'RAISE',
@@ -56,21 +79,42 @@ void main() {
   group('§4 вариация 22: null в необязательных полях', () {
     test('AUDIT: PricingRecommendation парсится при минимальном ответе', () {
       final item = PricingRecommendation.fromJson(_recommendationJson());
-      expect(item.recommendedPrice, 1234.567);
-      expect(item.priceTick, 0.5);
+      expect(item.recommendedPrice, DecimalValue.parse('1234.567'));
+      expect(item.priceTick, DecimalValue.parse('0.5'));
       expect(item.currency, 'UAH');
       expect(item.fairPrice, isNull);
     });
 
-    test('AUDIT: отсутствие reason_codes роняет парсер (TypeError)', () {
+    test('REGRESSION: отсутствие reason_codes даёт typed contract error', () {
       final json = _recommendationJson()..remove('reason_codes');
-      expect(() => PricingRecommendation.fromJson(json), throwsA(isA<Error>()));
+      expect(
+        () => PricingRecommendation.fromJson(json),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('reason_codes'),
+          ),
+        ),
+      );
     });
 
-    test('AUDIT: отсутствие competitor_count роняет парсер', () {
-      final json = _recommendationJson()..remove('competitor_count');
-      expect(() => PricingRecommendation.fromJson(json), throwsA(isA<Error>()));
-    });
+    test(
+      'REGRESSION: отсутствие competitor_count даёт typed contract error',
+      () {
+        final json = _recommendationJson()..remove('competitor_count');
+        expect(
+          () => PricingRecommendation.fromJson(json),
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              contains('competitor_count'),
+            ),
+          ),
+        );
+      },
+    );
   });
 
   group('Округление денег и валюта', () {
@@ -161,15 +205,12 @@ void main() {
       );
     });
 
-    test(
-      'AUDIT: неизвестный код показывается как сырой enum в нижнем регистре',
-      () {
-        expect(
-          PricingRecommendation.reasonLabel('SOME_NEW_GATE_CODE'),
-          'some new gate code',
-        );
-      },
-    );
+    test('REGRESSION: неизвестный код не маскируется под перевод', () {
+      expect(
+        PricingRecommendation.reasonLabel('SOME_NEW_GATE_CODE'),
+        'Неизвестная причина (SOME_NEW_GATE_CODE)',
+      );
+    });
 
     test('REGRESSION: reasonSummary показывает число скрытых причин', () {
       final item = PricingRecommendation.fromJson(
@@ -397,62 +438,1064 @@ void main() {
   });
 
   group('§4 вариация 19: 401/403 от API', () {
-    test('AUDIT: 403 отдаётся как обычное ApiException без различия', () async {
-      final api = ApiClient(
-        client: MockClient(
-          (request) async => http.Response(
-            jsonEncode({
-              'detail': {
-                'code': 'INSUFFICIENT_WORKSPACE_ROLE',
-                'required_roles': ['owner', 'admin'],
-                'actual_role': 'member',
-              },
-            }),
-            403,
-          ),
-        ),
-        baseUrl: 'http://api.test',
-      );
-      Object? captured;
-      try {
-        await api.getJson('/api/v1/anything', authenticated: false);
-      } catch (error) {
-        captured = error;
-      }
-      expect(captured, isA<ApiException>());
-      final failure = captured! as ApiException;
-      expect(failure.statusCode, 403);
-      // ФАКТ: структурированный код схлопывается в toString() Dart-мапы.
-      expect(failure.message, startsWith('{code: INSUFFICIENT_WORKSPACE_ROLE'));
-    });
-
-    test('AUDIT: 422 от FastAPI показывается как сырой список', () async {
-      final api = ApiClient(
-        client: MockClient(
-          (request) async => http.Response(
-            jsonEncode({
-              'detail': [
-                {
-                  'type': 'missing',
-                  'loc': ['body', 'oe'],
-                  'msg': 'Field required',
+    test(
+      'REGRESSION: 403 сохраняет machine code без Dart-map message',
+      () async {
+        final api = ApiClient(
+          client: MockClient(
+            (request) async => http.Response(
+              jsonEncode({
+                'detail': {
+                  'code': 'INSUFFICIENT_WORKSPACE_ROLE',
+                  'required_roles': ['owner', 'admin'],
+                  'actual_role': 'member',
                 },
-              ],
-            }),
-            422,
+              }),
+              403,
+            ),
           ),
-        ),
-        baseUrl: 'http://api.test',
+          baseUrl: 'http://api.test',
+        );
+        Object? captured;
+        try {
+          await api.getJson('/api/v1/anything', authenticated: false);
+        } catch (error) {
+          captured = error;
+        }
+        expect(captured, isA<ApiException>());
+        final failure = captured! as ApiException;
+        expect(failure.statusCode, 403);
+        expect(failure.code, 'INSUFFICIENT_WORKSPACE_ROLE');
+        expect(failure.message, 'API returned HTTP 403');
+        expect(failure.requiredRoles, ['owner', 'admin']);
+        expect(failure.actualRole, 'member');
+      },
+    );
+
+    test(
+      'REGRESSION: 422 не превращает validation list в сырую строку',
+      () async {
+        final api = ApiClient(
+          client: MockClient(
+            (request) async => http.Response(
+              jsonEncode({
+                'detail': [
+                  {
+                    'type': 'missing',
+                    'loc': ['body', 'oe'],
+                    'msg': 'Field required',
+                  },
+                ],
+              }),
+              422,
+            ),
+          ),
+          baseUrl: 'http://api.test',
+        );
+        Object? captured;
+        try {
+          await api.postJson('/api/v1/anything', authenticated: false);
+        } catch (error) {
+          captured = error;
+        }
+        final failure = captured! as ApiException;
+        expect(failure.statusCode, 422);
+        expect(failure.message, 'API validation failed');
+        expect(failure.validationErrors, hasLength(1));
+        expect(failure.validationErrors.single.type, 'missing');
+        expect(failure.validationErrors.single.location, ['body', 'oe']);
+        expect(failure.validationErrors.single.message, 'Field required');
+      },
+    );
+  });
+
+  group('§4 вариация V-48: быстрый повторный поиск', () {
+    test('REGRESSION: устаревший ответ не заменяет более новый', () async {
+      final slow = Completer<http.Response>();
+      final fast = Completer<http.Response>();
+      final client = MockClient((request) {
+        final query = request.url.queryParameters['q'];
+        if (query == 'slow') return slow.future;
+        if (query == 'fast') return fast.future;
+        return Future.value(_auditCatalogHttpResponse('initial'));
+      });
+      final container = ProviderContainer(
+        overrides: [
+          catalogApiProvider.overrideWithValue(
+            CatalogApi(
+              ApiClient(client: client, baseUrl: 'http://api.audit.test'),
+            ),
+          ),
+        ],
       );
-      Object? captured;
-      try {
-        await api.postJson('/api/v1/anything', authenticated: false);
-      } catch (error) {
-        captured = error;
-      }
-      final failure = captured! as ApiException;
-      expect(failure.statusCode, 422);
-      expect(failure.message, startsWith('[{type: missing'));
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        catalogControllerProvider,
+        (_, _) {},
+      );
+      addTearDown(subscription.close);
+      await container.read(catalogControllerProvider.future);
+
+      final slowSearch = container
+          .read(catalogControllerProvider.notifier)
+          .search('slow');
+      await Future<void>.delayed(Duration.zero);
+      final fastSearch = container
+          .read(catalogControllerProvider.notifier)
+          .search('fast');
+      await Future<void>.delayed(Duration.zero);
+
+      fast.complete(_auditCatalogHttpResponse('fast'));
+      await fastSearch;
+      slow.complete(_auditCatalogHttpResponse('slow'));
+      await slowSearch;
+
+      final state = container.read(catalogControllerProvider).requireValue;
+      expect(state.query, 'fast');
+      expect(state.page.items.single.name, 'fast');
     });
   });
+
+  group('§4 вариация V-40: ошибка сети при loadMore', () {
+    test('REGRESSION: уже загруженная страница сохраняется', () async {
+      final client = MockClient((request) async {
+        if (request.url.queryParameters['offset'] == '1') {
+          return http.Response(
+            jsonEncode({'detail': 'network unavailable'}),
+            500,
+            headers: const {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return _auditCatalogHttpResponse('retained', total: 2);
+      });
+      final container = ProviderContainer(
+        overrides: [
+          catalogApiProvider.overrideWithValue(
+            CatalogApi(
+              ApiClient(client: client, baseUrl: 'http://api.audit.test'),
+            ),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        catalogControllerProvider,
+        (_, _) {},
+      );
+      addTearDown(subscription.close);
+      await container.read(catalogControllerProvider.future);
+
+      await container.read(catalogControllerProvider.notifier).loadMore();
+
+      final state = container.read(catalogControllerProvider).requireValue;
+      expect(state.page.items.single.name, 'retained');
+      expect(state.page.total, 2);
+      expect(state.isLoadingMore, isFalse);
+      expect(state.error, contains('network unavailable'));
+    });
+  });
+
+  group('Аудит v2: доступность и покрывающая UI-матрица', () {
+    testWidgets('REGRESSION: MarkoButton имеет цель нажатия не меньше 44 pt', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: MarkoButton(label: 'Подключить', onPressed: () {}),
+          ),
+        ),
+      );
+
+      final size = tester.getSize(find.byType(MarkoButton));
+      // ignore: avoid_print
+      print({
+        'surface': 'MarkoButton',
+        'width': size.width,
+        'height': size.height,
+      });
+      expect(
+        size.height,
+        greaterThanOrEqualTo(44),
+        reason: 'Интерактивная цель должна быть не меньше 44 pt.',
+      );
+    });
+
+    for (final surface in _AuditP0Surface.values) {
+      testWidgets('AUDIT MATRIX: ${surface.name} — 108 комбинаций '
+          'state×width×scale×lang', (tester) async {
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+
+        var combinations = 0;
+        final renderExceptions = <String>[];
+        final forbiddenWithoutDedicatedCopy = <String>[];
+        for (final state in _AuditUiState.values) {
+          for (final width in const [375.0, 768.0, 1440.0]) {
+            for (final scale in const [1.0, 1.3, 2.0]) {
+              for (final locale in const [Locale('ru'), Locale('uk')]) {
+                combinations += 1;
+                tester.view.physicalSize = Size(width, 1100);
+                await tester.pumpWidget(
+                  _auditSurfaceApp(
+                    surface: surface,
+                    state: state,
+                    locale: locale,
+                    textScale: scale,
+                  ),
+                );
+                await tester.pump();
+                if (state != _AuditUiState.loading) {
+                  // Several production surfaces contain intentionally
+                  // repeating progress/cursor animations, so an unbounded
+                  // pumpAndSettle cannot terminate. Two bounded frames still
+                  // flush the provider future and the resulting layout.
+                  await tester.pump(const Duration(milliseconds: 100));
+                }
+                final exception = tester.takeException();
+                final key =
+                    '${surface.name}/${state.name}/'
+                    '${width.toInt()}/$scale/${locale.languageCode}';
+                if (exception != null) {
+                  renderExceptions.add('$key: $exception');
+                }
+                if (state == _AuditUiState.forbidden &&
+                    find.textContaining('403').evaluate().isEmpty &&
+                    find.textContaining('доступ').evaluate().isEmpty &&
+                    find.textContaining('доступу').evaluate().isEmpty) {
+                  final visibleText = tester
+                      .widgetList<Text>(find.byType(Text))
+                      .map(
+                        (widget) =>
+                            widget.data ??
+                            widget.textSpan?.toPlainText() ??
+                            '<empty>',
+                      )
+                      .take(8)
+                      .join(' | ');
+                  forbiddenWithoutDedicatedCopy.add('$key [$visibleText]');
+                }
+              }
+            }
+          }
+        }
+
+        // ignore: avoid_print
+        print({
+          'surface': surface.name,
+          'combinations': combinations,
+          'render_exceptions': renderExceptions,
+          'forbidden_without_dedicated_copy': forbiddenWithoutDedicatedCopy,
+        });
+        expect(combinations, 108);
+        expect(
+          renderExceptions,
+          isEmpty,
+          reason: 'Каждая P0-комбинация должна отрисоваться без исключений.',
+        );
+        expect(
+          forbiddenWithoutDedicatedCopy,
+          isEmpty,
+          reason: 'Forbidden должен иметь отдельное понятное состояние.',
+        );
+      });
+    }
+
+    for (final surface in _AuditSecondarySurface.values) {
+      testWidgets('AUDIT PAIRWISE: ${surface.name} — 18 строк силы 2', (
+        tester,
+      ) async {
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final renderExceptions = <String>[];
+        for (final row in _auditPairwiseRows) {
+          tester.view.physicalSize = Size(row.width, 1100);
+          await tester.pumpWidget(
+            _auditSecondarySurfaceApp(surface: surface, row: row),
+          );
+          await tester.pump();
+          if (row.state != _AuditUiState.loading) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          final exception = tester.takeException();
+          if (exception != null) {
+            renderExceptions.add(
+              '${surface.name}/${row.state.name}/'
+              '${row.width.toInt()}/${row.scale}/'
+              '${row.locale.languageCode}: $exception',
+            );
+          }
+        }
+        // ignore: avoid_print
+        print({
+          'surface': surface.name,
+          'pairwise_rows': _auditPairwiseRows.length,
+          'render_exceptions': renderExceptions,
+          'uncovered_interaction_groups':
+              '4 тройные группы факторов; взаимодействия силы >=3 не покрыты',
+        });
+        expect(_auditPairwiseRows.length, 18);
+        expect(
+          renderExceptions,
+          isEmpty,
+          reason:
+              'Каждая pairwise-комбинация должна отрисоваться без исключений.',
+        );
+      });
+    }
+
+    testWidgets('REGRESSION: dashboard chrome выдерживает textScale 2.0', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1440, 1100);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        _auditSecondarySurfaceApp(
+          surface: _AuditSecondarySurface.dashboard,
+          row: const (
+            state: _AuditUiState.partial,
+            width: 1440,
+            scale: 2.0,
+            locale: Locale('ru'),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+
+    testWidgets(
+      'REGRESSION: dashboard mobile chrome выдерживает textScale 2.0',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(375, 1100);
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          _auditSecondarySurfaceApp(
+            surface: _AuditSecondarySurface.dashboard,
+            row: const (
+              state: _AuditUiState.success,
+              width: 375,
+              scale: 2.0,
+              locale: Locale('ru'),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      },
+    );
+  });
 }
+
+enum _AuditP0Surface { catalog, recommendations, stores, productDetails }
+
+enum _AuditUiState { loading, empty, partial, error, forbidden, success }
+
+enum _AuditSecondarySurface {
+  auth,
+  dashboard,
+  storeProducts,
+  catalogContextDialog,
+  recommendationDecisionDialog,
+  tierOverrideDialog,
+  fitmentCandidatesPanel,
+}
+
+typedef _AuditPairwiseRow = ({
+  _AuditUiState state,
+  double width,
+  double scale,
+  Locale locale,
+});
+
+const _auditPairwiseRows = <_AuditPairwiseRow>[
+  (state: _AuditUiState.empty, width: 768, scale: 2.0, locale: Locale('uk')),
+  (state: _AuditUiState.success, width: 768, scale: 1.3, locale: Locale('ru')),
+  (state: _AuditUiState.partial, width: 1440, scale: 2.0, locale: Locale('ru')),
+  (
+    state: _AuditUiState.forbidden,
+    width: 375,
+    scale: 1.3,
+    locale: Locale('uk'),
+  ),
+  (state: _AuditUiState.partial, width: 375, scale: 1.0, locale: Locale('uk')),
+  (
+    state: _AuditUiState.forbidden,
+    width: 768,
+    scale: 1.0,
+    locale: Locale('ru'),
+  ),
+  (state: _AuditUiState.loading, width: 768, scale: 2.0, locale: Locale('ru')),
+  (state: _AuditUiState.success, width: 1440, scale: 1.0, locale: Locale('uk')),
+  (state: _AuditUiState.success, width: 375, scale: 2.0, locale: Locale('ru')),
+  (state: _AuditUiState.loading, width: 1440, scale: 1.0, locale: Locale('ru')),
+  (state: _AuditUiState.error, width: 768, scale: 1.0, locale: Locale('uk')),
+  (state: _AuditUiState.partial, width: 768, scale: 1.3, locale: Locale('uk')),
+  (state: _AuditUiState.empty, width: 1440, scale: 1.3, locale: Locale('ru')),
+  (state: _AuditUiState.empty, width: 375, scale: 1.0, locale: Locale('ru')),
+  (state: _AuditUiState.error, width: 375, scale: 1.3, locale: Locale('ru')),
+  (
+    state: _AuditUiState.forbidden,
+    width: 1440,
+    scale: 2.0,
+    locale: Locale('ru'),
+  ),
+  (state: _AuditUiState.loading, width: 375, scale: 1.3, locale: Locale('uk')),
+  (state: _AuditUiState.error, width: 1440, scale: 2.0, locale: Locale('uk')),
+];
+
+Widget _auditSurfaceApp({
+  required _AuditP0Surface surface,
+  required _AuditUiState state,
+  required Locale locale,
+  required double textScale,
+}) {
+  final auditKey = ValueKey(
+    'audit-p0-${surface.name}-${state.name}-'
+    '${locale.languageCode}-$textScale',
+  );
+  final child = switch (surface) {
+    _AuditP0Surface.catalog => const CatalogPage(onOpenPriceComparison: _noop),
+    _AuditP0Surface.recommendations => const RecommendationsPage(),
+    _AuditP0Surface.stores => const StoresPage(ownedOnly: true),
+    _AuditP0Surface.productDetails => CatalogProductDetailsSheet(
+      product: _auditProduct,
+      loadCompetitors: () => _auditComparisonFor(state),
+      onCompare: _noop,
+    ),
+  };
+  final app = MaterialApp(
+    theme: AppTheme.light,
+    locale: locale,
+    supportedLocales: const [Locale('ru'), Locale('uk')],
+    localizationsDelegates: GlobalMaterialLocalizations.delegates,
+    builder: (context, appChild) => MediaQuery(
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: TextScaler.linear(textScale)),
+      child: appChild!,
+    ),
+    home: Scaffold(body: child),
+  );
+  return KeyedSubtree(
+    key: auditKey,
+    child: switch (surface) {
+      _AuditP0Surface.catalog => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          catalogControllerProvider.overrideWith(
+            () => _AuditCatalogController(state),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditP0Surface.recommendations => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          recommendationsControllerProvider.overrideWith(
+            () => _AuditRecommendationsController(state),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditP0Surface.stores => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          storesControllerProvider.overrideWith(
+            () => _AuditStoresController(state),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditP0Surface.productDetails => app,
+    },
+  );
+}
+
+Widget _auditSecondarySurfaceApp({
+  required _AuditSecondarySurface surface,
+  required _AuditPairwiseRow row,
+}) {
+  final auditKey = ValueKey(
+    'audit-secondary-${surface.name}-${row.state.name}-'
+    '${row.width}-${row.scale}-${row.locale.languageCode}',
+  );
+  final child = switch (surface) {
+    _AuditSecondarySurface.auth => const AuthPage(),
+    _AuditSecondarySurface.dashboard => const DashboardPage(),
+    _AuditSecondarySurface.storeProducts => const StoreProductsPage(
+      storeId: 'store-audit',
+    ),
+    _AuditSecondarySurface.catalogContextDialog => _AuditDialogLauncher(
+      open: (context) => showCatalogContextDialog(
+        context,
+        initialStatus: row.state == _AuditUiState.empty ? 'unknown' : 'stale',
+        initialContext: row.state == _AuditUiState.empty
+            ? const {}
+            : const {
+                'stock_qty': 30,
+                'stock_age_days': 365,
+                'expected_units_sold': 1,
+              },
+      ),
+    ),
+    _AuditSecondarySurface.recommendationDecisionDialog => _AuditDialogLauncher(
+      open: (context) => showRecommendationDecisionDialog(
+        context,
+        recommendation: _auditRecommendation,
+        decision: row.state == _AuditUiState.empty ? 'rejected' : 'overridden',
+      ),
+    ),
+    _AuditSecondarySurface.tierOverrideDialog => _AuditDialogLauncher(
+      open: (context) => showTierOverrideDialog(
+        context,
+        currentTier: row.state == _AuditUiState.empty
+            ? 'unknown'
+            : 'aftermarket',
+      ),
+    ),
+    _AuditSecondarySurface.fitmentCandidatesPanel =>
+      const SingleChildScrollView(
+        child: FitmentCandidatesPanel(catalogItemId: 'item-audit'),
+      ),
+  };
+  final app = MaterialApp(
+    theme: AppTheme.light,
+    locale: row.locale,
+    supportedLocales: const [Locale('ru'), Locale('uk')],
+    localizationsDelegates: GlobalMaterialLocalizations.delegates,
+    builder: (context, appChild) => MediaQuery(
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: TextScaler.linear(row.scale)),
+      child: appChild!,
+    ),
+    home: Scaffold(body: child),
+  );
+  return KeyedSubtree(
+    key: auditKey,
+    child: switch (surface) {
+      _AuditSecondarySurface.auth => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _AuditAuthController(row.state),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditSecondarySurface.dashboard => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _AuditAuthController(_AuditUiState.success, signedIn: true),
+          ),
+          recommendationsControllerProvider.overrideWith(
+            () => _AuditRecommendationsController(row.state),
+          ),
+          catalogControllerProvider.overrideWith(
+            () => _AuditCatalogController(_AuditUiState.success),
+          ),
+          storesControllerProvider.overrideWith(
+            () => _AuditStoresController(_AuditUiState.success),
+          ),
+          systemStatusProvider.overrideWith((ref) async => SystemHealth.active),
+          appLanguageProvider.overrideWith(
+            () => _AuditAppLanguageController(row.locale),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditSecondarySurface.storeProducts => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          storeProductsProvider('store-audit').overrideWith(
+            () => _AuditStoreProductsController('store-audit', row.state),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditSecondarySurface.fitmentCandidatesPanel => ProviderScope(
+        retry: (_, _) => null,
+        overrides: [
+          fitmentControllerProvider('item-audit').overrideWith(
+            () => _AuditFitmentController('item-audit', row.state),
+          ),
+        ],
+        child: app,
+      ),
+      _AuditSecondarySurface.catalogContextDialog ||
+      _AuditSecondarySurface.recommendationDecisionDialog ||
+      _AuditSecondarySurface.tierOverrideDialog => app,
+    },
+  );
+}
+
+class _AuditDialogLauncher extends StatefulWidget {
+  const _AuditDialogLauncher({required this.open});
+
+  final Future<Object?> Function(BuildContext context) open;
+
+  @override
+  State<_AuditDialogLauncher> createState() => _AuditDialogLauncherState();
+}
+
+class _AuditDialogLauncherState extends State<_AuditDialogLauncher> {
+  bool _opened = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_opened) {
+      _opened = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.open(context);
+      });
+    }
+    return const SizedBox.expand();
+  }
+}
+
+class _AuditAppLanguageController extends AppLanguageController {
+  _AuditAppLanguageController(this.locale);
+
+  final Locale locale;
+
+  @override
+  AppLanguage build() =>
+      locale.languageCode == 'uk' ? AppLanguage.ukrainian : AppLanguage.russian;
+}
+
+class _AuditAuthController extends AuthController {
+  _AuditAuthController(this.auditState, {this.signedIn = false});
+
+  final _AuditUiState auditState;
+  final bool signedIn;
+
+  @override
+  Future<MarkoAuthState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<MarkoAuthState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.partial:
+        return const MarkoAuthState(
+          user: null,
+          busy: false,
+          error: 'Сессия загружена частично',
+          notice: null,
+        );
+      case _AuditUiState.empty:
+        return MarkoAuthState.initial;
+      case _AuditUiState.success:
+        return signedIn ? _auditSignedInAuthState : MarkoAuthState.initial;
+    }
+  }
+}
+
+class _AuditStoreProductsController extends StoreProductsController {
+  _AuditStoreProductsController(super.storeId, this.auditState)
+    : super(searchDebounce: Duration.zero);
+
+  final _AuditUiState auditState;
+
+  @override
+  Future<StoreProductsState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<StoreProductsState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.empty:
+        return StoreProductsState(
+          store: _auditStore,
+          page: ProductPage(items: [], total: 0),
+        );
+      case _AuditUiState.partial:
+        return StoreProductsState(
+          store: _auditStore,
+          page: ProductPage(items: [_auditStoreProduct], total: 30),
+          error: 'Получен 1 из 30 товаров',
+        );
+      case _AuditUiState.success:
+        return StoreProductsState(
+          store: _auditStore,
+          page: ProductPage(items: [_auditStoreProduct], total: 1),
+        );
+    }
+  }
+}
+
+class _AuditFitmentController extends FitmentController {
+  _AuditFitmentController(super.catalogItemId, this.auditState);
+
+  final _AuditUiState auditState;
+
+  @override
+  Future<FitmentReviewState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<FitmentReviewState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.empty:
+        return const FitmentReviewState(bundle: _auditFitmentEmptyBundle);
+      case _AuditUiState.partial:
+        return const FitmentReviewState(
+          bundle: _auditFitmentPartialBundle,
+          error: 'Получено 1 из 30 evidence-групп',
+        );
+      case _AuditUiState.success:
+        return const FitmentReviewState(bundle: _auditFitmentSuccessBundle);
+    }
+  }
+}
+
+void _noop() {}
+
+Never _auditFailure(_AuditUiState state) {
+  if (state == _AuditUiState.forbidden) {
+    throw const ApiException(
+      '{code: INSUFFICIENT_WORKSPACE_ROLE, actual_role: member}',
+      statusCode: 403,
+    );
+  }
+  throw const ApiException('network unavailable', statusCode: 500);
+}
+
+class _AuditCatalogController extends CatalogController {
+  _AuditCatalogController(this.auditState);
+
+  final _AuditUiState auditState;
+
+  @override
+  Future<CatalogState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<CatalogState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.empty:
+        return const CatalogState(page: _auditCatalogEmpty);
+      case _AuditUiState.partial:
+        return CatalogState(
+          page: CatalogProductPage(
+            items: [_auditProduct],
+            total: 30,
+            catalogTotal: 30,
+            listingTotal: 30,
+            duplicatesRemoved: 0,
+            storeTotal: 1,
+            stores: [_auditStoreOption],
+          ),
+          error: 'Получено 1 из 30',
+        );
+      case _AuditUiState.success:
+        return CatalogState(page: _auditCatalogSuccess);
+    }
+  }
+}
+
+class _AuditRecommendationsController extends RecommendationsController {
+  _AuditRecommendationsController(this.auditState);
+
+  final _AuditUiState auditState;
+
+  @override
+  Future<RecommendationsState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<RecommendationsState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.empty:
+        return const RecommendationsState(
+          page: RecommendationPage(items: [], total: 0, runId: null),
+          queue: 'all',
+          sort: 'ABSOLUTE_RECOMMENDED_CHANGE',
+        );
+      case _AuditUiState.partial:
+        return RecommendationsState(
+          page: RecommendationPage(
+            items: [_auditRecommendation],
+            total: 30,
+            runId: 'run-audit',
+          ),
+          queue: 'all',
+          sort: 'ABSOLUTE_RECOMMENDED_CHANGE',
+          error: 'Получено 1 из 30',
+        );
+      case _AuditUiState.success:
+        return RecommendationsState(
+          page: RecommendationPage(
+            items: [_auditRecommendation],
+            total: 1,
+            runId: 'run-audit',
+          ),
+          queue: 'all',
+          sort: 'ABSOLUTE_RECOMMENDED_CHANGE',
+        );
+    }
+  }
+}
+
+class _AuditStoresController extends StoresController {
+  _AuditStoresController(this.auditState);
+
+  final _AuditUiState auditState;
+
+  @override
+  Future<StoresState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<StoresState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.empty:
+        return const StoresState();
+      case _AuditUiState.partial:
+        return const StoresState(
+          stores: [_auditStore],
+          error: 'Получен 1 магазин, синхронизация недоступна',
+        );
+      case _AuditUiState.success:
+        return const StoresState(stores: [_auditStore]);
+    }
+  }
+}
+
+Future<CatalogCompetitorComparison> _auditComparisonFor(_AuditUiState state) {
+  switch (state) {
+    case _AuditUiState.loading:
+      return Completer<CatalogCompetitorComparison>().future;
+    case _AuditUiState.error:
+    case _AuditUiState.forbidden:
+      return Future<CatalogCompetitorComparison>.delayed(
+        Duration.zero,
+        () => throw state == _AuditUiState.forbidden
+            ? const ApiException(
+                '{code: INSUFFICIENT_WORKSPACE_ROLE, actual_role: member}',
+                statusCode: 403,
+              )
+            : const ApiException('network unavailable', statusCode: 500),
+      );
+    case _AuditUiState.empty:
+      return Future.value(_auditEmptyComparison);
+    case _AuditUiState.partial:
+      return Future.value(_auditPartialComparison);
+    case _AuditUiState.success:
+      return Future.value(_auditSuccessComparison);
+  }
+}
+
+final PricingRecommendation _auditRecommendation =
+    PricingRecommendation.fromJson(
+      _recommendationJson(
+        action: 'MANUAL_REVIEW',
+        reasonCodes: const ['LOW_COVERAGE'],
+      ),
+    );
+
+const _auditStoreOption = CatalogStoreOption(
+  storeId: 'store-audit',
+  externalId: '2847093',
+  name: 'KEMP',
+);
+
+const _auditStore = StoreSummary(
+  id: 'store-audit',
+  externalId: '2847093',
+  name: 'KEMP',
+  url: 'https://prom.ua/ua/c2847093-kemp.html',
+  kind: 'owned',
+  productCount: 30,
+  lastSyncedAt: null,
+);
+
+const _auditSignedInAuthState = MarkoAuthState(
+  user: AuthUser(
+    id: 'user-audit',
+    email: 'owner@example.test',
+    displayName: 'Owner',
+    avatarUrl: null,
+    workspaceId: 'workspace-audit',
+    workspaceRole: 'owner',
+  ),
+  busy: false,
+  error: null,
+  notice: null,
+);
+
+final _auditStoreProduct = StoreProduct(
+  id: 'listing-audit',
+  name:
+      'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+  url: 'https://prom.ua/ua/p-audit.html',
+  sku: '7E5827505A',
+  brand: 'KEMP',
+  price: 1800,
+  currency: 'UAH',
+  isAvailable: true,
+  imageUrl: null,
+);
+
+const _auditFitmentEmptyBundle = FitmentReviewBundle(
+  page: FitmentCandidatePage(items: [], total: 0, analysisId: null),
+  recommendation: null,
+);
+
+const _auditFitmentPartialBundle = FitmentReviewBundle(
+  page: FitmentCandidatePage(
+    items: [],
+    total: 30,
+    analysisId: 'analysis-audit',
+  ),
+  recommendation: null,
+);
+
+const _auditFitmentSuccessBundle = FitmentReviewBundle(
+  page: FitmentCandidatePage(items: [], total: 0, analysisId: 'analysis-audit'),
+  recommendation: null,
+);
+
+http.Response _auditCatalogHttpResponse(String name, {int total = 1}) {
+  return http.Response(
+    jsonEncode({
+      'items': [
+        {
+          'id': 'catalog-$name',
+          'identity_kind': 'oe',
+          'name': name,
+          'sku': 'SKU-$name',
+          'oe': 'OE-$name',
+          'model_id': null,
+          'brand': 'KEMP',
+          'image_url': null,
+          'price_min': '100.00',
+          'price_max': '100.00',
+          'currency': 'UAH',
+          'listing_count': 1,
+          'stores': <Object>[],
+          'recommended_price': null,
+          'recommendation_currency': null,
+          'recommendation_action': null,
+          'recommendation_computed_at': null,
+        },
+      ],
+      'total': total,
+      'catalog_total': total,
+      'listing_total': total,
+      'duplicates_removed': 0,
+      'store_total': 0,
+      'stores': <Object>[],
+    }),
+    200,
+    headers: const {'content-type': 'application/json; charset=utf-8'},
+  );
+}
+
+final _auditProduct = CatalogProduct(
+  id: 'product-audit',
+  identityKind: 'oe',
+  name:
+      'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+  sku: 'AUDIT-001',
+  oe: '7E5827505A',
+  modelId: null,
+  brand: 'KEMP',
+  imageUrl: null,
+  priceMin: 1800,
+  priceMax: 1800,
+  currency: 'UAH',
+  listingCount: 1,
+  stores: [
+    CatalogStorePresence(
+      storeId: 'store-audit',
+      externalId: '2847093',
+      name: 'KEMP',
+      url: 'https://prom.ua/ua/c2847093-kemp.html',
+      listingUrl: 'https://prom.ua/ua/p-audit.html',
+      listingCount: 1,
+      price: 1800,
+      currency: 'UAH',
+      isAvailable: true,
+    ),
+  ],
+);
+
+const _auditCatalogEmpty = CatalogProductPage(
+  items: [],
+  total: 0,
+  catalogTotal: 0,
+  listingTotal: 0,
+  duplicatesRemoved: 0,
+  storeTotal: 0,
+  stores: [],
+);
+
+final _auditCatalogSuccess = CatalogProductPage(
+  items: [_auditProduct],
+  total: 1,
+  catalogTotal: 1,
+  listingTotal: 1,
+  duplicatesRemoved: 0,
+  storeTotal: 1,
+  stores: [_auditStoreOption],
+);
+
+final _auditOffer = CatalogCompetitorOffer(
+  observationId: 'observation-audit',
+  sellerId: 'seller-audit',
+  sellerName: 'Конкурент',
+  title: 'Замок крышки багажника 7E5827505A',
+  url: 'https://prom.ua/ua/p-audit-competitor.html',
+  price: 400,
+  currency: 'UAH',
+  isAvailable: true,
+  normalizedPrice: 400,
+  tier: 'aftermarket',
+  matchConfidence: 0.95,
+  observedAt: DateTime.utc(2026, 7, 29),
+);
+
+final _auditEmptyComparison = CatalogCompetitorComparison(
+  recommendationId: null,
+  comparedAt: null,
+  currentPrice: 1800,
+  fairPrice: null,
+  recommendedPrice: null,
+  currency: 'UAH',
+  reasonCodes: [],
+  items: [],
+);
+
+final _auditPartialComparison = CatalogCompetitorComparison(
+  recommendationId: null,
+  comparedAt: null,
+  currentPrice: 1800,
+  fairPrice: null,
+  recommendedPrice: null,
+  currency: 'UAH',
+  reasonCodes: ['PARTIAL_EVIDENCE'],
+  items: [_auditOffer],
+);
+
+final _auditSuccessComparison = CatalogCompetitorComparison(
+  recommendationId: 'recommendation-audit',
+  comparedAt: null,
+  currentPrice: 1800,
+  fairPrice: 400,
+  recommendedPrice: 420,
+  currency: 'UAH',
+  reasonCodes: [],
+  items: [_auditOffer],
+);

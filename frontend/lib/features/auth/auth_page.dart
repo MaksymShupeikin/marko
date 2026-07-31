@@ -105,33 +105,42 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             ),
             const SizedBox(height: 24),
             if (showGoogle)
-              OutlinedButton.icon(
+              OutlinedButton(
                 onPressed: busy
                     ? null
                     : () => ref
                           .read(authControllerProvider.notifier)
                           .loginWithGoogle(),
-                icon: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: colors.surfaceMuted,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    'G',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: colors.brand,
-                      fontWeight: FontWeight.w700,
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 9,
+                  runSpacing: 4,
+                  children: [
+                    Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: colors.surfaceMuted,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        'G',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: colors.brand,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                label: Text(
-                  context.localized(
-                    ru: 'Продолжить с Google',
-                    uk: 'Продовжити з Google',
-                  ),
+                    Text(
+                      context.localized(
+                        ru: 'Продолжить с Google',
+                        uk: 'Продовжити з Google',
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ),
               ),
             if (!showGoogle)
@@ -150,14 +159,17 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             Row(
               children: [
                 const Expanded(child: Divider()),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text(
-                    context.localized(
-                      ru: 'или по почте',
-                      uk: 'або через пошту',
+                Flexible(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      context.localized(
+                        ru: 'или по почте',
+                        uk: 'або через пошту',
+                      ),
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
                 const Expanded(child: Divider()),
@@ -211,14 +223,14 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             if (auth?.error != null) ...[
               const SizedBox(height: 14),
               MarkoInlineMessage(
-                message: auth!.error!,
+                message: _localizedAuthFeedback(context, auth!.error!),
                 tone: MarkoMessageTone.error,
               ),
             ],
             if (auth?.notice != null) ...[
               const SizedBox(height: 14),
               MarkoInlineMessage(
-                message: auth!.notice!,
+                message: _localizedAuthFeedback(context, auth!.notice!),
                 tone: MarkoMessageTone.success,
               ),
             ],
@@ -276,6 +288,97 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     }
   }
 }
+
+String _localizedAuthFeedback(BuildContext context, String message) {
+  final translation = _authFeedbackTranslations[message];
+  if (translation != null) {
+    return context.localized(ru: translation.$1, uk: translation.$2);
+  }
+  return context.isUkrainian ? 'Помилка: $message' : message;
+}
+
+const _authFeedbackTranslations = <String, (String, String)>{
+  'Введите корректную почту': (
+    'Введите корректную почту',
+    'Введіть коректну електронну пошту',
+  ),
+  'Введите корректную почту.': (
+    'Введите корректную почту.',
+    'Введіть коректну електронну пошту.',
+  ),
+  'Пароль должен содержать минимум 8 символов': (
+    'Пароль должен содержать минимум 8 символов',
+    'Пароль має містити щонайменше 8 символів',
+  ),
+  'Проверьте почту и подтвердите регистрацию.': (
+    'Проверьте почту и подтвердите регистрацию.',
+    'Перевірте пошту та підтвердьте реєстрацію.',
+  ),
+  'Подтвердите почту. Мы повторно отправили письмо со ссылкой.': (
+    'Подтвердите почту. Мы повторно отправили письмо со ссылкой.',
+    'Підтвердьте пошту. Ми повторно надіслали лист із посиланням.',
+  ),
+  'Неверная почта или пароль.': (
+    'Неверная почта или пароль.',
+    'Неправильна електронна пошта або пароль.',
+  ),
+  'Аккаунт с этой почтой уже существует.': (
+    'Аккаунт с этой почтой уже существует.',
+    'Обліковий запис із цією поштою вже існує.',
+  ),
+  'Пароль слишком простой.': (
+    'Пароль слишком простой.',
+    'Пароль надто простий.',
+  ),
+  'Этот аккаунт отключён.': (
+    'Этот аккаунт отключён.',
+    'Цей обліковий запис вимкнено.',
+  ),
+  'Этот способ входа не включён в Firebase Authentication.': (
+    'Этот способ входа не включён в Firebase Authentication.',
+    'Цей спосіб входу не ввімкнено у Firebase Authentication.',
+  ),
+  'Вход через Google отменён.': (
+    'Вход через Google отменён.',
+    'Вхід через Google скасовано.',
+  ),
+  'Браузер заблокировал окно входа через Google.': (
+    'Браузер заблокировал окно входа через Google.',
+    'Браузер заблокував вікно входу через Google.',
+  ),
+  'Нет соединения с Firebase.': (
+    'Нет соединения с Firebase.',
+    'Немає з’єднання з Firebase.',
+  ),
+  'Аккаунт с этой почтой уже использует другой способ входа.': (
+    'Аккаунт с этой почтой уже использует другой способ входа.',
+    'Обліковий запис із цією поштою вже використовує інший спосіб входу.',
+  ),
+  'Google не вернул ID token. Проверьте OAuth client и SHA-1.': (
+    'Google не вернул ID token. Проверьте OAuth client и SHA-1.',
+    'Google не повернув ID token. Перевірте OAuth client і SHA-1.',
+  ),
+  'Google-вход недоступен в нативной Windows-версии. Используйте web/PWA или вход по почте.': (
+    'Google-вход недоступен в нативной Windows-версии. Используйте web/PWA или вход по почте.',
+    'Вхід через Google недоступний у нативній Windows-версії. Використовуйте web/PWA або вхід через пошту.',
+  ),
+  'Ошибка входа через Google.': (
+    'Ошибка входа через Google.',
+    'Помилка входу через Google.',
+  ),
+  'Firebase не вернул пользователя.': (
+    'Firebase не вернул пользователя.',
+    'Firebase не повернув користувача.',
+  ),
+  'Firebase не создал сессию.': (
+    'Firebase не создал сессию.',
+    'Firebase не створив сесію.',
+  ),
+  'Ошибка Firebase Authentication.': (
+    'Ошибка Firebase Authentication.',
+    'Помилка Firebase Authentication.',
+  ),
+};
 
 class _MobileAuthLayout extends StatelessWidget {
   const _MobileAuthLayout({required this.form});
@@ -349,20 +452,31 @@ class _AuthStory extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
             ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.bolt_rounded, size: 16, color: Colors.white),
-                SizedBox(width: 7),
-                Text(
-                  'Prom monitoring workspace',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  const WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: Icon(
+                      Icons.bolt_rounded,
+                      size: 16,
+                      color: Colors.white,
+                    ),
                   ),
-                ),
-              ],
+                  TextSpan(
+                    text: context.localized(
+                      ru: '  Рабочее пространство мониторинга Prom',
+                      uk: '  Робочий простір моніторингу Prom',
+                    ),
+                  ),
+                ],
+              ),
+              softWrap: true,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],

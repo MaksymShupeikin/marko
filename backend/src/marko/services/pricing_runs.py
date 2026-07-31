@@ -176,6 +176,20 @@ def policy_to_dict(policy: PricingPolicy) -> dict[str, Any]:
             "strategy": raise_policy.get("strategy"),
             "method_version": raise_policy.get("method_version"),
             "source_sha256": raise_policy.get("source_sha256"),
+            "psychological_step": raise_policy.get("psychological_step"),
+            "minimum_discount": raise_policy.get("minimum_discount"),
+            "maximum_discount": raise_policy.get("maximum_discount"),
+            "target_floor_ratio": raise_policy.get("target_floor_ratio"),
+            "floor_corroboration_sellers": raise_policy.get(
+                "floor_corroboration_sellers"
+            ),
+            "tier_agnostic": raise_policy.get("tier_agnostic"),
+            "allow_lower": raise_policy.get("allow_lower"),
+            "ignore_stock_status": raise_policy.get("ignore_stock_status"),
+            "ignore_cost_floor": raise_policy.get("ignore_cost_floor"),
+            "owner_decision_reference": raise_policy.get(
+                "owner_decision_reference"
+            ),
         }
     return payload
 
@@ -304,6 +318,7 @@ async def create_pricing_run(
     celery_app: Celery,
     policy_config: Mapping[str, Any] | None = None,
     source_mode: Literal["live", "e2e_fixture_replay"] = "live",
+    correlation_id: str | None = None,
 ) -> PricingRun:
     settings = get_settings()
     if source_mode == "live":
@@ -371,6 +386,9 @@ async def create_pricing_run(
         parser_version=PARSER_ADAPTER_VERSION,
         classifier_version=TIER_METHOD_VERSION,
         coefficient_model=policy.coefficient_model.value,
+        calibration_accounting=(
+            {"correlation_id": correlation_id} if correlation_id else {}
+        ),
         total_items=len(catalog_items),
     )
     session.add(run)
@@ -619,6 +637,7 @@ async def create_pricing_run(
         ),
         duplicates=max(0, run.total_items - len(targets_by_hash)),
         policy_version=run.policy_version,
+        correlation_id=correlation_id,
     )
     target_counts = {
         kind: sum(1 for target in targets_by_hash.values() if target.input_kind == kind)
@@ -1181,7 +1200,12 @@ async def list_recommendations(
     sort: str,
     limit: int,
     offset: int,
-) -> tuple[list[tuple[PricingRecommendation, CatalogItem]], int, UUID | None]:
+) -> tuple[
+    list[tuple[PricingRecommendation, CatalogItem]],
+    int,
+    UUID | None,
+    dict[str, int],
+]:
     if run_id is None:
         run_id = await session.scalar(
             select(PricingRun.id)
@@ -1190,7 +1214,7 @@ async def list_recommendations(
             .limit(1)
         )
         if run_id is None:
-            return [], 0, None
+            return [], 0, None, {"raise": 0, "lower": 0, "review": 0, "hold": 0}
     else:
         await get_pricing_run(session, workspace_id=workspace_id, run_id=run_id)
     conditions = [PricingRecommendation.pricing_run_id == run_id]
@@ -1223,12 +1247,37 @@ async def list_recommendations(
         )
     elif queue == "hold":
         conditions.append(PricingRecommendation.action == "HOLD")
-    count_statement = (
-        select(func.count(PricingRecommendation.id))
+    aggregate_statement = (
+        select(
+            func.count(PricingRecommendation.id).label("total"),
+            func.count(PricingRecommendation.id)
+            .filter(PricingRecommendation.action == "RAISE")
+            .label("raise_count"),
+            func.count(PricingRecommendation.id)
+            .filter(PricingRecommendation.action == "LOWER")
+            .label("lower_count"),
+            func.count(PricingRecommendation.id)
+            .filter(
+                PricingRecommendation.action.in_(
+                    ("MANUAL_REVIEW", "INSUFFICIENT_DATA")
+                )
+            )
+            .label("review_count"),
+            func.count(PricingRecommendation.id)
+            .filter(PricingRecommendation.action == "HOLD")
+            .label("hold_count"),
+        )
         .join(CatalogItem, CatalogItem.id == PricingRecommendation.catalog_item_id)
         .where(*conditions)
     )
-    total = int(await session.scalar(count_statement) or 0)
+    aggregates = (await session.execute(aggregate_statement)).one()
+    total = int(aggregates.total or 0)
+    action_counts = {
+        "raise": int(aggregates.raise_count or 0),
+        "lower": int(aggregates.lower_count or 0),
+        "review": int(aggregates.review_count or 0),
+        "hold": int(aggregates.hold_count or 0),
+    }
     order = _recommendation_sort_order(sort)
     rows = list(
         (
@@ -1244,7 +1293,7 @@ async def list_recommendations(
             )
         ).all()
     )
-    return [(row[0], row[1]) for row in rows], total, run_id
+    return [(row[0], row[1]) for row in rows], total, run_id, action_counts
 
 
 def _recommendation_sort_order(sort: str) -> list[Any]:

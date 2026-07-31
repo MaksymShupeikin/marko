@@ -1,14 +1,9 @@
 schema_version: metis-deterministic-candidate-selection-v1
 method_version: deterministic-candidate-gates-v1
 
-# Workspace-owned seller IDs are also loaded from PostgreSQL. These static IDs
-# are Yuri's known Prom network and provide a fail-safe if one connection is
-# temporarily absent from workspace_stores.
-own_seller_ids:
-  - "2847093"
-  - "3912822"
-  - "3325174"
-  - "4015921"
+# Ownership is tenant data and is loaded fail-closed from workspace_stores.
+# Shared policy must never seed one customer's seller IDs.
+own_seller_ids: []
 
 kemp_network_seller_ids:
   - "2847093"
@@ -194,6 +189,65 @@ category_domain:
     - path: [0, 92, 9202]
       label: "Шкільне приладдя"
       evidence: "Зошит на 12 аркушів У косу лінію Choose to shine 3244(12к)"
+
+    # Added 2026-07-29 after measuring the 8563 captured offers. Each prefix
+    # below was reached by a numeric collision, not by a real cross: KEMP
+    # position 863130 collides with Zelmer meat-grinder screw 86.3130, and
+    # similar collisions pulled in desks, lamps and medical clamps.
+    #
+    # [0, 50, 5006] is the most expensive of them: it alone held 402 offers,
+    # 357 of the TIER_UNKNOWN bucket AND 9 of the 39 rows the pipeline was
+    # treating as usable pricing evidence. Together with [0, 34, 3415] it
+    # accounted for all 15 meat-grinder rows among those 39.
+    #
+    # Deliberately NOT blocked: [0, 18, 1821] (Loncin motorcycle wheel) — a
+    # motorcycle part is not an automotive part, but whether two-wheeler parts
+    # belong in scope is the owner's call, not a measurement.
+    - path: [0, 50, 5006]
+      label: "Запчастини та аксесуари для побутової техніки"
+      evidence: "12000133 Шнек для м'ясорубок Zelmer NR8 86.3130"
+    - path: [0, 34, 3415]
+      label: "Кухонна техніка, запчастини"
+      evidence: "Кухонна техніка -> Шнек( z24) 86.3130 OEM"
+    - path: [0, 16, 1618]
+      label: "Обладнання для манікюру"
+      evidence: "Лампа UV/LED BQ V18 на 192 Вт бездротова на акумуляторі"
+    - path: [0, 15, 1503]
+      label: "Меблі: столи"
+      evidence: "Комп'ютерний стіл Ferrum-decor Тім 75x140x60 чорний"
+    - path: [0, 15, 150406]
+      label: "Світильники, бра"
+      evidence: "Бра Goldlux 324412 Elissa G9 1x10W IP20 BK (059843)"
+    - path: [0, 15, 405]
+      label: "Кухонний текстиль"
+      evidence: "Рушник кухонний мікрофібра оливкового кольору"
+    - path: [0, 15, 1502]
+      label: "Посуд та ємності"
+      evidence: "Пляшка для молока пластикова 11290 0.5 л 457080"
+    - path: [0, 27, 2702]
+      label: "Зоотовари"
+      evidence: "Moderna МОДЕРНА ЕКО подвійна миска для котів пластикова"
+    - path: [0, 27, 270203]
+      label: "Акваріумістика"
+      evidence: "Міні насос для акваріума ZOLUX AQUAYA 80, 170-320 л/год"
+    - path: [0, 3, 354]
+      label: "Одяг"
+      evidence: "Жіноча жилетка тепла з коміром-стійкою й капюшоном"
+    - path: [0, 69, 6901]
+      label: "Військовий одяг та амуніція"
+      evidence: "Убакс G4 Kiborg з коротким рукавом хакі+мультикам"
+    - path: [0, 18, 2035]
+      label: "Меблі: письмові столи"
+      evidence: "Письмовий стіл Ferrum-decor Тім 75x140x60 чорний"
+    - path: [0, 81, 1303]
+      label: "Будівельні матеріали, шпалери"
+      evidence: "Рідкі шпалери Екобарви Лайт Плюс LP-314-216"
+    - path: [0, 40, 1611]
+      label: "Медичні інструменти"
+      evidence: "Одноразовий фенестрований затискач LAPOMED з однією браншею"
+    - path: [0, 40, 1613]
+      label: "Медичні інструменти, затискачі"
+      evidence: "Затискач Lapomed LPM-1704.50 одноразовий фенестрований"
 
   # Measured unsafe on captured evidence and therefore disabled: on query
   # 2141006 the vote reached a 0.777778 share at depth 3 and would have removed

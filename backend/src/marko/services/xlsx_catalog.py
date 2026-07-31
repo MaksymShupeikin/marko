@@ -22,7 +22,7 @@ from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.core.config import Settings, backend_config_path, get_settings
@@ -259,6 +259,27 @@ class ParsedCatalog:
     characteristics_report: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class CatalogSheetPreview:
+    name: str
+    row_count: int
+    headers: list[str]
+    suggested_mapping: dict[str, str]
+    mapping_error: str | None
+    sample_rows: list[dict[str, Any]]
+    is_catalog_candidate: bool
+
+
+@dataclass(frozen=True)
+class CatalogWorkbookPreview:
+    filename: str
+    content_sha256: str
+    content_size: int
+    sheets: list[CatalogSheetPreview]
+    requires_sheet_choice: bool
+    max_size_bytes: int
+
+
 def normalize_identifier(value: Any) -> str:
     """Normalize an OE/MPN without ever coercing it to a number."""
     raw = _cell_text(value).upper().translate(_HOMOGLYPHS)
@@ -266,14 +287,120 @@ def normalize_identifier(value: Any) -> str:
     return _IDENTIFIER_CLEAN_RE.sub("", primary)
 
 
-def parse_catalog_xlsx(
+def preview_catalog_xlsx(
     content: bytes,
     *,
-    explicit_mapping: dict[str, str] | None = None,
-    sheet_name: str | None = None,
-    allow_encrypted_cost_input: bool = False,
-    characteristics_config: CharacteristicsConfig | None = None,
-) -> ParsedCatalog:
+    filename: str,
+    sample_size: int = 5,
+) -> CatalogWorkbookPreview:
+    """Inspect workbook structure without choosing a sheet or writing data.
+
+    Cost-labelled cells are intentionally excluded from preview rows while the
+    cost privacy mode is undecided. The column name may be shown so an operator
+    understands why it cannot be mapped, but its values never cross the API.
+    """
+
+    _validate_xlsx_container(content)
+    try:
+        workbook = load_workbook(
+            BytesIO(content),
+            read_only=True,
+            data_only=True,
+            keep_links=False,
+        )
+    except (InvalidFileException, OSError, ValueError, KeyError) as exc:
+        raise CatalogImportError("Файл не является валидным XLSX") from exc
+
+    previews: list[CatalogSheetPreview] = []
+    try:
+        for worksheet in workbook.worksheets:
+            iterator = worksheet.iter_rows(values_only=True)
+            try:
+                header_values = next(iterator)
+            except StopIteration:
+                previews.append(
+                    CatalogSheetPreview(
+                        name=str(worksheet.title),
+                        row_count=0,
+                        headers=[],
+                        suggested_mapping={},
+                        mapping_error="В листе нет строк",
+                        sample_rows=[],
+                        is_catalog_candidate=False,
+                    )
+                )
+                continue
+            if len(header_values) > MAX_COLUMNS:
+                previews.append(
+                    CatalogSheetPreview(
+                        name=str(worksheet.title),
+                        row_count=0,
+                        headers=[],
+                        suggested_mapping={},
+                        mapping_error=(
+                            f"Слишком много колонок: {len(header_values)} > "
+                            f"{MAX_COLUMNS}"
+                        ),
+                        sample_rows=[],
+                        is_catalog_candidate=False,
+                    )
+                )
+                continue
+            headers = _unique_headers(header_values)
+            mapping_error: str | None = None
+            suggested_mapping: dict[str, str] = {}
+            try:
+                resolved = resolve_column_mapping(headers)
+                suggested_mapping = {
+                    field: headers[index] for field, index in resolved.items()
+                }
+            except CatalogImportError as exc:
+                mapping_error = str(exc)
+
+            row_count = 0
+            sample_rows: list[dict[str, Any]] = []
+            for values in iterator:
+                if not any(value not in (None, "") for value in values):
+                    continue
+                row_count += 1
+                if len(sample_rows) >= sample_size:
+                    continue
+                sample_rows.append(
+                    {
+                        header: _json_safe(
+                            values[index] if index < len(values) else None
+                        )
+                        for index, header in enumerate(headers)
+                        if not is_raw_cost_label(header)
+                    }
+                )
+            previews.append(
+                CatalogSheetPreview(
+                    name=str(worksheet.title),
+                    row_count=row_count,
+                    headers=headers,
+                    suggested_mapping=suggested_mapping,
+                    mapping_error=mapping_error,
+                    sample_rows=sample_rows,
+                    is_catalog_candidate=mapping_error is None and row_count > 0,
+                )
+            )
+    finally:
+        workbook.close()
+
+    if not previews:
+        raise CatalogImportError("В XLSX нет листов")
+    return CatalogWorkbookPreview(
+        filename=filename[:255] or "catalog.xlsx",
+        content_sha256=hashlib.sha256(content).hexdigest(),
+        content_size=len(content),
+        sheets=previews,
+        requires_sheet_choice=True,
+        max_size_bytes=MAX_XLSX_BYTES,
+    )
+
+
+def _validate_xlsx_container(content: bytes) -> None:
     if not content:
         raise CatalogImportError("Файл пуст")
     if len(content) > MAX_XLSX_BYTES:
@@ -285,6 +412,17 @@ def parse_catalog_xlsx(
         raise CatalogImportError("Файл не является валидным XLSX") from exc
     if uncompressed_size > MAX_UNCOMPRESSED_XLSX_BYTES:
         raise CatalogImportError("Распакованный XLSX слишком велик")
+
+
+def parse_catalog_xlsx(
+    content: bytes,
+    *,
+    explicit_mapping: dict[str, str] | None = None,
+    sheet_name: str | None = None,
+    allow_encrypted_cost_input: bool = False,
+    characteristics_config: CharacteristicsConfig | None = None,
+) -> ParsedCatalog:
+    _validate_xlsx_container(content)
     try:
         workbook = load_workbook(
             BytesIO(content),
@@ -578,6 +716,18 @@ async def import_catalog_xlsx(
         sheet_name=sheet_name,
         allow_encrypted_cost_input=allow_encrypted_cost_input,
     )
+    request_fingerprint = _catalog_import_fingerprint(
+        content_sha256=hashlib.sha256(content).hexdigest(),
+        sheet_name=str(parsed.characteristics_report.get("sheet") or ""),
+        column_mapping=parsed.column_mapping,
+    )
+    existing = await _existing_idempotent_import(
+        session,
+        workspace_id=workspace_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if existing is not None:
+        return existing
     if parsed.sensitive_costs:
         try:
             require_server_cost_input_allowed(
@@ -592,6 +742,7 @@ async def import_catalog_xlsx(
         workspace_id=workspace_id,
         filename=filename[:255] or "catalog.xlsx",
         content_sha256=hashlib.sha256(content).hexdigest(),
+        request_fingerprint=request_fingerprint,
         content_size=len(content),
         status="running",
         column_mapping=parsed.column_mapping,
@@ -634,6 +785,63 @@ async def import_catalog_xlsx(
     await session.commit()
     await session.refresh(batch)
     return batch
+
+
+def _catalog_import_fingerprint(
+    *,
+    content_sha256: str,
+    sheet_name: str,
+    column_mapping: Mapping[str, str],
+) -> str:
+    payload = json.dumps(
+        {
+            "content_sha256": content_sha256,
+            "sheet_name": sheet_name,
+            "column_mapping": dict(sorted(column_mapping.items())),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+async def _existing_idempotent_import(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    request_fingerprint: str,
+) -> CatalogImportBatch | None:
+    """Serialize identical PostgreSQL requests and reuse a terminal snapshot."""
+
+    scalar = getattr(session, "scalar", None)
+    execute = getattr(session, "execute", None)
+    if scalar is None or execute is None:
+        # Lightweight unit-test sessions exercise encryption/persistence only.
+        return None
+    bind = getattr(session, "bind", None)
+    dialect = getattr(getattr(bind, "dialect", None), "name", None)
+    if dialect == "postgresql":
+        await execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:fingerprint, 0))"
+            ),
+            {"fingerprint": request_fingerprint},
+        )
+    existing = await scalar(
+        select(CatalogImportBatch)
+        .where(
+            CatalogImportBatch.workspace_id == workspace_id,
+            CatalogImportBatch.request_fingerprint == request_fingerprint,
+            CatalogImportBatch.status.in_(("completed", "partial")),
+        )
+        .order_by(CatalogImportBatch.created_at.desc(), CatalogImportBatch.id.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        await session.commit()
+    return existing
 
 
 async def get_import_batch(
@@ -1040,6 +1248,8 @@ def _json_safe(value: Any) -> Any:
 
 __all__ = [
     "CatalogImportError",
+    "CatalogSheetPreview",
+    "CatalogWorkbookPreview",
     "ImportIssue",
     "ParsedCatalog",
     "ParsedCatalogRow",
@@ -1051,5 +1261,6 @@ __all__ = [
     "normalize_identifier",
     "parse_catalog_xlsx",
     "parse_mapping_json",
+    "preview_catalog_xlsx",
     "resolve_column_mapping",
 ]

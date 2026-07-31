@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,11 +9,51 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/app_language.dart';
 import 'core/app_router.dart';
 import 'core/app_theme.dart';
+import 'core/api_client.dart';
+import 'core/client_error_reporter.dart';
 import 'core/environment.dart';
 import 'core/marko_ui.dart';
 import 'features/auth/auth_controller.dart';
 
-Future<void> main() async {
+void main() {
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      FlutterError.onError = (details) {
+        FlutterError.presentError(details);
+        unawaited(
+          ClientErrorReporter.instance.capture(
+            details.exception,
+            details.stack ?? StackTrace.current,
+            kind: ClientErrorKind.flutter,
+          ),
+        );
+      };
+      PlatformDispatcher.instance.onError = (error, stackTrace) {
+        unawaited(
+          ClientErrorReporter.instance.capture(
+            error,
+            stackTrace,
+            kind: ClientErrorKind.platform,
+          ),
+        );
+        return true;
+      };
+      await _bootstrap();
+    },
+    (error, stackTrace) {
+      unawaited(
+        ClientErrorReporter.instance.capture(
+          error,
+          stackTrace,
+          kind: ClientErrorKind.zone,
+        ),
+      );
+    },
+  );
+}
+
+Future<void> _bootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Environment.e2eMode) {
     if (!Environment.hasValidE2eConfig) {
@@ -90,6 +133,13 @@ class MarkoApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     final language = ref.watch(appLanguageProvider);
+    final reporter = ClientErrorReporter.instance;
+    reporter.attachTransport((event) async {
+      await ref
+          .read(apiClientProvider)
+          .postJson('/api/v1/operations/client-errors', body: event);
+    });
+    unawaited(reporter.flush());
     if (auth.isLoading) {
       return MaterialApp(
         title: 'Marko',

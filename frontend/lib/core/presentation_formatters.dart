@@ -1,7 +1,7 @@
 String formatMoney(
-  num value, {
+  Object value, {
   required String currency,
-  num? priceTick,
+  Object? priceTick,
   int? fractionDigits,
 }) {
   final amount = formatDecimalAmount(
@@ -12,13 +12,24 @@ String formatMoney(
   return '$amount ${currency.trim().toUpperCase()}';
 }
 
-String formatDecimalAmount(num value, {num? priceTick, int? fractionDigits}) {
-  final amount = _ScaledInteger.tryParse(value.toString());
-  final tick = priceTick == null
-      ? null
-      : _ScaledInteger.tryParse(priceTick.toString());
+String formatLocalDateTime(DateTime value) {
+  final local = value.toLocal();
+  String twoDigits(int number) => number.toString().padLeft(2, '0');
+  return '${twoDigits(local.day)}.${twoDigits(local.month)}.${local.year} '
+      '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
+}
+
+String formatDecimalAmount(
+  Object value, {
+  Object? priceTick,
+  int? fractionDigits,
+}) {
+  final amount = DecimalValue.tryParse(value);
+  final tick = DecimalValue.tryParse(priceTick);
   if (amount == null || (tick != null && tick.units <= BigInt.zero)) {
-    return value.toStringAsFixed(fractionDigits ?? 2);
+    return value is num
+        ? value.toStringAsFixed(fractionDigits ?? 2)
+        : value.toString();
   }
 
   final rounded = tick == null ? amount : amount.roundToMultiple(tick);
@@ -28,7 +39,7 @@ String formatDecimalAmount(num value, {num? priceTick, int? fractionDigits}) {
 
 int decimalScale(Object? rawValue, {int fallback = 2}) {
   if (rawValue == null) return fallback;
-  final parsed = _ScaledInteger.tryParse(rawValue.toString());
+  final parsed = DecimalValue.tryParse(rawValue);
   return parsed?.scale ?? fallback;
 }
 
@@ -45,8 +56,12 @@ String summarizeLimited(
   return visible.join(separator);
 }
 
-class _ScaledInteger {
-  const _ScaledInteger(this.units, this.scale);
+/// Exact base-10 value used for prices, ticks, and money serialization.
+///
+/// Parsing never passes through binary floating point. Division is exposed as
+/// [ratioTo] so an approximate boundary is explicit and limited to ratios.
+class DecimalValue implements Comparable<DecimalValue> {
+  const DecimalValue._(this.units, this.scale);
 
   final BigInt units;
   final int scale;
@@ -55,8 +70,26 @@ class _ScaledInteger {
     r'^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$',
   );
 
-  static _ScaledInteger? tryParse(String rawValue) {
-    final match = _pattern.firstMatch(rawValue.trim());
+  factory DecimalValue.parse(String rawValue) {
+    final value = tryParse(rawValue);
+    if (value == null) {
+      throw FormatException('Invalid decimal value: $rawValue');
+    }
+    return value;
+  }
+
+  factory DecimalValue.from(Object value) {
+    final parsed = tryParse(value);
+    if (parsed == null) {
+      throw FormatException('Invalid decimal value: $value');
+    }
+    return parsed;
+  }
+
+  static DecimalValue? tryParse(Object? rawValue) {
+    if (rawValue == null) return null;
+    if (rawValue is DecimalValue) return rawValue;
+    final match = _pattern.firstMatch(rawValue.toString().trim());
     if (match == null) return null;
     final sign = match.group(1) == '-' ? -1 : 1;
     final whole = match.group(2)!;
@@ -68,10 +101,16 @@ class _ScaledInteger {
       units *= _pow10(-scale);
       scale = 0;
     }
-    return _ScaledInteger(units, scale);
+    return DecimalValue._(units, scale);
   }
 
-  _ScaledInteger roundToMultiple(_ScaledInteger multiple) {
+  bool get isZero => units == BigInt.zero;
+
+  bool get isPositive => units > BigInt.zero;
+
+  DecimalValue abs() => units.isNegative ? DecimalValue._(-units, scale) : this;
+
+  DecimalValue roundToMultiple(DecimalValue multiple) {
     final commonScale = scale > multiple.scale ? scale : multiple.scale;
     final amountUnits = units * _pow10(commonScale - scale);
     final multipleUnits =
@@ -81,8 +120,61 @@ class _ScaledInteger {
     final remainder = absolute.remainder(multipleUnits);
     if (remainder * BigInt.two >= multipleUnits) quotient += BigInt.one;
     final rounded = quotient * multipleUnits;
-    return _ScaledInteger(
+    return DecimalValue._(
       amountUnits.isNegative ? -rounded : rounded,
+      commonScale,
+    );
+  }
+
+  DecimalValue operator +(Object other) {
+    final pair = _aligned(other);
+    return DecimalValue._(pair.$1 + pair.$2, pair.$3);
+  }
+
+  DecimalValue operator -(Object other) {
+    final pair = _aligned(other);
+    return DecimalValue._(pair.$1 - pair.$2, pair.$3);
+  }
+
+  DecimalValue operator *(Object other) {
+    final right = DecimalValue.from(other);
+    return DecimalValue._(units * right.units, scale + right.scale);
+  }
+
+  DecimalValue operator -() => DecimalValue._(-units, scale);
+
+  double ratioTo(Object other) {
+    final denominator = DecimalValue.from(other);
+    if (denominator.isZero) {
+      throw UnsupportedError('Cannot divide by a zero DecimalValue');
+    }
+    return toDouble() / denominator.toDouble();
+  }
+
+  double toDouble() => double.parse(toString());
+
+  bool operator <(Object other) => compareTo(DecimalValue.from(other)) < 0;
+
+  bool operator <=(Object other) => compareTo(DecimalValue.from(other)) <= 0;
+
+  bool operator >(Object other) => compareTo(DecimalValue.from(other)) > 0;
+
+  bool operator >=(Object other) => compareTo(DecimalValue.from(other)) >= 0;
+
+  @override
+  int compareTo(DecimalValue other) {
+    final commonScale = scale > other.scale ? scale : other.scale;
+    final left = units * _pow10(commonScale - scale);
+    final right = other.units * _pow10(commonScale - other.scale);
+    return left.compareTo(right);
+  }
+
+  (BigInt, BigInt, int) _aligned(Object other) {
+    final right = DecimalValue.from(other);
+    final commonScale = scale > right.scale ? scale : right.scale;
+    return (
+      units * _pow10(commonScale - scale),
+      right.units * _pow10(commonScale - right.scale),
       commonScale,
     );
   }
@@ -110,6 +202,40 @@ class _ScaledInteger {
       digits = '${digits.substring(0, split)}.${digits.substring(split)}';
     }
     return negative ? '-$digits' : digits;
+  }
+
+  String toStringAsFixed(int fractionDigits) => toFixed(fractionDigits);
+
+  @override
+  String toString() {
+    final negative = units.isNegative;
+    var digits = units.abs().toString();
+    if (scale > 0) {
+      digits = digits.padLeft(scale + 1, '0');
+      final split = digits.length - scale;
+      digits = '${digits.substring(0, split)}.${digits.substring(split)}';
+    }
+    return negative ? '-$digits' : digits;
+  }
+
+  String toJson() => toString();
+
+  @override
+  bool operator ==(Object other) {
+    final parsed = tryParse(other);
+    return parsed != null && compareTo(parsed) == 0;
+  }
+
+  @override
+  int get hashCode {
+    var canonicalUnits = units;
+    var canonicalScale = scale;
+    while (canonicalScale > 0 &&
+        canonicalUnits.remainder(BigInt.from(10)) == BigInt.zero) {
+      canonicalUnits ~/= BigInt.from(10);
+      canonicalScale -= 1;
+    }
+    return Object.hash(canonicalUnits, canonicalScale);
   }
 
   static BigInt _pow10(int exponent) => BigInt.from(10).pow(exponent);

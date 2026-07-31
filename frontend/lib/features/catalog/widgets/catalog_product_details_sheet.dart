@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/app_language.dart';
 import '../../../core/app_theme.dart';
+import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_cached_image.dart';
 import '../catalog_models.dart';
 import 'catalog_competitor_section.dart';
@@ -77,14 +78,14 @@ class CatalogProductDetailsSheet extends StatefulWidget {
 
 class _CatalogProductDetailsSheetState
     extends State<CatalogProductDetailsSheet> {
-  late Future<CatalogCompetitorComparison> _comparison;
+  late Future<_CatalogComparisonLoad> _comparison;
   bool _isDiscovering = false;
   String? _discoveryError;
 
   @override
   void initState() {
     super.initState();
-    _comparison = widget.loadCompetitors();
+    _comparison = _loadComparison();
   }
 
   @override
@@ -119,28 +120,40 @@ class _CatalogProductDetailsSheetState
                 const _SheetHeader(),
                 Divider(color: colors.border),
                 Expanded(
-                  child: ListView(
+                  child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-                    children: [
-                      _ProductSummary(product: widget.product),
-                      const SizedBox(height: 24),
-                      FutureBuilder<CatalogCompetitorComparison>(
-                        future: _comparison,
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState !=
-                              ConnectionState.done) {
-                            return const CatalogCompetitorLoading();
-                          }
-                          if (snapshot.hasError) {
-                            return CatalogCompetitorError(onRetry: _retry);
-                          }
-                          return CatalogCompetitorSection(
-                            comparison: snapshot.requireData,
-                            onOpenListing: _openListing,
-                          );
-                        },
-                      ),
-                    ],
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _ProductSummary(product: widget.product),
+                        const SizedBox(height: 24),
+                        FutureBuilder<_CatalogComparisonLoad>(
+                          future: _comparison,
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState !=
+                                ConnectionState.done) {
+                              return const CatalogCompetitorLoading();
+                            }
+                            final result = snapshot.requireData;
+                            if (result.error case final error?) {
+                              return MarkoAsyncErrorView(
+                                error: error,
+                                forbiddenResourceRu:
+                                    'конкурентным объявлениям этого товара',
+                                forbiddenResourceUk:
+                                    'конкурентних оголошень цього товару',
+                                onRetry: _retry,
+                                padding: EdgeInsets.zero,
+                              );
+                            }
+                            return CatalogCompetitorSection(
+                              comparison: result.comparison!,
+                              onOpenListing: _openListing,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 Container(
@@ -221,8 +234,16 @@ class _CatalogProductDetailsSheetState
 
   void _retry() {
     setState(() {
-      _comparison = widget.loadCompetitors();
+      _comparison = _loadComparison();
     });
+  }
+
+  Future<_CatalogComparisonLoad> _loadComparison() async {
+    try {
+      return _CatalogComparisonLoad.success(await widget.loadCompetitors());
+    } catch (error) {
+      return _CatalogComparisonLoad.failure(error);
+    }
   }
 
   Future<void> _discover() async {
@@ -236,7 +257,7 @@ class _CatalogProductDetailsSheetState
       final result = await discover();
       if (!mounted) return;
       setState(() {
-        _comparison = Future.value(result);
+        _comparison = Future.value(_CatalogComparisonLoad.success(result));
         _isDiscovering = false;
       });
     } catch (error) {
@@ -266,6 +287,15 @@ class _CatalogProductDetailsSheetState
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
+}
+
+class _CatalogComparisonLoad {
+  const _CatalogComparisonLoad.success(this.comparison) : error = null;
+
+  const _CatalogComparisonLoad.failure(this.error) : comparison = null;
+
+  final CatalogCompetitorComparison? comparison;
+  final Object? error;
 }
 
 class _SheetHeader extends StatelessWidget {

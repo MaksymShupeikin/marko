@@ -13,6 +13,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Computed,
     DateTime,
     Enum,
     ForeignKey,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -144,6 +146,16 @@ class Listing(TimestampMixin, Base):
         UniqueConstraint("store_id", "external_id", name="uq_listing_store_external"),
         Index("ix_listing_model_id", "model_id"),
         Index("ix_listing_sku", "sku"),
+        Index(
+            "ix_listings_owned_catalog_identity",
+            "catalog_identity_kind",
+            "catalog_identity_value",
+            "store_id",
+        ),
+        Index("ix_listings_owned_catalog_sku_norm", "catalog_sku_norm"),
+        Index("ix_listings_owned_catalog_oe_norm", "catalog_oe_norm"),
+        Index("ix_listings_owned_catalog_name_lower", text("lower(name)")),
+        Index("ix_listings_owned_catalog_store_first", "store_id", "name", "id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -162,6 +174,70 @@ class Listing(TimestampMixin, Base):
     current_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     is_available: Mapped[bool | None] = mapped_column(Boolean)
     raw_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    catalog_identity_kind: Mapped[str] = mapped_column(
+        Text,
+        Computed(
+            "public.marko_catalog_identity_kind("
+            "brand, sku, model_id, raw_data ->> 'oe_raw')",
+            persisted=True,
+        ),
+    )
+    catalog_identity_value: Mapped[str] = mapped_column(
+        Text,
+        Computed(
+            "public.marko_catalog_identity_value("
+            "brand, sku, model_id, raw_data ->> 'oe_raw', store_id, id)",
+            persisted=True,
+        ),
+    )
+    catalog_sku_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed("public.marko_catalog_normalize(sku)", persisted=True),
+    )
+    catalog_oe_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed(
+            "public.marko_catalog_normalize(raw_data ->> 'oe_raw')",
+            persisted=True,
+        ),
+    )
+    catalog_model_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed("public.marko_catalog_normalize(model_id)", persisted=True),
+    )
+    catalog_brand_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed("public.marko_catalog_normalize(brand)", persisted=True),
+    )
+    catalog_name_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed("public.marko_catalog_normalize(name)", persisted=True),
+    )
+    catalog_description_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed(
+            "public.marko_catalog_normalize(raw_data ->> 'description')",
+            persisted=True,
+        ),
+    )
+    catalog_completeness: Mapped[int] = mapped_column(
+        SmallInteger,
+        Computed(
+            "("
+            "CASE WHEN btrim(coalesce(raw_data ->> 'image', '')) "
+            "LIKE 'http://%' OR "
+            "btrim(coalesce(raw_data ->> 'image', '')) LIKE 'https://%' "
+            "THEN 1 ELSE 0 END"
+            " + CASE WHEN brand IS NOT NULL AND brand <> '' THEN 1 ELSE 0 END"
+            " + CASE WHEN sku IS NOT NULL AND sku <> '' THEN 1 ELSE 0 END"
+            " + CASE WHEN current_price IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN is_available IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN model_id IS NOT NULL AND model_id <> '' "
+            "THEN 1 ELSE 0 END"
+            ")",
+            persisted=True,
+        ),
+    )
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -700,7 +776,11 @@ class CatalogDiscoveryCapture(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     discovery_run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("catalog_discovery_runs.id", ondelete="CASCADE"), index=True
+        # RESTRICT, not CASCADE: a capture binds an evidence blob to the request
+        # that produced it. Deleting the run would leave the blob unattributable
+        # even though the blob itself is protected (F2-0014).
+        ForeignKey("catalog_discovery_runs.id", ondelete="RESTRICT"),
+        index=True,
     )
     evidence_blob_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("scrape_evidence_blobs.id", ondelete="RESTRICT"), index=True
@@ -955,6 +1035,11 @@ class ScrapeHttpAttempt(Base):
 class CatalogImportBatch(TimestampMixin, Base):
     __tablename__ = "catalog_import_batches"
     __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "request_fingerprint",
+            name="uq_catalog_import_workspace_fingerprint",
+        ),
         CheckConstraint(
             "status IN ('queued', 'running', 'completed', 'partial', 'failed')",
             name="ck_catalog_import_batch_status",
@@ -970,6 +1055,7 @@ class CatalogImportBatch(TimestampMixin, Base):
     )
     filename: Mapped[str] = mapped_column(String(255))
     content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
     content_size: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(
         String(16), default="queued", server_default="queued"
@@ -1016,7 +1102,19 @@ class CatalogItem(TimestampMixin, Base):
             "(conversion_rate_proxy >= 0 AND conversion_rate_proxy <= 1))",
             name="ck_catalog_items_sales_nonnegative",
         ),
+        CheckConstraint(
+            "identity_status IN ('OE_CONFIRMED', 'MPN_ONLY', 'UNRESOLVED')",
+            name="ck_catalog_item_identity_status",
+        ),
+        # After WP-2 an OE_CONFIRMED row must actually carry the OE; without
+        # this the status can drift away from the column it describes.
+        CheckConstraint(
+            "identity_status <> 'OE_CONFIRMED' OR "
+            "(oe_norm IS NOT NULL AND oe_norm <> '')",
+            name="ck_catalog_item_identity_oe_present",
+        ),
         Index("ix_catalog_item_workspace_oe", "workspace_id", "oe_norm"),
+        Index("ix_catalog_item_workspace_mpn", "workspace_id", "mpn_norm"),
         Index("ix_catalog_item_workspace_category", "workspace_id", "category"),
     )
 
@@ -1083,6 +1181,16 @@ class CatalogItem(TimestampMixin, Base):
     characteristics_raw: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=dict, server_default="{}"
     )
+    # WP-2: which of the already-existing ``oe_*`` / ``mpn_*`` pairs above was
+    # actually decided, and on what grounds.  An empty ``oe_norm`` is ambiguous
+    # on its own — it can mean "the brand says this article is a supplier
+    # number" or "nobody has looked yet" — and the difference decides whether
+    # the position belongs in a review queue.  ``UNRESOLVED`` is the state of
+    # every row imported before this revision, until the WP-6 reparse.
+    identity_status: Mapped[str] = mapped_column(
+        String(20), default="UNRESOLVED", server_default="UNRESOLVED"
+    )
+    identity_reason: Mapped[str | None] = mapped_column(String(40))
 
 
 class CatalogItemOverride(Base):
@@ -1709,6 +1817,13 @@ class MarketObservation(Base):
     cross_candidates: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, default=list, server_default="[]"
     )
+    # Normalized, privacy-bounded parser data used by the semantic
+    # comparability reviewer.  It deliberately excludes our procurement cost
+    # and credentials while retaining every candidate field the parser
+    # actually exposed (characteristics and image URLs included).
+    candidate_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
     brand_raw: Mapped[str | None] = mapped_column(String(255))
     # Deprecated compatibility field. New eligibility/calibration code must not read it.
     matched_oe_norm: Mapped[str | None] = mapped_column(String(255), index=True)
@@ -1762,7 +1877,7 @@ class MarketObservation(Base):
     )
     parser_version: Mapped[str] = mapped_column(String(80))
     evidence_contract_version: Mapped[str] = mapped_column(
-        String(80), default="comparison-evidence-v2", server_default="legacy-unknown-v0"
+        String(80), default="comparison-evidence-v3", server_default="legacy-unknown-v0"
     )
     comparability_policy_id: Mapped[str | None] = mapped_column(String(120))
     comparability_policy_hash: Mapped[str | None] = mapped_column(String(64))
@@ -1789,6 +1904,191 @@ class MarketObservation(Base):
         ForeignKey("cross_links.id", ondelete="RESTRICT"), index=True
     )
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CandidateComparabilityReview(Base):
+    """Immutable semantic review of one market candidate against our product."""
+
+    __tablename__ = "candidate_comparability_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_key",
+            name="uq_candidate_comparability_review_request_key",
+        ),
+        CheckConstraint(
+            "status IN ('COMPLETED', 'HARD_STOP', 'CACHED', 'FAILED', 'SKIPPED')",
+            name="ck_candidate_comparability_review_status",
+        ),
+        CheckConstraint(
+            "verdict IN ('COMPARABLE', 'NOT_COMPARABLE', 'INSUFFICIENT_DATA')",
+            name="ck_candidate_comparability_review_verdict",
+        ),
+        CheckConstraint(
+            "match_level IN "
+            "('EXACT', 'ACCEPTABLE_ANALOGUE', 'SUSPICIOUS', 'NOT_APPLICABLE')",
+            name="ck_candidate_comparability_review_match_level",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_candidate_comparability_review_confidence",
+        ),
+        CheckConstraint(
+            "(verdict = 'COMPARABLE' AND "
+            "match_level IN ('EXACT', 'ACCEPTABLE_ANALOGUE')) OR "
+            "(verdict <> 'COMPARABLE' AND "
+            "match_level IN ('SUSPICIOUS', 'NOT_APPLICABLE'))",
+            name="ck_candidate_comparability_review_positive_level",
+        ),
+        CheckConstraint(
+            "decision_source IN "
+            "('LLM', 'HARD_RULE', 'CACHE', 'HUMAN_CACHE', 'UNCONFIGURED')",
+            name="ck_candidate_comparability_review_source",
+        ),
+        CheckConstraint(
+            "(decision_source IN ('CACHE', 'HUMAN_CACHE') AND "
+            "cache_hit_review_id IS NOT NULL) OR "
+            "(decision_source NOT IN ('CACHE', 'HUMAN_CACHE') AND "
+            "cache_hit_review_id IS NULL)",
+            name="ck_candidate_comparability_review_cache_source",
+        ),
+        CheckConstraint(
+            "status NOT IN ('FAILED', 'SKIPPED') OR verdict = 'INSUFFICIENT_DATA'",
+            name="ck_candidate_comparability_review_failure_verdict",
+        ),
+        CheckConstraint(
+            "attempt_no > 0",
+            name="ck_candidate_comparability_review_attempt",
+        ),
+        CheckConstraint(
+            "latency_ms >= 0",
+            name="ck_candidate_comparability_review_latency",
+        ),
+        Index(
+            "ix_candidate_comparability_review_observation_time",
+            "market_observation_id",
+            "reviewed_at",
+        ),
+        Index(
+            "ix_candidate_comparability_review_cache",
+            "workspace_id",
+            "input_hash",
+            "prompt_version",
+            "model_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    market_observation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="RESTRICT"), index=True
+    )
+    request_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    prompt_version: Mapped[str] = mapped_column(String(80))
+    schema_version: Mapped[str] = mapped_column(String(80))
+    provider: Mapped[str] = mapped_column(String(50))
+    model_id: Mapped[str] = mapped_column(String(160))
+    decision_source: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(20))
+    verdict: Mapped[str] = mapped_column(String(24), index=True)
+    match_level: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    rationale: Mapped[str] = mapped_column(Text)
+    dimension_findings: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    hard_stop_conflicts: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    image_urls: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    cache_hit_review_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("candidate_comparability_reviews.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    provider_response_id: Mapped[str | None] = mapped_column(String(255))
+    provider_model: Mapped[str | None] = mapped_column(String(160))
+    usage: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CandidateComparabilityFeedback(Base):
+    """Append-only customer correction that becomes labelled matching data."""
+
+    __tablename__ = "candidate_comparability_feedback"
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('CONFIRM', 'CORRECT')",
+            name="ck_candidate_comparability_feedback_decision",
+        ),
+        CheckConstraint(
+            "corrected_verdict IS NULL OR corrected_verdict IN "
+            "('COMPARABLE', 'NOT_COMPARABLE', 'INSUFFICIENT_DATA')",
+            name="ck_candidate_comparability_feedback_verdict",
+        ),
+        CheckConstraint(
+            "corrected_match_level IS NULL OR corrected_match_level IN "
+            "('EXACT', 'ACCEPTABLE_ANALOGUE', 'SUSPICIOUS', 'NOT_APPLICABLE')",
+            name="ck_candidate_comparability_feedback_level",
+        ),
+        CheckConstraint(
+            "(decision = 'CONFIRM' AND corrected_verdict IS NULL AND "
+            "corrected_match_level IS NULL) OR "
+            "(decision = 'CORRECT' AND corrected_verdict IS NOT NULL AND "
+            "corrected_match_level IS NOT NULL)",
+            name="ck_candidate_comparability_feedback_correction",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_candidate_comparability_feedback_confidence",
+        ),
+        Index(
+            "ix_candidate_comparability_feedback_review_time",
+            "review_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    review_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("candidate_comparability_reviews.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    market_observation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    decision: Mapped[str] = mapped_column(String(16))
+    corrected_verdict: Mapped[str | None] = mapped_column(String(24))
+    corrected_match_level: Mapped[str | None] = mapped_column(String(32))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    reason: Mapped[str] = mapped_column(Text)
+    evidence_corrections: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class OfferProcessingOutcome(Base):
@@ -1906,6 +2206,112 @@ class CrossLink(Base):
     method_version: Mapped[str] = mapped_column(String(80))
     config_sha256: Mapped[str] = mapped_column(String(64))
     extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CatalogIdentityLink(Base):
+    """Append-only equivalence edge between two numbers of our own catalog item.
+
+    Deliberately a separate table rather than a nullable ``pricing_run_id`` on
+    ``cross_links`` (WP-3 chose option B, and the reason is recorded here rather
+    than left to archaeology).  A link read out of our own catalogue, the
+    reference map or a kemp.ua card belongs to no pricing run at all: it was not
+    observed while pricing anything.  Making ``cross_links.pricing_run_id``
+    nullable would weaken the append-only invariant of runs — every row there is
+    currently guaranteed to name the run that produced it — and would put two
+    things with different lifecycles in one table: a run's links die with the
+    run's evidence, these outlive every run.
+
+    The two tables are read as a union by ``_confirmed_cross_oems``.  Both sides
+    filter on ``validation_status == 'CONFIRMED'``, so a ``REVIEW`` row here can
+    never move a price.
+    """
+
+    __tablename__ = "catalog_identity_links"
+    __table_args__ = (
+        # One row per (item, pair, source): the same pair from two sources must
+        # both be recordable, because two independent sources agreeing is what
+        # promotes a KEMP_SITE link out of REVIEW.  Re-running the reparse with
+        # the same inputs therefore collides instead of duplicating.
+        UniqueConstraint(
+            "catalog_item_id",
+            "our_oem_norm",
+            "extracted_oem_norm",
+            "extraction_method",
+            name="uq_catalog_identity_link_pair_source",
+        ),
+        UniqueConstraint("sequence_no", name="uq_catalog_identity_link_sequence"),
+        CheckConstraint(
+            "our_oem_norm <> '' AND extracted_oem_norm <> '' "
+            "AND our_oem_norm <> extracted_oem_norm",
+            name="ck_catalog_identity_link_distinct_oems",
+        ),
+        # REJECTED is absent on purpose: these sources can be silent about a
+        # link, and silence is not disproof.
+        CheckConstraint(
+            "validation_status IN ('CONFIRMED', 'REVIEW')",
+            name="ck_catalog_identity_link_status",
+        ),
+        CheckConstraint(
+            "anomaly IS NULL OR anomaly IN "
+            "('OE_SOURCE_CONFLICT', 'SHARED_ARTICLE_FANOUT', "
+            "'OE_SUPERSEDED_BY_NEWER_REFERENCE')",
+            name="ck_catalog_identity_link_anomaly",
+        ),
+        # An anomaly means we cannot tell which number is right, so the link
+        # must not be usable as evidence until a human says otherwise.
+        CheckConstraint(
+            "anomaly IS NULL OR validation_status = 'REVIEW'",
+            name="ck_catalog_identity_link_anomaly_under_review",
+        ),
+        Index(
+            "ix_catalog_identity_link_workspace_pair",
+            "workspace_id",
+            "our_oem_norm",
+            "extracted_oem_norm",
+        ),
+        Index(
+            "ix_catalog_identity_link_workspace_extracted",
+            "workspace_id",
+            "extracted_oem_norm",
+        ),
+        Index(
+            "ix_catalog_identity_link_anomaly",
+            "workspace_id",
+            "anomaly",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    sequence_no: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="CASCADE"), index=True
+    )
+    our_oem_norm: Mapped[str] = mapped_column(String(255))
+    extracted_oem_norm: Mapped[str] = mapped_column(String(255))
+    #: The number as the source wrote it.  ``6455.EE`` carries its punctuation
+    #: as a marque signal that normalization erases.
+    extracted_raw: Mapped[str] = mapped_column(Text)
+    #: The whole original line the number was read out of — the proof that lets
+    #: a human check the decision by eye instead of trusting the pipeline.
+    raw_context: Mapped[str] = mapped_column(Text)
+    extraction_method: Mapped[str] = mapped_column(String(50))
+    validation_status: Mapped[str] = mapped_column(String(16))
+    anomaly: Mapped[str | None] = mapped_column(String(40))
+    #: Every source that produced this pair, most trusted first.
+    corroborating_sources: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    validation_details: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    method_version: Mapped[str] = mapped_column(String(80))
+    config_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

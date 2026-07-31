@@ -1,0 +1,342 @@
+"""Filter-faithful CSV/XLSX export for pricing recommendations.
+
+The export contract deliberately contains no cost or inventory-cost fields.
+Those remain unavailable until the workspace cost-privacy mode is approved.
+"""
+
+from __future__ import annotations
+
+import csv
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
+from io import BytesIO, StringIO
+from typing import Any, Literal
+from uuid import UUID
+
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from marko.infrastructure.db.models import CatalogItem, MarketObservation
+from marko.services.market_collection import _validated_listing_url
+from marko.services.pricing_runs import list_recommendations
+
+
+MAX_RECOMMENDATION_EXPORT_ROWS = 5_000
+MAX_SOURCE_URLS_PER_ROW = 10
+
+
+class RecommendationExportError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class RecommendationExport:
+    content: bytes
+    media_type: str
+    filename: str
+    row_count: int
+    run_id: UUID | None
+
+
+async def export_recommendations(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    export_format: Literal["csv", "xlsx"],
+    run_id: UUID | None,
+    action: str | None,
+    confidence_grade: str | None,
+    category: str | None,
+    queue: str,
+    priority_score_type: str | None,
+    confidence_min: Decimal | None,
+    confidence_max: Decimal | None,
+    sort: str,
+) -> RecommendationExport:
+    rows, total, resolved_run_id, _action_counts = await list_recommendations(
+        session,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        action=action,
+        confidence_grade=confidence_grade,
+        category=category,
+        queue=queue,
+        priority_score_type=priority_score_type,
+        confidence_min=confidence_min,
+        confidence_max=confidence_max,
+        sort=sort,
+        limit=MAX_RECOMMENDATION_EXPORT_ROWS,
+        offset=0,
+    )
+    if total > MAX_RECOMMENDATION_EXPORT_ROWS:
+        raise RecommendationExportError(
+            "RECOMMENDATION_EXPORT_LIMIT_EXCEEDED",
+            "Активные фильтры возвращают "
+            f"{total} строк; сузьте выборку до "
+            f"{MAX_RECOMMENDATION_EXPORT_ROWS}.",
+        )
+    source_urls = await _source_urls_by_recommendation(session, rows)
+    payload = [
+        _export_row(
+            recommendation,
+            item,
+            source_urls=source_urls.get(recommendation.id, ()),
+        )
+        for recommendation, item in rows
+    ]
+    suffix = str(resolved_run_id or "empty")
+    if export_format == "csv":
+        content = _to_csv(payload)
+        return RecommendationExport(
+            content=content,
+            media_type="text/csv; charset=utf-8",
+            filename=f"marko-recommendations-{suffix}.csv",
+            row_count=len(payload),
+            run_id=resolved_run_id,
+        )
+    content = _to_xlsx(payload)
+    return RecommendationExport(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        filename=f"marko-recommendations-{suffix}.xlsx",
+        row_count=len(payload),
+        run_id=resolved_run_id,
+    )
+
+
+async def _source_urls_by_recommendation(
+    session: AsyncSession,
+    rows: list[tuple[Any, CatalogItem]],
+) -> dict[UUID, tuple[str, ...]]:
+    ids: set[UUID] = set()
+    recommendation_ids: dict[UUID, list[UUID]] = {}
+    for recommendation, _item in rows:
+        ordered: list[UUID] = []
+        for raw in (
+            list(recommendation.evidence_observation_ids or [])
+            + list(recommendation.kemp_reference_observation_ids or [])
+        ):
+            try:
+                observation_id = UUID(str(raw))
+            except (TypeError, ValueError):
+                continue
+            if observation_id not in ordered:
+                ordered.append(observation_id)
+                ids.add(observation_id)
+        recommendation_ids[recommendation.id] = ordered
+    if not ids:
+        return {recommendation_id: () for recommendation_id in recommendation_ids}
+    observations = {
+        observation.id: observation
+        for observation in (
+            await session.scalars(
+                select(MarketObservation).where(MarketObservation.id.in_(ids))
+            )
+        ).all()
+    }
+    result: dict[UUID, tuple[str, ...]] = {}
+    for recommendation_id, ordered_ids in recommendation_ids.items():
+        urls: list[str] = []
+        for observation_id in ordered_ids:
+            observation = observations.get(observation_id)
+            if observation is None:
+                continue
+            safe_url, _reason = _validated_listing_url(observation.url)
+            if safe_url and safe_url not in urls:
+                urls.append(safe_url)
+            if len(urls) == MAX_SOURCE_URLS_PER_ROW:
+                break
+        result[recommendation_id] = tuple(urls)
+    return result
+
+
+def _export_row(
+    recommendation: Any,
+    item: CatalogItem,
+    *,
+    source_urls: tuple[str, ...],
+) -> dict[str, Any]:
+    money = lambda value: _format_money(  # noqa: E731
+        value,
+        currency=recommendation.currency,
+        price_tick=recommendation.price_tick,
+        price_tick_version=recommendation.price_tick_version,
+    )
+    trace = getattr(recommendation, "calculation_trace", {})
+    advisory = (
+        trace.get("advisory_decision")
+        if isinstance(trace, dict)
+        else None
+    )
+    if not isinstance(advisory, dict):
+        advisory = {}
+    return {
+        "sku": item.sku,
+        "oe": item.oe_norm,
+        "name": item.name,
+        "category": item.category,
+        "action": recommendation.action,
+        "current_price": money(recommendation.current_price),
+        "fair_price": money(recommendation.fair_price),
+        "recommended_price": money(recommendation.recommended_price),
+        "absolute_recommended_change": money(
+            recommendation.absolute_recommended_change
+        ),
+        "percentage_recommended_change": (
+            None
+            if recommendation.percentage_recommended_change is None
+            else str(recommendation.percentage_recommended_change)
+        ),
+        "customer_advisory_action": advisory.get("action", ""),
+        "customer_advisory_price": money(
+            _optional_decimal(advisory.get("recommended_price"))
+        ),
+        "customer_target_band_low": money(
+            _optional_decimal(advisory.get("target_band_low"))
+        ),
+        "customer_target_band_high": money(
+            _optional_decimal(advisory.get("target_band_high"))
+        ),
+        "automatic_price_application": (
+            "false"
+            if advisory.get("automatic_price_application") is False
+            else ""
+        ),
+        "confidence": str(recommendation.confidence),
+        "confidence_grade": recommendation.confidence_grade,
+        "reason_codes": "; ".join(recommendation.reason_codes or []),
+        "source_urls": list(source_urls),
+        "computed_at": recommendation.computed_at.isoformat(),
+    }
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except ArithmeticError:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _format_money(
+    value: Decimal | None,
+    *,
+    currency: str,
+    price_tick: Decimal,
+    price_tick_version: str | None = None,
+) -> str:
+    if value is None:
+        return ""
+    tick = Decimal(price_tick)
+    if tick <= 0:
+        tick = Decimal("0.01")
+    rounded = (Decimal(value) / tick).quantize(
+        Decimal("1"),
+        rounding=ROUND_HALF_UP,
+    ) * tick
+    # NUMERIC(14,4) pads the configured integer tick `1` to `1.0000`.
+    # The named tick contract, not database padding, controls presentation.
+    digits = (
+        0
+        if price_tick_version == "uah-integer-v1"
+        else max(0, -tick.as_tuple().exponent)
+    )
+    return f"{rounded:.{digits}f} {currency.strip().upper()}"
+
+
+def _to_csv(rows: list[dict[str, Any]]) -> bytes:
+    output = StringIO(newline="")
+    headers = _headers(include_source_columns=False)
+    writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        flattened = dict(row)
+        flattened["source_urls"] = "; ".join(row["source_urls"])
+        writer.writerow(flattened)
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def _to_xlsx(rows: list[dict[str, Any]]) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Recommendations"
+    headers = _headers(include_source_columns=True)
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for row in rows:
+        values = [
+            row.get(header, "")
+            if not header.startswith("source_url_")
+            else _source_at(row["source_urls"], header)
+            for header in headers
+        ]
+        sheet.append(values)
+        row_number = sheet.max_row
+        for column, header in enumerate(headers, 1):
+            if not header.startswith("source_url_"):
+                continue
+            cell = sheet.cell(row=row_number, column=column)
+            if cell.value:
+                cell.hyperlink = str(cell.value)
+                cell.style = "Hyperlink"
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def _headers(*, include_source_columns: bool) -> list[str]:
+    headers = [
+        "sku",
+        "oe",
+        "name",
+        "category",
+        "action",
+        "current_price",
+        "fair_price",
+        "recommended_price",
+        "absolute_recommended_change",
+        "percentage_recommended_change",
+        "customer_advisory_action",
+        "customer_advisory_price",
+        "customer_target_band_low",
+        "customer_target_band_high",
+        "automatic_price_application",
+        "confidence",
+        "confidence_grade",
+        "reason_codes",
+    ]
+    if include_source_columns:
+        headers.extend(
+            f"source_url_{index}"
+            for index in range(1, MAX_SOURCE_URLS_PER_ROW + 1)
+        )
+    else:
+        headers.append("source_urls")
+    headers.append("computed_at")
+    return headers
+
+
+def _source_at(urls: list[str], header: str) -> str:
+    index = int(header.rsplit("_", 1)[1]) - 1
+    return urls[index] if index < len(urls) else ""
+
+
+__all__ = [
+    "MAX_RECOMMENDATION_EXPORT_ROWS",
+    "MAX_SOURCE_URLS_PER_ROW",
+    "RecommendationExport",
+    "RecommendationExportError",
+    "export_recommendations",
+]

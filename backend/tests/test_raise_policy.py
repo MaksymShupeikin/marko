@@ -26,7 +26,11 @@ from metis.pricing.types import StockStatus
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = BACKEND_ROOT / "config" / "raise_policy.yaml"
-POLICY = load_raise_policy(POLICY_PATH)
+# The legacy arithmetic suite exercises the still-supported balanced strategy.
+# The deployment default is tested separately because Yuri's 2026-07-30
+# decision intentionally changed it to the tier-agnostic budget-floor strategy.
+POLICY = load_raise_policy(POLICY_PATH, strategy="balanced")
+DEPLOYMENT_POLICY = load_raise_policy(POLICY_PATH)
 
 
 def _decide(prices, current="1800", stock=StockStatus.FRESH, policy=None, cost=None):
@@ -230,6 +234,42 @@ def test_single_competitor_is_no_data() -> None:
 
 
 @pytest.mark.parametrize(
+    ("bad_price", "expected_code"),
+    [
+        ("-100", "NON_POSITIVE_PRICE"),
+        ("0", "NON_POSITIVE_PRICE"),
+        ("NaN", "NON_FINITE_PRICE"),
+        ("Infinity", "NON_FINITE_PRICE"),
+    ],
+)
+def test_public_raise_basis_rejects_invalid_market_evidence(
+    bad_price: str,
+    expected_code: str,
+) -> None:
+    with pytest.raises(ValueError) as captured:
+        build_basis([Decimal(bad_price), Decimal("100"), Decimal("200")])
+
+    assert getattr(captured.value, "code", None) == expected_code
+
+
+def test_raise_decision_abstains_on_invalid_market_evidence() -> None:
+    decision = _decide(["-100", "100", "200"], current="80")
+
+    assert decision.outcome is RaiseOutcome.NO_DATA
+    assert decision.recommended_price is None
+    assert decision.reasons == ("NON_POSITIVE_PRICE",)
+
+
+@pytest.mark.parametrize("current", ["0", "-1", "NaN", "Infinity"])
+def test_raise_decision_abstains_on_invalid_current_price(current: str) -> None:
+    decision = _decide(["100", "110", "120"], current=current)
+
+    assert decision.outcome is RaiseOutcome.NO_DATA
+    assert decision.recommended_price is None
+    assert decision.reasons == ("INVALID_CURRENT_PRICE",)
+
+
+@pytest.mark.parametrize(
     ("prices", "expected"),
     [
         # robust_CV exactly 0.15 must not be HIGH, exactly 0.35 must not be MEDIUM.
@@ -282,13 +322,21 @@ def test_dead_stock_is_not_handled_here() -> None:
 # -------------------------------------------------------------------- config
 
 
-def test_policy_file_defaults_to_balanced_median() -> None:
-    assert POLICY.strategy is RaiseStrategy.BALANCED
-    assert POLICY.target_quantile == Decimal("0.50")
-    assert POLICY.min_change_pct == Decimal("0.03")
-    assert POLICY.max_step_pct == Decimal("0.25")
-    assert POLICY.psychological_step == Decimal("10")
-    assert POLICY.source_sha256 is not None
+def test_policy_file_defaults_to_customer_budget_floor() -> None:
+    assert DEPLOYMENT_POLICY.strategy is RaiseStrategy.BUDGET_FLOOR
+    assert DEPLOYMENT_POLICY.target_quantile == Decimal("0")
+    assert DEPLOYMENT_POLICY.minimum_discount == Decimal("0.02")
+    assert DEPLOYMENT_POLICY.maximum_discount == Decimal("0.05")
+    assert DEPLOYMENT_POLICY.psychological_step == Decimal("1")
+    assert DEPLOYMENT_POLICY.tier_agnostic
+    assert DEPLOYMENT_POLICY.allow_lower
+    assert DEPLOYMENT_POLICY.ignore_stock_status
+    assert DEPLOYMENT_POLICY.ignore_cost_floor
+    assert (
+        DEPLOYMENT_POLICY.owner_decision_reference
+        == "customer-reply-2026-07-30"
+    )
+    assert DEPLOYMENT_POLICY.source_sha256 is not None
 
 
 def test_unknown_strategy_is_rejected() -> None:
@@ -301,13 +349,16 @@ def test_missing_policy_file_is_rejected(tmp_path) -> None:
         load_raise_policy(tmp_path / "absent.yaml")
 
 
-def test_code_default_matches_the_shipped_configuration() -> None:
-    """The in-code preset and the YAML must not drift apart silently."""
+def test_code_default_matches_explicit_balanced_fallback() -> None:
+    """Callers without deployment config retain the conservative legacy preset."""
 
     from dataclasses import replace
 
     from metis.pricing.raise_policy import default_raise_policy
 
-    shipped = replace(POLICY, source_sha256=None)
+    shipped = replace(
+        load_raise_policy(POLICY_PATH, strategy="balanced"),
+        source_sha256=None,
+    )
 
     assert shipped == default_raise_policy()

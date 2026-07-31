@@ -59,6 +59,36 @@ class ProductPageResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    query: str | None = None
+
+
+class CrossStoreMatchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source: str
+    store_id: UUID | None
+    store_name: str
+    marketplace: str
+    product_id: UUID | None
+    name: str
+    url: str
+    sku: str | None
+    brand: str | None
+    price: Decimal | None
+    currency: str
+    image_url: str | None
+    matched_on: str
+    matched_value: str
+    via_cross: bool
+
+
+class CrossStoreSearchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    query: str
+    normalized_query: str
+    identities: list[str]
+    matches: list[CrossStoreMatchResponse]
 
 
 class SyncRunResponse(BaseModel):

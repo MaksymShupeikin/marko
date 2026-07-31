@@ -9,6 +9,10 @@ import 'package:marko_client/features/catalog/catalog_page.dart';
 import 'package:marko_client/features/catalog/widgets/catalog_product_card.dart';
 
 void main() {
+  test('catalog pricing store follows server-owned order, not a tenant ID', () {
+    expect(_product.primaryStore?.externalId, '3912822');
+  });
+
   testWidgets('catalog shows deduplicated products and connected stores', (
     tester,
   ) async {
@@ -30,7 +34,7 @@ void main() {
     expect(find.text('kemp'), findsNothing);
     expect(find.text('Можно поднять до'), findsOneWidget);
     expect(find.text('700.00 UAH'), findsOneWidget);
-    expect(find.text('Сейчас: 450.00 UAH'), findsOneWidget);
+    expect(find.text('Сейчас: 420.00 UAH'), findsOneWidget);
     expect(find.text('420.00–450.00 UAH'), findsNothing);
     expect(find.text('3 объявления объединены'), findsOneWidget);
     expect(find.text('OE/OEM'), findsOneWidget);
@@ -140,7 +144,9 @@ void main() {
     expect(sheet, findsNothing);
   });
 
-  testWidgets('regular card tap opens the KEMP listing first', (tester) async {
+  testWidgets('regular card tap opens the server-selected owned listing', (
+    tester,
+  ) async {
     String? openedUrl;
     var detailOpens = 0;
 
@@ -165,7 +171,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(openedUrl, 'https://prom.ua/ua/p-kemp-product.html');
+    expect(openedUrl, 'https://prom.ua/ua/p1-product.html');
     expect(detailOpens, 0);
 
     openedUrl = null;
@@ -304,7 +310,7 @@ class _TestCatalogController extends CatalogController {
   final CatalogCompetitorComparison comparison;
 
   @override
-  Future<CatalogState> build() async => const CatalogState(page: _page);
+  Future<CatalogState> build() async => CatalogState(page: _page);
 
   @override
   Future<CatalogCompetitorComparison> loadCompetitors(
@@ -349,7 +355,7 @@ final _comparison = CatalogCompetitorComparison(
   ],
 );
 
-const _emptyComparison = CatalogCompetitorComparison(
+final _emptyComparison = CatalogCompetitorComparison(
   recommendationId: null,
   comparedAt: null,
   currentPrice: null,
@@ -393,7 +399,7 @@ final _discoveryComparison = CatalogCompetitorComparison(
   selectionMethodVersion: 'deterministic-candidate-gates-v1',
   selectionConfigSha256: 'aaaaaaaa',
   brandRulesDatasetId: 'NO_BRAND_DICTIONARY_CONFIGURED',
-  discoveryItems: const [
+  discoveryItems: [
     CatalogDiscoveredOffer(
       discoveryOfferId: 'discovery-offer',
       sourceListingId: '1402874053',
@@ -431,7 +437,7 @@ final _discoveryComparison = CatalogCompetitorComparison(
       tierConfidence: 0,
     ),
   ],
-  referenceOnly: const [
+  referenceOnly: [
     CatalogDiscoveredOffer(
       discoveryOfferId: 'discovery-offer',
       sourceListingId: '1402874053',
@@ -473,7 +479,7 @@ final _discoveryComparison = CatalogCompetitorComparison(
   ],
 );
 
-const _page = CatalogProductPage(
+final _page = CatalogProductPage(
   items: [_product],
   total: 1,
   catalogTotal: 1,
@@ -494,7 +500,7 @@ const _page = CatalogProductPage(
   ],
 );
 
-const _product = CatalogProduct(
+final _product = CatalogProduct(
   id: 'product-id',
   identityKind: 'brand_sku',
   name: 'Втягивающее реле стартера Mercedes',

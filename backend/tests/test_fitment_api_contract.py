@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from marko.api.dependencies import get_current_user
 from marko.api.main import create_app
+from marko.core.config import get_settings
 from marko.api.schemas.fitment import (
     CrossReferenceRequest,
     FitmentCandidateResponse,
@@ -144,6 +145,17 @@ def test_unknown_brand_route_is_fail_closed_and_still_has_catalog_fallbacks() ->
         "discovery_only_until_independent_confirmation"
     )
     assert route["automatic_access_authorized"] is False
+
+
+@pytest.fixture(autouse=True)
+def _enable_deferred_fitment(monkeypatch):
+    """Fitment is unmounted by default; these tests are about it, so they opt in."""
+
+    monkeypatch.setenv("FITMENT_API_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
 
 
 @pytest.mark.asyncio

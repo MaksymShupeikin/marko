@@ -108,3 +108,13 @@ def test_cv_uses_median_center_not_mean_mutation() -> None:
     assert profile.center == Decimal("103")
     assert profile.robust_cv == profile.selected_scale / profile.center
     assert profile.robust_cv != wrong_mean_cv
+
+
+def test_all_zero_scales_with_a_distinct_tail_are_not_reported_as_stable() -> None:
+    profile = robust_price_dispersion(
+        (Decimal("100"),) * 7 + (Decimal("10000"),)
+    )
+
+    assert profile.all_scales_zero
+    assert profile.unique_value_count == 2
+    assert profile.all_zero_with_variation

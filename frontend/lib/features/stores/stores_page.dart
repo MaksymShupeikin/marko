@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../../core/presentation_formatters.dart';
 import '../../core/widgets/marko_button.dart';
 import 'store_models.dart';
 import 'stores_controller.dart';
@@ -13,11 +14,16 @@ class StoresPage extends ConsumerStatefulWidget {
   const StoresPage({
     this.ownedOnly = false,
     this.canAdministerWorkspace = false,
+    this.onOpenStoreCatalog,
     super.key,
   });
 
   final bool ownedOnly;
   final bool canAdministerWorkspace;
+
+  /// Opens a store inside the dashboard's catalog tab with that store already
+  /// selected. Without it the row falls back to the standalone catalog route.
+  final void Function(String storeId)? onOpenStoreCatalog;
 
   @override
   ConsumerState<StoresPage> createState() => _StoresPageState();
@@ -25,6 +31,15 @@ class StoresPage extends ConsumerStatefulWidget {
 
 class _StoresPageState extends ConsumerState<StoresPage> {
   final _urlController = TextEditingController();
+
+  void _openStore(StoreSummary store) {
+    final openInCatalogTab = widget.onOpenStoreCatalog;
+    if (openInCatalogTab != null) {
+      openInCatalogTab(store.id);
+      return;
+    }
+    context.pushNamed('store-products', pathParameters: {'storeId': store.id});
+  }
 
   Future<void> _confirmDeleteStore(
     StoresController controller,
@@ -98,8 +113,12 @@ class _StoresPageState extends ConsumerState<StoresPage> {
       onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
       child: asyncState.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) =>
-            _RetryView(message: error.toString(), onRetry: controller.refresh),
+        error: (error, _) => MarkoAsyncErrorView(
+          error: error,
+          forbiddenResourceRu: 'разделу магазинов',
+          forbiddenResourceUk: 'розділу магазинів',
+          onRetry: controller.refresh,
+        ),
         data: (state) {
           final availableStores = widget.ownedOnly
               ? state.stores
@@ -199,12 +218,8 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                                         availableStores[index].id,
                                     deleteDisabled:
                                         state.isSubmitting || state.isDeleting,
-                                    onOpen: () => context.pushNamed(
-                                      'store-products',
-                                      pathParameters: {
-                                        'storeId': availableStores[index].id,
-                                      },
-                                    ),
+                                    onOpen: () =>
+                                        _openStore(availableStores[index]),
                                     onSync: () => controller.syncStore(
                                       availableStores[index],
                                     ),
@@ -447,6 +462,114 @@ class _SyncPanel extends StatelessWidget {
             color: foreground,
             backgroundColor: colors.surface.withValues(alpha: 0.7),
           ),
+          if (job != null) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _SyncMetricChip(
+                  label: context.localized(
+                    ru: 'Страницы: ${job!.catalogPages}',
+                    uk: 'Сторінки: ${job!.catalogPages}',
+                  ),
+                  foreground: foreground,
+                ),
+                _SyncMetricChip(
+                  label: context.localized(
+                    ru: 'Извлечено: ${job!.productsExtracted}',
+                    uk: 'Вилучено: ${job!.productsExtracted}',
+                  ),
+                  foreground: foreground,
+                ),
+                _SyncMetricChip(
+                  label: context.localized(
+                    ru: 'Сохранено: ${job!.productsPersisted}',
+                    uk: 'Збережено: ${job!.productsPersisted}',
+                  ),
+                  foreground: foreground,
+                ),
+                _SyncMetricChip(
+                  label: context.localized(
+                    ru: 'Дубликаты: ${job!.duplicateProducts}',
+                    uk: 'Дублікати: ${job!.duplicateProducts}',
+                  ),
+                  foreground: foreground,
+                ),
+                _SyncMetricChip(
+                  label: context.localized(
+                    ru: 'Записи в БД: ${job!.databaseWrites}',
+                    uk: 'Записи в БД: ${job!.databaseWrites}',
+                  ),
+                  foreground: foreground,
+                ),
+                if (job!.maxTaskExecutions > 0 || job!.taskExecutions > 0)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Запуски задачи: ${job!.taskExecutions}/${job!.maxTaskExecutions}',
+                      uk: 'Запуски завдання: ${job!.taskExecutions}/${job!.maxTaskExecutions}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.taskRedeliveries > 0)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Повторные доставки: ${job!.taskRedeliveries}',
+                      uk: 'Повторні доставки: ${job!.taskRedeliveries}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.deduplicatedSubmissions > 0)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Дедуплицировано запусков: ${job!.deduplicatedSubmissions}',
+                      uk: 'Дедупліковано запусків: ${job!.deduplicatedSubmissions}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.rawEvidenceBytes > 0)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Raw evidence: ${_formatByteCount(job!.rawEvidenceBytes)}',
+                      uk: 'Raw evidence: ${_formatByteCount(job!.rawEvidenceBytes)}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.structuredCompleteness != null)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Полнота структуры: ${_formatPercent(job!.structuredCompleteness!)}',
+                      uk: 'Повнота структури: ${_formatPercent(job!.structuredCompleteness!)}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.evidenceCoverage != null)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Покрытие доказательств: ${_formatPercent(job!.evidenceCoverage!)}',
+                      uk: 'Покриття доказів: ${_formatPercent(job!.evidenceCoverage!)}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.deadlineAt != null)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Дедлайн: ${formatLocalDateTime(job!.deadlineAt!)}',
+                      uk: 'Дедлайн: ${formatLocalDateTime(job!.deadlineAt!)}',
+                    ),
+                    foreground: foreground,
+                  ),
+                if (job!.leaseExpiresAt != null)
+                  _SyncMetricChip(
+                    label: context.localized(
+                      ru: 'Lease до: ${formatLocalDateTime(job!.leaseExpiresAt!)}',
+                      uk: 'Lease до: ${formatLocalDateTime(job!.leaseExpiresAt!)}',
+                    ),
+                    foreground: foreground,
+                  ),
+              ],
+            ),
+          ],
           if (job?.error != null) ...[
             const SizedBox(height: 10),
             Text(
@@ -462,6 +585,38 @@ class _SyncPanel extends StatelessWidget {
   }
 }
 
+class _SyncMetricChip extends StatelessWidget {
+  const _SyncMetricChip({required this.label, required this.foreground});
+
+  final String label;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: MarkoTheme.of(context).surface.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(color: foreground),
+      ),
+    );
+  }
+}
+
+String _formatPercent(double ratio) => '${(ratio * 100).toStringAsFixed(1)}%';
+
+String _formatByteCount(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 class _StoresHeading extends StatelessWidget {
   const _StoresHeading({required this.count, required this.onRefresh});
 
@@ -473,9 +628,11 @@ class _StoresHeading extends StatelessWidget {
     final colors = MarkoTheme.of(context);
     return Row(
       children: [
-        Text(
-          context.localized(ru: 'Подключённые', uk: 'Підключені'),
-          style: Theme.of(context).textTheme.titleLarge,
+        Expanded(
+          child: Text(
+            context.localized(ru: 'Подключённые', uk: 'Підключені'),
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
         ),
         const SizedBox(width: 9),
         Container(
@@ -489,7 +646,7 @@ class _StoresHeading extends StatelessWidget {
             style: Theme.of(context).textTheme.labelMedium,
           ),
         ),
-        const Spacer(),
+        const SizedBox(width: 8),
         IconButton(
           tooltip: context.localized(
             ru: 'Обновить список',
@@ -676,38 +833,6 @@ class _EmptyStores extends StatelessWidget {
   }
 }
 
-class _RetryView extends StatelessWidget {
-  const _RetryView({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(
-            children: [
-              MarkoInlineMessage(
-                message: message,
-                tone: MarkoMessageTone.error,
-              ),
-              const SizedBox(height: 14),
-              MarkoButton(
-                label: context.localized(ru: 'Повторить', uk: 'Повторити'),
-                onPressed: onRetry,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 String _storeSyncDescription(BuildContext context, StoreSummary store) {
   final value = store.lastSyncedAt;
   if (value == null) {
@@ -716,8 +841,7 @@ String _storeSyncDescription(BuildContext context, StoreSummary store) {
       uk: 'ще не синхронізовано',
     );
   }
-  final local = value.toLocal().toString();
-  final formatted = local.length >= 16 ? local.substring(0, 16) : local;
+  final formatted = formatLocalDateTime(value);
   return context.localized(
     ru: 'обновлён $formatted',
     uk: 'оновлено $formatted',

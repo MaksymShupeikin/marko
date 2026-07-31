@@ -23,6 +23,7 @@ from marko.parsers.prom.client import HttpClient
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.parser import parse_product_page
 from marko.services.prom_product_urls import validate_product_url
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +85,10 @@ def main() -> int:
                     cache_hits += 1
                     status = "REPLAYED"
                 else:
+                    # Explicit gate at the entrypoint in addition to the one the
+                    # transport enforces: replay above never needs authorization,
+                    # a fetch always does.
+                    require_live_prom_marketplace_collection()
                     html = client.get_html(url)
                     evidence_path.write_bytes(gzip.compress(html.encode("utf-8")))
                     fetches += 1

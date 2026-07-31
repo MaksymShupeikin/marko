@@ -238,16 +238,18 @@ def test_audit_var10c_kemp_text_marker_conflicts_with_brand_rule() -> None:
 # --- Детерминизм / float в scoring ----------------------------------------
 
 
-def test_audit_geometric_mean_and_log_coverage_use_binary_float() -> None:
-    """ФАКТ: confidence-агрегация проходит через math.log/math.exp (float)."""
+def test_confidence_transcendentals_follow_versioned_precision_profile() -> None:
+    """Approximate confidence math is rounded by an explicit replay contract."""
 
     value = geometric_mean(
         {"a": Decimal("0.7"), "b": Decimal("0.3"), "c": Decimal("0.9")}
     )
-    # Результат не является точной Decimal-степенью — он получен из float.
-    assert value.as_tuple().exponent < -10
     coverage = log_coverage(Decimal("5"), 12)
-    assert coverage.as_tuple().exponent < -10
+
+    assert value == Decimal("0.573879354831")
+    assert coverage == Decimal("0.698555495460")
+    assert value.as_tuple().exponent == -12
+    assert coverage.as_tuple().exponent == -12
 
 
 def test_audit_domain_functions_are_deterministic_across_repeats() -> None:

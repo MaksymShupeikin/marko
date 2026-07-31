@@ -152,6 +152,12 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
     session = FakeSession()
     from marko.services import market_collection
 
+    structured_events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        market_collection,
+        "pricing_event",
+        lambda event, **fields: structured_events.append((event, fields)),
+    )
     original_extract = market_collection.extract_oe_evidence
 
     def fail_one_extractor(raw_offer, raw_capture_manifest):
@@ -280,7 +286,25 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
     assert invalid_url.url_absence_reason == "INVALID_URL_PROTOCOL"
     assert invalid_url.automatic_eligible is False
     assert invalid_url.source_confidence < 1
-    assert any(
-        value.outcome_code == OfferOutcomeCode.FAILED_INTERNAL_PROCESSING.value
+    failed_outcome = next(
+        value
         for value in outcomes
+        if value.outcome_code == OfferOutcomeCode.FAILED_INTERNAL_PROCESSING.value
     )
+    fingerprint = failed_outcome.safe_sample["internal_error_fingerprint"]
+    assert len(fingerprint) == 64
+    event_name, event = next(
+        value
+        for value in structured_events
+        if value[0] == "offer_internal_processing_failed"
+    )
+    assert event_name == "offer_internal_processing_failed"
+    assert event["error_fingerprint"] == fingerprint
+    assert event["exception_type"] == "RuntimeError"
+    assert event["raw_offer_index"] == 3
+    assert event["pricing_run_item_id"] == str(failed_outcome.pricing_run_item_id)
+    assert event["raw_market_capture_id"] == str(
+        failed_outcome.raw_market_capture_id
+    )
+    assert event["stack_frames"]
+    assert "intentional extractor variation" not in repr(event)

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/app_language.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
 import 'pricing_models.dart';
@@ -37,6 +38,7 @@ class _RecommendationDecisionDialogState
   late final TextEditingController _price;
   late final TextEditingController _reason;
   bool _declareBelowCost = false;
+  bool _reasonInitialized = false;
   String? _error;
 
   @override
@@ -51,7 +53,15 @@ class _RecommendationDecisionDialogState
               fractionDigits: widget.recommendation.priceTickScale,
             ),
     );
-    _reason = TextEditingController(text: _defaultReason(widget.decision));
+    _reason = TextEditingController();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_reasonInitialized) return;
+    _reason.text = _defaultReason(context, widget.decision);
+    _reasonInitialized = true;
   }
 
   @override
@@ -66,7 +76,7 @@ class _RecommendationDecisionDialogState
     final target = _targetPrice;
     final encryptedCostConfigured = _encryptedCostConfigured;
     return AlertDialog(
-      title: Text(_title(widget.decision)),
+      title: Text(_title(context, widget.decision)),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -79,8 +89,14 @@ class _RecommendationDecisionDialogState
               if (widget.decision != 'rejected')
                 Text(
                   target == null
-                      ? 'Цена не указана'
-                      : 'Целевая цена: ${_money(widget.recommendation, target)}',
+                      ? context.localized(
+                          ru: 'Цена не указана',
+                          uk: 'Ціну не вказано',
+                        )
+                      : context.localized(
+                          ru: 'Целевая цена: ${_money(widget.recommendation, target)}',
+                          uk: 'Цільова ціна: ${_money(widget.recommendation, target)}',
+                        ),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               if (widget.decision == 'overridden') ...[
@@ -91,7 +107,10 @@ class _RecommendationDecisionDialogState
                     decimal: true,
                   ),
                   decoration: InputDecoration(
-                    labelText: 'Ваша цена, ${widget.recommendation.currency}',
+                    labelText: context.localized(
+                      ru: 'Ваша цена, ${widget.recommendation.currency}',
+                      uk: 'Ваша ціна, ${widget.recommendation.currency}',
+                    ),
                   ),
                   onChanged: (_) => setState(() {
                     _error = null;
@@ -102,15 +121,19 @@ class _RecommendationDecisionDialogState
               if (widget.decision != 'rejected') ...[
                 const SizedBox(height: 14),
                 if (_serverCostMode && !encryptedCostConfigured)
-                  const MarkoInlineMessage(
-                    message:
-                        'Для этой позиции себестоимость ещё не сохранена. Сервер не сможет проверить решение на убыточность.',
+                  MarkoInlineMessage(
+                    message: context.localized(
+                      ru: 'Для этой позиции себестоимость ещё не сохранена. Сервер не сможет проверить решение на убыточность.',
+                      uk: 'Для цієї позиції собівартість ще не збережено. Сервер не зможе перевірити рішення на збитковість.',
+                    ),
                     tone: MarkoMessageTone.warning,
                   ),
                 if (_recommendedPriceBelowCost)
-                  const MarkoInlineMessage(
-                    message:
-                        'Рекомендованная цена ниже сохранённой себестоимости. Для записи решения нужно явное подтверждение.',
+                  MarkoInlineMessage(
+                    message: context.localized(
+                      ru: 'Рекомендованная цена ниже сохранённой себестоимости. Для записи решения нужно явное подтверждение.',
+                      uk: 'Рекомендована ціна нижча за збережену собівартість. Для запису рішення потрібне явне підтвердження.',
+                    ),
                     tone: MarkoMessageTone.warning,
                   ),
                 if (!_serverCostMode || encryptedCostConfigured)
@@ -119,22 +142,36 @@ class _RecommendationDecisionDialogState
                     value: _declareBelowCost,
                     title: Text(
                       _serverCostMode
-                          ? 'Разрешаю ручное решение ниже зашифрованной себестоимости'
-                          : 'По моей локальной себестоимости эта цена убыточна',
+                          ? context.localized(
+                              ru: 'Разрешаю ручное решение ниже зашифрованной себестоимости',
+                              uk: 'Дозволяю ручне рішення нижче зашифрованої собівартості',
+                            )
+                          : context.localized(
+                              ru: 'По моей локальной себестоимости эта цена убыточна',
+                              uk: 'За моєю локальною собівартістю ця ціна збиткова',
+                            ),
                     ),
                     subtitle: Text(
                       _serverCostMode
-                          ? 'Сервер проверит цену после отправки. Исходная себестоимость не возвращается в интерфейс или audit trail.'
-                          : 'Сумма себестоимости не отправляется в API; в audit trail попадёт только эта отметка.',
+                          ? context.localized(
+                              ru: 'Сервер проверит цену после отправки. Исходная себестоимость не возвращается в интерфейс или журнал аудита.',
+                              uk: 'Сервер перевірить ціну після надсилання. Початкова собівартість не повертається в інтерфейс або журнал аудиту.',
+                            )
+                          : context.localized(
+                              ru: 'Сумма себестоимости не отправляется в API; в журнал аудита попадёт только эта отметка.',
+                              uk: 'Сума собівартості не надсилається в API; до журналу аудиту потрапить лише ця позначка.',
+                            ),
                     ),
                     onChanged: (value) => setState(() {
                       _declareBelowCost = value ?? false;
                     }),
                   ),
                 if (_declareBelowCost)
-                  const MarkoInlineMessage(
-                    message:
-                        'Убыточная цена требует ручного решения и причины. Себестоимость не является жёстким floor.',
+                  MarkoInlineMessage(
+                    message: context.localized(
+                      ru: 'Убыточная цена требует ручного решения и причины. Себестоимость не является жёстким ценовым полом.',
+                      uk: 'Збиткова ціна потребує ручного рішення та причини. Собівартість не є жорсткою ціновою підлогою.',
+                    ),
                     tone: MarkoMessageTone.warning,
                   ),
               ],
@@ -143,11 +180,16 @@ class _RecommendationDecisionDialogState
                 controller: _reason,
                 minLines: 2,
                 maxLines: 4,
-                decoration: const InputDecoration(labelText: 'Причина'),
+                decoration: InputDecoration(
+                  labelText: context.localized(ru: 'Причина', uk: 'Причина'),
+                ),
               ),
               const SizedBox(height: 10),
-              const Text(
-                'Решение запишется в Marko; цена на Prom.ua не меняется автоматически.',
+              Text(
+                context.localized(
+                  ru: 'Решение запишется в Marko; цена на Prom.ua не меняется автоматически.',
+                  uk: 'Рішення буде записано в Marko; ціна на Prom.ua не змінюється автоматично.',
+                ),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
@@ -163,19 +205,22 @@ class _RecommendationDecisionDialogState
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Отмена'),
+          child: Text(context.localized(ru: 'Отмена', uk: 'Скасувати')),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Записать')),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(context.localized(ru: 'Записать', uk: 'Записати')),
+        ),
       ],
     );
   }
 
-  double? get _targetPrice {
+  DecimalValue? get _targetPrice {
     if (widget.decision == 'rejected') return null;
     if (widget.decision == 'accepted') {
       return widget.recommendation.recommendedPrice;
     }
-    return double.tryParse(_price.text.trim().replaceAll(',', '.'));
+    return DecimalValue.tryParse(_price.text.trim().replaceAll(',', '.'));
   }
 
   bool get _serverCostMode =>
@@ -194,20 +239,32 @@ class _RecommendationDecisionDialogState
   void _submit() {
     final target = _targetPrice;
     if (widget.decision != 'rejected' && (target == null || target <= 0)) {
-      setState(() => _error = 'Укажите положительную цену');
+      setState(
+        () => _error = context.localized(
+          ru: 'Укажите положительную цену',
+          uk: 'Укажіть додатну ціну',
+        ),
+      );
       return;
     }
     if (widget.decision == 'accepted' &&
         _recommendedPriceBelowCost &&
         !_declareBelowCost) {
       setState(
-        () => _error =
-            'Подтвердите ручное решение ниже зашифрованной себестоимости',
+        () => _error = context.localized(
+          ru: 'Подтвердите ручное решение ниже зашифрованной себестоимости',
+          uk: 'Підтвердьте ручне рішення нижче зашифрованої собівартості',
+        ),
       );
       return;
     }
     if (_reason.text.trim().length < 3) {
-      setState(() => _error = 'Укажите причину решения');
+      setState(
+        () => _error = context.localized(
+          ru: 'Укажите причину решения',
+          uk: 'Укажіть причину рішення',
+        ),
+      );
       return;
     }
     final payload = <String, dynamic>{
@@ -227,7 +284,7 @@ class _RecommendationDecisionDialogState
   }
 }
 
-String _money(PricingRecommendation recommendation, double value) =>
+String _money(PricingRecommendation recommendation, DecimalValue value) =>
     formatMoney(
       value,
       currency: recommendation.currency,
@@ -235,14 +292,33 @@ String _money(PricingRecommendation recommendation, double value) =>
       fractionDigits: recommendation.priceTickScale,
     );
 
-String _title(String decision) => switch (decision) {
-  'accepted' => 'Принять рекомендацию',
-  'overridden' => 'Указать свою цену',
-  _ => 'Отклонить рекомендацию',
+String _title(BuildContext context, String decision) => switch (decision) {
+  'accepted' => context.localized(
+    ru: 'Принять рекомендацию',
+    uk: 'Прийняти рекомендацію',
+  ),
+  'overridden' => context.localized(
+    ru: 'Указать свою цену',
+    uk: 'Вказати власну ціну',
+  ),
+  _ => context.localized(
+    ru: 'Отклонить рекомендацию',
+    uk: 'Відхилити рекомендацію',
+  ),
 };
 
-String _defaultReason(String decision) => switch (decision) {
-  'accepted' => 'Рекомендация принята оператором',
-  'overridden' => 'Цена изменена оператором',
-  _ => 'Рекомендация отклонена оператором',
-};
+String _defaultReason(BuildContext context, String decision) =>
+    switch (decision) {
+      'accepted' => context.localized(
+        ru: 'Рекомендация принята оператором',
+        uk: 'Рекомендацію прийнято оператором',
+      ),
+      'overridden' => context.localized(
+        ru: 'Цена изменена оператором',
+        uk: 'Ціну змінено оператором',
+      ),
+      _ => context.localized(
+        ru: 'Рекомендация отклонена оператором',
+        uk: 'Рекомендацію відхилено оператором',
+      ),
+    };

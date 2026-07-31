@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+import json
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,6 +16,8 @@ from marko.services.owned_catalog import (
     canonical_catalog_sku,
     enrich_listing_oe,
     extract_labeled_oe,
+    get_owned_catalog_product,
+    list_owned_catalog,
 )
 from marko.services.source_access import SourceAccessBlocked
 
@@ -292,6 +295,198 @@ def test_owned_catalog_paginates_after_deduplication(
 
     assert len(page.items) == expected
     assert page.total == 2
+
+
+class _FakeMappings:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def one(self) -> dict:
+        assert len(self.rows) == 1
+        return self.rows[0]
+
+    def first(self) -> dict | None:
+        return self.rows[0] if self.rows else None
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _FakeResult:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def mappings(self) -> _FakeMappings:
+        return _FakeMappings(self.rows)
+
+
+class _BoundedCatalogSession:
+    def __init__(self, page_size: int) -> None:
+        self.page_size = page_size
+        self.calls: list[str] = []
+        self.selected_rows_returned = 0
+
+    async def execute(self, statement, parameters=None) -> _FakeResult:
+        sql = str(statement)
+        self.calls.append(sql)
+        if "page_identities" in sql:
+            identities = [
+                {
+                    "identity_kind": "brand_sku",
+                    "identity_value": f"KEMP:SKU{index:04d}",
+                }
+                for index in range(self.page_size)
+            ]
+            return _FakeResult(
+                [
+                    {
+                        "listing_total": 100_000,
+                        "catalog_total": 75_000,
+                        "filtered_total": 75_000,
+                        "page_identities": identities,
+                    }
+                ]
+            )
+        if "first_listing.seller_name" in sql:
+            return _FakeResult(
+                [
+                    {
+                        "store_id": STORE_A,
+                        "external_id": "3912822",
+                        "store_name": "Parts Avto",
+                    }
+                ]
+            )
+
+        selected = json.loads(parameters["selected_identities"])
+        rows = []
+        for index, identity in enumerate(selected):
+            listing = _listing(
+                store_id=STORE_A,
+                external_id="3912822",
+                sku=f"SKU{index:04d}",
+            )
+            rows.append(
+                {
+                    "identity_kind": identity["identity_kind"],
+                    "identity_value": identity["identity_value"],
+                    **listing.__dict__,
+                }
+            )
+        self.selected_rows_returned = len(rows)
+        return _FakeResult(rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [1, 50])
+async def test_sql_catalog_paging_keeps_query_count_constant_and_rows_bounded(
+    limit: int,
+) -> None:
+    session = _BoundedCatalogSession(page_size=limit)
+
+    page = await list_owned_catalog(
+        session,
+        workspace_id=uuid4(),
+        query=None,
+        store_ids=None,
+        limit=limit,
+        offset=0,
+    )
+
+    assert len(session.calls) == 3
+    assert session.selected_rows_returned == limit
+    assert len(page.items) == limit
+    assert page.listing_total == 100_000
+
+
+class _DirectCatalogSession:
+    def __init__(self, *, found: bool = True) -> None:
+        self.found = found
+        self.calls: list[tuple[str, dict]] = []
+
+    async def execute(self, statement, parameters=None) -> _FakeResult:
+        sql = str(statement)
+        values = dict(parameters or {})
+        self.calls.append((sql, values))
+        if "selected_identities" not in values:
+            if not self.found:
+                return _FakeResult([])
+            return _FakeResult(
+                [
+                    {
+                        "identity_kind": "brand_sku",
+                        "identity_value": "KEMP:SKU0001",
+                    }
+                ]
+            )
+        listing = _listing(
+            store_id=STORE_A,
+            external_id="3912822",
+            sku="SKU0001",
+        )
+        return _FakeResult(
+            [
+                {
+                    "identity_kind": "brand_sku",
+                    "identity_value": "KEMP:SKU0001",
+                    **listing.__dict__,
+                }
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_catalog_product_is_workspace_scoped_and_bounded() -> None:
+    identity = ("brand_sku", "KEMP:SKU0001")
+    product_id = (
+        __import__("hashlib").sha256(f"{identity[0]}:{identity[1]}".encode()).hexdigest()[
+            :32
+        ]
+    )
+    workspace_id = uuid4()
+    session = _DirectCatalogSession()
+
+    product = await get_owned_catalog_product(
+        session,
+        workspace_id=workspace_id,
+        product_id=product_id,
+    )
+
+    assert product is not None
+    assert product.id == product_id
+    assert len(session.calls) == 2
+    identity_sql, parameters = session.calls[0]
+    assert "ws.workspace_id = :workspace_id" in identity_sql
+    assert "LIMIT 2" in identity_sql
+    assert parameters == {
+        "workspace_id": workspace_id,
+        "product_id": product_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_catalog_product_rejects_invalid_or_foreign_ids() -> None:
+    invalid_session = _DirectCatalogSession()
+    assert (
+        await get_owned_catalog_product(
+            invalid_session,
+            workspace_id=uuid4(),
+            product_id="../not-an-id",
+        )
+        is None
+    )
+    assert invalid_session.calls == []
+
+    foreign_session = _DirectCatalogSession(found=False)
+    assert (
+        await get_owned_catalog_product(
+            foreign_session,
+            workspace_id=uuid4(),
+            product_id="a" * 32,
+        )
+        is None
+    )
+    assert len(foreign_session.calls) == 1
 
 
 @dataclass

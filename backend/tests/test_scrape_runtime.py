@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from unittest.mock import Mock
 
 import pytest
@@ -17,6 +19,7 @@ from marko.services.scraper_contract import (
     ScraperErrorCode,
     classify_scraper_exception,
 )
+from marko.services.source_access import SourceAccessBlocked
 
 
 def _response(
@@ -37,6 +40,14 @@ def _response(
     return response
 
 
+def _gate_stub() -> None:
+    """Transport tests exercise HTTP behaviour, not authorization (F2-0001).
+
+    The real gate is fail-closed by default; these tests opt out explicitly so
+    that a forgotten gate can never be mistaken for a passing transport test.
+    """
+
+
 def test_http_trace_separates_logical_request_and_physical_attempts() -> None:
     client = HttpClient(
         ScrapeConfig(
@@ -44,7 +55,8 @@ def test_http_trace_separates_logical_request_and_physical_attempts() -> None:
             delay_jitter=0,
             max_attempts=2,
             backoff_factor=0,
-        )
+        ),
+        live_request_gate=_gate_stub,
     )
     client._session.get = Mock(  # noqa: SLF001 - black-box HTTP boundary test
         side_effect=[_response(503), _response(200)]
@@ -71,7 +83,8 @@ def test_max_attempts_is_total_physical_attempts_not_extra_retries() -> None:
             delay_jitter=0,
             max_attempts=2,
             backoff_factor=0,
-        )
+        ),
+        live_request_gate=_gate_stub,
     )
     get = Mock(side_effect=[_response(503), _response(503)])
     client._session.get = get  # noqa: SLF001
@@ -101,7 +114,9 @@ def test_raw_evidence_replay_skips_network_and_physical_attempt() -> None:
             )
         },
     )
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0), live_request_gate=_gate_stub
+    )
     get = Mock(side_effect=AssertionError("network must not be called"))
     client._session.get = get  # noqa: SLF001
 
@@ -129,7 +144,9 @@ def test_raw_evidence_replay_rejects_hash_mismatch() -> None:
             )
         },
     )
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0), live_request_gate=_gate_stub
+    )
     client._session.get = Mock(side_effect=AssertionError("no network"))  # noqa: SLF001
 
     with scrape_execution(trace), pytest.raises(ReplayIntegrityError):
@@ -147,7 +164,8 @@ def test_timeout_taxonomy_survives_http_client_retry_wrapper() -> None:
             delay=0,
             delay_jitter=0,
             max_attempts=1,
-        )
+        ),
+        live_request_gate=_gate_stub,
     )
     client._session.get = Mock(side_effect=requests.Timeout("slow"))  # noqa: SLF001
 
@@ -157,6 +175,32 @@ def test_timeout_taxonomy_survives_http_client_retry_wrapper() -> None:
     boundary = classify_scraper_exception(captured.value)
     assert boundary.code == ScraperErrorCode.TIMEOUT
     assert boundary.retryable is True
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_category"),
+    [
+        (requests.ConnectTimeout("connect stalled"), "connect_timeout"),
+        (requests.ReadTimeout("body stalled"), "read_timeout"),
+    ],
+)
+def test_http_trace_distinguishes_connect_and_read_timeouts(
+    error: requests.RequestException,
+    expected_category: str,
+) -> None:
+    trace = ScrapeExecutionTrace(item_kind="comparison_job", execution_no=1)
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1),
+        live_request_gate=_gate_stub,
+    )
+    client._session.get = Mock(side_effect=error)  # noqa: SLF001
+
+    with scrape_execution(trace), pytest.raises(RequestFailed):
+        client.get_html("https://prom.ua/ua/p1-product.html")
+
+    request = trace.drain_completed_requests()[0]
+    assert len(request.attempts) == 1
+    assert request.attempts[0].error_category == expected_category
 
 
 def test_global_request_wait_is_recorded_per_physical_attempt() -> None:
@@ -183,7 +227,9 @@ def test_global_request_wait_is_recorded_per_physical_attempt() -> None:
         execution_no=1,
         guard=guard,
     )
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0), live_request_gate=_gate_stub
+    )
     client._session.get = Mock(return_value=_response(200))  # noqa: SLF001
 
     with scrape_execution(trace):
@@ -219,7 +265,10 @@ def test_terminal_http_failure_does_not_open_retry_circuit() -> None:
         execution_no=1,
         guard=guard,
     )
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1),
+        live_request_gate=_gate_stub,
+    )
     client._session.get = Mock(return_value=_response(404))  # noqa: SLF001
 
     with scrape_execution(trace), pytest.raises(RequestFailed):
@@ -236,7 +285,10 @@ def test_terminal_redirect_retains_bounded_body_and_location_in_trace() -> None:
         url=url,
         location="/ua/search?search_term=OE",
     )
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1),
+        live_request_gate=_gate_stub,
+    )
     client._session.get = Mock(return_value=response)  # noqa: SLF001
     trace = ScrapeExecutionTrace(item_kind="catalog_discovery", execution_no=1)
 
@@ -273,7 +325,8 @@ def test_http_status_taxonomy_uses_the_actual_status_class(
             delay=0,
             delay_jitter=0,
             max_attempts=1,
-        )
+        ),
+        live_request_gate=_gate_stub,
     )
     client._session.get = Mock(return_value=_response(status))  # noqa: SLF001
 
@@ -285,7 +338,10 @@ def test_http_status_taxonomy_uses_the_actual_status_class(
 
 
 def test_any_successful_http_2xx_response_reaches_the_parser_boundary() -> None:
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1),
+        live_request_gate=_gate_stub,
+    )
     client._session.get = Mock(return_value=_response(206, b"partial"))  # noqa: SLF001
 
     assert client.get_html("https://prom.ua/ua/p1-product.html") == "partial"
@@ -294,7 +350,10 @@ def test_any_successful_http_2xx_response_reaches_the_parser_boundary() -> None:
 def test_redirects_are_not_followed_without_per_hop_admission() -> None:
     response = _response(302)
     response.headers["Location"] = "http://127.0.0.1/internal"
-    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1),
+        live_request_gate=_gate_stub,
+    )
     get = Mock(return_value=response)
     client._session.get = get  # noqa: SLF001
 
@@ -314,7 +373,8 @@ def test_response_size_limit_is_terminal_and_evidence_safe() -> None:
             delay_jitter=0,
             max_attempts=3,
             max_response_bytes=10,
-        )
+        ),
+        live_request_gate=_gate_stub,
     )
     get = Mock(return_value=response)
     client._session.get = get  # noqa: SLF001
@@ -337,7 +397,8 @@ def test_retry_after_is_bounded_by_policy() -> None:
             delay_jitter=0,
             max_attempts=2,
             backoff_max=7,
-        )
+        ),
+        live_request_gate=_gate_stub,
     )
     client._session.get = Mock(  # noqa: SLF001
         side_effect=[response, _response(200)]
@@ -346,3 +407,96 @@ def test_retry_after_is_bounded_by_policy() -> None:
 
     assert client.get_html("https://prom.ua/ua/p1-product.html")
     client._sleep_backoff.assert_called_once_with(7)
+
+
+def test_transport_is_fail_closed_without_explicit_gate() -> None:
+    """F2-0001: физический запрос невозможен без source-access verdict.
+
+    Тесты запускаются с ``PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT=NOT_PERMITTED``
+    (см. ``tests/conftest.py``), поэтому клиент по умолчанию обязан отказать
+    до обращения к сети.
+    """
+    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1))
+    get = Mock(side_effect=AssertionError("network must not be reached"))
+    client._session.get = get  # noqa: SLF001
+
+    with pytest.raises(SourceAccessBlocked):
+        client.get_html("https://prom.ua/ua/p1-product.html")
+
+    assert get.call_count == 0
+
+
+def test_replay_stays_allowed_while_transport_is_gated() -> None:
+    """Гейт стоит после развилки replay: офлайн-повтор не блокируется."""
+    url = "https://prom.ua/ua/p1-product.html"
+    key = request_fingerprint("product_page", url)
+    trace = ScrapeExecutionTrace(
+        item_kind="comparison_job",
+        execution_no=1,
+        replay_cache={
+            key: ReplayEvidence(
+                request_key=key,
+                body=b"<html>replayed</html>",
+                encoding="utf-8",
+                content_type="text/html",
+            )
+        },
+    )
+    client = HttpClient(ScrapeConfig(delay=0, delay_jitter=0))
+    client._session.get = Mock(side_effect=AssertionError("no network"))  # noqa: SLF001
+
+    with scrape_execution(trace):
+        assert client.get_html(url) == "<html>replayed</html>"
+
+
+def _retry_after_client(backoff_max: float = 600) -> HttpClient:
+    return HttpClient(
+        ScrapeConfig(
+            delay=0,
+            delay_jitter=0,
+            max_attempts=2,
+            backoff_max=backoff_max,
+        ),
+        live_request_gate=_gate_stub,
+    )
+
+
+def test_retry_after_http_date_is_parsed_and_bounded() -> None:
+    """F2-0002: обе стандартные формы Retry-After дают ограниченную паузу."""
+    deadline = datetime.now(UTC) + timedelta(seconds=120)
+    response = _response(429)
+    response.headers["Retry-After"] = format_datetime(deadline, usegmt=True)
+    client = _retry_after_client()
+
+    seconds = client._retry_after_seconds(response)  # noqa: SLF001
+
+    assert seconds is not None
+    assert 100 <= seconds <= 121
+
+
+def test_retry_after_http_date_is_capped_by_policy() -> None:
+    deadline = datetime.now(UTC) + timedelta(hours=6)
+    response = _response(429)
+    response.headers["Retry-After"] = format_datetime(deadline, usegmt=True)
+
+    seconds = _retry_after_client(backoff_max=30)._retry_after_seconds(  # noqa: SLF001
+        response
+    )
+
+    assert seconds == 30
+
+
+def test_retry_after_http_date_in_the_past_does_not_wait() -> None:
+    deadline = datetime.now(UTC) - timedelta(minutes=5)
+    response = _response(429)
+    response.headers["Retry-After"] = format_datetime(deadline, usegmt=True)
+
+    assert _retry_after_client()._retry_after_seconds(response) == 0.0  # noqa: SLF001
+
+
+@pytest.mark.parametrize("raw", ["", "soon", "-30", "Tue, 99 Xxx 2026 99:99:99 GMT"])
+def test_retry_after_malformed_falls_back_to_exponential_backoff(raw: str) -> None:
+    response = _response(429)
+    response.headers["Retry-After"] = raw
+
+    assert _retry_after_client()._retry_after_seconds(response) is None  # noqa: SLF001

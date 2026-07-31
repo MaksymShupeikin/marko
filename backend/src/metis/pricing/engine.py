@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
-import math
 from collections.abc import Iterable, Mapping
 
 from .comparability import (
@@ -15,9 +14,11 @@ from .comparability import (
 )
 from .raise_policy import (
     RaiseOutcome,
+    RaiseStrategy,
     decide_raise,
     default_raise_policy,
 )
+from .numeric import decimal_exp, decimal_ln, decimal_pow
 from .statistics import (
     clamp01,
     effective_sample_size,
@@ -139,6 +140,8 @@ def _recommend_price_core(
     legacy_replay: bool,
 ) -> PricingResult:
     """Core implementation shared by the candidate and baseline policies."""
+    raise_policy = policy.raise_policy or default_raise_policy()
+    budget_floor_mode = raise_policy.strategy is RaiseStrategy.BUDGET_FLOOR
     if not context.current_price.is_finite() or context.current_price <= ZERO:
         return _empty_result(
             context,
@@ -160,6 +163,10 @@ def _recommend_price_core(
     kemp_reference: list[NormalizedOffer] = []
     excluded: list[ExcludedOffer] = []
     comparability_decisions: list[ComparabilityDecision] = []
+    semantic_required_count = 0
+    semantic_positive_count = 0
+    semantic_negative_count = 0
+    semantic_insufficient_count = 0
     owned_store_count = 0
     for offer in collected_offers:
         if offer.is_owned or offer.cohort_role == CohortRole.OWNED_STORE:
@@ -232,28 +239,76 @@ def _recommend_price_core(
                     )
                 )
             continue
+        if offer.semantic_review_required:
+            semantic_required_count += 1
+            if offer.semantic_review_verdict == "COMPARABLE":
+                semantic_positive_count += 1
+            elif offer.semantic_review_verdict == "NOT_COMPARABLE":
+                semantic_negative_count += 1
+            else:
+                semantic_insufficient_count += 1
         rejection, comparability = _hard_rejection(
             context,
             offer,
             policy,
             legacy_replay=legacy_replay,
+            ignore_tier=budget_floor_mode and raise_policy.tier_agnostic,
         )
         if comparability is not None:
             comparability_decisions.append(comparability)
         if rejection:
+            semantic_rejection = rejection in {
+                "REJECTED_LLM_NOT_COMPARABLE",
+                "MANUAL_LLM_COMPARABILITY_INSUFFICIENT",
+                "MANUAL_LLM_COMPARABILITY_MISSING",
+            }
             stage = (
                 "comparability"
-                if comparability is not None and not comparability.automatic_eligible
+                if semantic_rejection
+                or (comparability is not None and not comparability.automatic_eligible)
                 else "eligibility"
             )
             role = (
                 CohortRole.USED_REJECTED
                 if rejection == "USED_OR_REFURBISHED"
                 else CohortRole.MANUAL_REVIEW
-                if comparability is not None and not comparability.automatic_eligible
+                if rejection
+                in {
+                    "MANUAL_LLM_COMPARABILITY_INSUFFICIENT",
+                    "MANUAL_LLM_COMPARABILITY_MISSING",
+                }
+                or (comparability is not None and not comparability.automatic_eligible)
                 else CohortRole.HARD_REJECTED
             )
             excluded.append(_excluded(offer, rejection, stage, role))
+            continue
+
+        if budget_floor_mode and raise_policy.tier_agnostic:
+            eligible.append(
+                NormalizedOffer(
+                    observation_id=offer.observation_id,
+                    seller_id=offer.seller_id,
+                    seller_name=offer.seller_name,
+                    tier=offer.tier,
+                    raw_price=offer.price,
+                    normalized_price=offer.price,
+                    multiplier=ONE,
+                    coefficient_confidence=ONE,
+                    age_hours=offer.age_hours,
+                    match_confidence=offer.match_confidence,
+                    tier_confidence=ONE,
+                    source_confidence=offer.source_confidence,
+                    coefficient_model=CoefficientModel.SIMPLE_MEDIAN,
+                    coefficient_version="owner-tier-agnostic-v1",
+                    coefficient_sample_size=0,
+                    coefficient_effective_sample_size=ZERO,
+                    coefficient_dataset_hash="",
+                    source=offer.source,
+                    listing_url=offer.listing_url,
+                    comparison_evidence=offer.comparison_evidence,
+                    cohort_role=CohortRole.TARGET_MARKET,
+                )
+            )
             continue
 
         coefficient = coefficients.get((context.category, offer.tier))
@@ -317,6 +372,21 @@ def _recommend_price_core(
     hard_gate_results, failed_hard_gates, unknown_hard_fields = (
         _summarize_comparability(comparability_decisions, legacy_replay=legacy_replay)
     )
+    if semantic_required_count:
+        hard_gate_results = {
+            **hard_gate_results,
+            "llm_comparability": int(
+                semantic_positive_count == semantic_required_count
+            ),
+        }
+        if semantic_negative_count:
+            failed_hard_gates = tuple(
+                dict.fromkeys((*failed_hard_gates, "llm_comparability"))
+            )
+        if semantic_insufficient_count:
+            unknown_hard_fields = tuple(
+                dict.fromkeys((*unknown_hard_fields, "llm_comparability"))
+            )
     if unique_count < 3:
         return _result_without_market_action(
             context,
@@ -376,7 +446,17 @@ def _recommend_price_core(
             version=policy.robust_cluster_diagnostic_version,
         )
 
-    cleaned, outliers, outlier_method = _clean_outliers(deduplicated, policy)
+    if budget_floor_mode:
+        # The owner's target is explicitly the minimum. A statistically unusual
+        # price may still be the valid market floor; hard product-comparability,
+        # seller, condition and source gates above remain mandatory.
+        cleaned = list(deduplicated)
+        outliers: list[ExcludedOffer] = []
+        # Persisted as VARCHAR(24); keep this stable identifier compact while the
+        # calculation trace carries the full owner-policy explanation.
+        outlier_method = "owner_minimum_raw"
+    else:
+        cleaned, outliers, outlier_method = _clean_outliers(deduplicated, policy)
     excluded.extend(outliers)
     if len(cleaned) < 3:
         return _result_without_market_action(
@@ -409,9 +489,31 @@ def _recommend_price_core(
         profile_version=policy.robust_dispersion_profile_version,
         correction_profile_version=(policy.robust_scale_correction_profile_version),
     )
-    fair_price = post_clean_profile.center
-    lower_bound = percentile(prices, Decimal("0.25"))
-    upper_bound = percentile(prices, Decimal("0.75"))
+    budget_floor_decision = (
+        decide_raise(
+            current_price=context.current_price,
+            prices=prices,
+            stock_status=context.stock_status,
+            policy=raise_policy,
+            # Positional against ``prices``: the floor may not rest on one shop.
+            sellers=[offer.seller_id for offer in cleaned],
+        )
+        if budget_floor_mode
+        else None
+    )
+    if budget_floor_decision is not None:
+        # Keep every verified comparable offer in evidence, but use the same
+        # plausibility-filtered minimum for the result, advisory and action.
+        # A diagnostic fallback is needed only for confidence math when every
+        # observed price is below the floor; the persisted fair price remains
+        # null in that case.
+        fair_price = budget_floor_decision.fair_price or min(prices)
+        lower_bound = budget_floor_decision.target_band_low
+        upper_bound = budget_floor_decision.target_band_high
+    else:
+        fair_price = post_clean_profile.center
+        lower_bound = percentile(prices, Decimal("0.25"))
+        upper_bound = percentile(prices, Decimal("0.75"))
     dispersion = post_clean_profile.robust_cv
     winsorized_prices = winsorize(
         [offer.normalized_price for offer in deduplicated],
@@ -425,43 +527,62 @@ def _recommend_price_core(
         else Decimal("Infinity")
     )
     factors, n_effective = _confidence_factors(cleaned, fair_price, dispersion, policy)
+    if budget_floor_mode:
+        factors["tier"] = ONE
+        factors["dispersion"] = ONE
     confidence, weakest = _aggregate_confidence(factors, policy)
     confidence_grade = _confidence_grade(confidence, factors, policy)
 
-    reasons: list[str] = []
+    reasons: list[str] = (
+        list(budget_floor_decision.reasons + budget_floor_decision.flags)
+        if budget_floor_decision is not None
+        else []
+    )
     data_health_issues: list[str] = []
     if context.severe_data_health_issue:
         data_health_issues.append("SEVERE_DATA_HEALTH_ISSUE")
     if fair_price <= ZERO or not fair_price.is_finite():
         data_health_issues.append("INVALID_FAIR_PRICE")
-    if sensitivity > policy.sensitivity_tolerance:
+    if not budget_floor_mode and sensitivity > policy.sensitivity_tolerance:
         reasons.append("ESTIMATOR_SENSITIVITY")
     robust_scale_gate_blocked = (
         selected_dispersion_method != RobustScaleMethod.LEGACY_MAD
         and post_clean_profile.partial_scale_degeneracy
     )
-    if robust_scale_gate_blocked:
+    if robust_scale_gate_blocked and not budget_floor_mode:
         reasons.append("ROBUST_SCALE_PARTIAL_DEGENERACY")
+    robust_zero_scale_with_variation = bool(
+        pre_clean_profile.all_zero_with_variation
+        or post_clean_profile.all_zero_with_variation
+    )
+    if robust_zero_scale_with_variation and not budget_floor_mode:
+        reasons.append("ROBUST_SCALE_ALL_ZERO_WITH_VARIATION")
     robust_estimator_disagreement = bool(
         policy.version == "pricing-v3.1-heterogeneity-gated"
         and post_clean_profile.cv_relative_span is not None
         and post_clean_profile.cv_relative_span > policy.robust_disagreement_threshold
     )
-    if robust_estimator_disagreement:
+    if robust_estimator_disagreement and not budget_floor_mode:
         reasons.append("ROBUST_ESTIMATOR_DISAGREEMENT")
     robust_cluster_blocked = bool(
         cluster_diagnostic is not None and cluster_diagnostic.flagged
     )
-    if robust_cluster_blocked:
+    if robust_cluster_blocked and not budget_floor_mode:
         reasons.append("ROBUST_MULTIMODAL_COHORT")
     robust_diagnostic_unavailable = bool(
         policy.version == "pricing-v3.1-heterogeneity-gated"
         and cluster_diagnostic is not None
         and not cluster_diagnostic.available
     )
-    if robust_diagnostic_unavailable:
+    if robust_diagnostic_unavailable and not budget_floor_mode:
         reasons.append("ROBUST_DIAGNOSTIC_UNAVAILABLE")
-    if len(cleaned) < policy.min_competitors:
+    action_min_competitors = (
+        raise_policy.min_evidence if budget_floor_mode else policy.min_competitors
+    )
+    manual_review_below = (
+        raise_policy.min_evidence if budget_floor_mode else policy.manual_review_below
+    )
+    if len(cleaned) < action_min_competitors:
         reasons.append("TOO_FEW_COMPETITORS_FOR_ACTION")
     if n_effective < policy.min_effective_competitors:
         reasons.append("LOW_EFFECTIVE_SAMPLE_SIZE")
@@ -478,20 +599,25 @@ def _recommend_price_core(
 
     action_gates_pass = (
         not data_health_issues
-        and len(cleaned) >= policy.min_competitors
+        and len(cleaned) >= action_min_competitors
         and n_effective >= policy.min_effective_competitors
         and confidence >= policy.confidence_min
         and not failed_factors
-        and sensitivity <= policy.sensitivity_tolerance
-        and not robust_scale_gate_blocked
-        and not robust_estimator_disagreement
-        and not robust_cluster_blocked
-        and not robust_diagnostic_unavailable
+        and (budget_floor_mode or sensitivity <= policy.sensitivity_tolerance)
+        and (budget_floor_mode or not robust_scale_gate_blocked)
+        and (budget_floor_mode or not robust_zero_scale_with_variation)
+        and (budget_floor_mode or not robust_estimator_disagreement)
+        and (budget_floor_mode or not robust_cluster_blocked)
+        and (budget_floor_mode or not robust_diagnostic_unavailable)
     )
     common = {
         "context": context,
         "policy": policy,
-        "fair_price": fair_price,
+        "fair_price": (
+            budget_floor_decision.fair_price
+            if budget_floor_decision is not None
+            else fair_price
+        ),
         "lower_bound": lower_bound,
         "upper_bound": upper_bound,
         "confidence": confidence,
@@ -519,7 +645,7 @@ def _recommend_price_core(
         "kemp_reference": kemp_reference,
         "owned_store_count": owned_store_count,
     }
-    if unique_count < policy.manual_review_below or not action_gates_pass:
+    if unique_count < manual_review_below or not action_gates_pass:
         reasons.append("MANUAL_REVIEW_REQUIRED")
         result = _priced_result(
             **common,
@@ -531,13 +657,26 @@ def _recommend_price_core(
         )
         return _enforce_invariants(result, context)
 
-    # Only genuine dead stock is liquidated.  A slow mover is still selling, so
-    # it goes through the raise path, where its own guard applies: it is pushed
-    # up only while it is the cheapest offer on the market.
-    if context.stock_status is StockStatus.DEAD_STOCK:
+    # The owner-approved budget-floor strategy explicitly ignores stock age and
+    # stock status. Legacy strategies retain the separate clearance branch.
+    if context.stock_status is StockStatus.DEAD_STOCK and not (
+        budget_floor_mode and raise_policy.ignore_stock_status
+    ):
         action, recommended, mode_reasons, cost_floor = _clearance_recommendation(
             context, prices, policy
         )
+    elif budget_floor_decision is not None:
+        if budget_floor_decision.outcome is RaiseOutcome.RAISE:
+            action = RecommendationAction.RAISE
+        elif budget_floor_decision.outcome is RaiseOutcome.LOWER:
+            action = RecommendationAction.LOWER
+        elif budget_floor_decision.outcome is RaiseOutcome.SHOW_BUT_FLAG:
+            action = RecommendationAction.MANUAL_REVIEW
+        else:
+            action = RecommendationAction.HOLD
+        recommended = budget_floor_decision.recommended_price
+        mode_reasons = ()
+        cost_floor = None
     else:
         action, recommended, mode_reasons = _raise_recommendation(
             context,
@@ -547,7 +686,7 @@ def _recommend_price_core(
             policy,
         )
         cost_floor = None
-        if context.stock_status == StockStatus.UNKNOWN:
+        if context.stock_status == StockStatus.UNKNOWN and not budget_floor_mode:
             mode_reasons = mode_reasons + ("UNKNOWN_STOCK_STATUS",)
     reasons.extend(mode_reasons)
     result = _priced_result(
@@ -626,6 +765,7 @@ def _hard_rejection(
     policy: PricingPolicy,
     *,
     legacy_replay: bool,
+    ignore_tier: bool = False,
 ) -> tuple[str | None, ComparabilityDecision | None]:
     if not offer.price.is_finite() or offer.price <= ZERO:
         return "NON_POSITIVE_PRICE", None
@@ -642,6 +782,16 @@ def _hard_rejection(
             return comparability.reason_codes[0], comparability
     else:
         comparability = None
+    if offer.semantic_review_required:
+        if not offer.semantic_review_id:
+            return "MANUAL_LLM_COMPARABILITY_MISSING", comparability
+        if offer.semantic_review_verdict == "NOT_COMPARABLE":
+            return "REJECTED_LLM_NOT_COMPARABLE", comparability
+        if (
+            offer.semantic_review_verdict != "COMPARABLE"
+            or offer.semantic_review_match_level not in {"EXACT", "ACCEPTABLE_ANALOGUE"}
+        ):
+            return "MANUAL_LLM_COMPARABILITY_INSUFFICIENT", comparability
     currency = (offer.currency or "").strip().upper()
     if currency != context.currency.strip().upper() or currency != policy.currency:
         return "CURRENCY_MISMATCH", comparability
@@ -655,10 +805,11 @@ def _hard_rejection(
         return offer.conflict_reason or "COMMERCIAL_CONFLICT", comparability
     if offer.match_confidence < policy.match_confidence_min:
         return "LOW_MATCH_CONFIDENCE", comparability
-    if offer.tier == ProductTier.UNKNOWN:
-        return "UNKNOWN_TIER", comparability
-    if offer.tier_confidence < policy.tier_confidence_min:
-        return "LOW_TIER_CONFIDENCE", comparability
+    if not ignore_tier:
+        if offer.tier == ProductTier.UNKNOWN:
+            return "UNKNOWN_TIER", comparability
+        if offer.tier_confidence < policy.tier_confidence_min:
+            return "LOW_TIER_CONFIDENCE", comparability
     if offer.source_confidence < policy.source_confidence_min:
         return "LOW_SOURCE_CONFIDENCE", comparability
     return None, comparability
@@ -836,8 +987,9 @@ def _confidence_factors(
     policy: PricingPolicy,
 ) -> tuple[dict[str, Decimal], Decimal]:
     freshness = [
-        Decimal(
-            str(math.pow(2, -float(offer.age_hours / policy.freshness_half_life_hours)))
+        decimal_pow(
+            Decimal("2"),
+            -(offer.age_hours / policy.freshness_half_life_hours),
         )
         for offer in offers
     ]
@@ -929,9 +1081,8 @@ def _raise_recommendation(
 ) -> tuple[RecommendationAction, Decimal | None, tuple[str, ...]]:
     """Propose a higher price, or stay silent.
 
-    Anything still selling is never advised downwards: the tool exists to show
-    where money is being left on the table, and a wrong cut costs margin on
-    every unit sold.  Silence is the safe failure.
+    Legacy strategies are raise-only. The owner-approved budget-floor strategy
+    may advise either direction to restore the 2–5% below-market position.
     """
 
     del fair_price, lower_bound
@@ -940,10 +1091,13 @@ def _raise_recommendation(
         prices=[offer.normalized_price for offer in cleaned_offers],
         stock_status=context.stock_status,
         policy=policy.raise_policy or default_raise_policy(),
+        sellers=[offer.seller_id for offer in cleaned_offers],
     )
     reasons = decision.reasons + decision.flags
     if decision.outcome is RaiseOutcome.RAISE:
         return RecommendationAction.RAISE, decision.recommended_price, reasons
+    if decision.outcome is RaiseOutcome.LOWER:
+        return RecommendationAction.LOWER, decision.recommended_price, reasons
     if decision.outcome is RaiseOutcome.SHOW_BUT_FLAG:
         return RecommendationAction.MANUAL_REVIEW, None, reasons
     return RecommendationAction.HOLD, None, reasons
@@ -973,15 +1127,15 @@ def _clearance_recommendation(
     reasons = [
         "CLEARANCE_MARKDOWN",
         "AGE_POLICY_ENGINEERING_ASSUMPTION",
-        f"AGE_POLICY_{policy.stock_age_policy_version}",
+        "AGE_POLICY_VERSION_APPLIED",
     ]
     if context.stock_age_days is None:
         beta_age = ZERO
         reasons.append("STOCK_AGE_UNKNOWN_BASE_POLICY_ONLY")
     else:
         excess_age = max(ZERO, context.stock_age_days - threshold_days)
-        beta_age = ONE - Decimal(
-            str(math.exp(-math.log(2) * float(excess_age / half_life_days)))
+        beta_age = ONE - decimal_exp(
+            -decimal_ln(Decimal("2")) * (excess_age / half_life_days)
         )
     beta = clamp01(max(base_beta, beta_age, context.liquidity_target, context.urgency))
     target = (ONE - beta) * context.current_price + beta * min(
@@ -1127,16 +1281,9 @@ def _monthly_units(
         and context.days_since_last_sale is not None
         and context.days_since_last_sale >= ZERO
     ):
-        recency = Decimal(
-            str(
-                math.pow(
-                    2,
-                    -float(
-                        context.days_since_last_sale
-                        / policy.sales_recency_half_life_days
-                    ),
-                )
-            )
+        recency = decimal_pow(
+            Decimal("2"),
+            -(context.days_since_last_sale / policy.sales_recency_half_life_days),
         )
         return context.historical_monthly_units * recency, "historical_recency"
     if (
@@ -1170,9 +1317,9 @@ def _priced_result(
     policy: PricingPolicy,
     action: RecommendationAction,
     recommended_price: Decimal | None,
-    fair_price: Decimal,
-    lower_bound: Decimal,
-    upper_bound: Decimal,
+    fair_price: Decimal | None,
+    lower_bound: Decimal | None,
+    upper_bound: Decimal | None,
     confidence: Decimal,
     confidence_grade: str,
     weakest: str | None,

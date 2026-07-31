@@ -48,6 +48,11 @@ build/
 # Local runtime evidence and generated operator outputs
 .artifacts/
 outputs/
+frontend/test/failures/
+
+# Customer source data stays local; only its provenance manifest is versioned.
+backend/data/*
+!backend/data/SOURCES.md
 
 # Local databases and temporary files
 *.db
@@ -55,3 +60,8 @@ outputs/
 *.sqlite3
 *.tmp
 *.temp
+
+# Database backups (never commit: contain production data)
+/backups/
+*.dump
+*.dump.sha256

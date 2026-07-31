@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     pricing_comparability_v1_automatic_enabled: bool = False
     pricing_comparability_activation_artifact: str = ""
     pricing_comparability_activation_sha256: str = ""
+    pricing_llm_comparability_mode: Literal["off", "shadow", "required"] = "off"
+    pricing_llm_provider: Literal["openai_responses"] = "openai_responses"
+    pricing_llm_base_url: str = "https://api.openai.com/v1"
+    pricing_llm_api_key: SecretStr = SecretStr("")
+    pricing_llm_model: str = "gpt-5-mini"
+    pricing_llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    pricing_llm_max_output_tokens: int = Field(default=1600, ge=256, le=8000)
+    pricing_llm_max_images: int = Field(default=4, ge=0, le=10)
+    pricing_llm_max_concurrency: int = Field(default=4, ge=1, le=32)
+    # Fitment is a later phase and is not part of the 2026-07-30 delivery, whose
+    # scope the customer set as raise/cut against the cheapest comparable offer.
+    # Its endpoints are implemented and tested but unreachable from the UI, so
+    # publishing them would offer a feature nobody can use and nobody reviewed
+    # for handover.  Off by default; a deployment opts in deliberately.
+    fitment_api_enabled: bool = False
+    operational_metrics_token: SecretStr = SecretStr("")
     e2e_auth_bypass: bool = False
     e2e_auth_token: str = ""
     e2e_task_hold_seconds: float = 0.0
@@ -102,6 +118,12 @@ class Settings(BaseSettings):
     store_sync_retry_base_delay_seconds: int = 30
     store_sync_scraper_http_timeout_seconds: float = 30.0
     store_sync_scraper_http_max_attempts: int = 4
+    store_sync_scraper_pages_per_task: int = Field(default=5, ge=1, le=100)
+    store_sync_scraper_total_page_limit: int = Field(
+        default=1000,
+        ge=1,
+        le=10_000,
+    )
     store_sync_scraper_max_pages: int = 0
     store_url_resolver_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     store_url_resolver_max_redirects: int = Field(default=3, ge=0, le=10)
@@ -115,6 +137,17 @@ class Settings(BaseSettings):
     scrape_evidence_gc_interval_seconds: int = 3600
     scrape_outbox_reconcile_batch_size: int = 100
     scrape_outbox_reconcile_interval_seconds: int = 15
+    workflow_reconcile_batch_size: int = Field(default=100, ge=1, le=1000)
+    workflow_reconcile_interval_seconds: int = Field(
+        default=60,
+        ge=15,
+        le=3600,
+    )
+    workflow_stale_after_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86_400,
+    )
     scheduler_singleton_lock_key: str = "marko:scheduler:singleton:v1"
     scheduler_singleton_ttl_seconds: int = Field(default=90, ge=30, le=600)
     scheduler_singleton_refresh_seconds: int = Field(default=20, ge=1, le=120)
@@ -146,6 +179,11 @@ class Settings(BaseSettings):
                     "A permitted Prom marketplace source requires an auditable "
                     "PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE"
                 )
+        metrics_token = self.operational_metrics_token.get_secret_value()
+        if metrics_token and len(metrics_token) < 32:
+            raise ValueError(
+                "OPERATIONAL_METRICS_TOKEN must contain at least 32 characters"
+            )
         if self.e2e_auth_bypass:
             if environment != "e2e":
                 raise ValueError("E2E_AUTH_BYPASS is allowed only in ENVIRONMENT=e2e")
@@ -173,6 +211,54 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SCHEDULER_SINGLETON_REACQUIRE_MAX_SECONDS must not be less than "
                 "SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS"
+            )
+        if self.pricing_llm_comparability_mode != "off":
+            if not self.pricing_llm_api_key.get_secret_value().strip():
+                raise ValueError(
+                    "PRICING_LLM_API_KEY is required when "
+                    "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
+                )
+            if not self.pricing_llm_model.strip():
+                raise ValueError(
+                    "PRICING_LLM_MODEL is required when "
+                    "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
+                )
+            llm_base_url = self.pricing_llm_base_url.strip().casefold()
+            if not (
+                llm_base_url.startswith("https://")
+                or (
+                    environment in {"development", "test", "e2e"}
+                    and llm_base_url.startswith("http://")
+                )
+            ):
+                raise ValueError(
+                    "PRICING_LLM_BASE_URL must use HTTPS outside local/test environments"
+                )
+        concurrent_collectors = max(
+            1,
+            self.store_sync_worker_count + self.pricing_collection_worker_count,
+        )
+        conservative_global_wait = self.pricing_collection_min_interval_seconds * max(
+            0, concurrent_collectors - 1
+        )
+        attempts = max(1, self.store_sync_scraper_http_max_attempts)
+        request_upper_bound = (
+            attempts
+            * (
+                self.store_sync_scraper_http_timeout_seconds
+                + self.pricing_scraper_request_delay_seconds
+                + self.pricing_scraper_request_jitter_seconds
+                + conservative_global_wait
+            )
+            + max(0, attempts - 1) * 60
+        )
+        chunk_upper_bound = (
+            self.store_sync_scraper_pages_per_task * request_upper_bound + 120
+        )
+        if chunk_upper_bound >= self.store_sync_task_soft_time_limit_seconds:
+            raise ValueError(
+                "STORE_SYNC_SCRAPER_PAGES_PER_TASK exceeds the conservative "
+                "store-sync soft-time-limit budget"
             )
         if not Path(self.scheduler_health_state_path).is_absolute():
             raise ValueError("SCHEDULER_HEALTH_STATE_PATH must be absolute")

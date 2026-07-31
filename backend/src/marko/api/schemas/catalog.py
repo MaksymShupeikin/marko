@@ -16,6 +16,7 @@ class CatalogImportResponse(BaseModel):
     id: UUID
     filename: str
     content_sha256: str
+    request_fingerprint: str | None
     content_size: int
     status: str
     column_mapping: dict[str, str]
@@ -26,6 +27,25 @@ class CatalogImportResponse(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+
+class CatalogSheetPreviewResponse(BaseModel):
+    name: str
+    row_count: int
+    headers: list[str]
+    suggested_mapping: dict[str, str]
+    mapping_error: str | None
+    sample_rows: list[dict[str, Any]]
+    is_catalog_candidate: bool
+
+
+class CatalogImportPreviewResponse(BaseModel):
+    filename: str
+    content_sha256: str
+    content_size: int
+    sheets: list[CatalogSheetPreviewResponse]
+    requires_sheet_choice: bool
+    max_size_bytes: int
 
 
 class CatalogImportPageResponse(BaseModel):
@@ -54,6 +74,7 @@ class CatalogItemResponse(BaseModel):
     current_price: Decimal
     currency: str
     is_available: bool | None
+    is_owned: bool
     stock_status: str
     stock_qty: Decimal | None
     stock_age_days: Decimal | None

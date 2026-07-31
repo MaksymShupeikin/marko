@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+
 from marko.api.main import app
 from marko.api.routers.v1.operations import router as operations_router
 from marko.infrastructure.db.models import (
@@ -11,6 +13,7 @@ from marko.infrastructure.db.models import (
     StoreSyncTaskExecution,
 )
 from marko.services.scraper_metrics import render_prometheus
+from marko.services import scraper_metrics
 
 
 def test_scraper_metrics_endpoints_are_in_openapi() -> None:
@@ -106,6 +109,7 @@ def test_prometheus_renderer_contains_every_required_metric_family() -> None:
             "process_resident_memory_bytes": 1024,
             "database_pool_in_use": 1,
             "database_probe_latency_seconds": 0.001,
+            "database_probe_failed": False,
             "database_transaction_latency_seconds": None,
             "broker_publish_latency_seconds": 0,
             "broker_consumer_lag": 0,
@@ -147,6 +151,7 @@ def test_prometheus_renderer_contains_every_required_metric_family() -> None:
         "process_resident_memory_bytes",
         "database_pool_in_use",
         "database_probe_latency_seconds",
+        "database_probe_failed",
         "database_transaction_latency_seconds",
         "broker_publish_latency_seconds",
         "broker_consumer_lag",
@@ -155,3 +160,29 @@ def test_prometheus_renderer_contains_every_required_metric_family() -> None:
     emitted = {line.split("{", 1)[0] for line in output.splitlines()}
 
     assert required <= emitted
+
+
+@pytest.mark.asyncio
+async def test_database_probe_failure_emits_safe_structured_diagnostic(
+    monkeypatch,
+) -> None:
+    class FailingSession:
+        async def execute(self, _statement):
+            raise RuntimeError("database secret must not enter telemetry")
+
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        scraper_metrics,
+        "pricing_event",
+        lambda event, **fields: events.append((event, fields)),
+        raising=False,
+    )
+
+    result = await scraper_metrics._database_probe_latency(FailingSession())
+
+    assert result is None
+    event_name, fields = events[0]
+    assert event_name == "database_probe_failed"
+    assert fields["exception_type"] == "RuntimeError"
+    assert len(str(fields["error_fingerprint"])) == 64
+    assert "database secret" not in repr(fields)

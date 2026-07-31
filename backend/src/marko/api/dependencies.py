@@ -1,11 +1,13 @@
 """Reusable FastAPI dependencies."""
 
+import secrets
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from marko.core.config import get_settings
 from marko.services.auth import (
     AuthConfigurationError,
     AuthConflictError,
@@ -76,10 +78,39 @@ async def require_workspace_admin(current: CurrentUser) -> AuthContext:
 
 WorkspaceAdmin = Annotated[AuthContext, Depends(require_workspace_admin)]
 
+
+async def require_metrics_scraper(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(bearer_scheme),
+    ],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Authorize the internal scrape target without issuing a user token.
+
+    Fail-closed: with no ``OPERATIONAL_METRICS_TOKEN`` configured the endpoint
+    keeps demanding a user JWT, so an unset secret never opens anonymous access.
+    """
+
+    expected = get_settings().operational_metrics_token.get_secret_value()
+    if (
+        expected
+        and credentials is not None
+        and credentials.scheme.casefold() == "bearer"
+        and secrets.compare_digest(credentials.credentials, expected)
+    ):
+        return
+    await get_current_user(credentials, session)
+
+
+MetricsScraper = Annotated[None, Depends(require_metrics_scraper)]
+
 __all__ = [
     "CurrentUser",
+    "MetricsScraper",
     "WorkspaceAdmin",
     "get_current_user",
     "get_session",
+    "require_metrics_scraper",
     "require_workspace_admin",
 ]

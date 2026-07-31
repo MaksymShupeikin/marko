@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request, status
+import re
+from uuid import uuid4
+
+from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -11,8 +14,19 @@ from fastapi.responses import JSONResponse
 from marko.core.config import get_settings
 from marko.services.source_access import SourceAccessBlocked
 from marko.services.cost_privacy import privacy_safe_validation_errors
+from metis.pricing.observability import pricing_event
 
-from .router import api_router
+from .router import api_router, include_fitment_router
+
+
+_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _correlation_id(request: Request) -> str:
+    supplied = request.headers.get("X-Correlation-ID", "").strip()
+    if _CORRELATION_ID_RE.fullmatch(supplied):
+        return supplied
+    return str(uuid4())
 
 
 def create_app() -> FastAPI:
@@ -38,6 +52,13 @@ def create_app() -> FastAPI:
         allow_headers=settings.cors_header_list,
     )
     application.include_router(api_router, prefix=settings.api_prefix)
+    if settings.fitment_api_enabled:
+        # Deferred to a later phase; see docs/FITMENT_PHASE_BOUNDARY_2026-07-30.md.
+        # Mounted through a scoped router so it lands under the same API prefix
+        # as everything else rather than at the application root.
+        scoped = APIRouter()
+        include_fitment_router(scoped)
+        application.include_router(scoped, prefix=settings.api_prefix)
     if settings.environment.strip().casefold() == "e2e" and settings.e2e_auth_bypass:
         from .routers.e2e import router as e2e_router
 
@@ -49,7 +70,10 @@ def create_app() -> FastAPI:
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
+        correlation_id = _correlation_id(request)
+        request.state.correlation_id = correlation_id
         response = await call_next(request)
+        response.headers["X-Correlation-ID"] = correlation_id
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -62,6 +86,13 @@ def create_app() -> FastAPI:
                 "Strict-Transport-Security",
                 "max-age=31536000; includeSubDomains",
             )
+        pricing_event(
+            "api_request_completed",
+            correlation_id=correlation_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+        )
         return response
 
     @application.exception_handler(SourceAccessBlocked)

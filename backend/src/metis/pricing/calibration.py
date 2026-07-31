@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
 import json
-import math
 from typing import Iterable
 
+from .numeric import decimal_exp, decimal_ln, decimal_sqrt
 from .statistics import clamp01, effective_sample_size, median, percentile
 from .types import CalibrationPair, CoefficientModel, ProductTier, TierCoefficient
 
@@ -302,9 +302,7 @@ def _deduplicated_points(
             or pair.quality_weight <= ZERO
         ):
             continue
-        log_ratio = Decimal(
-            str(math.log(float(pair.tier_price / pair.reference_price)))
-        )
+        log_ratio = decimal_ln(pair.tier_price / pair.reference_price)
         per_oe[(category, pair.tier, oe_norm)].append(
             (log_ratio, min(ONE, pair.quality_weight))
         )
@@ -368,9 +366,7 @@ def _interval_and_confidence(
         q3 = percentile([point.log_ratio for point in points], Decimal("0.75"))
         robust_sigma = max(robust_sigma, (q3 - q1) / Decimal("1.349"))
     n_effective = effective_sample_size(point.weight for point in points)
-    standard_error = robust_sigma / Decimal(
-        str(math.sqrt(max(1.0, float(n_effective))))
-    )
+    standard_error = robust_sigma / decimal_sqrt(max(ONE, n_effective))
     low = _exp_decimal(center - Decimal("1.96") * standard_error)
     high = _exp_decimal(center + Decimal("1.96") * standard_error)
     support = clamp01(n_effective / max(ONE, minimum_support))
@@ -385,7 +381,7 @@ def _normalized_oe(value: str | None) -> str | None:
 
 
 def _exp_decimal(value: Decimal) -> Decimal:
-    return Decimal(str(math.exp(float(value))))
+    return decimal_exp(value)
 
 
 def _decimal_text(value: Decimal) -> str:

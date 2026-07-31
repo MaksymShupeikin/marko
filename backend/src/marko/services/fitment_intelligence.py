@@ -1231,6 +1231,14 @@ async def list_fitment_candidates(
     int,
     FitmentAnalysis | None,
 ]:
+    catalog_item_exists = await session.scalar(
+        select(CatalogItem.id).where(
+            CatalogItem.id == catalog_item_id,
+            CatalogItem.workspace_id == workspace_id,
+        )
+    )
+    if catalog_item_exists is None:
+        raise FitmentNotFoundError("catalog item not found")
     if analysis_id is None:
         analysis = await session.scalar(
             select(FitmentAnalysis)

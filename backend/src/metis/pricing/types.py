@@ -168,7 +168,7 @@ class SourceProvenance:
     source_record_id: str | None = None
     raw_evidence_sha256: str | None = None
     parser_contract_version: str | None = None
-    schema_version: str = "comparison-evidence-v2"
+    schema_version: str = "comparison-evidence-v3"
     verified: bool = False
 
 
@@ -225,6 +225,11 @@ class CompetitorOffer:
     currency_evidence: str | None = None
     comparison_evidence: ComparisonEvidence | None = None
     cohort_role: CohortRole | None = None
+    semantic_review_required: bool = False
+    semantic_review_id: str | None = None
+    semantic_review_verdict: str | None = None
+    semantic_review_match_level: str | None = None
+    semantic_review_confidence: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +306,8 @@ class RobustDispersionProfile:
     robust_cv: Decimal
     zero_scale_methods: tuple[str, ...]
     all_scales_zero: bool
+    unique_value_count: int
+    all_zero_with_variation: bool
     partial_scale_degeneracy: bool
     cv_min: Decimal
     cv_max: Decimal
@@ -677,7 +684,7 @@ class PricingResult:
     finite_sample_scale_correction: bool = True
     automatic_eligible: bool = False
     verified_seller_count: int = 0
-    comparability_policy_id: str = "yuri-v1-comparability-v2"
+    comparability_policy_id: str = "yuri-v1-comparability-v3"
     comparability_policy_hash: str = ""
     hard_gate_results: Mapping[str, int] = field(default_factory=dict)
     failed_hard_gates: tuple[str, ...] = field(default_factory=tuple)

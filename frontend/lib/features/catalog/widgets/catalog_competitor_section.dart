@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/app_language.dart';
 import '../../../core/app_theme.dart';
+import '../../../core/presentation_formatters.dart';
 import '../catalog_models.dart';
 
 class CatalogCompetitorSection extends StatelessWidget {
@@ -81,8 +82,8 @@ class CatalogCompetitorSection extends StatelessWidget {
     final dateSuffix = comparedAt == null
         ? ''
         : context.localized(
-            ru: ' от ${_dateTime(comparedAt)}',
-            uk: ' від ${_dateTime(comparedAt)}',
+            ru: ' от ${formatLocalDateTime(comparedAt)}',
+            uk: ' від ${formatLocalDateTime(comparedAt)}',
           );
     return context.localized(
       ru:
@@ -110,7 +111,7 @@ class _DiscoverySection extends StatelessWidget {
     final collectedAt = comparison.discoveredAt;
     final dateSuffix = collectedAt == null
         ? ''
-        : ' · ${_dateTime(collectedAt)}';
+        : ' · ${formatLocalDateTime(collectedAt)}';
     final ownedSuffix = comparison.ownedExcludedCount == 0
         ? ''
         : context.localized(
@@ -121,6 +122,13 @@ class _DiscoverySection extends StatelessWidget {
                 ' Власних оголошень виключено: '
                 '${comparison.ownedExcludedCount}.',
           );
+    final classifiedOfferIds = {
+      ...comparison.pricingEvidence.map((offer) => offer.discoveryOfferId),
+      ...comparison.referenceOnly.map((offer) => offer.discoveryOfferId),
+    };
+    final remainingParsedOffers = comparison.discoveryItems
+        .where((offer) => !classifiedOfferIds.contains(offer.discoveryOfferId))
+        .toList(growable: false);
 
     return Column(
       key: const ValueKey('catalog-discovery-section'),
@@ -155,6 +163,30 @@ class _DiscoverySection extends StatelessWidget {
         if (comparison.selectionHistogram.isNotEmpty) ...[
           const SizedBox(height: 12),
           _SelectionHistogram(comparison: comparison),
+        ],
+        if (remainingParsedOffers.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          _OutcomeBlock(
+            key: const ValueKey('catalog-parser-candidates-block'),
+            title: context.localized(
+              ru: 'Остальные объявления из выдачи парсера',
+              uk: 'Інші оголошення з видачі парсера',
+            ),
+            subtitle: context.localized(
+              ru:
+                  'Они сохранены и показаны для ручной проверки. '
+                  'Статус и причина указаны в каждой карточке; на цену '
+                  'эти объявления не влияют.',
+              uk:
+                  'Вони збережені й показані для ручної перевірки. '
+                  'Статус і причину вказано в кожній картці; на ціну '
+                  'ці оголошення не впливають.',
+            ),
+            emptyLabel: '',
+            offers: remainingParsedOffers,
+            onOpenListing: onOpenListing,
+            accent: colors.warning,
+          ),
         ],
         const SizedBox(height: 18),
         _OutcomeBlock(
@@ -392,23 +424,9 @@ class _DiscoveredListingCard extends StatelessWidget {
                                   ],
                                 ),
                           ),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                color: availabilityColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              availability,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
+                        _AvailabilityLabel(
+                          color: availabilityColor,
+                          label: availability,
                         ),
                       ],
                     ),
@@ -605,7 +623,7 @@ class _PriceCalculationCard extends StatelessWidget {
     final recommended = comparison.recommendedPrice;
     final current = comparison.currentPrice;
     if (recommended != null && current != null && current > 0) {
-      final delta = (recommended - current) / current * 100;
+      final delta = (recommended - current).ratioTo(current) * 100;
       return context.localized(
         ru:
             'Рекомендация: ${recommended.toStringAsFixed(0)} '
@@ -696,7 +714,7 @@ class _CalculationRow extends StatelessWidget {
   }
 }
 
-String _price(double? value, String currency) {
+String _price(DecimalValue? value, String currency) {
   if (value == null) return '—';
   return '${value.toStringAsFixed(0)} $currency'.trim();
 }
@@ -915,23 +933,9 @@ class _CompetitorListingCard extends StatelessWidget {
                                 ],
                               ),
                         ),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                color: availabilityColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              availability,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
+                        _AvailabilityLabel(
+                          color: availabilityColor,
+                          label: availability,
                         ),
                       ],
                     ),
@@ -973,6 +977,34 @@ class _CompetitorListingCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _AvailabilityLabel extends StatelessWidget {
+  const _AvailabilityLabel({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text.rich(
+      TextSpan(
+        children: [
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+          ),
+          TextSpan(text: '  $label'),
+        ],
+      ),
+      style: Theme.of(context).textTheme.bodySmall,
+      softWrap: true,
     );
   }
 }
@@ -1183,6 +1215,10 @@ String _reasonLabel(BuildContext context, String reason) {
       ru: 'не автозапчасть (категория Prom)',
       uk: 'не автозапчастина (категорія Prom)',
     ),
+    'WEAK_NUMERIC_IDENTITY' => context.localized(
+      ru: 'короткий числовой OE найден только в тексте — возможна коллизия',
+      uk: 'короткий числовий OE знайдено лише в тексті — можлива колізія',
+    ),
     'CATEGORY_OUTLIER_MAJORITY_VOTE' => context.localized(
       ru: 'категория не совпадает с выдачей',
       uk: 'категорія не збігається з видачею',
@@ -1225,11 +1261,4 @@ String _reasonLabel(BuildContext context, String reason) {
     ),
     _ => reason,
   };
-}
-
-String _dateTime(DateTime value) {
-  final local = value.toLocal();
-  String twoDigits(int number) => number.toString().padLeft(2, '0');
-  return '${twoDigits(local.day)}.${twoDigits(local.month)}.${local.year} '
-      '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
 }

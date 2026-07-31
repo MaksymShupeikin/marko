@@ -1,0 +1,236 @@
+# Вид бренда в колонке «фирма по артикулу» справочника KEMP (WP-2, пункт 3).
+#
+# Зачем: артикул сам по себе не говорит, OE это или номер поставщика.
+# Говорит бренд рядом с ним. Номер бренда-автопроизводителя — OE; номер
+# бренда-поставщика — MPN, и подставлять его вместо OE запрещено (NO_5):
+# именно эта подстановка породила исходную проблему каталога.
+#
+# Покрытие обязано быть полным: в справочнике 101 различное значение
+# колонки, и все 101 перечислены здесь поимённо. Незнакомое значение при
+# обновлении справочника не угадывается — оно даёт UNKNOWN и закрывает
+# позицию в MPN_ONLY (fail-closed). Пустое значение колонки в этот файл не
+# входит: его обрабатывает загрузчик, см. NO_BRAND.
+#
+# rows: — число строк справочника с этим брендом на sha256
+# 54687209e28a4fc30b42daefdc196b3222ac1dc16dfd705d9807dac52537bbd7.
+# Это документация замера, а не проверяемый контракт: справочник обновится,
+# и числа разойдутся, что само по себе не ошибка.
+
+schema_version: metis-article-brand-kinds-v1
+method_version: article-brand-kinds-v1
+reference_map_sha256: 54687209e28a4fc30b42daefdc196b3222ac1dc16dfd705d9807dac52537bbd7
+
+# Автопроизводитель: артикул рядом с таким брендом — настоящий OE.
+vehicle_manufacturer:
+  - name: "VAG"
+    rows: 1591
+  - name: "General Motors"
+    rows: 449
+  - name: "Mercedes"
+    rows: 345
+  - name: "Ford"
+    rows: 302
+  - name: "Renault (RVI)"
+    rows: 167
+  - name: "Opel"
+    rows: 140
+  - name: "Peugeot/Citroen"
+    rows: 98
+  - name: "Fiat/Alfa/Lancia"
+    rows: 80
+  - name: "Chery"
+    rows: 69
+  - name: "BMW"
+    rows: 15
+  - name: "Nissan"
+    rows: 2
+  - name: "Mitsubishi"
+    rows: 1
+  - name: "Evobus/Setra"
+    rows: 1
+
+# Поставщик компонентов: артикул рядом с таким брендом — MPN, не OE.
+# Sachs, FAG, INA, SKF, LUK и Kolbenschmidt поставляют и на конвейер, но их
+# собственный номер от этого OE не становится: у детали на конвейере свой
+# номер автопроизводителя, и он в этой колонке не лежит.
+aftermarket:
+  - name: "ATS"
+    rows: 1
+  - name: "ATY"
+    rows: 2
+  - name: "Ajusa"
+    rows: 1
+  - name: "Alkar"
+    rows: 1
+  - name: "BCD"
+    rows: 1
+  - name: "BSG"
+    rows: 2
+  - name: "Begel"
+    rows: 2
+  - name: "Beru"
+    rows: 4
+  - name: "Boge"
+    rows: 1
+  - name: "Bosch"
+    rows: 64
+  - name: "CRB"
+    rows: 4
+  - name: "Cadic"
+    rows: 1
+  - name: "Contitech"
+    rows: 11
+  - name: "Corteco"
+    rows: 6
+  - name: "DP Group"
+    rows: 1
+  - name: "Dongil"
+    rows: 1
+  - name: "ERT"
+    rows: 1
+  - name: "Elring"
+    rows: 12
+  - name: "Elwis Royal"
+    rows: 1
+  - name: "Eurohesperia"
+    rows: 1
+  - name: "FAG"
+    rows: 205
+  - name: "Febi"
+    rows: 7
+  - name: "Federal Mogul"
+    rows: 9
+  - name: "Ferodo"
+    rows: 3
+  - name: "Filtron"
+    rows: 1
+  - name: "Flennor"
+    rows: 1
+  - name: "Formpart/Otoform"
+    rows: 1
+  - name: "GKN-Spidan"
+    rows: 81
+  - name: "GMW"
+    rows: 2
+  - name: "GP"
+    rows: 4
+  - name: "GPD"
+    rows: 5
+  - name: "Glyco"
+    rows: 3
+  - name: "Goetze"
+    rows: 2
+  - name: "HC Parts"
+    rows: 2
+  - name: "HELLA"
+    rows: 2
+  - name: "Hengst"
+    rows: 5
+  - name: "Hitachi"
+    rows: 3
+  - name: "INA"
+    rows: 40
+  - name: "IPD"
+    rows: 1
+  - name: "JP Group"
+    rows: 3
+  - name: "Japan Cars"
+    rows: 1
+  - name: "K&K"
+    rows: 25
+  - name: "K+F"
+    rows: 75
+  - name: "KME"
+    rows: 3
+  - name: "Kayaba"
+    rows: 13
+  - name: "Kaylas"
+    rows: 1
+  - name: "Knecht-Mahle"
+    rows: 1
+  - name: "Kolbenschmidt"
+    rows: 61
+  - name: "LEX"
+    rows: 4
+  - name: "LUK"
+    rows: 24
+  - name: "Leader Parts"
+    rows: 5
+  - name: "Lemforder"
+    rows: 2
+  - name: "Lesjofors"
+    rows: 87
+  - name: "Lucas"
+    rows: 1
+  - name: "Luzar"
+    rows: 5
+  - name: "Magneti Marelli"
+    rows: 2
+  - name: "Mahle Original"
+    rows: 5
+  - name: "Maxgear"
+    rows: 14
+  - name: "Meat&Doria"
+    rows: 3
+  - name: "Meyle"
+    rows: 15
+  - name: "Moog"
+    rows: 62
+  - name: "NSK"
+    rows: 1
+  - name: "Nissens"
+    rows: 91
+  - name: "Optimal"
+    rows: 4
+  - name: "Philips"
+    rows: 1
+  - name: "Pierburg"
+    rows: 1
+  - name: "Polcar"
+    rows: 12
+  - name: "QUINTON HAZELL"
+    rows: 1
+  - name: "Remsa"
+    rows: 1
+  - name: "Rotweiss"
+    rows: 1
+  - name: "Ruville"
+    rows: 1
+  - name: "SBS"
+    rows: 1
+  - name: "SKF"
+    rows: 26
+  - name: "STD Ecem"
+    rows: 1
+  - name: "Sachs"
+    rows: 283
+  - name: "Shafer"
+    rows: 3
+  - name: "Stanadyne"
+    rows: 2
+  - name: "TRW"
+    rows: 12
+  - name: "Tomex"
+    rows: 11
+  - name: "Trucktec"
+    rows: 1
+  - name: "VALEO PHC"
+    rows: 11
+  - name: "Victor Reinz"
+    rows: 5
+  - name: "WE Parts"
+    rows: 1
+  - name: "ZEN"
+    rows: 1
+  - name: "ZF Parts"
+    rows: 1
+  - name: "ZNP"
+    rows: 4
+
+# Значение стоит в колонке бренда, но брендом не является. Не догадка о
+# производителе, а признание, что бренд неизвестен: страна происхождения
+# ничего не говорит о том, OE перед нами или нет. Позиция закрывается в
+# MPN_ONLY так же, как при незнакомом значении.
+not_a_brand:
+  - name: "China"
+    rows: 1

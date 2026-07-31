@@ -5,10 +5,14 @@ from __future__ import annotations
 import logging
 import random
 import time
+from collections.abc import Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import requests
 
 from marko.services.scrape_runtime import current_scrape_trace
+from marko.services.source_access import require_live_prom_marketplace_collection
 
 from .config import ScrapeConfig
 from .exceptions import RequestFailed, UnsafeResponse
@@ -21,11 +25,21 @@ class HttpClient:
 
     _RETRYABLE_STATUS = frozenset({408, 429})
 
-    def __init__(self, config: ScrapeConfig) -> None:
+    def __init__(
+        self,
+        config: ScrapeConfig,
+        *,
+        live_request_gate: Callable[[], None] | None = None,
+    ) -> None:
         self._config = config
         self._session = requests.Session()
         self._session.headers.update(config.base_headers)
         self._last_request_ts = 0.0
+        # Fail-closed by default: a caller must pass an explicit gate to opt out,
+        # so a new entrypoint cannot reach the network by forgetting the check.
+        self._live_request_gate = (
+            live_request_gate or require_live_prom_marketplace_collection
+        )
 
     def get_html(self, url: str, params: dict | None = None) -> str:
         """Return page HTML content as text. Raises RequestFailed on failure."""
@@ -67,6 +81,10 @@ class HttpClient:
                     )
                 raise
             self._rotate_user_agent()
+            # Fail-closed authorization immediately before the physical request.
+            # Persisted-evidence replay never reaches this point, so offline
+            # reruns stay allowed while every network attempt is gated.
+            self._live_request_gate()
             attempt_started = time.perf_counter()
             try:
                 response = self._session.get(
@@ -83,9 +101,14 @@ class HttpClient:
                 )
             except requests.RequestException as exc:
                 last_error = exc
-                error_category = (
-                    "timeout" if isinstance(exc, requests.Timeout) else "network"
-                )
+                if isinstance(exc, requests.ConnectTimeout):
+                    error_category = "connect_timeout"
+                elif isinstance(exc, requests.ReadTimeout):
+                    error_category = "read_timeout"
+                elif isinstance(exc, requests.Timeout):
+                    error_category = "timeout"
+                else:
+                    error_category = "network"
                 if trace is not None and request_trace is not None:
                     attempt_trace = trace.record_attempt(
                         request_trace,
@@ -281,13 +304,40 @@ class HttpClient:
         raw = response.headers.get("Retry-After")
         if raw is None:
             return None
+        seconds, form = self._parse_retry_after(raw)
+        if seconds is None:
+            log.warning("Не розібрано Retry-After %r для %s", raw, response.url)
+            return None
+        bounded = min(seconds, max(0.0, self._config.backoff_max))
+        log.info(
+            "Retry-After (%s) %.3f s, обмежено політикою до %.3f s",
+            form,
+            seconds,
+            bounded,
+        )
+        return bounded
+
+    def _parse_retry_after(self, raw: str) -> tuple[float | None, str]:
+        """Parse both RFC 9110 forms: delay-seconds and HTTP-date."""
+        value = raw.strip()
         try:
-            seconds = float(raw)
+            seconds = float(value)
         except ValueError:
-            return None
-        if seconds < 0:
-            return None
-        return min(seconds, max(0.0, self._config.backoff_max))
+            pass
+        else:
+            # Negative delay-seconds is malformed: keep the previous behaviour and
+            # fall back to exponential backoff instead of retrying immediately.
+            return (seconds if seconds >= 0 else None), "delay-seconds"
+        try:
+            deadline = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None, "unparsed"
+        if deadline is None:
+            return None, "unparsed"
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        delay = (deadline - datetime.now(UTC)).total_seconds()
+        return max(0.0, delay), "http-date"
 
     def _consume_bounded_response(self, response: requests.Response) -> None:
         content_type = response.headers.get("Content-Type", "").split(";", 1)[0]

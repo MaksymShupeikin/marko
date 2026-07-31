@@ -8,6 +8,12 @@ rule_files:
 scrape_configs:
   - job_name: marko-api
     metrics_path: /api/v1/operations/metrics/prometheus
+    # The scrape target refuses anonymous access. Prometheus authenticates with
+    # the internal service credential; without the file the target returns 401
+    # instead of silently exposing operational metrics.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics_token
     static_configs:
       - targets:
           - api:8000

@@ -5,6 +5,10 @@ import pytest
 
 from marko.api.schemas.stores import ProductResponse
 from marko.infrastructure.db.models import (
+    CandidateComparabilityFeedback,
+    CandidateComparabilityReview,
+    CatalogDiscoveryCapture,
+    CatalogDiscoveryOffer,
     Listing,
     MarketObservation,
     StoreSyncProductSnapshot,
@@ -117,6 +121,31 @@ def test_market_observation_orm_matches_currency_evidence_migration() -> None:
     assert columns.currency_inferred.server_default is not None
 
 
+def test_llm_comparability_models_are_auditable_and_append_only_ready() -> None:
+    observation_columns = MarketObservation.__table__.c
+    review = CandidateComparabilityReview.__table__
+    feedback = CandidateComparabilityFeedback.__table__
+
+    assert not observation_columns.candidate_snapshot.nullable
+    assert observation_columns.candidate_snapshot.server_default is not None
+    assert _ondelete(review, "market_observation_id") == "RESTRICT"
+    assert _ondelete(review, "cache_hit_review_id") == "RESTRICT"
+    assert _ondelete(feedback, "review_id") == "RESTRICT"
+    assert {
+        "input_snapshot",
+        "image_urls",
+        "dimension_findings",
+        "hard_stop_conflicts",
+        "provider_response_id",
+        "usage",
+    } <= set(review.c.keys())
+    assert {
+        "corrected_verdict",
+        "corrected_match_level",
+        "evidence_corrections",
+    } <= set(feedback.c.keys())
+
+
 # Seller.from_url
 
 
@@ -128,3 +157,29 @@ def test_seller_from_url_parses_and_lowercases_lang():
 def test_seller_from_url_invalid_raises():
     with pytest.raises(ValueError):
         Seller.from_url("https://example.com/not-a-seller")
+
+
+# raw evidence retention (F2-0014)
+
+
+def _ondelete(table, column: str) -> str | None:
+    for fk in table.columns[column].foreign_keys:
+        return fk.ondelete
+    raise AssertionError(f"{table.name}.{column} has no foreign key")
+
+
+def test_discovery_captures_survive_deletion_of_their_run():
+    """F2-0014: capture — сырое доказательство, а не производная строка.
+
+    Проба аудита удаляла один ``catalog_discovery_runs`` и уносила 10 captures
+    и 290 offers. Блоб был защищён RESTRICT, но без capture его нельзя привязать
+    к запросу, который его породил.
+    """
+    captures = CatalogDiscoveryCapture.__table__
+    assert _ondelete(captures, "discovery_run_id") == "RESTRICT"
+    assert _ondelete(captures, "evidence_blob_id") == "RESTRICT"
+
+
+def test_discovery_offers_remain_derived_rows():
+    """Разобранные кандидаты восстановимы из captures, поэтому CASCADE уместен."""
+    assert _ondelete(CatalogDiscoveryOffer.__table__, "discovery_run_id") == "CASCADE"

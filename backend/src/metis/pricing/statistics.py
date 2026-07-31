@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
-import math
 from types import MappingProxyType
 
 from .types import ClusterDiagnostic, RobustDispersionProfile, RobustScaleMethod
+from .numeric import decimal_exp, decimal_ln, decimal_log1p, profile_decimal
 
 
 ZERO = Decimal("0")
@@ -381,6 +381,8 @@ def robust_price_dispersion(
     cvs = {name: value / center for name, value in scales.items()}
     zero_methods = tuple(name for name, value in scales.items() if value == ZERO)
     all_zero = len(zero_methods) == len(scales)
+    unique_value_count = len(set(collected))
+    all_zero_with_variation = all_zero and unique_value_count > 1
     partial_degeneracy = bool(zero_methods) and not all_zero
     cv_min = min(cvs.values())
     cv_max = max(cvs.values())
@@ -416,6 +418,8 @@ def robust_price_dispersion(
         robust_cv=selected_scale / center,
         zero_scale_methods=zero_methods,
         all_scales_zero=all_zero,
+        unique_value_count=unique_value_count,
+        all_zero_with_variation=all_zero_with_variation,
         partial_scale_degeneracy=partial_degeneracy,
         cv_min=cv_min,
         cv_max=cv_max,
@@ -451,6 +455,8 @@ def dispersion_profile_to_dict(
         "robust_cv": str(profile.robust_cv),
         "zero_scale_methods": list(profile.zero_scale_methods),
         "all_scales_zero": profile.all_scales_zero,
+        "unique_value_count": profile.unique_value_count,
+        "all_zero_with_variation": profile.all_zero_with_variation,
         "partial_scale_degeneracy": profile.partial_scale_degeneracy,
         "cv_min": str(profile.cv_min),
         "cv_max": str(profile.cv_max),
@@ -573,25 +579,25 @@ def geometric_mean(
     if epsilon <= ZERO:
         raise ValueError("epsilon must be positive")
     selected_weights = weights or {name: ONE for name in scores}
-    numerator = 0.0
+    numerator = ZERO
     denominator = ZERO
     for name, score in scores.items():
         weight = Decimal(str(selected_weights.get(name, ONE)))
         if weight <= ZERO:
             raise ValueError("geometric-mean weights must be positive")
         bounded = max(epsilon, clamp01(score))
-        numerator += float(weight) * math.log(float(bounded))
+        numerator += weight * decimal_ln(bounded)
         denominator += weight
     if denominator <= ZERO:
         return ZERO
-    return clamp01(Decimal(str(math.exp(numerator / float(denominator)))))
+    return clamp01(decimal_exp(numerator / denominator))
 
 
 def log_coverage(count: Decimal, reference_count: int) -> Decimal:
     if count <= ZERO or reference_count <= 0:
         return ZERO
-    value = math.log1p(float(count)) / math.log1p(reference_count)
-    return clamp01(Decimal(str(value)))
+    value = decimal_log1p(count) / decimal_log1p(Decimal(reference_count))
+    return clamp01(profile_decimal(value))
 
 
 def round_down_to_tick(value: Decimal, tick: Decimal) -> Decimal:

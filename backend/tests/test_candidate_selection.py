@@ -75,6 +75,7 @@ def test_owned_seller_stops_at_first_gate() -> None:
         _reference(),
         _candidate(seller_id="2847093"),
         CONFIG,
+        owned_seller_ids=frozenset({"2847093"}),
     )
 
     assert verdict.status is CandidateStatus.REJECTED
@@ -633,3 +634,87 @@ def test_config_rejects_unlabelled_ancestor(tmp_path: Path) -> None:
 
     with pytest.raises(CandidateSelectionConfigError):
         load_candidate_selection_config(target)
+
+
+# Измеренная на 8563 офферах контаминация категорий (2026-07-29)
+
+
+def test_household_appliance_parts_are_rejected_by_category() -> None:
+    """Шнек для мясорубки Zelmer 86.3130 сталкивался с позицией KEMP 863130.
+
+    До правки блок-листа режим гейта был ``NO_ACTIVE_POLICY``, и эти офферы
+    доходили до конца цепочки: 402 в корзине TIER_UNKNOWN и 9 среди 39 строк,
+    которые конвейер считал пригодной ценовой уликой.
+    """
+    verdict = check_candidate(
+        _reference(oem="86.3130", title="Шнек 863130"),
+        _candidate(
+            title="12000133 Шнек для м'ясорубок Zelmer NR8 86.3130",
+            brand="Zelmer",
+            category_id=64421,
+            category_path=(0, 50, 5006, 644, 64421),
+        ),
+        CONFIG,
+    )
+
+    assert verdict.status is CandidateStatus.REJECTED
+    assert verdict.reason == "CATEGORY_NOT_AUTOPARTS"
+    details = verdict.details["gates"]["category_domain"]
+    assert details["mode"] == "BLOCKLIST"
+    assert details["matched_ancestor"] == [0, 50, 5006]
+
+
+def test_kitchen_appliance_branch_is_rejected_by_category() -> None:
+    verdict = check_candidate(
+        _reference(oem="86.3130", title="Шнек 863130"),
+        _candidate(
+            title="Кухонна техніка -> Шнек( z24) 86.3130 OEM",
+            brand="Zelmer",
+            category_id=341550,
+            category_path=(0, 34, 3415, 341550),
+        ),
+        CONFIG,
+    )
+
+    assert verdict.status is CandidateStatus.REJECTED
+    assert verdict.reason == "CATEGORY_NOT_AUTOPARTS"
+
+
+@pytest.mark.parametrize(
+    ("label", "path"),
+    [
+        ("маникюрная лампа", (0, 16, 1618, 161801)),
+        ("компьютерный стол", (0, 15, 1503, 150301)),
+        ("зоотовары", (0, 27, 2702, 270201)),
+        ("одежда", (0, 3, 354, 3541)),
+        ("военная амуниция", (0, 69, 6901, 690101)),
+        ("жидкие обои", (0, 81, 1303, 130301)),
+        ("медицинский зажим", (0, 40, 1611, 161101)),
+    ],
+)
+def test_measured_non_automotive_branches_are_rejected(label, path) -> None:
+    verdict = check_candidate(_reference(), _candidate(category_path=path), CONFIG)
+
+    assert verdict.status is CandidateStatus.REJECTED, label
+    assert verdict.reason == "CATEGORY_NOT_AUTOPARTS", label
+
+
+@pytest.mark.parametrize(
+    ("label", "path"),
+    [
+        ("болт VW вне автоветви", (0, 81, 4205, 420501)),
+        ("крышка маслозаливная BMW", (0, 509, 71906, 7190601)),
+        ("крышка NTY", (0, 18, 208, 20808)),
+        ("прокладка ELRING", (0, 29, 2905, 290501)),
+        ("колесо Loncin: решение владельца, не блокируем", (0, 18, 1821, 182101)),
+    ],
+)
+def test_genuine_parts_outside_the_automotive_branch_still_pass(label, path) -> None:
+    """Блок-лист не должен превращаться в allowlist по верхней ветви.
+
+    Настоящие автозапчасти измеримо живут вне [0, 55]; блокировка ветви целиком
+    срезала бы их.
+    """
+    verdict = check_candidate(_reference(), _candidate(category_path=path), CONFIG)
+
+    assert verdict.reason != "CATEGORY_NOT_AUTOPARTS", label

@@ -7,11 +7,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
+import json
 import re
 import unicodedata
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.core.config import Settings, get_settings
@@ -58,6 +59,7 @@ class OwnedCatalogStorePresence:
     price: Decimal | None
     currency: str
     is_available: bool | None
+    is_owned: bool
 
 
 @dataclass(frozen=True)
@@ -106,15 +108,519 @@ async def list_owned_catalog(
     limit: int,
     offset: int,
 ) -> OwnedCatalogPage:
-    result = await session.execute(_owned_catalog_statement(workspace_id))
-    rows = tuple(OwnedCatalogListing(**dict(row)) for row in result.mappings().all())
-    return build_owned_catalog_page(
-        rows,
-        query=query,
-        store_ids=store_ids,
+    """Return one bounded catalog page without materialising the whole catalog.
+
+    Identity grouping, filtering, deterministic sorting and pagination happen
+    in PostgreSQL.  Python only assembles listings belonging to the selected
+    identities, preserving the response semantics of
+    :func:`build_owned_catalog_page`.
+    """
+
+    store_parameters = list(store_ids or ())
+    normalized_query = normalize_catalog_code(query)
+    text_query = (query or "").strip().casefold()
+    normalized_tokens = [
+        token
+        for raw_token in re.split(r"\s+", (query or "").strip())
+        if (token := normalize_catalog_code(raw_token))
+    ]
+    parameters = {
+        "workspace_id": workspace_id,
+        "filter_stores": bool(store_ids),
+        "store_ids": store_parameters,
+        "normalized_query": normalized_query,
+        "text_query": text_query,
+        "normalized_tokens": normalized_tokens,
+        "has_query": bool(normalized_query or text_query),
+        "limit": limit,
+        "offset": offset,
+    }
+    page_result = await session.execute(
+        _owned_catalog_page_statement(
+            has_query=bool(normalized_query or text_query),
+        ),
+        parameters,
+    )
+    page_row = page_result.mappings().one()
+    identities_payload = page_row["page_identities"]
+    if isinstance(identities_payload, str):
+        identities_payload = json.loads(identities_payload)
+    identities = tuple(
+        (item["identity_kind"], item["identity_value"])
+        for item in identities_payload
+    )
+
+    stores_result = await session.execute(
+        _owned_catalog_stores_statement(),
+        {"workspace_id": workspace_id},
+    )
+    stores = tuple(
+        sorted(
+            (
+                OwnedCatalogStoreOption(
+                    store_id=row["store_id"],
+                    external_id=row["external_id"],
+                    name=(row["store_name"] or "").strip()
+                    or f"Prom {row['external_id']}",
+                )
+                for row in stores_result.mappings()
+            ),
+            key=lambda store: (store.name.casefold(), store.external_id),
+        )
+    )
+
+    selected_rows: dict[tuple[str, str], list[OwnedCatalogListing]] = {
+        identity: [] for identity in identities
+    }
+    if identities:
+        selected_payload = json.dumps(
+            [
+                {
+                    "identity_kind": identity_kind,
+                    "identity_value": identity_value,
+                }
+                for identity_kind, identity_value in identities
+            ],
+            ensure_ascii=False,
+        )
+        rows_result = await session.execute(
+            _owned_catalog_selected_rows_statement(),
+            {
+                "workspace_id": workspace_id,
+                "filter_stores": bool(store_ids),
+                "store_ids": store_parameters,
+                "selected_identities": selected_payload,
+            },
+        )
+        for row in rows_result.mappings():
+            identity = (row["identity_kind"], row["identity_value"])
+            selected_rows[identity].append(
+                OwnedCatalogListing(
+                    **{
+                        key: value
+                        for key, value in row.items()
+                        if key not in {"identity_kind", "identity_value"}
+                    }
+                )
+            )
+
+    items = tuple(
+        _catalog_product(identity, selected_rows[identity])
+        for identity in identities
+    )
+    catalog_total = int(page_row["catalog_total"])
+    listing_total = int(page_row["listing_total"])
+    return OwnedCatalogPage(
+        items=items,
+        total=int(page_row["filtered_total"]),
+        catalog_total=catalog_total,
+        listing_total=listing_total,
+        duplicates_removed=max(0, listing_total - catalog_total),
+        store_total=len(stores),
+        stores=stores,
         limit=limit,
         offset=offset,
     )
+
+
+async def get_owned_catalog_product(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: str,
+) -> OwnedCatalogProduct | None:
+    """Resolve one stable catalog identity without scanning catalog pages.
+
+    The hash is resolved inside the calling workspace.  A foreign and an
+    unknown product therefore have the same result and cannot be enumerated
+    through this endpoint.
+    """
+
+    if re.fullmatch(r"[0-9a-f]{32}", product_id) is None:
+        return None
+    identity_result = await session.execute(
+        _owned_catalog_identity_by_id_statement(),
+        {"workspace_id": workspace_id, "product_id": product_id},
+    )
+    identity_rows = list(identity_result.mappings())
+    if len(identity_rows) != 1:
+        return None
+    identity = (
+        identity_rows[0]["identity_kind"],
+        identity_rows[0]["identity_value"],
+    )
+    selected_payload = json.dumps(
+        [{"identity_kind": identity[0], "identity_value": identity[1]}],
+        ensure_ascii=False,
+    )
+    rows_result = await session.execute(
+        _owned_catalog_selected_rows_statement(),
+        {
+            "workspace_id": workspace_id,
+            "filter_stores": False,
+            "store_ids": [],
+            "selected_identities": selected_payload,
+        },
+    )
+    rows = [
+        OwnedCatalogListing(
+            **{
+                key: value
+                for key, value in row.items()
+                if key not in {"identity_kind", "identity_value"}
+            }
+        )
+        for row in rows_result.mappings()
+    ]
+    if not rows:
+        return None
+    product = _catalog_product(identity, rows)
+    return product if product.id == product_id else None
+
+
+_OWNED_CATALOG_PAGE_SQL = """
+WITH base AS MATERIALIZED (
+  SELECT
+    l.id AS listing_id,
+    l.store_id,
+    ms.external_id AS store_external_id,
+    l.name,
+    l.catalog_identity_kind AS identity_kind,
+    l.catalog_identity_value AS identity_value,
+    l.catalog_completeness AS completeness,
+    l.catalog_sku_norm AS normalized_sku,
+    l.catalog_oe_norm AS normalized_oe,
+    l.catalog_model_norm AS normalized_model,
+    l.catalog_brand_norm AS normalized_brand,
+    l.catalog_name_norm AS normalized_name,
+    l.catalog_description_norm AS normalized_description
+  FROM listings AS l
+  JOIN marketplace_stores AS ms
+    ON ms.id = l.store_id
+  JOIN workspace_stores AS ws
+    ON ws.store_id = ms.id
+  WHERE ws.workspace_id = :workspace_id
+    AND ws.kind = 'owned'
+    AND (
+      NOT CAST(:filter_stores AS boolean)
+      OR l.store_id = ANY(CAST(:store_ids AS uuid[]))
+    )
+),
+grouped AS MATERIALIZED (
+  SELECT
+    identity_kind,
+    identity_value,
+    (
+      array_agg(
+        name
+        ORDER BY
+          completeness DESC,
+          char_length(name) DESC,
+          lower(name),
+          store_external_id,
+          listing_id::text
+      )
+    )[1] AS representative_name,
+    bool_or(
+      CAST(:text_query AS text) <> ''
+      AND strpos(lower(name), CAST(:text_query AS text)) > 0
+    ) AS text_match,
+    bool_or(
+      CAST(:normalized_query AS text) <> ''
+      AND (
+        strpos(normalized_sku, CAST(:normalized_query AS text)) > 0
+        OR strpos(normalized_oe, CAST(:normalized_query AS text)) > 0
+        OR strpos(normalized_model, CAST(:normalized_query AS text)) > 0
+        OR strpos(normalized_brand, CAST(:normalized_query AS text)) > 0
+        OR strpos(normalized_name, CAST(:normalized_query AS text)) > 0
+        OR strpos(normalized_description, CAST(:normalized_query AS text)) > 0
+      )
+    ) AS normalized_match,
+    array_agg(normalized_sku)
+      || array_agg(normalized_oe)
+      || array_agg(normalized_model)
+      || array_agg(normalized_brand)
+      || array_agg(normalized_name)
+      || array_agg(normalized_description) AS search_values
+  FROM base
+  GROUP BY identity_kind, identity_value
+),
+filtered AS MATERIALIZED (
+  SELECT
+    identity_kind,
+    identity_value,
+    representative_name
+  FROM grouped
+  WHERE
+    NOT CAST(:has_query AS boolean)
+    OR text_match
+    OR normalized_match
+    OR (
+      cardinality(CAST(:normalized_tokens AS text[])) > 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM unnest(CAST(:normalized_tokens AS text[])) AS requested(token)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM unnest(grouped.search_values) AS candidate(value)
+          WHERE strpos(candidate.value, requested.token) > 0
+        )
+      )
+    )
+),
+stats AS (
+  SELECT
+    (SELECT count(*) FROM base) AS listing_total,
+    (SELECT count(*) FROM grouped) AS catalog_total,
+    (SELECT count(*) FROM filtered) AS filtered_total
+),
+page AS (
+  SELECT
+    identity_kind,
+    identity_value,
+    lower(representative_name) AS sort_name,
+    encode(
+      sha256(
+        convert_to(identity_kind || ':' || identity_value, 'UTF8')
+      ),
+      'hex'
+    ) AS stable_id
+  FROM filtered
+  ORDER BY
+    lower(representative_name),
+    encode(
+      sha256(
+        convert_to(identity_kind || ':' || identity_value, 'UTF8')
+      ),
+      'hex'
+    )
+  LIMIT :limit
+  OFFSET :offset
+)
+SELECT
+  stats.listing_total,
+  stats.catalog_total,
+  stats.filtered_total,
+  coalesce(
+    (
+      SELECT jsonb_agg(
+        jsonb_build_object(
+          'identity_kind', page.identity_kind,
+          'identity_value', page.identity_value
+        )
+        ORDER BY page.sort_name, page.stable_id
+      )
+      FROM page
+    ),
+    '[]'::jsonb
+  ) AS page_identities
+FROM stats
+"""
+
+
+_OWNED_CATALOG_PAGE_NO_SEARCH_SQL = """
+WITH base AS MATERIALIZED (
+  SELECT
+    l.id AS listing_id,
+    ms.external_id AS store_external_id,
+    l.name,
+    l.catalog_identity_kind AS identity_kind,
+    l.catalog_identity_value AS identity_value,
+    l.catalog_completeness AS completeness
+  FROM listings AS l
+  JOIN marketplace_stores AS ms
+    ON ms.id = l.store_id
+  JOIN workspace_stores AS ws
+    ON ws.store_id = ms.id
+  WHERE ws.workspace_id = :workspace_id
+    AND ws.kind = 'owned'
+    AND (
+      NOT CAST(:filter_stores AS boolean)
+      OR l.store_id = ANY(CAST(:store_ids AS uuid[]))
+    )
+),
+grouped AS MATERIALIZED (
+  SELECT
+    identity_kind,
+    identity_value,
+    (
+      array_agg(
+        name
+        ORDER BY
+          completeness DESC,
+          char_length(name) DESC,
+          lower(name),
+          store_external_id,
+          listing_id::text
+      )
+    )[1] AS representative_name
+  FROM base
+  GROUP BY identity_kind, identity_value
+),
+page AS (
+  SELECT
+    identity_kind,
+    identity_value,
+    lower(representative_name) AS sort_name,
+    encode(
+      sha256(
+        convert_to(identity_kind || ':' || identity_value, 'UTF8')
+      ),
+      'hex'
+    ) AS stable_id
+  FROM grouped
+  ORDER BY
+    lower(representative_name),
+    encode(
+      sha256(
+        convert_to(identity_kind || ':' || identity_value, 'UTF8')
+      ),
+      'hex'
+    )
+  LIMIT :limit
+  OFFSET :offset
+)
+SELECT
+  (SELECT count(*) FROM base) AS listing_total,
+  (SELECT count(*) FROM grouped) AS catalog_total,
+  (SELECT count(*) FROM grouped) AS filtered_total,
+  coalesce(
+    (
+      SELECT jsonb_agg(
+        jsonb_build_object(
+          'identity_kind', page.identity_kind,
+          'identity_value', page.identity_value
+        )
+        ORDER BY page.sort_name, page.stable_id
+      )
+      FROM page
+    ),
+    '[]'::jsonb
+  ) AS page_identities
+"""
+
+
+_OWNED_CATALOG_STORES_SQL = """
+SELECT
+  ms.id AS store_id,
+  ms.external_id,
+  coalesce(
+    first_listing.seller_name,
+    ms.name
+  ) AS store_name
+FROM workspace_stores AS ws
+JOIN marketplace_stores AS ms
+  ON ms.id = ws.store_id
+JOIN LATERAL (
+  SELECT l.raw_data ->> 'seller_name' AS seller_name
+  FROM listings AS l
+  WHERE l.store_id = ms.id
+  ORDER BY l.name, l.id
+  LIMIT 1
+) AS first_listing ON true
+WHERE ws.workspace_id = :workspace_id
+  AND ws.kind = 'owned'
+"""
+
+
+_OWNED_CATALOG_SELECTED_ROWS_SQL = """
+WITH selected AS MATERIALIZED (
+  SELECT
+    item.value ->> 'identity_kind' AS identity_kind,
+    item.value ->> 'identity_value' AS identity_value,
+    item.ordinality
+  FROM jsonb_array_elements(
+    CAST(:selected_identities AS jsonb)
+  ) WITH ORDINALITY AS item(value, ordinality)
+)
+SELECT
+  selected.identity_kind,
+  selected.identity_value,
+  l.id AS listing_id,
+  l.store_id,
+  ms.external_id AS store_external_id,
+  coalesce(
+    l.raw_data ->> 'seller_name',
+    ms.name
+  ) AS store_name,
+  ms.canonical_url AS store_url,
+  l.name,
+  l.url AS listing_url,
+  l.sku,
+  l.model_id,
+  l.brand,
+  l.currency,
+  l.current_price,
+  l.is_available,
+  l.raw_data ->> 'image' AS image_url,
+  l.raw_data ->> 'oe_raw' AS oe_raw,
+  l.raw_data ->> 'description' AS description
+FROM selected
+JOIN listings AS l
+  ON l.catalog_identity_kind = selected.identity_kind
+  AND l.catalog_identity_value = selected.identity_value
+JOIN marketplace_stores AS ms
+  ON ms.id = l.store_id
+JOIN workspace_stores AS ws
+  ON ws.store_id = ms.id
+WHERE ws.workspace_id = :workspace_id
+  AND ws.kind = 'owned'
+  AND (
+    NOT CAST(:filter_stores AS boolean)
+    OR l.store_id = ANY(CAST(:store_ids AS uuid[]))
+  )
+ORDER BY
+  selected.ordinality,
+  ms.external_id,
+  l.name,
+  l.id
+"""
+
+_OWNED_CATALOG_IDENTITY_BY_ID_SQL = """
+SELECT
+  l.catalog_identity_kind AS identity_kind,
+  l.catalog_identity_value AS identity_value
+FROM listings AS l
+JOIN workspace_stores AS ws
+  ON ws.store_id = l.store_id
+WHERE ws.workspace_id = :workspace_id
+  AND ws.kind = 'owned'
+  AND left(
+    encode(
+      sha256(
+        convert_to(
+          l.catalog_identity_kind || ':' || l.catalog_identity_value,
+          'UTF8'
+        )
+      ),
+      'hex'
+    ),
+    32
+  ) = :product_id
+GROUP BY l.catalog_identity_kind, l.catalog_identity_value
+ORDER BY l.catalog_identity_kind, l.catalog_identity_value
+LIMIT 2
+"""
+
+
+def _owned_catalog_page_statement(*, has_query: bool = True):
+    return text(
+        _OWNED_CATALOG_PAGE_SQL
+        if has_query
+        else _OWNED_CATALOG_PAGE_NO_SEARCH_SQL
+    )
+
+
+def _owned_catalog_stores_statement():
+    return text(_OWNED_CATALOG_STORES_SQL)
+
+
+def _owned_catalog_selected_rows_statement():
+    return text(_OWNED_CATALOG_SELECTED_ROWS_SQL)
+
+
+def _owned_catalog_identity_by_id_statement():
+    return text(_OWNED_CATALOG_IDENTITY_BY_ID_SQL)
 
 
 async def enrich_listing_oe(
@@ -426,6 +932,7 @@ def _store_presence(rows: list[OwnedCatalogListing]) -> OwnedCatalogStorePresenc
         price=representative.current_price,
         currency=representative.currency,
         is_available=representative.is_available,
+        is_owned=True,
     )
 
 

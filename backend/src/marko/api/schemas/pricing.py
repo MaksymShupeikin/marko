@@ -263,12 +263,22 @@ class RecommendationResponse(BaseModel):
     computed_at: datetime
 
 
+class RecommendationActionCountsResponse(BaseModel):
+    raise_: int = Field(alias="raise", serialization_alias="raise")
+    lower: int
+    review: int
+    hold: int
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class RecommendationPageResponse(BaseModel):
     items: list[RecommendationResponse]
     total: int
     run_id: UUID | None
     limit: int
     offset: int
+    action_counts: RecommendationActionCountsResponse
 
 
 class RecommendationReplayResponse(BaseModel):
@@ -305,6 +315,124 @@ class RecommendationDecisionResponse(BaseModel):
     reason: str
     policy_version: str
     decided_at: datetime
+
+
+class ComparabilityReviewResponse(BaseModel):
+    review_id: UUID
+    market_observation_id: UUID
+    input_hash: str
+    verdict: Literal["COMPARABLE", "NOT_COMPARABLE", "INSUFFICIENT_DATA"]
+    match_level: Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"]
+    confidence: Decimal
+    rationale: str
+    dimension_findings: list[dict[str, Any]]
+    hard_stop_conflicts: list[dict[str, Any]]
+    decision_source: str
+    status: str
+    provider: str
+    model_id: str
+    prompt_version: str
+    reviewed_at: datetime
+    cache_hit_review_id: UUID | None
+    image_urls: list[str]
+    provider_response_id: str | None
+    error_code: str | None
+    error_detail: str | None
+    feedback_count: int
+    latest_feedback_id: UUID | None
+    latest_feedback_decision: str | None
+    latest_feedback_reason: str | None
+    pricing_eligible: bool
+
+
+class ComparabilityReviewRequest(BaseModel):
+    force: bool = False
+
+
+class ComparabilityFeedbackEvidenceReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal[
+        "OUR_PRODUCT",
+        "CANDIDATE",
+        "IMAGE",
+        "DETERMINISTIC_GATE",
+    ]
+    field: str = Field(min_length=1, max_length=120)
+    value: str = Field(default="", max_length=1000)
+    excerpt: str = Field(default="", max_length=500)
+
+
+class ComparabilityFeedbackDimensionCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension: Literal[
+        "oe_reference",
+        "part_type",
+        "brand_manufacturer",
+        "fitment",
+        "vehicle_generation",
+        "year_interval",
+        "engine",
+        "body_variant",
+        "side",
+        "position",
+        "condition",
+        "package_quantity",
+        "currency_presence",
+    ]
+    outcome: Literal["MATCH", "CONFLICT", "UNKNOWN", "NOT_APPLICABLE"]
+    our_value: str = Field(default="", max_length=1000)
+    candidate_value: str = Field(default="", max_length=1000)
+    explanation: str = Field(min_length=1, max_length=1000)
+    evidence: list[ComparabilityFeedbackEvidenceReference] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+
+
+class ComparabilityFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["CONFIRM", "CORRECT"]
+    corrected_verdict: (
+        Literal["COMPARABLE", "NOT_COMPARABLE", "INSUFFICIENT_DATA"] | None
+    ) = None
+    corrected_match_level: (
+        Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"] | None
+    ) = None
+    confidence: Decimal | None = Field(default=None, ge=0, le=1)
+    reason: str = Field(min_length=3, max_length=2000)
+    evidence_corrections: list[ComparabilityFeedbackDimensionCorrection] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+
+    @model_validator(mode="after")
+    def validate_correction(self) -> ComparabilityFeedbackRequest:
+        if self.decision == "CORRECT":
+            if self.corrected_verdict is None or self.corrected_match_level is None:
+                raise ValueError(
+                    "CORRECT requires corrected_verdict and corrected_match_level"
+                )
+        elif (
+            self.corrected_verdict is not None
+            or self.corrected_match_level is not None
+            or self.evidence_corrections
+        ):
+            raise ValueError("CONFIRM cannot carry corrected values")
+        dimensions = [item.dimension for item in self.evidence_corrections]
+        if len(dimensions) != len(set(dimensions)):
+            raise ValueError("evidence corrections cannot repeat a dimension")
+        return self
+
+
+class ComparabilityStatusResponse(BaseModel):
+    mode: Literal["off", "shadow", "required"]
+    provider: str
+    model: str
+    configured: bool
+    automatic_price_publication: Literal[False] = False
 
 
 class RecommendationEvidenceResponse(BaseModel):
@@ -362,6 +490,10 @@ class RecommendationEvidenceResponse(BaseModel):
     comparability_policy_id: str | None
     comparability_policy_hash: str | None
     comparison_evidence: dict[str, Any] | None
+    candidate_snapshot: dict[str, Any]
+    llm_review_required: bool
+    llm_pricing_eligible: bool
+    llm_review: ComparabilityReviewResponse | None
 
 
 class ObservationTierOverrideRequest(BaseModel):
@@ -413,6 +545,15 @@ class CompetitorOfferInput(BaseModel):
     listing_url: str | None = None
     comparison_evidence: dict[str, Any] | None = None
     cohort_role: CohortRole | None = None
+    semantic_review_required: bool = False
+    semantic_review_id: str | None = None
+    semantic_review_verdict: (
+        Literal["COMPARABLE", "NOT_COMPARABLE", "INSUFFICIENT_DATA"] | None
+    ) = None
+    semantic_review_match_level: (
+        Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"] | None
+    ) = None
+    semantic_review_confidence: Decimal | None = Field(default=None, ge=0, le=1)
 
     def to_domain(self) -> CompetitorOffer:
         values = self.model_dump()

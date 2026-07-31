@@ -29,6 +29,7 @@ validate-response-footer = "marko.governance.response_footer_cli:main"
 validate-machine-summary = "marko.governance.machine_summary_cli:main"
 validate-scraper-audit = "marko.governance.scraper_audit_summary_cli:main"
 catalog-candidate-report = "marko.catalog_candidate_report_cli:main"
+catalog-identity-reparse = "marko.catalog_identity_reparse_cli:main"
 catalog-coverage-measurement = "marko.catalog_coverage_measurement_cli:main"
 brand-review-worksheet = "marko.brand_review_worksheet_cli:main"
 

@@ -55,10 +55,18 @@ final _reference = _offer(
   status: 'REFERENCE_ONLY',
   reason: 'TIER_UNKNOWN',
 );
+final _rejected = _offer(
+  id: '3',
+  title: 'Несопоставимое объявление 7E5827505A',
+  price: 900,
+  status: 'REJECTED',
+  reason: 'OEM_NOT_FOUND',
+);
 
 CatalogCompetitorComparison _comparison({
   List<CatalogDiscoveredOffer> evidence = const [],
   List<CatalogDiscoveredOffer> reference = const [],
+  List<CatalogDiscoveredOffer> discovery = const [],
   double? recommended,
   List<String> reasons = const [],
 }) {
@@ -73,12 +81,15 @@ CatalogCompetitorComparison _comparison({
     items: const [],
     discoveryRunId: 'run-1',
     discoveryQuery: '7E5827505A',
-    discoveredTotal: evidence.length + reference.length,
+    discoveredTotal: discovery.isEmpty
+        ? evidence.length + reference.length
+        : discovery.length,
     pricingEvidenceCount: evidence.length,
     referenceOnlyCount: reference.length,
     rejectedCandidateCount: 4,
     confidenceGrade: 'MEDIUM',
     dispersion: 0.1516,
+    discoveryItems: discovery,
     pricingEvidence: evidence,
     referenceOnly: reference,
   );
@@ -148,6 +159,34 @@ void main() {
       'https://prom.ua/ua/p1-item.html',
       'https://prom.ua/ua/p2-item.html',
     ]);
+  });
+
+  testWidgets('parsed candidates remain visible even when rejected', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        _comparison(
+          evidence: [_evidence],
+          reference: [_reference],
+          discovery: [_evidence, _reference, _rejected],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('catalog-parser-candidates-block')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Остальные объявления из выдачи парсера · 1'),
+      findsOneWidget,
+    );
+    expect(find.text('Несопоставимое объявление 7E5827505A'), findsOneWidget);
+    expect(find.textContaining('Отброшен'), findsOneWidget);
+    expect(find.text('Замок 7E5827505A Polcar'), findsOneWidget);
+    expect(find.text('Замок 7E5827505A без бренда'), findsOneWidget);
   });
 
   testWidgets('an empty pricing basis says so instead of showing nothing', (

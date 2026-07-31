@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from marko.api.schemas.catalog import (
     CatalogCompetitorComparisonResponse,
     CatalogDiscoveryRequest,
     CatalogImportPageResponse,
+    CatalogImportPreviewResponse,
     CatalogImportResponse,
     CatalogItemPageResponse,
     CatalogItemResponse,
@@ -43,7 +45,11 @@ from marko.services.catalog_discovery import (
 )
 from marko.services.catalog_costs import cost_configuration_map
 from marko.services.cost_privacy import privacy_safe_mapping
-from marko.services.owned_catalog import enrich_listing_oe, list_owned_catalog
+from marko.services.owned_catalog import (
+    enrich_listing_oe,
+    get_owned_catalog_product,
+    list_owned_catalog,
+)
 from marko.services.source_access import SourceAccessBlocked
 from marko.services.xlsx_catalog import (
     MAX_XLSX_BYTES,
@@ -53,6 +59,7 @@ from marko.services.xlsx_catalog import (
     list_catalog_items,
     list_import_batches,
     parse_mapping_json,
+    preview_catalog_xlsx,
 )
 
 router = APIRouter()
@@ -192,6 +199,79 @@ async def get_owned_catalog_products(
     )
 
 
+@router.get("/products/{product_id}", response_model=OwnedCatalogProductResponse)
+async def get_owned_catalog_product_details(
+    product_id: str,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OwnedCatalogProductResponse:
+    product = await get_owned_catalog_product(
+        session,
+        workspace_id=current.workspace_id,
+        product_id=product_id,
+    )
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog product not found",
+        )
+    response = OwnedCatalogProductResponse.model_validate(product)
+    recommendations = await list_catalog_recommendation_summaries(
+        session,
+        workspace_id=current.workspace_id,
+        products=(product,),
+    )
+    recommendation = recommendations.get(product.id)
+    if recommendation is None:
+        return response
+    return response.model_copy(
+        update={
+            "recommended_price": recommendation.recommended_price,
+            "recommendation_currency": recommendation.currency,
+            "recommendation_action": recommendation.action,
+            "recommendation_computed_at": recommendation.computed_at,
+        }
+    )
+
+
+@router.post(
+    "/imports/preview",
+    response_model=CatalogImportPreviewResponse,
+)
+async def preview_catalog_import(
+    _current: WorkspaceAdmin,
+    file: Annotated[UploadFile, File(description="Prom.ua XLSX export")],
+) -> CatalogImportPreviewResponse:
+    filename = file.filename or "catalog.xlsx"
+    if not filename.casefold().endswith(".xlsx"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "CATALOG_IMPORT_XLSX_REQUIRED",
+                "message": "Only .xlsx files are supported",
+            },
+        )
+    content = await file.read(MAX_XLSX_BYTES + 1)
+    await file.close()
+    try:
+        preview = await asyncio.to_thread(
+            preview_catalog_xlsx,
+            content,
+            filename=filename,
+        )
+    except CatalogImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "CATALOG_IMPORT_PREVIEW_INVALID", "message": str(exc)},
+        ) from exc
+    return CatalogImportPreviewResponse.model_validate(
+        {
+            **preview.__dict__,
+            "sheets": [sheet.__dict__ for sheet in preview.sheets],
+        }
+    )
+
+
 @router.post(
     "/imports",
     response_model=CatalogImportResponse,
@@ -201,14 +281,17 @@ async def upload_catalog(
     current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
     file: Annotated[UploadFile, File(description="Prom.ua XLSX export")],
+    sheet_name: Annotated[str, Form(min_length=1)],
     mapping: Annotated[str | None, Form()] = None,
-    sheet_name: Annotated[str | None, Form()] = None,
 ) -> CatalogImportResponse:
     filename = file.filename or "catalog.xlsx"
     if not filename.casefold().endswith(".xlsx"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Only .xlsx files are supported",
+            detail={
+                "code": "CATALOG_IMPORT_XLSX_REQUIRED",
+                "message": "Only .xlsx files are supported",
+            },
         )
     content = await file.read(MAX_XLSX_BYTES + 1)
     await file.close()
@@ -226,7 +309,7 @@ async def upload_catalog(
     except CatalogImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
+            detail={"code": "CATALOG_IMPORT_INVALID", "message": str(exc)},
         ) from exc
     return CatalogImportResponse.model_validate(batch)
 

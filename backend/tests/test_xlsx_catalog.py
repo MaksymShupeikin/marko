@@ -15,6 +15,7 @@ from marko.services.xlsx_catalog import (
     normalize_identifier,
     parse_catalog_xlsx,
     parse_mapping_json,
+    preview_catalog_xlsx,
 )
 
 
@@ -282,6 +283,54 @@ def test_missing_required_columns_is_a_workbook_error():
 
     with pytest.raises(CatalogImportError, match="category, oe"):
         parse_catalog_xlsx(content)
+
+
+def test_preview_lists_every_sheet_without_guessing_or_leaking_cost_values():
+    stream = BytesIO()
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "Export Products Sheet"
+    first.append(["OE", "Name", "Category", "Price", "Себестоимость"])
+    first.append(["ABC-1", "Part", "Filters", 100, 77])
+    second = workbook.create_sheet("Лист1")
+    second.append(["OE", "Name", "Category", "Price"])
+    second.append(["ABC-2", "Other", "Brakes", 200])
+    workbook.save(stream)
+    workbook.close()
+
+    preview = preview_catalog_xlsx(
+        stream.getvalue(),
+        filename="catalog.xlsx",
+    )
+
+    assert preview.requires_sheet_choice is True
+    assert [sheet.name for sheet in preview.sheets] == [
+        "Export Products Sheet",
+        "Лист1",
+    ]
+    assert [sheet.is_catalog_candidate for sheet in preview.sheets] == [True, True]
+    assert preview.sheets[0].suggested_mapping["oe"] == "OE"
+    assert preview.sheets[0].row_count == 1
+    assert "Себестоимость" in preview.sheets[0].headers
+    assert "Себестоимость" not in preview.sheets[0].sample_rows[0]
+    assert "77" not in str(preview.sheets[0].sample_rows)
+
+
+def test_preview_marks_non_catalog_sheet_without_rejecting_workbook():
+    stream = BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Notes"
+    sheet.append(["Comment"])
+    sheet.append(["not a catalog"])
+    workbook.save(stream)
+    workbook.close()
+
+    preview = preview_catalog_xlsx(stream.getvalue(), filename="notes.xlsx")
+
+    assert len(preview.sheets) == 1
+    assert preview.sheets[0].is_catalog_candidate is False
+    assert "обязательные колонки" in (preview.sheets[0].mapping_error or "")
 
 
 def test_duplicate_sku_is_rejected_as_a_row_error():

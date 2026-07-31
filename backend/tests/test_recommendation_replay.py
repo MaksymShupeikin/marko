@@ -16,7 +16,7 @@ from metis.pricing import (
 from marko.services.recommendation_replay import (
     REPLAY_CONTRACT_V1,
     REPLAY_CONTRACT_V2,
-    REPLAY_CONTRACT_V5,
+    REPLAY_CONTRACT_V6,
     REPLAY_CONTRACT_VERSION,
     compare_replayed_result,
     context_from_snapshot,
@@ -118,11 +118,11 @@ def test_context_snapshot_rebuilds_frozen_pricing_input() -> None:
     assert context.below_cost_warning_confirmed is True
 
 
-def test_current_replay_contract_is_v5_and_compares_current_trace() -> None:
+def test_current_replay_contract_is_v6_and_compares_current_trace() -> None:
     result = _pricing_result()
     stored = _stored_recommendation(result)
     stored.calculation_trace = {
-        "replay_contract_version": REPLAY_CONTRACT_V5,
+        "replay_contract_version": REPLAY_CONTRACT_V6,
         "robust_dispersion": robust_dispersion_trace(
             selected_method=result.dispersion_method,
             pre_clean=result.pre_clean_dispersion_profile,
@@ -139,16 +139,21 @@ def test_current_replay_contract_is_v5_and_compares_current_trace() -> None:
         },
         "robust_diagnostic": None,
         "robust_policy_fingerprint": dict(result.robust_policy_fingerprint),
+        "llm_comparability": {
+            "mode": "off",
+            "required": False,
+            "reviews": [],
+        },
     }
 
-    assert REPLAY_CONTRACT_VERSION == REPLAY_CONTRACT_V5
+    assert REPLAY_CONTRACT_VERSION == REPLAY_CONTRACT_V6
     mismatches = compare_replayed_result(
         stored,
         result,
-        replay_contract_version=REPLAY_CONTRACT_V5,
+        replay_contract_version=REPLAY_CONTRACT_V6,
     )
     # The synthetic result has a diagnostic while this minimal frozen test
-    # trace intentionally does not.  All other V5 contract fields replay.
+    # trace intentionally does not.  All other V6 contract fields replay.
     assert set(mismatches) <= {"robust_diagnostic"}
 
 

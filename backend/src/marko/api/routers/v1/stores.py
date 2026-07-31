@@ -10,12 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.stores import (
+    CrossStoreMatchResponse,
+    CrossStoreSearchResponse,
     ProductPageResponse,
     ProductResponse,
     StoreCreateRequest,
     StoreResponse,
     StoreSyncResponse,
 )
+from marko.services.catalog_search import MAX_CROSS_STORE_MATCHES
 from marko.services.stores import (
     StoreNotFoundError,
     TaskDispatchError,
@@ -25,6 +28,7 @@ from marko.services.stores import (
     list_stores,
     queue_store_sync,
     register_store,
+    search_store_neighbours,
 )
 from marko.services.seller_url_resolver import (
     PromSellerUrlError,
@@ -157,6 +161,7 @@ async def get_products(
     current: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[str | None, Query(max_length=255)] = None,
 ) -> ProductPageResponse:
     try:
         page = await list_store_products(
@@ -165,6 +170,7 @@ async def get_products(
             workspace_id=current.workspace_id,
             limit=limit,
             offset=offset,
+            query=q,
         )
     except StoreNotFoundError as exc:
         raise HTTPException(
@@ -175,4 +181,35 @@ async def get_products(
         total=page.total,
         limit=page.limit,
         offset=page.offset,
+        query=page.query,
+    )
+
+
+@router.get("/{store_id}/products/elsewhere", response_model=CrossStoreSearchResponse)
+async def get_products_in_other_stores(
+    store_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+    q: Annotated[str, Query(min_length=1, max_length=255)],
+    limit: Annotated[int, Query(ge=1, le=50)] = MAX_CROSS_STORE_MATCHES,
+) -> CrossStoreSearchResponse:
+    try:
+        search = await search_store_neighbours(
+            session,
+            store_id=store_id,
+            workspace_id=current.workspace_id,
+            query=q,
+            limit=limit,
+        )
+    except StoreNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
+    return CrossStoreSearchResponse(
+        query=search.query,
+        normalized_query=search.normalized_query,
+        identities=list(search.identities),
+        matches=[
+            CrossStoreMatchResponse.model_validate(match) for match in search.matches
+        ],
     )

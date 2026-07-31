@@ -223,6 +223,8 @@ class FitmentCandidatePage {
     required this.items,
     required this.total,
     required this.analysisId,
+    this.limit = 100,
+    this.offset = 0,
   });
 
   factory FitmentCandidatePage.fromJson(Map<String, dynamic> json) {
@@ -236,12 +238,18 @@ class FitmentCandidatePage {
           .toList(growable: false),
       total: (json['total'] as num?)?.toInt() ?? 0,
       analysisId: json['analysis_id']?.toString(),
+      limit: (json['limit'] as num?)?.toInt() ?? 100,
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
     );
   }
 
   final List<FitmentCandidate> items;
   final int total;
   final String? analysisId;
+  final int limit;
+  final int offset;
+
+  bool get hasMore => offset + items.length < total;
 }
 
 class FitmentMarketRecommendation {

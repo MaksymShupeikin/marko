@@ -8,7 +8,7 @@ void main() {
   testWidgets('product card keeps price as the primary visual element', (
     tester,
   ) async {
-    const product = StoreProduct(
+    final product = StoreProduct(
       id: 'product-id',
       name: 'Premium product',
       url: 'https://prom.ua/product',
@@ -22,7 +22,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.light,
-        home: const Scaffold(
+        home: Scaffold(
           body: Center(
             child: SizedBox(
               width: 280,

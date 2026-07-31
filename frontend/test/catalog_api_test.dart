@@ -4,9 +4,30 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:marko_client/core/api_client.dart';
+import 'package:marko_client/core/presentation_formatters.dart';
 import 'package:marko_client/features/catalog/catalog_api.dart';
 
 void main() {
+  test('loads one stable catalog product by its deep-link id', () async {
+    final api = CatalogApi(
+      ApiClient(
+        client: MockClient((request) async {
+          expect(
+            request.url.path,
+            '/api/v1/catalog/products/0123456789abcdef0123456789abcdef',
+          );
+          return http.Response(jsonEncode(_catalogProductJson), 200);
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+
+    final product = await api.getProduct('0123456789abcdef0123456789abcdef');
+
+    expect(product.id, 'catalog-product');
+    expect(product.name, 'Product');
+  });
+
   test('loads the catalog and sends search plus store filters', () async {
     final api = CatalogApi(
       ApiClient(
@@ -34,7 +55,7 @@ void main() {
     expect(page.items, hasLength(1));
     expect(page.items.single.stores, hasLength(2));
     expect(page.items.single.listingCount, 3);
-    expect(page.items.single.recommendedPrice, 700);
+    expect(page.items.single.recommendedPrice, DecimalValue.parse('700'));
     expect(page.items.single.recommendationAction, 'RAISE');
     expect(page.duplicatesRemoved, 1);
     expect(page.stores.map((store) => store.name), ['Parts Avto', 'ПРОФПАРТС']);
@@ -95,8 +116,11 @@ void main() {
 
       expect(comparison.items, hasLength(1));
       expect(comparison.items.single.sellerName, 'Auto Partner');
-      expect(comparison.items.single.price, 680);
-      expect(comparison.items.single.normalizedPrice, 690);
+      expect(comparison.items.single.price, DecimalValue.parse('680'));
+      expect(
+        comparison.items.single.normalizedPrice,
+        DecimalValue.parse('690'),
+      );
     },
   );
 
@@ -213,13 +237,54 @@ void main() {
       expect(comparison.hasDiscovery, isTrue);
       expect(comparison.promReportedTotal, 91);
       expect(comparison.discoveryItems.single.sellerName, 'Autoparts IF');
-      expect(comparison.discoveryItems.single.salePrice, 629);
+      expect(
+        comparison.discoveryItems.single.salePrice,
+        DecimalValue.parse('629'),
+      );
       expect(comparison.referenceOnlyCount, 1);
       expect(comparison.unfetchedCount, 62);
       expect(comparison.discoveryItems.single.selectionReason, 'TIER_UNKNOWN');
       expect(comparison.discoveryItems.single.passedGates, hasLength(9));
     },
   );
+
+  test('catalog discovery uses its explicit long-running deadline', () async {
+    final client = _CapturingApiClient();
+
+    await CatalogApi(client).discoverCompetitors(sku: 'SKU-1');
+
+    expect(client.capturedTimeout, const Duration(minutes: 2));
+  });
+}
+
+class _CapturingApiClient extends ApiClient {
+  _CapturingApiClient()
+    : super(
+        client: MockClient((_) async => throw UnimplementedError()),
+        baseUrl: 'http://api.test',
+      );
+
+  Duration? capturedTimeout;
+
+  @override
+  Future<dynamic> postJson(
+    String path, {
+    Map<String, dynamic>? body,
+    bool authenticated = true,
+    Duration? timeout,
+  }) async {
+    capturedTimeout = timeout;
+    return {
+      'recommendation_id': null,
+      'compared_at': null,
+      'current_price': null,
+      'fair_price': null,
+      'recommended_price': null,
+      'currency': null,
+      'reason_codes': <String>[],
+      'items': <dynamic>[],
+    };
+  }
 }
 
 Map<String, dynamic> _pageJson() => {
@@ -276,4 +341,20 @@ Map<String, dynamic> _storeJson(
   'price': price,
   'currency': 'UAH',
   'is_available': true,
+};
+
+final Map<String, dynamic> _catalogProductJson = {
+  'id': 'catalog-product',
+  'identity_kind': 'brand_sku',
+  'name': 'Product',
+  'sku': 'SKU-1',
+  'oe': 'OE-1',
+  'model_id': null,
+  'brand': 'KEMP',
+  'image_url': null,
+  'price_min': '100.00',
+  'price_max': '100.00',
+  'currency': 'UAH',
+  'listing_count': 1,
+  'stores': [_storeJson('store-a', '3912822', 'KEMP', 1, '100.00')],
 };

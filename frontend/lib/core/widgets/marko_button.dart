@@ -175,15 +175,20 @@ class _MarkoButtonState extends State<MarkoButton> {
             },
           ),
         },
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _enabled ? _activate : null,
-          onTapDown: _enabled ? (_) => setState(() => _pressed = true) : null,
-          onTapUp: _enabled ? (_) => setState(() => _pressed = false) : null,
-          onTapCancel: _enabled ? () => setState(() => _pressed = false) : null,
-          child: widget.expand
-              ? SizedBox(width: double.infinity, child: button)
-              : button,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _enabled ? _activate : null,
+            onTapDown: _enabled ? (_) => setState(() => _pressed = true) : null,
+            onTapUp: _enabled ? (_) => setState(() => _pressed = false) : null,
+            onTapCancel: _enabled
+                ? () => setState(() => _pressed = false)
+                : null,
+            child: widget.expand
+                ? SizedBox(width: double.infinity, child: button)
+                : button,
+          ),
         ),
       ),
     );

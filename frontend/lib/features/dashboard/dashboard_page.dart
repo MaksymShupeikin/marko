@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
@@ -10,18 +11,44 @@ import '../../core/widgets/marko_menu.dart';
 import '../auth/auth_controller.dart';
 import '../catalog/catalog_page.dart';
 import '../pricing/recommendations_page.dart';
+import '../stores/store_models.dart';
 import '../stores/stores_controller.dart';
 import '../stores/stores_page.dart';
 
 class DashboardPage extends ConsumerStatefulWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({
+    this.initialTab = 0,
+    this.initialCatalogProductId,
+    this.initialRecommendationId,
+    this.routeNavigation = false,
+    super.key,
+  });
+
+  final int initialTab;
+  final String? initialCatalogProductId;
+  final String? initialRecommendationId;
+  final bool routeNavigation;
 
   @override
   ConsumerState<DashboardPage> createState() => _DashboardPageState();
 }
 
 class _DashboardPageState extends ConsumerState<DashboardPage> {
-  int _selectedIndex = 0;
+  static const _catalogIndex = 1;
+  static const _storesIndex = 2;
+
+  late int _selectedIndex;
+  String? _catalogStoreId;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = widget.initialCatalogProductId != null
+        ? _catalogIndex
+        : widget.initialRecommendationId != null
+        ? 0
+        : widget.initialTab.clamp(0, 3);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,21 +74,32 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
       ),
     ];
     final content = switch (_selectedIndex) {
-      1 => CatalogPage(
+      _catalogIndex => CatalogPage(
         onOpenPriceComparison: () => _select(0),
         canAdministerWorkspace: canAdministerWorkspace,
+        initialStoreId: _catalogStoreId,
+        onInitialStoreApplied: _clearCatalogStore,
+        initialProductId: widget.initialCatalogProductId,
+        onOpenProductDeepLink: widget.routeNavigation
+            ? _openCatalogProduct
+            : null,
       ),
-      2 => StoresPage(
+      _storesIndex => StoresPage(
         ownedOnly: true,
         canAdministerWorkspace: canAdministerWorkspace,
+        onOpenStoreCatalog: _openStoreInCatalog,
       ),
       3 => _Overview(
-        onOpenStores: () => _select(2),
+        onOpenStores: () => _select(_storesIndex),
         canAdministerWorkspace: canAdministerWorkspace,
       ),
       _ => RecommendationsPage(
         onOpenCatalog: () => _select(1),
         canAdministerWorkspace: canAdministerWorkspace,
+        initialRecommendationId: widget.initialRecommendationId,
+        onOpenRecommendationDeepLink: widget.routeNavigation
+            ? _openRecommendation
+            : null,
       ),
     };
 
@@ -114,7 +152,45 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     );
   }
 
-  void _select(int index) => setState(() => _selectedIndex = index);
+  void _select(int index) {
+    if (widget.routeNavigation) {
+      final routeName = switch (index) {
+        1 => 'catalog',
+        2 => 'stores',
+        3 => 'overview',
+        _ => 'pricing',
+      };
+      context.goNamed(routeName);
+      return;
+    }
+    setState(() => _selectedIndex = index);
+  }
+
+  void _openCatalogProduct(String productId) {
+    context.goNamed(
+      'catalog-product',
+      pathParameters: {'productId': productId},
+    );
+  }
+
+  void _openRecommendation(String recommendationId) {
+    context.goNamed(
+      'pricing-recommendation',
+      pathParameters: {'recommendationId': recommendationId},
+    );
+  }
+
+  void _openStoreInCatalog(String storeId) {
+    setState(() {
+      _catalogStoreId = storeId;
+      _selectedIndex = _catalogIndex;
+    });
+  }
+
+  void _clearCatalogStore() {
+    if (_catalogStoreId == null) return;
+    setState(() => _catalogStoreId = null);
+  }
 
   void _selectLanguage(AppLanguage language) =>
       ref.read(appLanguageProvider.notifier).select(language);
@@ -261,65 +337,74 @@ class _LanguageSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    return MarkoMenuButton<AppLanguage>(
-      key: const ValueKey('language-selector'),
-      tooltip: context.localized(ru: 'Выбрать язык', uk: 'Обрати мову'),
-      header: context.localized(ru: 'Язык интерфейса', uk: 'Мова інтерфейсу'),
-      selected: language,
-      onSelected: onSelected,
-      minWidth: 220,
-      offset: const Offset(0, -12),
-      entries: AppLanguage.values
-          .map(
-            (item) => MarkoMenuEntry(
-              value: item,
-              label: item.nativeLabel,
-              avatarText: item.shortLabel,
-            ),
-          )
-          .toList(growable: false),
-      child: Container(
-        width: compact ? null : double.infinity,
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 9 : 11,
-          vertical: 9,
-        ),
-        decoration: BoxDecoration(
-          color: colors.surfaceMuted,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: colors.border),
-        ),
-        child: Row(
-          mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
-          children: [
-            Icon(Icons.language_rounded, size: 18, color: colors.muted),
-            const SizedBox(width: 9),
-            if (!compact)
-              Expanded(
-                child: Text(
-                  language.nativeLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colors.ink,
-                    fontWeight: FontWeight.w600,
+    final selectorLabel = context.localized(
+      ru: 'Выбрать язык',
+      uk: 'Обрати мову',
+    );
+    return Semantics(
+      container: true,
+      button: true,
+      label: selectorLabel,
+      child: MarkoMenuButton<AppLanguage>(
+        key: const ValueKey('language-selector'),
+        tooltip: selectorLabel,
+        header: context.localized(ru: 'Язык интерфейса', uk: 'Мова інтерфейсу'),
+        selected: language,
+        onSelected: onSelected,
+        minWidth: 220,
+        offset: const Offset(0, -12),
+        entries: AppLanguage.values
+            .map(
+              (item) => MarkoMenuEntry(
+                value: item,
+                label: item.nativeLabel,
+                avatarText: item.shortLabel,
+              ),
+            )
+            .toList(growable: false),
+        child: Container(
+          width: compact ? null : double.infinity,
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 9 : 11,
+            vertical: 9,
+          ),
+          decoration: BoxDecoration(
+            color: colors.surfaceMuted,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colors.border),
+          ),
+          child: Row(
+            mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+            children: [
+              Icon(Icons.language_rounded, size: 18, color: colors.muted),
+              const SizedBox(width: 9),
+              if (!compact)
+                Expanded(
+                  child: Text(
+                    language.nativeLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colors.ink,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
+              if (compact)
+                Text(
+                  language.shortLabel,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelMedium?.copyWith(color: colors.ink),
+                ),
+              const SizedBox(width: 5),
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: colors.muted,
               ),
-            if (compact)
-              Text(
-                language.shortLabel,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelMedium?.copyWith(color: colors.ink),
-              ),
-            const SizedBox(width: 5),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 18,
-              color: colors.muted,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -477,8 +562,12 @@ class _MobileHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const MarkoWordmark(compact: true),
-          const Spacer(),
+          const Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: MarkoWordmark(compact: true),
+            ),
+          ),
           _LanguageSelector(
             language: language,
             onSelected: onLanguageSelected,
@@ -568,15 +657,7 @@ class _Overview extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final stores = ref.watch(storesControllerProvider).value?.stores;
-    final storeCount = stores?.length;
-    final productCount = stores?.fold<int>(
-      0,
-      (total, store) => total + store.productCount,
-    );
-    final syncedCount = stores
-        ?.where((store) => store.lastSyncedAt != null)
-        .length;
+    final storesState = ref.watch(storesControllerProvider);
     final colors = MarkoTheme.of(context);
 
     return ListView(
@@ -627,47 +708,14 @@ class _Overview extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: 28),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final columns = constraints.maxWidth >= 760 ? 3 : 1;
-                    final width = columns == 3
-                        ? (constraints.maxWidth - 32) / 3
-                        : constraints.maxWidth;
-                    return Wrap(
-                      spacing: 16,
-                      runSpacing: 16,
-                      children: [
-                        _MetricPanel(
-                          width: width,
-                          icon: Icons.storefront_outlined,
-                          value: storeCount?.toString() ?? '—',
-                          label: context.localized(
-                            ru: 'Подключено магазинов',
-                            uk: 'Підключено магазинів',
-                          ),
-                        ),
-                        _MetricPanel(
-                          width: width,
-                          icon: Icons.inventory_2_outlined,
-                          value: productCount?.toString() ?? '—',
-                          label: context.localized(
-                            ru: 'Товаров в мониторинге',
-                            uk: 'Товарів у моніторингу',
-                          ),
-                        ),
-                        _MetricPanel(
-                          width: width,
-                          icon: Icons.check_circle_outline_rounded,
-                          value: syncedCount?.toString() ?? '—',
-                          label: context.localized(
-                            ru: 'Синхронизировано',
-                            uk: 'Синхронізовано',
-                          ),
-                          positive: true,
-                        ),
-                      ],
-                    );
-                  },
+                storesState.when(
+                  loading: () => const _OverviewLoading(),
+                  error: (_, _) => _OverviewError(
+                    onRetry: () => ref.invalidate(storesControllerProvider),
+                  ),
+                  data: (state) => state.stores.isEmpty
+                      ? const _OverviewEmpty()
+                      : _OverviewMetrics(stores: state.stores),
                 ),
                 const SizedBox(height: 20),
                 MarkoPanel(
@@ -702,6 +750,153 @@ class _Overview extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _OverviewLoading extends StatelessWidget {
+  const _OverviewLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return MarkoPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              context.localized(
+                ru: 'Загружаем данные обзора…',
+                uk: 'Завантажуємо дані огляду…',
+              ),
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OverviewEmpty extends StatelessWidget {
+  const _OverviewEmpty();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return MarkoPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+      child: Column(
+        children: [
+          Icon(Icons.storefront_outlined, color: colors.muted, size: 30),
+          const SizedBox(height: 12),
+          Text(
+            context.localized(
+              ru: 'Подключённых магазинов пока нет',
+              uk: 'Підключених магазинів поки немає',
+            ),
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 5),
+          Text(
+            context.localized(
+              ru: 'Подключите магазин, чтобы увидеть сводные показатели.',
+              uk: 'Підключіть магазин, щоб побачити зведені показники.',
+            ),
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OverviewError extends StatelessWidget {
+  const _OverviewError({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return MarkoInlineMessage(
+      message: context.localized(
+        ru: 'Не удалось загрузить данные обзора.',
+        uk: 'Не вдалося завантажити дані огляду.',
+      ),
+      tone: MarkoMessageTone.error,
+      action: TextButton(
+        onPressed: onRetry,
+        child: Text(context.localized(ru: 'Повторить', uk: 'Повторити')),
+      ),
+    );
+  }
+}
+
+class _OverviewMetrics extends StatelessWidget {
+  const _OverviewMetrics({required this.stores});
+
+  final List<StoreSummary> stores;
+
+  @override
+  Widget build(BuildContext context) {
+    final productCount = stores.fold<int>(
+      0,
+      (total, store) => total + store.productCount,
+    );
+    final syncedCount = stores
+        .where((store) => store.lastSyncedAt != null)
+        .length;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 760 ? 3 : 1;
+        final width = columns == 3
+            ? (constraints.maxWidth - 32) / 3
+            : constraints.maxWidth;
+        return Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: [
+            _MetricPanel(
+              width: width,
+              icon: Icons.storefront_outlined,
+              value: stores.length.toString(),
+              label: context.localized(
+                ru: 'Подключено магазинов',
+                uk: 'Підключено магазинів',
+              ),
+            ),
+            _MetricPanel(
+              width: width,
+              icon: Icons.inventory_2_outlined,
+              value: productCount.toString(),
+              label: context.localized(
+                ru: 'Товаров в мониторинге',
+                uk: 'Товарів у моніторингу',
+              ),
+            ),
+            _MetricPanel(
+              width: width,
+              icon: Icons.check_circle_outline_rounded,
+              value: syncedCount.toString(),
+              label: context.localized(
+                ru: 'Синхронизировано',
+                uk: 'Синхронізовано',
+              ),
+              positive: true,
+            ),
+          ],
+        );
+      },
     );
   }
 }

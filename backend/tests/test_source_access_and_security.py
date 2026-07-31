@@ -7,7 +7,9 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
 from marko.api import main as api_main
-from marko.api.dependencies import get_current_user
+from marko.api import dependencies
+from marko.api.dependencies import get_current_user, get_session
+from marko.api.routers.v1 import operations as operations_router
 from marko.core.config import Settings
 from marko.infrastructure.db.models import User, WorkspaceRole
 from marko.services.auth import AuthContext
@@ -151,6 +153,29 @@ async def test_production_app_disables_docs_and_sets_security_headers(
     assert live.headers["x-content-type-options"] == "nosniff"
     assert live.headers["x-frame-options"] == "DENY"
     assert "max-age=31536000" in live.headers["strict-transport-security"]
+    assert live.headers["x-correlation-id"]
+
+
+@pytest.mark.asyncio
+async def test_api_correlation_id_is_echoed_or_safely_replaced() -> None:
+    application = api_main.create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        echoed = await client.get(
+            "/api/v1/health/live",
+            headers={"X-Correlation-ID": "operator-run:20260730.1"},
+        )
+        replaced = await client.get(
+            "/api/v1/health/live",
+            headers={"X-Correlation-ID": "unsafe correlation id with spaces"},
+        )
+
+    assert echoed.headers["x-correlation-id"] == "operator-run:20260730.1"
+    assert replaced.headers["x-correlation-id"]
+    assert replaced.headers["x-correlation-id"] != "unsafe correlation id with spaces"
 
 
 @pytest.mark.asyncio
@@ -192,6 +217,106 @@ async def test_operational_metrics_require_authentication() -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Authentication required"
+
+
+_METRICS_PATH = "/api/v1/operations/metrics/prometheus"
+_SERVICE_TOKEN = "m" * 32
+
+
+async def _scrape_metrics(monkeypatch, *, configured: str, sent: str | None):
+    """Call the scrape target with a configured secret and a presented one."""
+    monkeypatch.setattr(
+        dependencies,
+        "get_settings",
+        lambda: Settings(operational_metrics_token=configured),
+    )
+
+    async def empty_render(_session):
+        return "# no metrics\n"
+
+    monkeypatch.setattr(
+        operations_router, "render_latest_operational_prometheus", empty_render
+    )
+
+    application = api_main.create_app()
+    application.dependency_overrides[get_session] = lambda: None
+    headers = {"Authorization": f"Bearer {sent}"} if sent is not None else {}
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application),
+            base_url="http://test",
+        ) as client:
+            return await client.get(_METRICS_PATH, headers=headers)
+    finally:
+        application.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_prometheus_scrapes_metrics_with_the_service_credential(
+    monkeypatch,
+) -> None:
+    """F2-0010: настроенный внутренний токен даёт 200 без пользовательского JWT."""
+    response = await _scrape_metrics(
+        monkeypatch, configured=_SERVICE_TOKEN, sent=_SERVICE_TOKEN
+    )
+
+    assert response.status_code == 200
+    assert response.text == "# no metrics\n"
+
+
+@pytest.mark.asyncio
+async def test_metrics_reject_a_wrong_service_credential(monkeypatch) -> None:
+    """Неверный service-токен не авторизует и не отдаёт метрики.
+
+    Запрос проваливается в обычную пользовательскую проверку — так участник с
+    настоящим JWT сохраняет доступ. В тестовой среде Firebase не настроен,
+    поэтому пользовательская ветка отвечает 503 вместо 401; важно, что это не
+    200 и тело не содержит метрик.
+    """
+    response = await _scrape_metrics(
+        monkeypatch, configured=_SERVICE_TOKEN, sent="w" * 32
+    )
+
+    assert response.status_code != 200
+    assert "# no metrics" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_metrics_stay_closed_when_no_service_credential_is_configured(
+    monkeypatch,
+) -> None:
+    """Незаданный секрет не открывает анонимный доступ (fail-closed)."""
+    response = await _scrape_metrics(monkeypatch, configured="", sent=None)
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_metrics_reject_a_non_bearer_credential(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dependencies,
+        "get_settings",
+        lambda: Settings(operational_metrics_token=_SERVICE_TOKEN),
+    )
+    application = api_main.create_app()
+    application.dependency_overrides[get_session] = lambda: None
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=application),
+            base_url="http://test",
+        ) as client:
+            response = await client.get(
+                _METRICS_PATH, headers={"Authorization": f"Basic {_SERVICE_TOKEN}"}
+            )
+    finally:
+        application.dependency_overrides.clear()
+
+    assert response.status_code == 401
+
+
+def test_short_service_credential_is_refused_by_configuration() -> None:
+    with pytest.raises(ValidationError):
+        Settings(operational_metrics_token="tooshort")
 
 
 @pytest.mark.asyncio

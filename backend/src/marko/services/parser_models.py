@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _SELLER_URL_RE = re.compile(
@@ -213,5 +214,83 @@ class SeedInfo:
 
     product: Product
     seller_count: int | None  # how many sellers offer this exact model (buyBox)
-    min_price: float | None
-    max_price: float | None
+    min_price: Decimal | None
+    max_price: Decimal | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "min_price", _optional_decimal(self.min_price))
+        object.__setattr__(self, "max_price", _optional_decimal(self.max_price))
+
+
+def _optional_decimal(value: object | None) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+@dataclass(frozen=True)
+class MotorsVehicle:
+    """One vehicle prom.ua's automotive catalogue says the part fits.
+
+    Kept structured rather than flattened to a caption because this is the
+    applicability data WP-5 has been missing: ``comparability.yaml`` knows seven
+    marques against forty-six observed in the catalogue, and this arrives with
+    the engine and the production window already separated.
+    """
+
+    manufacturer: str
+    model: str
+    engine: str | None = None
+    horsepower: int | None = None
+    fuel_type: str | None = None
+    drive_type: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+
+    @property
+    def caption(self) -> str:
+        parts = [self.manufacturer, self.model]
+        if self.engine:
+            parts.append(self.engine)
+        if self.date_from or self.date_to:
+            parts.append(f"{(self.date_from or '')[:7]}..{(self.date_to or '')[:7]}")
+        return " ".join(part for part in parts if part)
+
+
+@dataclass(frozen=True)
+class MotorsContext:
+    """What prom.ua's automotive vertical says about one product card.
+
+    This is the marketplace's own answer to the question three work packages
+    tried to reconstruct from the customer's spreadsheets: which normalized part
+    code this is, which OE numbers supersede it, and what it fits.  The listing
+    behind ``oe_page_url`` is the cross-seller market for that code.
+    """
+
+    normalized_part_code: str | None
+    part_group_id: int | None
+    oe_page_id: int | None
+    oe_page_alias: str | None
+    #: Supersession chain, normalized, our own code first when present.
+    compatible_oe_numbers: tuple[str, ...] = ()
+    compatible_vehicles: tuple[MotorsVehicle, ...] = ()
+    images: tuple[str, ...] = ()
+
+    @property
+    def has_oe_page(self) -> bool:
+        return self.oe_page_id is not None and bool(self.oe_page_alias)
+
+    def oe_page_url(self, lang: str = "ua") -> str | None:
+        """Where the cross-seller offers for this code live, or nothing.
+
+        Measured 2026-07-31: 28 of 40 catalogue positions have such a page, so
+        the absence is ordinary and the caller must have another route.
+        """
+
+        if not self.has_oe_page:
+            return None
+        return f"https://prom.ua/{lang}/auto/oen/{self.oe_page_id}-{self.oe_page_alias}"

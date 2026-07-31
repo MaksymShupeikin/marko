@@ -701,6 +701,7 @@ def test_catalog_response_redacts_legacy_cost_columns_and_model_field() -> None:
         current_price=Decimal("1000"),
         currency="UAH",
         is_available=True,
+        is_owned=True,
         stock_status="unknown",
         stock_qty=None,
         stock_age_days=None,

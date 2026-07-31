@@ -6,15 +6,68 @@ import 'package:http/http.dart' as http;
 
 import 'environment.dart';
 import 'firebase_auth_client.dart';
+import 'client_error_reporter.dart';
+
+class ApiValidationError {
+  const ApiValidationError({
+    required this.type,
+    required this.location,
+    required this.message,
+  });
+
+  factory ApiValidationError.fromJson(Map<String, dynamic> json) {
+    final rawLocation = json['loc'];
+    return ApiValidationError(
+      type: json['type']?.toString() ?? 'validation_error',
+      location: rawLocation is List
+          ? rawLocation.map((part) => part.toString()).toList(growable: false)
+          : const [],
+      message: json['msg']?.toString() ?? 'Invalid value',
+    );
+  }
+
+  final String type;
+  final List<String> location;
+  final String message;
+}
 
 class ApiException implements Exception {
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(
+    this.message, {
+    this.statusCode,
+    this.code,
+    this.detail,
+    this.requiredRoles = const [],
+    this.actualRole,
+    this.validationErrors = const [],
+    this.metadata = const {},
+  });
 
   final String message;
   final int? statusCode;
+  final String? code;
+  final Object? detail;
+  final List<String> requiredRoles;
+  final String? actualRole;
+  final List<ApiValidationError> validationErrors;
+  final Map<String, dynamic> metadata;
 
   @override
   String toString() => message;
+}
+
+class BinaryDownload {
+  const BinaryDownload({
+    required this.bytes,
+    required this.filename,
+    required this.contentType,
+    this.rowCount,
+  });
+
+  final Uint8List bytes;
+  final String filename;
+  final String? contentType;
+  final int? rowCount;
 }
 
 class ApiClient {
@@ -38,12 +91,14 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? queryParameters,
     bool authenticated = true,
+    Duration? timeout,
   }) async {
     return _request(
       'GET',
       path,
       queryParameters: queryParameters,
       authenticated: authenticated,
+      timeout: timeout,
     );
   }
 
@@ -51,12 +106,62 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? body,
     bool authenticated = true,
+    Duration? timeout,
   }) {
-    return _request('POST', path, body: body, authenticated: authenticated);
+    return _request(
+      'POST',
+      path,
+      body: body,
+      authenticated: authenticated,
+      timeout: timeout,
+    );
   }
 
-  Future<dynamic> deleteJson(String path, {bool authenticated = true}) {
-    return _request('DELETE', path, authenticated: authenticated);
+  Future<dynamic> deleteJson(
+    String path, {
+    bool authenticated = true,
+    Duration? timeout,
+  }) {
+    return _request(
+      'DELETE',
+      path,
+      authenticated: authenticated,
+      timeout: timeout,
+    );
+  }
+
+  Future<BinaryDownload> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+    bool authenticated = true,
+    String fallbackFilename = 'download.bin',
+  }) async {
+    var response = await _send(
+      'GET',
+      path,
+      queryParameters: queryParameters,
+      authenticated: authenticated,
+    );
+    if (response.statusCode == 401 && authenticated && await _refreshOnce()) {
+      response = await _send(
+        'GET',
+        path,
+        queryParameters: queryParameters,
+        authenticated: true,
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _decode(response);
+    }
+    _rememberCorrelationId(response);
+    return BinaryDownload(
+      bytes: response.bodyBytes,
+      filename:
+          _filenameFromDisposition(response.headers['content-disposition']) ??
+          fallbackFilename,
+      contentType: response.headers['content-type'],
+      rowCount: int.tryParse(response.headers['x-export-row-count'] ?? ''),
+    );
   }
 
   Future<dynamic> postMultipart(
@@ -91,6 +196,7 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? body,
     required bool authenticated,
+    Duration? timeout,
   }) async {
     var response = await _send(
       method,
@@ -98,6 +204,7 @@ class ApiClient {
       queryParameters: queryParameters,
       body: body,
       authenticated: authenticated,
+      timeout: timeout,
     );
     if (response.statusCode == 401 && authenticated && await _refreshOnce()) {
       response = await _send(
@@ -106,6 +213,7 @@ class ApiClient {
         queryParameters: queryParameters,
         body: body,
         authenticated: true,
+        timeout: timeout,
       );
     }
     return _decode(response);
@@ -117,6 +225,7 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? body,
     required bool authenticated,
+    Duration? timeout,
   }) async {
     final uri = Uri.parse(
       '$baseUrl$path',
@@ -132,7 +241,7 @@ class ApiClient {
       'DELETE' => client.delete(uri, headers: headers),
       _ => client.get(uri, headers: headers),
     };
-    return request.timeout(const Duration(seconds: 15));
+    return request.timeout(timeout ?? const Duration(seconds: 15));
   }
 
   Future<http.Response> _sendMultipart(
@@ -172,6 +281,7 @@ class ApiClient {
   }
 
   dynamic _decode(http.Response response) {
+    _rememberCorrelationId(response);
     dynamic payload;
     if (response.body.isNotEmpty) {
       try {
@@ -184,12 +294,64 @@ class ApiClient {
       final detail = payload is Map<String, dynamic>
           ? payload['detail']
           : payload;
+      final structured = detail is Map<String, dynamic> ? detail : null;
+      final validationErrors = detail is List
+          ? detail
+                .whereType<Map<String, dynamic>>()
+                .map(ApiValidationError.fromJson)
+                .toList(growable: false)
+          : const <ApiValidationError>[];
+      final requiredRoles = structured?['required_roles'] is List
+          ? (structured!['required_roles'] as List)
+                .map((role) => role.toString())
+                .toList(growable: false)
+          : const <String>[];
+      final metadata = structured == null
+          ? <String, dynamic>{}
+          : Map<String, dynamic>.from(structured);
+      metadata
+        ..remove('code')
+        ..remove('message')
+        ..remove('required_roles')
+        ..remove('actual_role');
+      final message =
+          structured?['message']?.toString() ??
+          (validationErrors.isNotEmpty
+              ? 'API validation failed'
+              : detail is String && detail.isNotEmpty
+              ? detail
+              : 'API returned HTTP ${response.statusCode}');
       throw ApiException(
-        detail?.toString() ?? 'API returned HTTP ${response.statusCode}',
+        message,
         statusCode: response.statusCode,
+        code: structured?['code']?.toString(),
+        detail: detail,
+        requiredRoles: requiredRoles,
+        actualRole: structured?['actual_role']?.toString(),
+        validationErrors: validationErrors,
+        metadata: metadata,
       );
     }
     return payload;
+  }
+
+  void _rememberCorrelationId(http.Response response) {
+    ClientErrorReporter.instance.updateCorrelationId(
+      response.headers['x-correlation-id'],
+    );
+  }
+
+  static String? _filenameFromDisposition(String? value) {
+    if (value == null || value.isEmpty) return null;
+    final encoded = RegExp(
+      r"filename\*=UTF-8''([^;]+)",
+      caseSensitive: false,
+    ).firstMatch(value)?.group(1);
+    if (encoded != null) return Uri.decodeComponent(encoded);
+    return RegExp(
+      r'filename="?([^";]+)"?',
+      caseSensitive: false,
+    ).firstMatch(value)?.group(1);
   }
 
   static String _normalizeBaseUrl(String value) {

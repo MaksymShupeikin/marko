@@ -8,6 +8,13 @@ class CatalogApi {
 
   final ApiClient _client;
 
+  Future<CatalogProduct> getProduct(String productId) async {
+    final payload = await _client.getJson(
+      '/api/v1/catalog/products/$productId',
+    );
+    return CatalogProduct.fromJson(payload as Map<String, dynamic>);
+  }
+
   Future<CatalogProductPage> listProducts({
     String query = '',
     List<String>? storeIds,
@@ -45,12 +52,13 @@ class CatalogApi {
     String? oe,
     String? brand,
     String? title,
-    double? currentPrice,
+    Object? currentPrice,
     String? currency,
     String? category,
   }) async {
     final payload = await _client.postJson(
       '/api/v1/catalog/competitors/discover',
+      timeout: const Duration(minutes: 2),
       body: {
         'sku': sku,
         'oe': oe,

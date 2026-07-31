@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
+import traceback
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Mapping
@@ -23,6 +24,7 @@ from sqlalchemy import func, or_, select
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
     BrandTierRule,
+    CandidateComparabilityReview,
     CatalogItem,
     CrossLink,
     MarketObservation,
@@ -45,10 +47,12 @@ from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.gateway import PromGateway
 from metis.pricing import (
     CalibrationPair,
+    COMPARABILITY_CONTRACT_VERSION,
     CoefficientModel,
     CohortRole,
     CompetitorOffer,
     ProductTier,
+    PricingResult,
     RecommendationAction,
     TierClassification,
     bind_persisted_provenance,
@@ -66,6 +70,11 @@ from metis.pricing import (
     recommend_price,
     robust_dispersion_trace,
 )
+from metis.pricing.raise_policy import RaisePolicy, RaiseStrategy
+from metis.pricing.numeric import (
+    TRANSCENDENTAL_PROFILE_VERSION,
+    TRANSCENDENTAL_RELATIVE_TOLERANCE,
+)
 from metis.pricing.statistics import median as decimal_median
 from metis.pricing.observability import pricing_event
 from marko.services.collection_guard import DistributedCollectionGuard
@@ -81,6 +90,13 @@ from marko.services.decision_fingerprint import (
     canonical_sha256,
 )
 from marko.services.matching import PriceComparison
+from marko.services.llm_comparability import (
+    EffectiveComparabilityReview,
+    apply_effective_review_to_evidence,
+    ensure_run_item_comparability_reviews,
+    ensure_target_comparability_reviews,
+    load_effective_review_map,
+)
 from marko.services.offer_identity import (
     ConfirmedCross,
     OE_EXTRACTOR_VERSION,
@@ -143,6 +159,116 @@ class PricingItemNotFoundError(LookupError):
 
 class PermanentCollectionError(RuntimeError):
     pass
+
+
+def customer_budget_floor_trace(
+    *,
+    policy: RaisePolicy | None,
+    result: PricingResult,
+    comparability_activation_verified: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Return audit policy and a safe advisory when automatic release is gated."""
+
+    if policy is None or policy.strategy is not RaiseStrategy.BUDGET_FLOOR:
+        return None, None
+    plausibility_floor = (
+        result.current_price * policy.target_floor_ratio
+        if policy.target_floor_ratio > Decimal("0")
+        else None
+    )
+    excluded_implausible_count = (
+        sum(offer.normalized_price < plausibility_floor for offer in result.evidence)
+        if plausibility_floor is not None
+        else 0
+    )
+    policy_trace = {
+        "strategy": policy.strategy.value,
+        "method_version": policy.method_version,
+        "source_sha256": policy.source_sha256,
+        "owner_decision_reference": policy.owner_decision_reference,
+        "market_basis": "minimum_verified_comparable_price",
+        "minimum_discount": str(policy.minimum_discount),
+        "maximum_discount": str(policy.maximum_discount),
+        "selected_discount": str(policy.minimum_discount),
+        "psychological_step": str(policy.psychological_step),
+        "target_floor_ratio": str(policy.target_floor_ratio),
+        "floor_corroboration_sellers": policy.floor_corroboration_sellers,
+        "plausibility_floor": (
+            None if plausibility_floor is None else str(plausibility_floor)
+        ),
+        "excluded_implausible_count": excluded_implausible_count,
+        "brand_tier_handling": "ignored_for_price",
+        "stock_status_handling": "ignored_for_price",
+        # Avoid a `cost`-labelled API key: the cost-privacy boundary correctly
+        # strips every such key, even when it carries policy metadata only.
+        "procurement_basis_handling": "ignored_for_price",
+        "automatic_price_application": False,
+    }
+    if (
+        comparability_activation_verified
+        or not result.automatic_eligible
+        or result.action not in {RecommendationAction.RAISE, RecommendationAction.LOWER}
+        or result.recommended_price is None
+    ):
+        return policy_trace, None
+    absolute_change = abs(result.recommended_price - result.current_price)
+    percentage_change = (
+        absolute_change / result.current_price
+        if result.current_price > Decimal("0")
+        else None
+    )
+    advisory = {
+        "status": "COMPARABILITY_REVIEW_REQUIRED",
+        "action": result.action.value,
+        "current_price": str(result.current_price),
+        "recommended_price": str(result.recommended_price),
+        "absolute_change": str(absolute_change),
+        "percentage_change": (
+            None if percentage_change is None else str(percentage_change)
+        ),
+        "minimum_comparable_price": (
+            None if result.fair_price is None else str(result.fair_price)
+        ),
+        "target_band_low": (
+            None if result.lower_bound is None else str(result.lower_bound)
+        ),
+        "target_band_high": (
+            None if result.upper_bound is None else str(result.upper_bound)
+        ),
+        "automatic_price_application": False,
+        "reason": "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED",
+    }
+    return policy_trace, advisory
+
+
+def apply_comparability_activation_gate(
+    result: PricingResult,
+    *,
+    activation_verified: bool,
+) -> PricingResult:
+    """Apply the persisted release gate identically in calculation and replay."""
+
+    if not result.automatic_eligible or activation_verified:
+        return result
+    return replace(
+        result,
+        action=RecommendationAction.MANUAL_REVIEW,
+        recommended_price=None,
+        absolute_recommended_change=None,
+        percentage_recommended_change=None,
+        action_gates_passed=False,
+        automatic_eligible=False,
+        confidence_grade="MANUAL",
+        reasons=tuple(
+            dict.fromkeys(
+                result.reasons
+                + (
+                    "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED",
+                    "MANUAL_REVIEW_REQUIRED",
+                )
+            )
+        ),
+    )
 
 
 CollectionAction = Literal[
@@ -302,7 +428,10 @@ async def process_pricing_item(
         is_redelivery=is_redelivery,
     )
     if claim is None:
-        return await _run_id_for_statuses(run_item_id, ("classified",))
+        run_id = await _run_id_for_statuses(run_item_id, ("classified",))
+        if run_id is not None:
+            await ensure_run_item_comparability_reviews(run_item_id)
+        return run_id
     if claim.action == "target_busy":
         pricing_event(
             "scrape_target_duplicate_delivery",
@@ -324,6 +453,7 @@ async def process_pricing_item(
         if claim.scrape_target_id is None:
             raise RuntimeError("Target materialization claim has no target")
         await _materialize_target_evidence(claim.scrape_target_id)
+        await ensure_target_comparability_reviews(claim.scrape_target_id)
         return claim.run_id
     if claim.action == "target_collect":
         if (
@@ -338,10 +468,13 @@ async def process_pricing_item(
             and settings.e2e_task_hold_seconds > 0
         ):
             await asyncio.sleep(settings.e2e_task_hold_seconds)
-        return await _process_target_collection(claim)
+        run_id = await _process_target_collection(claim)
+        await ensure_target_comparability_reviews(claim.scrape_target_id)
+        return run_id
 
     if await _has_capture(run_item_id):
         await _mark_classified(run_item_id, reason="resumed_from_capture")
+        await ensure_run_item_comparability_reviews(run_item_id)
         return claim.run_id
     if not claim.product_url:
         await _mark_classified(run_item_id, reason="missing_product_url")
@@ -361,6 +494,7 @@ async def process_pricing_item(
         product_url=claim.product_url,
         comparison=comparison,
     )
+    await ensure_run_item_comparability_reviews(run_item_id)
     return claim.run_id
 
 
@@ -481,6 +615,8 @@ def _raise_on_required_request_failure(trace: ScrapeExecutionTrace) -> None:
     mapping = {
         "rate_limited": (ScraperErrorCode.RATE_LIMITED, True),
         "timeout": (ScraperErrorCode.TIMEOUT, True),
+        "connect_timeout": (ScraperErrorCode.TIMEOUT, True),
+        "read_timeout": (ScraperErrorCode.TIMEOUT, True),
         "upstream_5xx": (ScraperErrorCode.UPSTREAM_5XX, True),
         "retry_exhausted": (ScraperErrorCode.RETRY_EXHAUSTED, True),
         "upstream_3xx": (ScraperErrorCode.UPSTREAM_3XX, False),
@@ -1854,6 +1990,28 @@ def _offer_outcome(
     )
 
 
+def _internal_offer_error_diagnostic(
+    error: Exception,
+) -> tuple[str, str, tuple[str, ...]]:
+    """Return a stable root-cause fingerprint without logging source payloads."""
+
+    stack_frames = tuple(
+        f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}:{frame.name}"
+        for frame in traceback.extract_tb(error.__traceback__)[-8:]
+    )
+    message_sha256 = hashlib.sha256(
+        str(error).encode("utf-8", errors="replace")
+    ).hexdigest()
+    fingerprint = canonical_sha256(
+        {
+            "exception_type": type(error).__name__,
+            "message_sha256": message_sha256,
+            "stack_frames": stack_frames,
+        }
+    )
+    return fingerprint, message_sha256, stack_frames
+
+
 def _validate_offer_accounting(
     accounting: OfferAccounting,
     *,
@@ -2119,6 +2277,7 @@ async def _persist_payload_observations(
                 condition_state=condition_assessment.state.value,
                 condition_reason_codes=list(condition_assessment.reason_codes),
                 cross_candidates=cross_candidates,
+                candidate_snapshot=_candidate_review_snapshot(product),
                 brand_raw=brand,
                 matched_oe_norm=verification.verified_matched_oe_norm,
                 search_oe_norm=catalog_item.oe_norm,
@@ -2148,7 +2307,7 @@ async def _persist_payload_observations(
                 source_confidence_factors=dict(source_assessment.factors),
                 source_confidence_method_version=source_assessment.method_version,
                 parser_version=run.parser_version,
-                evidence_contract_version="comparison-evidence-v2",
+                evidence_contract_version=COMPARABILITY_CONTRACT_VERSION,
                 comparability_policy_id=comparison_evidence.policy_id,
                 comparability_policy_hash=comparison_evidence.policy_hash,
                 comparison_evidence=comparison_evidence_to_dict(comparison_evidence),
@@ -2177,20 +2336,35 @@ async def _persist_payload_observations(
                 method_version=classification.method_version,
             )
         except Exception as exc:
-            session.add(
-                _offer_outcome(
-                    run_item=run_item,
-                    capture=capture,
-                    raw_offer_index=candidate.raw_offer_index,
-                    outcome_code=OfferOutcomeCode.FAILED_INTERNAL_PROCESSING,
-                    stage="internal",
-                    reason_codes=(f"INTERNAL_{type(exc).__name__.upper()}",),
-                    payload_sha256=payload_sha256,
-                    safe_sample=safe_offer_sample(
-                        raw_offer,
-                        raw_offer_index=candidate.raw_offer_index,
-                    ),
-                )
+            error_fingerprint, message_sha256, stack_frames = (
+                _internal_offer_error_diagnostic(exc)
+            )
+            safe_sample = safe_offer_sample(
+                raw_offer,
+                raw_offer_index=candidate.raw_offer_index,
+            )
+            safe_sample["internal_error_fingerprint"] = error_fingerprint
+            failed_outcome = _offer_outcome(
+                run_item=run_item,
+                capture=capture,
+                raw_offer_index=candidate.raw_offer_index,
+                outcome_code=OfferOutcomeCode.FAILED_INTERNAL_PROCESSING,
+                stage="internal",
+                reason_codes=(f"INTERNAL_{type(exc).__name__.upper()}",),
+                payload_sha256=payload_sha256,
+                safe_sample=safe_sample,
+            )
+            session.add(failed_outcome)
+            pricing_event(
+                "offer_internal_processing_failed",
+                pricing_run_id=str(run.id),
+                pricing_run_item_id=str(run_item.id),
+                raw_market_capture_id=str(capture.id),
+                raw_offer_index=candidate.raw_offer_index,
+                exception_type=type(exc).__name__,
+                exception_message_sha256=message_sha256,
+                error_fingerprint=error_fingerprint,
+                stack_frames=stack_frames,
             )
             failed += 1
             continue
@@ -2503,6 +2677,51 @@ async def claim_collection_finalization(run_id: UUID, *, task_id: str | None) ->
         )
         if active:
             return False
+        if get_settings().pricing_llm_comparability_mode != "off":
+            observation_count = int(
+                await session.scalar(
+                    select(func.count(MarketObservation.id))
+                    .join(
+                        PricingRunItem,
+                        PricingRunItem.id == MarketObservation.pricing_run_item_id,
+                    )
+                    .where(
+                        PricingRunItem.pricing_run_id == run_id,
+                        PricingRunItem.status == "classified",
+                    )
+                )
+                or 0
+            )
+            reviewed_count = int(
+                await session.scalar(
+                    select(
+                        func.count(
+                            func.distinct(
+                                CandidateComparabilityReview.market_observation_id
+                            )
+                        )
+                    )
+                    .join(
+                        MarketObservation,
+                        MarketObservation.id
+                        == CandidateComparabilityReview.market_observation_id,
+                    )
+                    .join(
+                        PricingRunItem,
+                        PricingRunItem.id == MarketObservation.pricing_run_item_id,
+                    )
+                    .where(
+                        PricingRunItem.pricing_run_id == run_id,
+                        PricingRunItem.status == "classified",
+                    )
+                )
+                or 0
+            )
+            # A run item becomes "classified" before its potentially slow LLM
+            # calls are persisted.  A finalizer from another item must not race
+            # past that semantic-review barrier.
+            if reviewed_count < observation_count:
+                return False
         run.status = "calibrating"
         run.finalizer_task_id = task_id
         run.calibration_started_at = datetime.now(UTC)
@@ -2742,6 +2961,12 @@ async def _derive_calibration_pairs(
     for item, observation, classification in rows:
         latest.setdefault(observation.id, (item, observation, classification))
     now = datetime.now(UTC)
+    llm_mode = get_settings().pricing_llm_comparability_mode
+    effective_reviews = await load_effective_review_map(
+        session,
+        list(latest),
+        as_of=now,
+    )
     grouped: dict[
         tuple[str, str],
         list[tuple[CatalogItem, MarketObservation, ObservationTierClassification]],
@@ -2751,6 +2976,26 @@ async def _derive_calibration_pairs(
     confirmed_cross_groups: set[tuple[str, str]] = set()
     eligible_count = 0
     for item, observation, classification in latest.values():
+        semantic_review = effective_reviews.get(observation.id)
+        if llm_mode == "required" and (
+            semantic_review is None or not semantic_review.comparable
+        ):
+            reason = (
+                "CAL_LLM_COMPARABILITY_MISSING"
+                if semantic_review is None
+                else "CAL_LLM_NOT_COMPARABLE"
+                if semantic_review.verdict.value == "NOT_COMPARABLE"
+                else "CAL_LLM_COMPARABILITY_INSUFFICIENT"
+            )
+            observation.calibration_exclusion_codes = [reason]
+            exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+            pricing_event(
+                "calibration_observation_excluded_total",
+                pricing_run_id=str(run_id),
+                reason=reason,
+                value=1,
+            )
+            continue
         decision = evaluate_calibration_eligibility(
             item,
             observation,
@@ -2901,13 +3146,20 @@ async def _derive_calibration_pairs(
     excluded = considered - eligible_count
     if considered != eligible_count + excluded:
         raise RuntimeError("CALIBRATION_ACCOUNTING_ERROR")
+    correlation_id = (run.calibration_accounting or {}).get("correlation_id")
     run.calibration_accounting = {
+        **({"correlation_id": correlation_id} if correlation_id else {}),
         "observations_considered": considered,
         "eligible_observations": eligible_count,
         "excluded_observations": excluded,
         "exclusion_counts_by_reason": dict(sorted(exclusion_counts.items())),
         "exact_oe_groups": len(exact_groups),
         "confirmed_cross_groups": len(confirmed_cross_groups),
+        "llm_comparability_mode": llm_mode,
+        "llm_reviews_available": len(effective_reviews),
+        "llm_positive_reviews": sum(
+            review.comparable for review in effective_reviews.values()
+        ),
         "category_tier_pairs": len(result),
         "dataset_hash": dataset_hash,
     }
@@ -2919,6 +3171,7 @@ async def _derive_calibration_pairs(
         excluded_observations=excluded,
         category_tier_pairs=len(result),
         dataset_hash=dataset_hash,
+        correlation_id=correlation_id,
     )
     return result
 
@@ -3052,11 +3305,24 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
         for observation, classification in rows:
             latest.setdefault(observation.id, (observation, classification))
         now = datetime.now(UTC)
+        settings = get_settings()
+        llm_mode = settings.pricing_llm_comparability_mode
+        semantic_review_required = llm_mode == "required"
+        effective_reviews = await load_effective_review_map(
+            session,
+            list(latest),
+            as_of=now,
+        )
         offers = [
-            _domain_offer(observation, classification, now)
+            _domain_offer(
+                observation,
+                classification,
+                now,
+                semantic_review=effective_reviews.get(observation.id),
+                semantic_review_required=semantic_review_required,
+            )
             for observation, classification in latest.values()
         ]
-        settings = get_settings()
         override = await get_latest_override(session, catalog_item.id)
         context = build_pricing_context(catalog_item, override)
         configured_cost = await get_decrypted_catalog_cost(
@@ -3089,26 +3355,15 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 settings.pricing_comparability_activation_sha256,
             )
         )
-        if result.automatic_eligible and not comparability_activation_verified:
-            result = replace(
-                result,
-                action=RecommendationAction.MANUAL_REVIEW,
-                recommended_price=None,
-                absolute_recommended_change=None,
-                percentage_recommended_change=None,
-                action_gates_passed=False,
-                automatic_eligible=False,
-                confidence_grade="MANUAL",
-                reasons=tuple(
-                    dict.fromkeys(
-                        result.reasons
-                        + (
-                            "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED",
-                            "MANUAL_REVIEW_REQUIRED",
-                        )
-                    )
-                ),
-            )
+        customer_policy_trace, advisory_decision = customer_budget_floor_trace(
+            policy=policy.raise_policy,
+            result=result,
+            comparability_activation_verified=comparability_activation_verified,
+        )
+        result = apply_comparability_activation_gate(
+            result,
+            activation_verified=comparability_activation_verified,
+        )
         recommended_price_below_cost = (
             result.recommended_price < configured_cost
             if result.recommended_price is not None and configured_cost is not None
@@ -3120,7 +3375,18 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 for coefficient in coefficients.values()
             }
         )
-        applied_coefficient_version = applied_versions[0] if applied_versions else None
+        tier_agnostic_pricing = bool(
+            policy.raise_policy is not None
+            and policy.raise_policy.strategy is RaiseStrategy.BUDGET_FLOOR
+            and policy.raise_policy.tier_agnostic
+        )
+        applied_coefficient_version = (
+            "owner-tier-agnostic-v1"
+            if tier_agnostic_pricing
+            else applied_versions[0]
+            if applied_versions
+            else None
+        )
         context_snapshot = {
             "sku": context.sku,
             "category": context.category,
@@ -3163,17 +3429,28 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "liquidity_target": str(context.liquidity_target),
             "urgency": str(context.urgency),
             "manual_priority": str(context.manual_priority),
-            "comparability_contract_version": "comparison-evidence-v2",
+            "comparability_contract_version": COMPARABILITY_CONTRACT_VERSION,
+            "llm_comparability_mode": llm_mode,
         }
         robust_diagnostic = cluster_diagnostic_to_dict(result.cluster_diagnostic)
         calculation_trace = {
-            "replay_contract_version": "recommendation-replay-v5",
+            "replay_contract_version": "recommendation-replay-v6",
             "decision_fingerprint_version": DECISION_FINGERPRINT_VERSION,
+            "numeric_precision": {
+                "profile_version": TRANSCENDENTAL_PROFILE_VERSION,
+                "relative_tolerance": str(TRANSCENDENTAL_RELATIVE_TOLERANCE),
+            },
             "calculated_at": now.isoformat(),
             "catalog_snapshot_id": str(run.import_batch_id),
             "pricing_run_id": str(run.id),
-            "fair_price_estimator": "median",
+            "fair_price_estimator": (
+                "minimum_verified_comparable_price"
+                if tier_agnostic_pricing
+                else "median"
+            ),
             "outlier_filter": result.outlier_method,
+            "customer_pricing_policy": customer_policy_trace,
+            "advisory_decision": advisory_decision,
             "robust_dispersion": robust_dispersion_trace(
                 selected_method=result.dispersion_method,
                 pre_clean=result.pre_clean_dispersion_profile,
@@ -3187,14 +3464,31 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "robust_diagnostic": robust_diagnostic,
             "robust_policy_fingerprint": dict(result.robust_policy_fingerprint),
             "comparability": {
-                "contract_version": "comparison-evidence-v2",
+                "contract_version": COMPARABILITY_CONTRACT_VERSION,
                 "policy_id": result.comparability_policy_id,
                 "policy_hash": result.comparability_policy_hash,
                 "automatic_eligible": result.automatic_eligible,
+                "activation_verified": comparability_activation_verified,
                 "verified_seller_count": result.verified_seller_count,
                 "hard_gates": dict(result.hard_gate_results),
                 "failed_hard_gates": list(result.failed_hard_gates),
                 "unknown_hard_fields": list(result.unknown_hard_fields),
+            },
+            "llm_comparability": {
+                "mode": llm_mode,
+                "required": semantic_review_required,
+                "reviewed_observation_count": len(effective_reviews),
+                "positive_observation_count": sum(
+                    review.comparable for review in effective_reviews.values()
+                ),
+                "reviews": [
+                    review.as_dict()
+                    for review in sorted(
+                        effective_reviews.values(),
+                        key=lambda value: str(value.market_observation_id),
+                    )
+                ],
+                "automatic_price_publication": False,
             },
             "confidence_aggregation": policy.confidence_aggregation.value,
             "factor_scores": {
@@ -3251,6 +3545,11 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     "source": offer.source,
                     "listing_url": offer.listing_url,
                     "cohort_role": offer.cohort_role.value,
+                    "llm_review": (
+                        effective_reviews[UUID(offer.observation_id)].as_dict()
+                        if UUID(offer.observation_id) in effective_reviews
+                        else None
+                    ),
                 }
                 for offer in result.evidence
             ],
@@ -3265,6 +3564,11 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     "listing_url": offer.listing_url,
                     "cohort_role": offer.cohort_role.value,
                     "target_effect": "NOT_IN_TARGET_MEDIAN",
+                    "llm_review": (
+                        effective_reviews[UUID(offer.observation_id)].as_dict()
+                        if UUID(offer.observation_id) in effective_reviews
+                        else None
+                    ),
                 }
                 for offer in result.kemp_reference_evidence
             ],
@@ -3289,6 +3593,7 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     "validated": coefficient.validated,
                     "validation_reasons": list(coefficient.validation_reasons),
                     "excluded_oe_norm": coefficient.excluded_oe_norm,
+                    "used_for_price": not tier_agnostic_pricing,
                 }
                 for coefficient in sorted(
                     coefficients.values(), key=lambda value: value.tier.value
@@ -3337,6 +3642,13 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             build_identity=settings.build_identity,
             price_tick=policy.price_tick,
             price_tick_version=policy.price_tick_version,
+            comparability_reviews=[
+                review.as_dict()
+                for review in sorted(
+                    effective_reviews.values(),
+                    key=lambda value: str(value.market_observation_id),
+                )
+            ],
         )
         decision_fingerprint = canonical_sha256(fingerprint_payload)
         calculation_trace["decision_fingerprint_payload"] = fingerprint_payload
@@ -3502,6 +3814,9 @@ def _domain_offer(
     observation: MarketObservation,
     classification: ObservationTierClassification,
     now: datetime,
+    *,
+    semantic_review: EffectiveComparabilityReview | None = None,
+    semantic_review_required: bool = False,
 ) -> CompetitorOffer:
     age_seconds = max(0.0, (now - observation.observed_at).total_seconds())
     condition_assessment = classify_condition(
@@ -3515,6 +3830,12 @@ def _domain_offer(
     }
     condition_unknown = condition_assessment.state.value == "UNKNOWN"
     derived_kemp = normalize_brand(observation.brand_raw) == "KEMP"
+    comparison_evidence = comparison_evidence_from_dict(observation.comparison_evidence)
+    if semantic_review_required:
+        comparison_evidence = apply_effective_review_to_evidence(
+            comparison_evidence,
+            semantic_review,
+        )
     return CompetitorOffer(
         observation_id=str(observation.id),
         seller_id=observation.seller_id,
@@ -3547,10 +3868,21 @@ def _domain_offer(
         ),
         source=observation.source,
         listing_url=observation.url,
-        comparison_evidence=comparison_evidence_from_dict(
-            observation.comparison_evidence
-        ),
+        comparison_evidence=comparison_evidence,
         cohort_role=CohortRole(classification.cohort_role),
+        semantic_review_required=semantic_review_required,
+        semantic_review_id=(
+            str(semantic_review.review_id) if semantic_review is not None else None
+        ),
+        semantic_review_verdict=(
+            semantic_review.verdict.value if semantic_review is not None else None
+        ),
+        semantic_review_match_level=(
+            semantic_review.match_level.value if semantic_review is not None else None
+        ),
+        semantic_review_confidence=(
+            semantic_review.confidence if semantic_review is not None else None
+        ),
     )
 
 
@@ -3933,6 +4265,65 @@ def _optional_string(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _candidate_review_snapshot(product: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain normalized candidate fields needed by the semantic reviewer."""
+
+    allowed = {
+        "id",
+        "name",
+        "title",
+        "sku",
+        "model_id",
+        "category_id",
+        "category_ids",
+        "brand",
+        "seller_id",
+        "seller_name",
+        "image",
+        "images",
+        "description",
+        "oe_raw",
+        "fitment",
+        "vehicle_generation",
+        "year_from",
+        "year_to",
+        "engine",
+        "body_variant",
+        "side",
+        "position",
+        "condition",
+        "package_quantity",
+        "characteristics",
+        "measure_unit",
+        "presence",
+        "is_available",
+        "url",
+        "price",
+        "price_original",
+        "discounted_price",
+        "currency",
+    }
+    selected = {key: product.get(key) for key in sorted(allowed) if key in product}
+    try:
+        encoded = json.dumps(
+            selected,
+            ensure_ascii=False,
+            sort_keys=True,
+            allow_nan=False,
+            default=str,
+        )
+        decoded = json.loads(encoded)
+    except (TypeError, ValueError):
+        return {
+            "schema_version": "marko-candidate-review-snapshot-v1",
+            "snapshot_error": "NON_JSON_VALUE",
+        }
+    return {
+        "schema_version": "marko-candidate-review-snapshot-v1",
+        "product": decoded,
+    }
 
 
 def _validated_listing_url(value: Any) -> tuple[str, str | None]:

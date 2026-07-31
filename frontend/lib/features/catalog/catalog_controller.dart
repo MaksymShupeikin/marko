@@ -10,6 +10,7 @@ class CatalogState {
     this.selectedStoreIds = const {},
     this.isSearching = false,
     this.isLoadingMore = false,
+    this.deepLinkUnavailable = false,
     this.error,
   });
 
@@ -18,6 +19,7 @@ class CatalogState {
   final Set<String> selectedStoreIds;
   final bool isSearching;
   final bool isLoadingMore;
+  final bool deepLinkUnavailable;
   final String? error;
 
   CatalogState copyWith({
@@ -26,6 +28,7 @@ class CatalogState {
     Set<String>? selectedStoreIds,
     bool? isSearching,
     bool? isLoadingMore,
+    bool? deepLinkUnavailable,
     String? error,
     bool clearError = false,
   }) {
@@ -35,6 +38,7 @@ class CatalogState {
       selectedStoreIds: selectedStoreIds ?? this.selectedStoreIds,
       isSearching: isSearching ?? this.isSearching,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      deepLinkUnavailable: deepLinkUnavailable ?? this.deepLinkUnavailable,
       error: clearError ? null : error ?? this.error,
     );
   }
@@ -68,6 +72,47 @@ class CatalogController extends AsyncNotifier<CatalogState> {
       oe: product.oe,
       brand: product.brand,
     );
+  }
+
+  Future<CatalogProduct?> ensureVisible(String productId) async {
+    final current = state.value;
+    if (current == null) return null;
+    for (final product in current.page.items) {
+      if (product.id == productId) return product;
+    }
+    try {
+      final product = await _api.getProduct(productId);
+      final latest = state.value;
+      if (latest == null) return null;
+      final items = [
+        product,
+        ...latest.page.items.where((item) => item.id != product.id),
+      ];
+      state = AsyncData(
+        latest.copyWith(
+          page: CatalogProductPage(
+            items: items,
+            total: latest.page.total,
+            catalogTotal: latest.page.catalogTotal,
+            listingTotal: latest.page.listingTotal,
+            duplicatesRemoved: latest.page.duplicatesRemoved,
+            storeTotal: latest.page.storeTotal,
+            stores: latest.page.stores,
+            limit: latest.page.limit,
+            offset: latest.page.offset,
+          ),
+          deepLinkUnavailable: false,
+          clearError: true,
+        ),
+      );
+      return product;
+    } catch (_) {
+      final latest = state.value;
+      if (latest != null) {
+        state = AsyncData(latest.copyWith(deepLinkUnavailable: true));
+      }
+      return null;
+    }
   }
 
   Future<CatalogCompetitorComparison> discoverCompetitors(
@@ -153,6 +198,8 @@ class CatalogController extends AsyncNotifier<CatalogState> {
             duplicatesRemoved: next.duplicatesRemoved,
             storeTotal: next.storeTotal,
             stores: next.stores,
+            limit: next.limit,
+            offset: current.page.offset,
           ),
           isLoadingMore: false,
           clearError: true,

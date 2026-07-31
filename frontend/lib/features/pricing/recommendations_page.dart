@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,43 +11,71 @@ import '../../core/presentation_formatters.dart';
 import '../../core/widgets/marko_menu.dart';
 import '../fitment/fitment_candidates_panel.dart';
 import 'catalog_context_dialog.dart';
+import 'comparability_feedback_dialog.dart';
+import 'comparability_review_panel.dart';
+import 'discovery_funnel_panel.dart';
 import 'pricing_api.dart';
 import 'pricing_controller.dart';
 import 'pricing_models.dart';
+import 'pricing_reason_labels.dart';
 import 'recommendation_decision_dialog.dart';
+import 'recommendation_export_button.dart';
+import 'pricing_run_panel.dart';
 import 'tier_override_dialog.dart';
 
 class RecommendationsPage extends ConsumerWidget {
   const RecommendationsPage({
     this.onOpenCatalog,
     this.canAdministerWorkspace = false,
+    this.initialRecommendationId,
+    this.onOpenRecommendationDeepLink,
     super.key,
   });
 
   final VoidCallback? onOpenCatalog;
   final bool canAdministerWorkspace;
+  final String? initialRecommendationId;
+  final ValueChanged<String>? onOpenRecommendationDeepLink;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncState = ref.watch(recommendationsControllerProvider);
     return asyncState.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, _) => _LoadError(
-        message: error.toString(),
+      error: (error, _) => MarkoAsyncErrorView(
+        error: error,
+        forbiddenResourceRu: 'ценовым рекомендациям',
+        forbiddenResourceUk: 'цінових рекомендацій',
         onRetry: () => ref.invalidate(recommendationsControllerProvider),
       ),
-      data: (state) => _RecommendationsContent(
-        state: state,
-        canAdministerWorkspace: canAdministerWorkspace,
-        onOpenCatalog: onOpenCatalog,
-        onRefresh: () =>
-            ref.read(recommendationsControllerProvider.notifier).refresh(),
-        onQueue: (queue) => ref
-            .read(recommendationsControllerProvider.notifier)
-            .setQueue(queue),
-        onSort: (sort) =>
-            ref.read(recommendationsControllerProvider.notifier).setSort(sort),
-      ),
+      data: (state) {
+        final recommendationId = initialRecommendationId;
+        if (recommendationId != null &&
+            state.deepLinkRequestedId != recommendationId) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            ref
+                .read(recommendationsControllerProvider.notifier)
+                .ensureVisible(recommendationId);
+          });
+        }
+        return _RecommendationsContent(
+          state: state,
+          initialRecommendationId: recommendationId,
+          canAdministerWorkspace: canAdministerWorkspace,
+          onOpenRecommendationDeepLink: onOpenRecommendationDeepLink,
+          onOpenCatalog: onOpenCatalog,
+          onRefresh: () =>
+              ref.read(recommendationsControllerProvider.notifier).refresh(),
+          onQueue: (queue) => ref
+              .read(recommendationsControllerProvider.notifier)
+              .setQueue(queue),
+          onSort: (sort) => ref
+              .read(recommendationsControllerProvider.notifier)
+              .setSort(sort),
+          onLoadMore: () =>
+              ref.read(recommendationsControllerProvider.notifier).loadMore(),
+        );
+      },
     );
   }
 }
@@ -53,29 +83,31 @@ class RecommendationsPage extends ConsumerWidget {
 class _RecommendationsContent extends StatelessWidget {
   const _RecommendationsContent({
     required this.state,
+    required this.initialRecommendationId,
     required this.canAdministerWorkspace,
+    required this.onOpenRecommendationDeepLink,
     required this.onOpenCatalog,
     required this.onRefresh,
     required this.onQueue,
     required this.onSort,
+    required this.onLoadMore,
   });
 
   final RecommendationsState state;
+  final String? initialRecommendationId;
   final bool canAdministerWorkspace;
+  final ValueChanged<String>? onOpenRecommendationDeepLink;
   final VoidCallback? onOpenCatalog;
   final VoidCallback onRefresh;
   final ValueChanged<String> onQueue;
   final ValueChanged<String> onSort;
+  final VoidCallback onLoadMore;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final recommendations = state.page.items;
-    final raiseCount = recommendations.where((item) => item.isRaise).length;
-    final lowerCount = recommendations.where((item) => item.isLower).length;
-    final reviewCount = recommendations
-        .where((item) => item.needsReview)
-        .length;
+    final actionCounts = state.page.actionCounts;
     return RefreshIndicator(
       onRefresh: () async => onRefresh(),
       child: ListView(
@@ -117,17 +149,35 @@ class _RecommendationsContent extends StatelessWidget {
                           ],
                         ),
                       ),
-                      IconButton(
-                        tooltip: context.localized(
-                          ru: 'Обновить',
-                          uk: 'Оновити',
-                        ),
-                        onPressed: onRefresh,
-                        icon: const Icon(Icons.refresh_rounded),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          RecommendationExportButton(
+                            queue: state.queue,
+                            sort: state.sort,
+                            action: state.actionFilter,
+                          ),
+                          IconButton.outlined(
+                            tooltip: context.localized(
+                              ru: 'Обновить',
+                              uk: 'Оновити',
+                            ),
+                            onPressed: onRefresh,
+                            icon: const Icon(Icons.refresh_rounded),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                   const SizedBox(height: 22),
+                  PricingRunPanel(
+                    canAdministerWorkspace: canAdministerWorkspace,
+                    onRunFinished: onRefresh,
+                  ),
+                  const SizedBox(height: 18),
+                  const DiscoveryFunnelPanel(),
+                  const SizedBox(height: 18),
                   if (state.error != null) ...[
                     MarkoInlineMessage(
                       message: state.error!,
@@ -135,11 +185,21 @@ class _RecommendationsContent extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                   ],
+                  if (state.deepLinkUnavailable) ...[
+                    MarkoInlineMessage(
+                      message: context.localized(
+                        ru: 'Не удалось открыть рекомендацию по ссылке. Она недоступна в этой рабочей области или больше не существует.',
+                        uk: 'Не вдалося відкрити рекомендацію за посиланням. Вона недоступна в цій робочій області або більше не існує.',
+                      ),
+                      tone: MarkoMessageTone.warning,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   _SummaryRow(
                     total: state.page.total,
-                    raiseCount: raiseCount,
-                    lowerCount: lowerCount,
-                    reviewCount: reviewCount,
+                    raiseCount: actionCounts.raise,
+                    lowerCount: actionCounts.lower,
+                    reviewCount: actionCounts.review,
                   ),
                   const SizedBox(height: 18),
                   Wrap(
@@ -162,6 +222,30 @@ class _RecommendationsContent extends StatelessWidget {
                         child: _RecommendationCard(
                           recommendation: recommendation,
                           canAdministerWorkspace: canAdministerWorkspace,
+                          initiallyExpanded:
+                              recommendation.id == initialRecommendationId,
+                          onOpenDeepLink: onOpenRecommendationDeepLink,
+                        ),
+                      ),
+                    ),
+                  if (recommendations.isNotEmpty && state.page.hasMore)
+                    Center(
+                      child: OutlinedButton.icon(
+                        onPressed: state.isLoadingMore ? null : onLoadMore,
+                        icon: state.isLoadingMore
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.expand_more_rounded),
+                        label: Text(
+                          context.localized(
+                            ru: 'Показать ещё (${recommendations.length} из ${state.page.total})',
+                            uk: 'Показати ще (${recommendations.length} із ${state.page.total})',
+                          ),
                         ),
                       ),
                     ),
@@ -434,10 +518,14 @@ class _RecommendationCard extends ConsumerStatefulWidget {
   const _RecommendationCard({
     required this.recommendation,
     required this.canAdministerWorkspace,
+    required this.initiallyExpanded,
+    required this.onOpenDeepLink,
   });
 
   final PricingRecommendation recommendation;
   final bool canAdministerWorkspace;
+  final bool initiallyExpanded;
+  final ValueChanged<String>? onOpenDeepLink;
 
   @override
   ConsumerState<_RecommendationCard> createState() =>
@@ -449,6 +537,16 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
   bool _savingDecision = false;
   bool _verifyingReplay = false;
   RecommendationReplay? _replay;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initiallyExpanded) {
+      _evidence = ref
+          .read(pricingApiProvider)
+          .getEvidence(widget.recommendation.id);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -464,6 +562,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
     return MarkoPanel(
       padding: EdgeInsets.zero,
       child: ExpansionTile(
+        initiallyExpanded: widget.initiallyExpanded,
         onExpansionChanged: (expanded) {
           if (expanded && _evidence == null) {
             setState(() {
@@ -485,23 +584,46 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
           alignment: Alignment.center,
           child: Icon(icon, color: foreground, size: 21),
         ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                recommendation.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            const SizedBox(width: 12),
-            _ActionBadge(
+        title: LayoutBuilder(
+          builder: (context, constraints) {
+            final badge = _ActionBadge(
               label: _actionLabel(context, recommendation.action),
               foreground: foreground,
               background: background,
-            ),
-          ],
+            );
+            final compact =
+                constraints.maxWidth < 360 ||
+                MediaQuery.textScalerOf(context).scale(14) >= 18;
+            if (compact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    recommendation.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 6),
+                  Align(alignment: Alignment.centerLeft, child: badge),
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    recommendation.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                badge,
+              ],
+            );
+          },
         ),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 7),
@@ -548,6 +670,10 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
               );
             },
           ),
+          if (recommendation.hasAdvisoryPrice) ...[
+            const SizedBox(height: 16),
+            CustomerPriceAdvisory(recommendation: recommendation),
+          ],
           const SizedBox(height: 16),
           Wrap(
             spacing: 8,
@@ -610,6 +736,17 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                   context.localized(ru: 'Отклонить', uk: 'Відхилити'),
                 ),
               ),
+              if (widget.onOpenDeepLink != null)
+                OutlinedButton.icon(
+                  onPressed: () => widget.onOpenDeepLink!(recommendation.id),
+                  icon: const Icon(Icons.link_rounded, size: 18),
+                  label: Text(
+                    context.localized(
+                      ru: 'Постоянная ссылка',
+                      uk: 'Постійне посилання',
+                    ),
+                  ),
+                ),
             ],
           ),
           if (_replay != null) ...[
@@ -624,6 +761,12 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
               future: _evidence!,
               normalizedOffers: recommendation.normalizedOffersById,
               onOverride: widget.canAdministerWorkspace ? _overrideTier : null,
+              onComparabilityFeedback: widget.canAdministerWorkspace
+                  ? _recordComparabilityFeedback
+                  : null,
+              onComparabilityReview: widget.canAdministerWorkspace
+                  ? _rerunComparabilityReview
+                  : null,
             ),
             const SizedBox(height: 18),
             const Divider(),
@@ -639,7 +782,8 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
   }
 
   String _priceDecision(BuildContext context, PricingRecommendation item) {
-    final target = item.recommendedPrice;
+    final advisory = item.recommendedPrice == null && item.hasAdvisoryPrice;
+    final target = item.recommendedPrice ?? item.advisoryRecommendedPrice;
     if (target == null && !item.automaticEligible) {
       return context.localized(
         ru: '${_recommendationMoney(item, item.currentPrice)} — автоцена не сформирована',
@@ -656,12 +800,18 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
         item.absoluteRecommendedChange ?? (target - item.currentPrice).abs();
     final percent =
         item.percentageRecommendedChange ??
-        (item.currentPrice == 0 ? 0 : change / item.currentPrice);
+        (item.currentPrice.isZero ? 0 : change.ratioTo(item.currentPrice));
     final sign = target >= item.currentPrice ? '+' : '−';
+    final suffix = advisory
+        ? context.localized(
+            ru: ' · ориентир, требует проверки',
+            uk: ' · орієнтир, потребує перевірки',
+          )
+        : '';
     return '${_recommendationMoney(item, item.currentPrice)} → '
         '${_recommendationMoney(item, target)} · '
         '$sign${_recommendationMoney(item, change)} '
-        '(${(percent * 100).toStringAsFixed(1)}%)';
+        '(${(percent * 100).toStringAsFixed(1)}%)$suffix';
   }
 
   Future<void> _editContext() async {
@@ -794,6 +944,92 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
       );
     }
   }
+
+  Future<void> _recordComparabilityFeedback(
+    RecommendationEvidence evidence,
+  ) async {
+    final review = evidence.llmReview;
+    if (review == null) return;
+    final values = await showComparabilityFeedbackDialog(
+      context,
+      review: review,
+    );
+    if (values == null || !mounted) return;
+    try {
+      await ref
+          .read(pricingApiProvider)
+          .recordComparabilityFeedback(review.reviewId, values);
+      if (!mounted) return;
+      _refreshEvidence();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.localized(
+              ru:
+                  'Разметка сохранена. Она станет эталоном и будет учтена '
+                  'в следующем расчёте.',
+              uk:
+                  'Розмітку збережено. Вона стане еталоном і буде врахована '
+                  'в наступному розрахунку.',
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _showEvidenceError(error);
+    }
+  }
+
+  Future<void> _rerunComparabilityReview(
+    RecommendationEvidence evidence,
+  ) async {
+    try {
+      await ref
+          .read(pricingApiProvider)
+          .reviewComparability(evidence.observationId, force: true);
+      if (!mounted) return;
+      _refreshEvidence();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.localized(
+              ru:
+                  'Новая проверка сохранена. Текущая рекомендация не '
+                  'переписана; результат войдёт в следующий расчёт.',
+              uk:
+                  'Нову перевірку збережено. Поточну рекомендацію не '
+                  'перезаписано; результат увійде до наступного розрахунку.',
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _showEvidenceError(error);
+    }
+  }
+
+  void _refreshEvidence() {
+    setState(() {
+      _evidence = ref
+          .read(pricingApiProvider)
+          .getEvidence(widget.recommendation.id);
+    });
+  }
+
+  void _showEvidenceError(Object error) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.localized(
+            ru: 'Не удалось сохранить проверку: $error',
+            uk: 'Не вдалося зберегти перевірку: $error',
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ReplayStatus extends StatelessWidget {
@@ -847,11 +1083,15 @@ class _MarketEvidenceList extends StatelessWidget {
     required this.future,
     required this.normalizedOffers,
     required this.onOverride,
+    required this.onComparabilityFeedback,
+    required this.onComparabilityReview,
   });
 
   final Future<List<RecommendationEvidence>> future;
   final Map<String, Map<String, dynamic>> normalizedOffers;
   final Future<void> Function(RecommendationEvidence)? onOverride;
+  final Future<void> Function(RecommendationEvidence)? onComparabilityFeedback;
+  final Future<void> Function(RecommendationEvidence)? onComparabilityReview;
 
   @override
   Widget build(BuildContext context) {
@@ -903,9 +1143,7 @@ class _MarketEvidenceList extends StatelessWidget {
             ...laneItems.map((item) {
               final normalized = normalizedOffers[item.observationId];
               final normalizedPrice =
-                  double.tryParse(
-                    normalized?['normalized_price']?.toString() ?? '',
-                  ) ??
+                  DecimalValue.tryParse(normalized?['normalized_price']) ??
                   item.normalizedPrice;
               final multiplier =
                   double.tryParse(
@@ -1007,12 +1245,12 @@ class _MarketEvidenceList extends StatelessWidget {
                             Text(
                               item.automaticEligible
                                   ? context.localized(
-                                      ru: 'Сопоставимость: verified',
-                                      uk: 'Зіставність: verified',
+                                      ru: 'Детерминированная проверка: пройдена',
+                                      uk: 'Детермінована перевірка: пройдена',
                                     )
                                   : context.localized(
-                                      ru: 'Сопоставимость: manual review',
-                                      uk: 'Зіставність: manual review',
+                                      ru: 'Детерминированная проверка: нужна ручная проверка',
+                                      uk: 'Детермінована перевірка: потрібна ручна перевірка',
                                     ),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
@@ -1020,6 +1258,13 @@ class _MarketEvidenceList extends StatelessWidget {
                                         ? colors.positive
                                         : colors.warning,
                                   ),
+                            ),
+                            const SizedBox(height: 5),
+                            RecommendationEvidenceDetails(evidence: item),
+                            ComparabilityReviewPanel(
+                              evidence: item,
+                              onFeedback: onComparabilityFeedback,
+                              onReview: onComparabilityReview,
                             ),
                           ],
                         ),
@@ -1066,6 +1311,98 @@ class _MarketEvidenceList extends StatelessWidget {
   }
 }
 
+class RecommendationEvidenceDetails extends StatelessWidget {
+  const RecommendationEvidenceDetails({required this.evidence, super.key});
+
+  final RecommendationEvidence evidence;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    final extracted = evidence.extractedOeNorms.isEmpty
+        ? '—'
+        : evidence.extractedOeNorms.join(', ');
+    final calibrationExclusions = evidence.calibrationExclusionCodes.isEmpty
+        ? '—'
+        : evidence.calibrationExclusionCodes.join(', ');
+    final reenriched = evidence.oeReenrichedAt == null
+        ? '—'
+        : formatLocalDateTime(evidence.oeReenrichedAt!);
+    final availability = switch (evidence.isAvailable) {
+      true => context.localized(ru: 'в наличии', uk: 'у наявності'),
+      false => context.localized(ru: 'нет в наличии', uk: 'немає в наявності'),
+      null => context.localized(ru: 'неизвестно', uk: 'невідомо'),
+    };
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: MarkoTheme.of(context).surfaceMuted.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'OE: status=${evidence.oeVerificationStatus} · '
+              'search=${_emptyAsDash(evidence.searchOeNorm)} · '
+              'extracted=$extracted · '
+              'verified=${evidence.verifiedMatchedOeNorm ?? '—'} · '
+              'identity=${evidence.comparisonIdentityKey ?? '—'}',
+              style: style,
+            ),
+            Text(
+              '${context.localized(ru: 'Provenance', uk: 'Походження')}: '
+              'seller=${_emptyAsDash(evidence.sellerId)} · '
+              'OE extractor=${_emptyAsDash(evidence.oeExtractorVersion)} · '
+              'source method=${_emptyAsDash(evidence.sourceConfidenceMethodVersion)} · '
+              're-enriched=$reenriched · '
+              'error=${evidence.oeReenrichmentErrorCode ?? '—'}',
+              style: style,
+            ),
+            Text(
+              'OE evidence: ${_safeJson(evidence.oeEvidenceSummary)}',
+              style: style,
+            ),
+            Text(
+              '${context.localized(ru: 'Флаги', uk: 'Прапорці')}: '
+              '$availability · used=${evidence.isUsed} · '
+              'KEMP=${evidence.isKemp} · owned=${evidence.isOwned}',
+              style: style,
+            ),
+            Text(
+              'Hard gate: ${evidence.comparabilityHardGateResult} · '
+              'calibration exclusions=$calibrationExclusions',
+              style: style,
+            ),
+            Text(
+              'Source factors: ${_safeJson(evidence.sourceConfidenceFactors)} · '
+              'outcomes=${_safeJson(evidence.offerOutcomeCounts)}',
+              style: style,
+            ),
+            Text(
+              'Policy: id=${evidence.comparabilityPolicyId ?? '—'} · '
+              'hash=${evidence.comparabilityPolicyHash ?? '—'}',
+              style: style,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _emptyAsDash(String value) => value.trim().isEmpty ? '—' : value;
+
+String _safeJson(Object value) {
+  try {
+    return jsonEncode(value);
+  } on Object {
+    return '<unavailable>';
+  }
+}
+
 class _ActionBadge extends StatelessWidget {
   const _ActionBadge({
     required this.label,
@@ -1096,6 +1433,108 @@ class _ActionBadge extends StatelessWidget {
   }
 }
 
+class CustomerPriceAdvisory extends StatelessWidget {
+  const CustomerPriceAdvisory({super.key, required this.recommendation});
+
+  final PricingRecommendation recommendation;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final target = recommendation.advisoryRecommendedPrice!;
+    final marketMinimum = recommendation.advisoryMarketMinimum;
+    final bandLow = recommendation.advisoryTargetBandLow;
+    final bandHigh = recommendation.advisoryTargetBandHigh;
+    final excludedImplausible = recommendation.customerExcludedImplausibleCount;
+    final plausibilityFloor = recommendation.customerPlausibilityFloor;
+    final direction = recommendation.advisoryAction == 'LOWER'
+        ? context.localized(ru: 'Снизить', uk: 'Знизити')
+        : context.localized(ru: 'Поднять', uk: 'Підвищити');
+    return Container(
+      key: const ValueKey('customer-price-advisory'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.tertiaryContainer.withValues(alpha: 0.42),
+        border: Border.all(color: colors.tertiary.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            context.localized(
+              ru: 'Ценовой ориентир заказчика',
+              uk: 'Ціновий орієнтир замовника',
+            ),
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: colors.onTertiaryContainer,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$direction: ${_recommendationMoney(recommendation, target)}',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          if (marketMinimum != null && bandLow != null && bandHigh != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              context.localized(
+                ru:
+                    'Минимальная сопоставимая цена: '
+                    '${_recommendationMoney(recommendation, marketMinimum)}. '
+                    'Допустимый коридор: '
+                    '${_recommendationMoney(recommendation, bandLow)} — '
+                    '${_recommendationMoney(recommendation, bandHigh)}.',
+                uk:
+                    'Мінімальна зіставна ціна: '
+                    '${_recommendationMoney(recommendation, marketMinimum)}. '
+                    'Допустимий коридор: '
+                    '${_recommendationMoney(recommendation, bandLow)} — '
+                    '${_recommendationMoney(recommendation, bandHigh)}.',
+              ),
+            ),
+          ],
+          if (excludedImplausible > 0 && plausibilityFloor != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              context.localized(
+                ru:
+                    'Из ценовой цели исключено подозрительно дешёвых '
+                    'предложений: $excludedImplausible (ниже '
+                    '${_recommendationMoney(recommendation, plausibilityFloor)}). '
+                    'Они остаются в доказательствах.',
+                uk:
+                    'Із цінової цілі виключено підозріло дешевих '
+                    'пропозицій: $excludedImplausible (нижче '
+                    '${_recommendationMoney(recommendation, plausibilityFloor)}). '
+                    'Вони залишаються в доказах.',
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Text(
+            context.localized(
+              ru:
+                  'Брендовый уровень, закупка и возраст остатка в цене не '
+                  'участвуют. Сопоставимость требует проверки; цена '
+                  'автоматически не применяется.',
+              uk:
+                  'Рівень бренду, закупівля та вік залишку в ціні не '
+                  'враховуються. Зіставність потребує перевірки; ціна '
+                  'автоматично не застосовується.',
+            ),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Evidence extends StatelessWidget {
   const _Evidence({required this.recommendation});
 
@@ -1103,6 +1542,8 @@ class _Evidence extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final budgetFloor =
+        recommendation.customerPricingPolicy?['strategy'] == 'budget_floor';
     final estimator = recommendation.calculationTrace['fair_price_estimator']
         ?.toString();
     final outlierFilter = recommendation.calculationTrace['outlier_filter']
@@ -1117,8 +1558,10 @@ class _Evidence extends StatelessWidget {
         const SizedBox(height: 11),
         _KeyValue(
           label: context.localized(
-            ru: 'Справедливая цена',
-            uk: 'Справедлива ціна',
+            ru: budgetFloor
+                ? 'Минимальная сопоставимая цена'
+                : 'Справедливая цена',
+            uk: budgetFloor ? 'Мінімальна зіставна ціна' : 'Справедлива ціна',
           ),
           value: recommendation.fairPrice == null
               ? context.localized(ru: 'не рассчитана', uk: 'не розрахована')
@@ -1126,8 +1569,10 @@ class _Evidence extends StatelessWidget {
         ),
         _KeyValue(
           label: context.localized(
-            ru: 'Рыночный диапазон',
-            uk: 'Ринковий діапазон',
+            ru: budgetFloor ? 'Целевой коридор (−5%…−2%)' : 'Рыночный диапазон',
+            uk: budgetFloor
+                ? 'Цільовий коридор (−5%…−2%)'
+                : 'Ринковий діапазон',
           ),
           value: recommendation.lowerBound == null
               ? '—'
@@ -1155,8 +1600,8 @@ class _Evidence extends StatelessWidget {
         if (estimator != null)
           _KeyValue(
             label: context.localized(
-              ru: 'Робастная модель',
-              uk: 'Робастна модель',
+              ru: budgetFloor ? 'Основа расчёта' : 'Робастная модель',
+              uk: budgetFloor ? 'Основа розрахунку' : 'Робастна модель',
             ),
             value: '$estimator + ${outlierFilter ?? 'none'}',
           ),
@@ -1298,7 +1743,14 @@ class _KeyValue extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Text(value, style: Theme.of(context).textTheme.bodyMedium),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              softWrap: true,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
         ],
       ),
     );
@@ -1354,36 +1806,12 @@ class _EmptyRecommendations extends StatelessWidget {
   }
 }
 
-class _LoadError extends StatelessWidget {
-  const _LoadError({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: MarkoInlineMessage(
-          message: message,
-          tone: MarkoMessageTone.error,
-          action: TextButton(
-            onPressed: onRetry,
-            child: Text(context.localized(ru: 'Повторить', uk: 'Повторити')),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-String _money(double value, {required String currency}) =>
+String _money(Object value, {required String currency}) =>
     formatMoney(value, currency: currency);
 
 String _recommendationMoney(
   PricingRecommendation recommendation,
-  double value,
+  DecimalValue value,
 ) => formatMoney(
   value,
   currency: recommendation.currency,
@@ -1448,123 +1876,8 @@ String _reasonSummary(
   );
 }
 
-String _reasonLabel(BuildContext context, String code) => switch (code) {
-  'MARKET_SUPPORTS_RAISE' => context.localized(
-    ru: 'рынок поддерживает повышение',
-    uk: 'ринок підтримує підвищення',
-  ),
-  'MARKET_NOT_ABOVE_RAISE_THRESHOLD' => context.localized(
-    ru: 'рынок не выше текущей цены',
-    uk: 'ринок не вище поточної ціни',
-  ),
-  'CLEARANCE_MARKDOWN' => context.localized(
-    ru: 'цена для высвобождения капитала',
-    uk: 'ціна для вивільнення капіталу',
-  ),
-  'TOO_FEW_COMPETITORS' ||
-  'TOO_FEW_COMPETITORS_FOR_ACTION' => context.localized(
-    ru: 'мало валидных конкурентов',
-    uk: 'мало валідних конкурентів',
-  ),
-  'LOW_CONFIDENCE' => context.localized(
-    ru: 'низкая уверенность',
-    uk: 'низька впевненість',
-  ),
-  'LOW_COVERAGE' => context.localized(ru: 'мало данных', uk: 'мало даних'),
-  'LOW_DISPERSION' => context.localized(
-    ru: 'слишком низкий разброс цен',
-    uk: 'надто низький розкид цін',
-  ),
-  'HIGH_DISPERSION' => context.localized(
-    ru: 'слишком большой разброс цен',
-    uk: 'надто великий розкид цін',
-  ),
-  'LOW_FRESHNESS' => context.localized(
-    ru: 'данные устарели',
-    uk: 'дані застаріли',
-  ),
-  'LOW_MATCH' => context.localized(
-    ru: 'слабое совпадение товаров',
-    uk: 'слабкий збіг товарів',
-  ),
-  'LOW_TIER' => context.localized(
-    ru: 'смешались уровни товара',
-    uk: 'змішалися рівні товару',
-  ),
-  'LOW_SOURCE' => context.localized(
-    ru: 'низкая надёжность источника',
-    uk: 'низька надійність джерела',
-  ),
-  'SEVERE_DATA_HEALTH_ISSUE' => context.localized(
-    ru: 'критическая проблема данных',
-    uk: 'критична проблема даних',
-  ),
-  'BELOW_COST_ONLY_FOR_DEAD_STOCK' => context.localized(
-    ru: 'цена ниже себестоимости доступна только для неликвида',
-    uk: 'ціна нижче собівартості доступна лише для неліквіду',
-  ),
-  'MISSING_FLOOR' || 'MISSING_COST' => context.localized(
-    ru: 'нужна себестоимость',
-    uk: 'потрібна собівартість',
-  ),
-  'LOW_EFFECTIVE_SAMPLE_SIZE' => context.localized(
-    ru: 'мало независимых конкурентов',
-    uk: 'мало незалежних конкурентів',
-  ),
-  'ESTIMATOR_SENSITIVITY' => context.localized(
-    ru: 'оценка неустойчива к очистке данных',
-    uk: 'оцінка нестійка до очищення даних',
-  ),
-  'ROBUST_MULTIMODAL_COHORT' => context.localized(
-    ru: 'обнаружены разные ценовые кластеры',
-    uk: 'виявлено різні цінові кластери',
-  ),
-  'ROBUST_ESTIMATOR_DISAGREEMENT' => context.localized(
-    ru: 'робастные оценки расходятся',
-    uk: 'робастні оцінки розходяться',
-  ),
-  'ROBUST_BASELINE_ABSTENTION_NOT_RELAXABLE' => context.localized(
-    ru: 'новая модель не может обойти baseline abstention',
-    uk: 'нова модель не може обійти baseline abstention',
-  ),
-  'MANUAL_MISSING_COMPARABILITY_EVIDENCE' => context.localized(
-    ru: 'нет доказательств сопоставимости',
-    uk: 'немає доказів зіставності',
-  ),
-  'MANUAL_MISSING_OE_PROVENANCE' => context.localized(
-    ru: 'нет проверенного OE',
-    uk: 'немає перевіреного OE',
-  ),
-  'MANUAL_MISSING_STABLE_SELLER_ID' => context.localized(
-    ru: 'нет стабильного ID продавца',
-    uk: 'немає стабільного ID продавця',
-  ),
-  'MANUAL_MISSING_SOURCE_PROVENANCE' => context.localized(
-    ru: 'нет проверенного source evidence',
-    uk: 'немає перевіреного source evidence',
-  ),
-  'MANUAL_MISSING_RAW_CURRENCY' => context.localized(
-    ru: 'валюта не указана в source',
-    uk: 'валюту не вказано в source',
-  ),
-  'REJECTED_IDENTITY_CONFLICT' => context.localized(
-    ru: 'конфликт identity товара',
-    uk: 'конфлікт identity товару',
-  ),
-  'REJECTED_COMPARABILITY_CONFLICT' => context.localized(
-    ru: 'коммерчески несопоставимые товары',
-    uk: 'комерційно незрівнянні товари',
-  ),
-  'MISSING_BELOW_COST_AUTHORIZATION' => context.localized(
-    ru: 'нет полного подтверждения продажи ниже себестоимости',
-    uk: 'немає повного підтвердження продажу нижче собівартості',
-  ),
-  'MANUAL_REVIEW_REQUIRED' => context.localized(
-    ru: 'требуется ручная проверка',
-    uk: 'потрібна ручна перевірка',
-  ),
-  _ => code.toLowerCase().replaceAll('_', ' '),
-};
+String _reasonLabel(BuildContext context, String code) =>
+    pricingReasonLabel(context, code);
 
 String _tierLabel(BuildContext context, String tier) => switch (tier) {
   'oem' => 'OEM',

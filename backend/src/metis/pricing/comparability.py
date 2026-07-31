@@ -24,10 +24,11 @@ from .types import (
 )
 
 
-COMPARABILITY_CONTRACT_VERSION = "comparison-evidence-v2"
-COMPARABILITY_POLICY_ID = "yuri-v1-comparability-v2"
+COMPARABILITY_CONTRACT_VERSION = "comparison-evidence-v3"
+COMPARABILITY_POLICY_ID = "yuri-v1-comparability-v3"
 COMPARABILITY_DIMENSIONS = (
     "oe_reference",
+    "part_type",
     "brand_manufacturer",
     "fitment",
     "vehicle_generation",
@@ -64,7 +65,14 @@ _CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
                 {"oe_reference", "position", "condition", "package_quantity"}
             ),
             conditional=frozenset(
-                {"fitment", "vehicle_generation", "year_interval", "engine", "side"}
+                {
+                    "part_type",
+                    "fitment",
+                    "vehicle_generation",
+                    "year_interval",
+                    "engine",
+                    "side",
+                }
             ),
             automatic_action_allowed=True,
         ),
@@ -73,6 +81,7 @@ _CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
             hard_required=frozenset({"oe_reference", "position", "side", "condition"}),
             conditional=frozenset(
                 {
+                    "part_type",
                     "fitment",
                     "vehicle_generation",
                     "year_interval",
@@ -87,9 +96,17 @@ _CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
             hard_required=frozenset({"oe_reference", "condition"}),
             conditional=frozenset(
                 set(COMPARABILITY_DIMENSIONS)
-                - {"oe_reference", "condition", "brand_manufacturer"}
+                - {
+                    "oe_reference",
+                    "condition",
+                    "brand_manufacturer",
+                }
             ),
-            automatic_action_allowed=False,
+            # "automatic" here means eligibility for the deterministic
+            # recommendation calculation, never publishing a price to Prom.
+            # In required mode the separate semantic-review gate still demands
+            # an explicit part_type match before this policy is evaluated.
+            automatic_action_allowed=True,
         ),
     }
 )
@@ -165,6 +182,7 @@ class ComparabilityDecision:
 
 _MISSING_REASON = {
     "oe_reference": "MANUAL_MISSING_OE_PROVENANCE",
+    "part_type": "MANUAL_MISSING_PART_TYPE",
     "brand_manufacturer": "MANUAL_MISSING_BRAND",
     "fitment": "MANUAL_MISSING_FITMENT",
     "vehicle_generation": "MANUAL_MISSING_FITMENT",

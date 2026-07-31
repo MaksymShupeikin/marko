@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 import itertools
+from pathlib import Path
 import random
 
 import pytest
@@ -14,6 +15,7 @@ from metis.pricing import (
     CompetitorOffer,
     DimensionEvidence,
     EvidenceState,
+    HardGateResult,
     ProductPricingContext,
     ProductTier,
     RecommendationAction,
@@ -23,6 +25,7 @@ from metis.pricing import (
     recommend_price,
     verified_comparison_evidence,
 )
+from metis.pricing.candidate_selection import load_candidate_selection_config
 
 
 ABSTAIN = {
@@ -36,6 +39,14 @@ AUTOMATIC = {
 }
 RETRIEVAL_KINDS = ("fuzzy", "sku", "model")
 CATEGORY = "brakes"
+
+
+def test_workspace_ownership_is_not_seeded_with_tenant_ids_in_shared_policy() -> None:
+    config = load_candidate_selection_config(
+        Path(__file__).resolve().parents[1] / "config" / "comparability.yaml"
+    )
+
+    assert config.own_seller_ids == frozenset()
 
 
 def _coefficients() -> dict[tuple[str, ProductTier], TierCoefficient]:
@@ -115,6 +126,20 @@ def _offer(
 
 def _market(**kwargs) -> list[CompetitorOffer]:
     return [_offer(index, **kwargs) for index in range(5)]
+
+
+def test_padded_normalized_currency_passes_the_currency_hard_gate() -> None:
+    decision = evaluate_comparison_evidence(
+        _evidence(0),
+        seller_id="seller-0",
+        currency_raw=" UAH ",
+        currency_normalized=" uah ",
+        required_currency="UAH",
+        category=CATEGORY,
+    )
+
+    assert decision.hard_gate_result is HardGateResult.PASS
+    assert decision.hard_gate_results["currency_matches"] == 1
 
 
 @pytest.mark.parametrize("retrieval_kind", RETRIEVAL_KINDS)

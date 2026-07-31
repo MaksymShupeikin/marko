@@ -327,3 +327,16 @@ def test_r020_policy_remains_unactivated_without_representative_data() -> None:
     assert V31.robust_non_relaxation_enabled
     assert V31.robust_baseline_policy_version == "pricing-v2"
     assert V31.version == "pricing-v3.1-heterogeneity-gated"
+
+
+def test_zero_robust_scales_with_real_price_variation_fail_closed() -> None:
+    result = recommend_price(
+        _context(),
+        _market((100, 100, 100, 100, 100, 100, 100, 10000)),
+        BUDGET_COEFFICIENTS,
+        policy=V31,
+    )
+
+    assert result.action in ABSTAIN
+    assert result.recommended_price is None
+    assert "ROBUST_SCALE_ALL_ZERO_WITH_VARIATION" in result.reasons

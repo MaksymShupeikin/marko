@@ -421,6 +421,8 @@ def check_candidate(
     brand_tiers: Mapping[str, ProductTier] | None = None,
     category_context: CategoryDomainContext | None = None,
     calibrated_premiums: Mapping[tuple[str, ProductTier], Decimal] | None = None,
+    tier_agnostic: bool = False,
+    identity_source: str | None = None,
 ) -> CandidateVerdict:
     """Run cheap-to-expensive gates and stop at the first terminal result.
 
@@ -429,6 +431,16 @@ def check_candidate(
     honest state of a workspace that has not calibrated yet: every candidate at
     a level other than ours becomes ``REFERENCE_ONLY`` instead of silently
     entering the price basis at an unconverted price.
+
+    ``tier_agnostic`` reflects a workspace whose owner prices against the
+    cheapest comparable offer regardless of level, and it relaxes exactly two
+    gates: ``tier_known`` and ``premium_calibration``.  It is deliberately not a
+    property of the shared comparability config — the decision belongs to the
+    pricing strategy (``raise_policy.yaml``), and duplicating it here would let
+    the two disagree.  Nothing that establishes whether this is the same part is
+    affected; under a minimum-based target those gates matter more, not less,
+    because a wrong match is no longer diluted by a median but becomes the
+    recommendation outright.
     """
 
     effective_owned = frozenset(owned_seller_ids) | config.own_seller_ids
@@ -465,7 +477,9 @@ def check_candidate(
         ),
         (
             "oem_identity",
-            lambda: _gate_oem_identity(our_item, candidate, cross_oems),
+            lambda: _gate_oem_identity(
+                our_item, candidate, cross_oems, identity_source
+            ),
         ),
         (
             "oem_stuffing",
@@ -501,7 +515,7 @@ def check_candidate(
         ),
         (
             "tier_known",
-            lambda: _gate_tier_known(predicted_tier),
+            lambda: _gate_tier_known(predicted_tier, tier_agnostic=tier_agnostic),
         ),
         (
             "premium_calibration",
@@ -509,6 +523,7 @@ def check_candidate(
                 our_item,
                 tier=predicted_tier,
                 calibrated_premiums=calibrated_premiums,
+                tier_agnostic=tier_agnostic,
             ),
         ),
         (
@@ -518,6 +533,7 @@ def check_candidate(
                 candidate,
                 config,
                 tier=predicted_tier,
+                tier_agnostic=tier_agnostic,
             ),
         ),
     )
@@ -747,11 +763,51 @@ def _gate_remanufactured(
     )
 
 
+#: Number of digits below which an all-numeric OE stops identifying a part on a
+#: free-text marketplace search.  Measured on the 2026-07-29 reference map: 938
+#: of 7687 positions (12.2%) carry an all-numeric OE of six digits or fewer, and
+#: 682 of those are exactly six.  Six digits is a space of one million, and part
+#: numbering is reused across trades — KEMP 863130 (a cylinder-head gasket, Elring
+#: 863.130) and Zelmer 86.3130 (a meat-grinder auger) normalize to the same
+#: string, which is how 115 auger listings reached the observation set.
+#:
+#: This only ever raises a flag.  Rejecting on it would need the golden set to
+#: show what the rule costs in real candidates, and that set does not exist yet.
+WEAK_NUMERIC_IDENTITY_MAX_DIGITS = 6
+
+#: Evidence kinds that are a substring hit in free text rather than an exact
+#: match of a structured field.  A collision can only enter through these.
+_SUBSTRING_IDENTITY_EVIDENCE = frozenset({"TITLE", "DESCRIPTION"})
+
+
 def _gate_oem_identity(
     our_item: ReferenceItem,
     candidate: CandidateItem,
     confirmed_cross_oems: frozenset[str],
+    identity_source: str | None = None,
 ) -> _GateResult:
+    """Establish that the candidate is the same part, or reject it.
+
+    ``identity_source`` names a source that already grouped this offer with our
+    part — prom.ua's own ``/auto/oen/`` listing for our normalized part code, for
+    instance.  Then the number is not looked for again in the seller's wording.
+
+    That is not a relaxation, it is a correction.  Measured on 2026-07-31: of
+    2181 offers taken from the page prom.ua files under our own part code, 1887
+    were rejected as ``OEM_NOT_FOUND`` because the sellers do not repeat the
+    number in their titles.  Re-deriving an identity the source asserted throws
+    away exactly the evidence the source was consulted for.
+    """
+
+    if identity_source:
+        return _GateResult(
+            details={
+                "expected_oem": norm_oem(our_item.oem),
+                "article_oem": norm_oem(candidate.article_field) or None,
+                "evidence": "SOURCE_ASSERTED",
+                "identity_asserted_by": identity_source,
+            }
+        )
     expected = norm_oem(our_item.oem)
     article = norm_oem(candidate.article_field)
     title = norm_oem(candidate.title)
@@ -775,12 +831,19 @@ def _gate_oem_identity(
                 "evidence": None,
             },
         )
+    weak = (
+        evidence in _SUBSTRING_IDENTITY_EVIDENCE
+        and expected.isdigit()
+        and len(expected) <= WEAK_NUMERIC_IDENTITY_MAX_DIGITS
+    )
     return _GateResult(
+        flag="WEAK_NUMERIC_IDENTITY" if weak else None,
         details={
             "expected_oem": expected,
             "article_oem": article or None,
             "evidence": evidence,
-        }
+            "weak_numeric_identity": weak,
+        },
     )
 
 
@@ -996,8 +1059,18 @@ def _gate_own_brand(
     )
 
 
-def _gate_tier_known(tier: ProductTier) -> _GateResult:
+def _gate_tier_known(tier: ProductTier, *, tier_agnostic: bool) -> _GateResult:
     if tier is ProductTier.UNKNOWN:
+        if tier_agnostic:
+            # The owner prices against the cheapest comparable offer whatever
+            # its level, so an unclassified brand is no longer a reason to hold
+            # the offer back.  The flag keeps the admission attributable: it
+            # marks every candidate that entered the basis only because of that
+            # decision, so its effect stays measurable afterwards.
+            return _GateResult(
+                flag="TIER_UNKNOWN_ACCEPTED",
+                details={"tier": tier.value, "admitted_by": "TIER_AGNOSTIC_POLICY"},
+            )
         return _GateResult(
             action=CandidateStatus.REFERENCE_ONLY,
             reason="TIER_UNKNOWN",
@@ -1011,6 +1084,7 @@ def _gate_premium_calibration(
     *,
     tier: ProductTier,
     calibrated_premiums: Mapping[tuple[str, ProductTier], Decimal] | None,
+    tier_agnostic: bool,
 ) -> _GateResult:
     """Require a validated coefficient before a price may be converted.
 
@@ -1019,6 +1093,15 @@ def _gate_premium_calibration(
     that would recommend raising a budget part to the price of an original.
     A candidate at our own level needs no coefficient: the ratio is one by
     construction.
+
+    ``tier_agnostic`` retires that requirement, and only a minimum-based target
+    earns the right to retire it.  Converting levels matters for a central
+    statistic, where dear originals drag the estimate upwards; the minimum of a
+    mixture is almost never taken by the dearest level, so it selects the lowest
+    one present without any coefficient.  The error the gate was built to
+    prevent cannot occur in the direction the owner asked for — and where only
+    originals are on the market he has explicitly chosen the cheapest of them
+    as the target.
     """
 
     category = (our_item.category or "").strip().casefold()
@@ -1031,6 +1114,16 @@ def _gate_premium_calibration(
                 "category": category,
                 "tier": tier.value,
             }
+        )
+    if tier_agnostic:
+        return _GateResult(
+            flag="TIER_AGNOSTIC_PRICING",
+            details={
+                "premium": "1",
+                "source": "TIER_AGNOSTIC_OWNER_POLICY",
+                "category": category,
+                "tier": tier.value,
+            },
         )
     premium = (calibrated_premiums or {}).get((category, tier))
     if premium is None or premium <= 0 or not premium.is_finite():
@@ -1060,25 +1153,35 @@ def _gate_price_anomaly(
     config: CandidateSelectionConfig,
     *,
     tier: ProductTier,
+    tier_agnostic: bool,
 ) -> _GateResult:
     if our_item.price is None or our_item.price <= 0:
         return _GateResult(
             details={"checked": False, "reason": "REFERENCE_PRICE_MISSING"}
         )
     category = (our_item.category or "").strip().casefold()
-    premiums = config.price_anomaly.category_tier_premiums.get(
-        category,
-        config.price_anomaly.default_tier_premiums,
-    )
-    premium = premiums.get(tier)
-    if premium is None or premium <= 0:
-        return _GateResult(
-            details={
-                "checked": False,
-                "reason": "TIER_PREMIUM_MISSING",
-                "tier": tier.value,
-            }
+    if tier_agnostic:
+        # No level is converted, so the premium is one by policy rather than by
+        # lookup.  This is not a formality: ``unknown`` carries no configured
+        # premium, so keeping the lookup here would report ``checked: False``
+        # and switch the only remaining price guard off for precisely the
+        # unclassified offers that the tier-agnostic decision lets in.
+        premium = Decimal("1")
+    else:
+        premiums = config.price_anomaly.category_tier_premiums.get(
+            category,
+            config.price_anomaly.default_tier_premiums,
         )
+        looked_up = premiums.get(tier)
+        if looked_up is None or looked_up <= 0:
+            return _GateResult(
+                details={
+                    "checked": False,
+                    "reason": "TIER_PREMIUM_MISSING",
+                    "tier": tier.value,
+                }
+            )
+        premium = looked_up
     normalized_price = candidate.price / premium
     ratio = normalized_price / our_item.price
     anomaly = (

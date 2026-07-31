@@ -27,7 +27,11 @@ from metis.pricing import (
     recommend_price,
     robust_dispersion_trace,
 )
-from marko.services.market_collection import _domain_offer
+from marko.services.market_collection import (
+    _domain_offer,
+    apply_comparability_activation_gate,
+)
+from marko.services.llm_comparability import effective_review_from_snapshot
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.decision_fingerprint import (
     DECISION_FINGERPRINT_V1,
@@ -48,7 +52,8 @@ REPLAY_CONTRACT_V2 = "recommendation-replay-v2"
 REPLAY_CONTRACT_V3 = "recommendation-replay-v3"
 REPLAY_CONTRACT_V4 = "recommendation-replay-v4"
 REPLAY_CONTRACT_V5 = "recommendation-replay-v5"
-REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V5
+REPLAY_CONTRACT_V6 = "recommendation-replay-v6"
+REPLAY_CONTRACT_VERSION = REPLAY_CONTRACT_V6
 SUPPORTED_REPLAY_CONTRACTS = frozenset(
     {
         REPLAY_CONTRACT_V1,
@@ -56,6 +61,7 @@ SUPPORTED_REPLAY_CONTRACTS = frozenset(
         REPLAY_CONTRACT_V3,
         REPLAY_CONTRACT_V4,
         REPLAY_CONTRACT_V5,
+        REPLAY_CONTRACT_V6,
     }
 )
 
@@ -146,15 +152,55 @@ async def replay_recommendation(
         oe_norm=item.oe_norm,
         policy=policy,
     )
+    llm_trace = trace.get("llm_comparability")
+    llm_required = bool(isinstance(llm_trace, Mapping) and llm_trace.get("required"))
+    review_snapshots = (
+        llm_trace.get("reviews", ()) if isinstance(llm_trace, Mapping) else ()
+    )
+    effective_reviews = {}
+    if isinstance(review_snapshots, list):
+        try:
+            effective_reviews = {
+                review.market_observation_id: review
+                for raw in review_snapshots
+                if isinstance(raw, Mapping)
+                for review in (effective_review_from_snapshot(raw),)
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RecommendationReplayUnavailable(
+                "Stored LLM comparability review snapshot is invalid"
+            ) from exc
     result = recommend_price(
         context,
         [
-            _domain_offer(observation, classification, calculated_at)
+            _domain_offer(
+                observation,
+                classification,
+                calculated_at,
+                semantic_review=effective_reviews.get(observation.id),
+                semantic_review_required=llm_required,
+            )
             for observation, classification in latest.values()
         ],
         coefficients,
         policy=policy,
         legacy_replay="comparability" not in trace,
+    )
+    comparability_trace = trace.get("comparability", {})
+    if isinstance(comparability_trace, Mapping):
+        stored_activation_verified = comparability_trace.get("activation_verified")
+    else:
+        stored_activation_verified = None
+    if stored_activation_verified is None:
+        # Pre-field traces can still be replayed: the emitted gate reason is
+        # immutable evidence that the release gate was closed at calculation.
+        stored_activation_verified = (
+            "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED"
+            not in recommendation.reason_codes
+        )
+    result = apply_comparability_activation_gate(
+        result,
+        activation_verified=bool(stored_activation_verified),
     )
     mismatches = compare_replayed_result(
         recommendation,
@@ -177,11 +223,23 @@ async def replay_recommendation(
         fingerprint_version=str(
             trace.get("decision_fingerprint_version", DECISION_FINGERPRINT_V1)
         ),
+        comparability_reviews=[
+            review.as_dict()
+            for review in sorted(
+                effective_reviews.values(),
+                key=lambda value: str(value.market_observation_id),
+            )
+        ],
     )
     replayed_fingerprint = canonical_sha256(fingerprint_payload)
     if (
         replay_contract_version
-        in {REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT_V5}
+        in {
+            REPLAY_CONTRACT_V3,
+            REPLAY_CONTRACT_V4,
+            REPLAY_CONTRACT_V5,
+            REPLAY_CONTRACT_V6,
+        }
         and recommendation.decision_fingerprint
         and recommendation.decision_fingerprint != replayed_fingerprint
     ):
@@ -337,6 +395,7 @@ def compare_replayed_result(
         REPLAY_CONTRACT_V3,
         REPLAY_CONTRACT_V4,
         REPLAY_CONTRACT_V5,
+        REPLAY_CONTRACT_V6,
     }:
         stored_robust = trace.get("robust_dispersion", {})
         if not isinstance(stored_robust, Mapping):
@@ -379,7 +438,12 @@ def compare_replayed_result(
                 "robust_constants": replayed_robust["constants"],
             }
         )
-    if contract in {REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT_V5}:
+    if contract in {
+        REPLAY_CONTRACT_V3,
+        REPLAY_CONTRACT_V4,
+        REPLAY_CONTRACT_V5,
+        REPLAY_CONTRACT_V6,
+    }:
         stored_comparability = trace.get("comparability", {})
         if not isinstance(stored_comparability, Mapping):
             stored_comparability = {}
@@ -535,6 +599,7 @@ __all__ = [
     "REPLAY_CONTRACT_V3",
     "REPLAY_CONTRACT_V4",
     "REPLAY_CONTRACT_V5",
+    "REPLAY_CONTRACT_V6",
     "RecommendationReplay",
     "RecommendationReplayUnavailable",
     "compare_replayed_result",

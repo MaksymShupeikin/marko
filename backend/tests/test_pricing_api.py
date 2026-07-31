@@ -261,13 +261,16 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["action"] == "RAISE"
-    assert body["recommended_price"] == "1000"
+    assert body["fair_price"] == "1000"
+    assert body["lower_bound"] == "950.00"
+    assert body["upper_bound"] == "980.00"
+    assert body["recommended_price"] == "980"
     assert body["competitor_count"] == 5
     assert body["priority_score_type"] == "gross_uplift_opportunity"
     assert body["raw_competitor_count"] == 5
     assert body["unique_seller_count"] == 5
     assert body["clean_competitor_count"] == 5
-    assert body["outlier_method"] == "mad"
+    assert body["outlier_method"] == "owner_minimum_raw"
     assert body["dispersion_method"] == "legacy_mad"
     assert body["dispersion_profile"]["profile_version"] == "rc-scale-v1"
     assert body["dispersion_profile"]["sample_stage"] == "post_clean"
@@ -275,6 +278,7 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     assert body["action_gates_passed"] is True
     assert body["evidence"][0]["multiplier"] == "1"
     assert body["evidence"][0]["normalized_price"] == body["evidence"][0]["raw_price"]
+    assert body["evidence"][0]["coefficient_version"] == "owner-tier-agnostic-v1"
 
 
 def test_openapi_exposes_additive_dispersion_contract() -> None:
@@ -286,3 +290,70 @@ def test_openapi_exposes_additive_dispersion_contract() -> None:
     assert "dispersion_profile" in properties
     assert "dispersion_method" in stored_properties
     assert "dispersion_profile" in stored_properties
+
+
+def test_openapi_recommendation_page_exposes_population_action_counts() -> None:
+    schema = app.openapi()
+    page = schema["components"]["schemas"]["RecommendationPageResponse"]
+    properties = page["properties"]
+
+    assert "limit" in properties
+    assert "offset" in properties
+    counts_ref = properties["action_counts"]["$ref"]
+    counts = schema["components"]["schemas"][counts_ref.rsplit("/", 1)[-1]]
+    assert set(counts["required"]) == {"raise", "lower", "review", "hold"}
+
+
+def test_openapi_exposes_llm_comparability_review_and_feedback_contract() -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    evidence = schema["components"]["schemas"]["RecommendationEvidenceResponse"]
+    review = schema["components"]["schemas"]["ComparabilityReviewResponse"]
+
+    assert "/api/v1/pricing/comparability/status" in paths
+    assert (
+        "/api/v1/pricing/observations/{observation_id}/comparability-reviews" in paths
+    )
+    assert "/api/v1/pricing/comparability-reviews/{review_id}/feedback" in paths
+    assert "llm_review" in evidence["properties"]
+    assert "llm_pricing_eligible" in evidence["properties"]
+    assert "candidate_snapshot" in evidence["properties"]
+    assert {
+        "verdict",
+        "match_level",
+        "confidence",
+        "rationale",
+        "dimension_findings",
+        "hard_stop_conflicts",
+        "pricing_eligible",
+    } <= set(review["properties"])
+
+
+@pytest.mark.asyncio
+async def test_comparability_status_is_authenticated_and_advisory_only() -> None:
+    user = User(id=uuid4(), email="seller@example.com", is_active=True)
+
+    async def current_user_override():
+        return AuthContext(
+            user=user,
+            workspace_id=uuid4(),
+            workspace_role=WorkspaceRole.member,
+        )
+
+    app.dependency_overrides[get_current_user] = current_user_override
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/v1/pricing/comparability/status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "mode": "off",
+        "provider": "openai_responses",
+        "model": "gpt-5-mini",
+        "configured": False,
+        "automatic_price_publication": False,
+    }

@@ -42,12 +42,32 @@ class StoresApi {
     return SyncRun.fromJson(payload as Map<String, dynamic>);
   }
 
-  Future<ProductPage> listProducts(String storeId, {int offset = 0}) async {
+  Future<ProductPage> listProducts(
+    String storeId, {
+    int offset = 0,
+    String query = '',
+  }) async {
+    final trimmed = query.trim();
     final payload = await _client.getJson(
       '/api/v1/stores/$storeId/products',
-      queryParameters: {'limit': '100', 'offset': '$offset'},
+      queryParameters: {
+        'limit': '100',
+        'offset': '$offset',
+        if (trimmed.isNotEmpty) 'q': trimmed,
+      },
     );
     return ProductPage.fromJson(payload as Map<String, dynamic>);
+  }
+
+  Future<CrossStoreSearch> searchOtherStores(
+    String storeId,
+    String query,
+  ) async {
+    final payload = await _client.getJson(
+      '/api/v1/stores/$storeId/products/elsewhere',
+      queryParameters: {'q': query.trim()},
+    );
+    return CrossStoreSearch.fromJson(payload as Map<String, dynamic>);
   }
 }
 

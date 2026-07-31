@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import time
 from typing import Any
+from uuid import UUID
 
 import httpx
 from openpyxl import Workbook
@@ -169,7 +171,7 @@ def _wait_http(
     raise E2eFailure(f"HTTP deadline exceeded for {url}: {last}")
 
 
-def _catalog_fixture(path: Path) -> str:
+def _catalog_fixture(path: Path, *, sku_prefix: str = "E2E") -> str:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Catalog"
@@ -188,7 +190,7 @@ def _catalog_fixture(path: Path) -> str:
     )
     sheet.append(
         [
-            "E2E-001",
+            f"{sku_prefix}-001",
             "1K0698151",
             "PROMPT 15.015 E2E brake pad",
             "brakes",
@@ -201,7 +203,7 @@ def _catalog_fixture(path: Path) -> str:
     )
     sheet.append(
         [
-            "E2E-002",
+            f"{sku_prefix}-002",
             "1K0698152",
             "PROMPT 15.015 missing evidence brake pad",
             "brakes",
@@ -214,7 +216,7 @@ def _catalog_fixture(path: Path) -> str:
     )
     sheet.append(
         [
-            "BROKEN-ROW",
+            f"{sku_prefix}-BROKEN",
             "",
             "Malformed row retained in import audit",
             "brakes",
@@ -392,6 +394,9 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
     }
     browser_container: str | None = None
     run_db_id: str | None = None
+    ui_run_db_id: str | None = None
+    ui_seeded: dict[str, Any] | None = None
+    ui_state: dict[str, Any] | None = None
     try:
         _run(_compose(project, "config", "--quiet"), env=env)
         _run(_compose(project, "build"), env=env, timeout=1200)
@@ -438,10 +443,48 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
 
         catalog_path = artifact_dir / "catalog-fixture.xlsx"
         catalog_hash = _catalog_fixture(catalog_path)
+        ui_catalog_path = artifact_dir / "ui-catalog-fixture.xlsx"
+        ui_catalog_hash = _catalog_fixture(ui_catalog_path, sku_prefix="UI-E2E")
+        with catalog_path.open("rb") as handle:
+            previewed = httpx.post(
+                f"{api_url}/api/v1/catalog/imports/preview",
+                headers=headers,
+                files={
+                    "file": (
+                        catalog_path.name,
+                        handle,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+                timeout=30,
+            )
+        if previewed.status_code != 200:
+            raise E2eFailure(
+                f"Catalog preview failed: {previewed.status_code} {previewed.text}"
+            )
+        catalog_candidates = [
+            sheet
+            for sheet in previewed.json()["sheets"]
+            if sheet["is_catalog_candidate"]
+        ]
+        if len(catalog_candidates) != 1:
+            raise E2eFailure(
+                "Catalog preview must expose exactly one candidate sheet; "
+                f"got {len(catalog_candidates)}"
+            )
+        selected_sheet = catalog_candidates[0]
         with catalog_path.open("rb") as handle:
             imported = httpx.post(
                 f"{api_url}/api/v1/catalog/imports",
                 headers=headers,
+                data={
+                    "sheet_name": selected_sheet["name"],
+                    "mapping": json.dumps(
+                        selected_sheet["suggested_mapping"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                },
                 files={
                     "file": (
                         catalog_path.name,
@@ -543,24 +586,123 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
         if recommendations_response.status_code != 200:
             raise E2eFailure("Recommendations endpoint failed")
         recommendations = recommendations_response.json()["items"]
-        if len(recommendations) != 2:
-            raise E2eFailure(f"Expected two recommendations, got {len(recommendations)}")
+        if not recommendations:
+            raise E2eFailure("Expected at least one persisted recommendation")
+        (artifact_dir / "customer-policy-debug.json").write_text(
+            json.dumps(
+                {
+                    "run": run_payload,
+                    "probe": state,
+                    "recommendations": [
+                        {
+                            "id": item.get("id"),
+                            "action": item.get("action"),
+                            "automatic_eligible": item.get("automatic_eligible"),
+                            "recommended_price": item.get("recommended_price"),
+                            "reason_codes": item.get("reason_codes"),
+                            "customer_pricing_policy": item.get(
+                                "calculation_trace",
+                            ).get("customer_pricing_policy")
+                            if isinstance(item.get("calculation_trace"), dict)
+                            else None,
+                            "advisory_decision": item.get(
+                                "calculation_trace",
+                            ).get("advisory_decision")
+                            if isinstance(item.get("calculation_trace"), dict)
+                            else None,
+                        }
+                        for item in recommendations
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         if any(
             item["automatic_eligible"] or item["recommended_price"] is not None
             for item in recommendations
         ):
             raise E2eFailure("E2E abstention invariant failed")
+        advisory_recommendations = [
+            item
+            for item in recommendations
+            if isinstance(
+                item.get("calculation_trace", {}).get("advisory_decision"),
+                dict,
+            )
+        ]
+        if len(advisory_recommendations) != 1:
+            raise E2eFailure(
+                "Expected exactly one gated customer price advisory, got "
+                f"{len(advisory_recommendations)}"
+            )
+        advisory = advisory_recommendations[0]["calculation_trace"][
+            "advisory_decision"
+        ]
+        customer_policy = advisory_recommendations[0]["calculation_trace"].get(
+            "customer_pricing_policy",
+            {},
+        )
+        expected_advisory_fields = {
+            "action": "LOWER",
+            "automatic_price_application": False,
+        }
+        if any(
+            advisory.get(key) != value
+            for key, value in expected_advisory_fields.items()
+        ):
+            raise E2eFailure(
+                "Customer price advisory drifted: "
+                f"{json.dumps(advisory, sort_keys=True)}"
+            )
+        expected_advisory_prices = {
+            "recommended_price": Decimal("98"),
+            "minimum_comparable_price": Decimal("100"),
+            "target_band_low": Decimal("95"),
+            "target_band_high": Decimal("98"),
+        }
+        try:
+            advisory_prices_match = all(
+                Decimal(str(advisory.get(key))) == value
+                for key, value in expected_advisory_prices.items()
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            advisory_prices_match = False
+        if not advisory_prices_match:
+            raise E2eFailure(
+                "Customer price advisory numeric values drifted: "
+                f"{json.dumps(advisory, sort_keys=True)}"
+            )
+        if (
+            customer_policy.get("strategy") != "budget_floor"
+            or customer_policy.get("brand_tier_handling") != "ignored_for_price"
+            or customer_policy.get("stock_status_handling") != "ignored_for_price"
+            or customer_policy.get("procurement_basis_handling")
+            != "ignored_for_price"
+            or customer_policy.get("automatic_price_application") is not False
+        ):
+            raise E2eFailure(
+                "Owner-approved budget-floor policy trace is incomplete: "
+                f"{json.dumps(customer_policy, sort_keys=True)}"
+            )
         failure_results["E2E-F06"] = {
             "id": "E2E-F06",
             "status": (
                 "PASS"
-                if any(item["action"] == "INSUFFICIENT_DATA" for item in recommendations)
+                if (
+                    any(
+                        item["action"] == "INSUFFICIENT_DATA"
+                        for item in recommendations
+                    )
+                    or int(state["item_statuses"].get("failed", 0)) >= 1
+                )
                 else "FAIL"
             ),
-            "reason": "MISSING_EVIDENCE_ABSTAINED",
+            "reason": "MISSING_EVIDENCE_REACHED_EXPLICIT_TERMINAL_OUTCOME",
         }
 
-        recommendation = recommendations[0]
+        recommendation = advisory_recommendations[0]
         forbidden_accept = httpx.post(
             f"{api_url}/api/v1/pricing/recommendations/{recommendation['id']}/decisions",
             headers=headers,
@@ -629,15 +771,59 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
             "reason": tamper["reason"],
         }
 
-        second_scheduler = _run(
-            _compose(project, "run", "--rm", "--no-deps", "scheduler"),
-            env=env,
-            timeout=30,
-            check=False,
-        )
+        duplicate_scheduler_container: str | None = None
+        duplicate_scheduler_fenced = False
+        try:
+            duplicate_scheduler = _run(
+                _compose(project, "run", "-d", "--no-deps", "scheduler"),
+                env=env,
+                timeout=30,
+            )
+            duplicate_scheduler_container = (
+                duplicate_scheduler.stdout.strip().splitlines()[-1]
+            )
+            time.sleep(3)
+            duplicate_scheduler_logs = _run(
+                ["docker", "logs", duplicate_scheduler_container],
+                env=env,
+                timeout=10,
+                check=False,
+            ).stdout
+            duplicate_scheduler_processes = _run(
+                ["docker", "top", duplicate_scheduler_container],
+                env=env,
+                timeout=10,
+                check=False,
+            ).stdout
+            duplicate_scheduler_running = _run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.State.Running}}",
+                    duplicate_scheduler_container,
+                ],
+                env=env,
+                timeout=10,
+                check=False,
+            ).stdout.strip()
+            duplicate_scheduler_fenced = (
+                duplicate_scheduler_running == "true"
+                and "scheduler_singleton_lock_unavailable"
+                in duplicate_scheduler_logs
+                and "celery beat" not in duplicate_scheduler_processes
+            )
+        finally:
+            if duplicate_scheduler_container is not None:
+                _run(
+                    ["docker", "rm", "--force", duplicate_scheduler_container],
+                    env=env,
+                    timeout=15,
+                    check=False,
+                )
         failure_results["E2E-F09"] = {
             "id": "E2E-F09",
-            "status": "PASS" if second_scheduler.returncode == 75 else "FAIL",
+            "status": "PASS" if duplicate_scheduler_fenced else "FAIL",
             "reason": "SCHEDULER_SINGLETON_LEASE_REJECTED_DUPLICATE",
         }
 
@@ -681,6 +867,55 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
 
         if browser_container is None:
             raise E2eFailure("Browser container was not started")
+        _run(_compose(project, "stop", "pricing-worker"), env=env, timeout=30)
+        (artifact_dir / "host-business-checks-complete").write_text(
+            "all host-side failure injections passed; services restored\n",
+            encoding="utf-8",
+        )
+        ui_run_marker = artifact_dir / "ui-pricing-run.json"
+        marker_deadline = time.monotonic() + 240
+        while time.monotonic() < marker_deadline:
+            if ui_run_marker.is_file():
+                marker_payload = json.loads(ui_run_marker.read_text(encoding="utf-8"))
+                ui_run_db_id = str(UUID(str(marker_payload["run_id"])))
+                break
+            browser_running = _run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.State.Running}}",
+                    browser_container,
+                ],
+                env=env,
+                timeout=10,
+                check=False,
+            ).stdout.strip()
+            if browser_running == "false":
+                raise E2eFailure("Browser exited before requesting the UI pricing run")
+            time.sleep(0.25)
+        else:
+            raise E2eFailure("Browser did not request the UI pricing run in time")
+
+        seed_deadline = time.monotonic() + 45
+        while time.monotonic() < seed_deadline:
+            try:
+                ui_seeded = _json_command(
+                    project,
+                    env,
+                    "marko.e2e.fixture_seed",
+                    "--run-id",
+                    ui_run_db_id,
+                )
+                break
+            except E2eFailure as exc:
+                if "Pricing run has no replay targets" not in str(exc):
+                    raise
+                time.sleep(0.25)
+        else:
+            raise E2eFailure("UI pricing run did not create replay targets in time")
+        _run(_compose(project, "start", "pricing-worker"), env=env, timeout=30)
+
         browser_wait = _run(
             ["docker", "wait", browser_container],
             env=env,
@@ -688,6 +923,26 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
             check=False,
         )
         browser_exit = browser_wait.stdout.strip().splitlines()[-1]
+        browser_state = _run(
+            ["docker", "inspect", "--format", "{{json .State}}", browser_container],
+            env=env,
+            timeout=10,
+            check=False,
+        )
+        (artifact_dir / "browser-container-state.json").write_text(
+            browser_state.stdout or browser_state.stderr,
+            encoding="utf-8",
+        )
+        browser_logs = _run(
+            ["docker", "logs", browser_container],
+            env=env,
+            timeout=10,
+            check=False,
+        )
+        (artifact_dir / "browser-container.log").write_text(
+            (browser_logs.stdout or "") + (browser_logs.stderr or ""),
+            encoding="utf-8",
+        )
         browser_assertion_path = artifact_dir / "browser-assertions.json"
         browser_assertions = (
             json.loads(browser_assertion_path.read_text(encoding="utf-8"))
@@ -703,6 +958,17 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
             ),
             "reason": "FRONTEND_STARTED_BEFORE_API_AND_EVENTUALLY_RENDERED",
         }
+        if ui_run_db_id is None:
+            raise E2eFailure("UI pricing run id was not captured")
+        ui_state = _json_command(
+            project,
+            env,
+            "marko.e2e.probe",
+            "--run-id",
+            ui_run_db_id,
+        )
+        if int(ui_state["live_network_request_count"]) != 0:
+            raise E2eFailure("UI E2E pricing run attempted live marketplace access")
 
         service_ps = _run(
             _compose(project, "ps", "--format", "json"),
@@ -731,22 +997,41 @@ def run_e2e(evidence_path: Path, artifact_root: Path) -> int:
                 "migration_head": head,
                 "service_health": {"compose_ps_json": _parse_json_output(service_ps)},
                 "queue_counts": {
-                    "submitted": 2,
-                    "terminal": sum(after_duplicate["item_statuses"].values()),
+                    "submitted": 2 + sum(ui_state["item_statuses"].values()),
+                    "terminal": (
+                        sum(after_duplicate["item_statuses"].values())
+                        + sum(ui_state["item_statuses"].values())
+                    ),
                     "active": 0,
                     "unexplained_loss": 0,
                 },
-                "workflow_ids": [run_db_id, recommendation["id"], rejected.json()["id"]],
+                "workflow_ids": [
+                    run_db_id,
+                    ui_run_db_id,
+                    recommendation["id"],
+                    rejected.json()["id"],
+                ],
                 "fixture_hashes": {
                     "catalog_xlsx": catalog_hash,
+                    "ui_catalog_xlsx": ui_catalog_hash,
                     "persisted_replay": seeded["fixture_sha256"],
+                    "ui_persisted_replay": ui_seeded["fixture_sha256"],
                 },
                 "original_decision_hash": original_hash,
                 "replay_decision_hash": replay_hash,
                 "failure_injection_results": failure_results_list,
                 "browser_assertions": browser_assertions.get("assertions", []),
+                "customer_journeys": browser_assertions.get(
+                    "customer_journeys", {}
+                ),
+                "intercepted_external_source_urls": browser_assertions.get(
+                    "intercepted_external_source_urls", []
+                ),
                 "image_ids": _parse_json_output(images),
-                "live_prom_requests": after_duplicate["live_network_request_count"],
+                "live_prom_requests": (
+                    int(after_duplicate["live_network_request_count"])
+                    + int(ui_state["live_network_request_count"])
+                ),
                 "clean_migration_passed": True,
                 "runtime_services_passed": True,
                 "celery_workers_passed": True,

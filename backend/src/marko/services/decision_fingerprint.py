@@ -12,11 +12,16 @@ import unicodedata
 from typing import Any, Iterable, Mapping
 
 from metis.pricing import PricingResult, TierCoefficient, cluster_diagnostic_to_dict
+from metis.pricing.numeric import (
+    TRANSCENDENTAL_PROFILE_VERSION,
+    TRANSCENDENTAL_RELATIVE_TOLERANCE,
+)
 
 
 DECISION_FINGERPRINT_V1 = "recommendation-decision-fingerprint-v1"
 DECISION_FINGERPRINT_V2 = "recommendation-decision-fingerprint-v2"
-DECISION_FINGERPRINT_VERSION = DECISION_FINGERPRINT_V2
+DECISION_FINGERPRINT_V3 = "recommendation-decision-fingerprint-v3"
+DECISION_FINGERPRINT_VERSION = DECISION_FINGERPRINT_V3
 
 
 def build_decision_fingerprint_payload(
@@ -34,8 +39,13 @@ def build_decision_fingerprint_payload(
     price_tick: Decimal,
     price_tick_version: str,
     fingerprint_version: str = DECISION_FINGERPRINT_VERSION,
+    comparability_reviews: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    if fingerprint_version not in {DECISION_FINGERPRINT_V1, DECISION_FINGERPRINT_V2}:
+    if fingerprint_version not in {
+        DECISION_FINGERPRINT_V1,
+        DECISION_FINGERPRINT_V2,
+        DECISION_FINGERPRINT_V3,
+    }:
         raise ValueError("Unsupported recommendation decision fingerprint version")
     observation_payload = []
     for observation in observations:
@@ -138,74 +148,87 @@ def build_decision_fingerprint_payload(
     ]
     coefficient_payload.sort(key=lambda item: (item["category"], item["tier"]))
     policy_hash = canonical_sha256(policy_config)
-    return canonicalize(
-        {
-            "fingerprint_version": fingerprint_version,
-            "input_context": context_snapshot,
-            "observations": observation_payload,
-            "eligible_observation_ids": sorted(
-                offer.observation_id for offer in result.evidence
+    payload: dict[str, Any] = {
+        "fingerprint_version": fingerprint_version,
+        "input_context": context_snapshot,
+        "observations": observation_payload,
+        "eligible_observation_ids": sorted(
+            offer.observation_id for offer in result.evidence
+        ),
+        "excluded_observations": sorted(
+            (
+                {
+                    "observation_id": item.observation_id,
+                    "seller_id": item.seller_id,
+                    "raw_price": item.raw_price,
+                    "tier": item.tier.value if item.tier else None,
+                    "reason": item.reason,
+                    "stage": item.stage,
+                }
+                for item in result.excluded
             ),
-            "excluded_observations": sorted(
-                (
-                    {
-                        "observation_id": item.observation_id,
-                        "seller_id": item.seller_id,
-                        "raw_price": item.raw_price,
-                        "tier": item.tier.value if item.tier else None,
-                        "reason": item.reason,
-                        "stage": item.stage,
-                    }
-                    for item in result.excluded
-                ),
-                key=lambda item: (
-                    item["observation_id"],
-                    item["stage"],
-                    item["reason"],
-                ),
+            key=lambda item: (
+                item["observation_id"],
+                item["stage"],
+                item["reason"],
             ),
-            "matching_and_comparability_policy": {
-                "policy_id": result.comparability_policy_id,
-                "policy_hash": result.comparability_policy_hash,
-                "hard_gate_results": result.hard_gate_results,
-                "failed_hard_gates": result.failed_hard_gates,
-                "unknown_hard_fields": result.unknown_hard_fields,
-            },
-            "tier_coefficients": coefficient_payload,
-            "coefficient_version": coefficient_version,
-            "calibration_dataset_hash": calibration_dataset_hash,
-            "pricing_policy": {
-                "version": result.policy_version,
-                "sha256": policy_hash,
-                "config": policy_config,
-            },
-            "robust_diagnostic": cluster_diagnostic_to_dict(result.cluster_diagnostic),
-            "robust_policy_fingerprint": result.robust_policy_fingerprint,
-            "parser_contract": {
-                "parser_version": parser_version,
-                "classifier_version": classifier_version,
-                "comparison_evidence_contract": (
-                    "comparison-evidence-v1"
-                    if fingerprint_version == DECISION_FINGERPRINT_V1
-                    else "comparison-evidence-v2"
-                ),
-            },
-            "build_identity": build_identity or "NOT_AVAILABLE",
-            "rounding_policy": {
-                "price_tick": price_tick,
-                "price_tick_version": price_tick_version,
-            },
-            "decision": {
-                "action": result.action.value,
-                "fair_price": result.fair_price,
-                "recommended_price": result.recommended_price,
-                "lower_bound": result.lower_bound,
-                "upper_bound": result.upper_bound,
-                "reasons": result.reasons,
-                "automatic_eligible": result.automatic_eligible,
-            },
-        }
-    )
+        ),
+        "matching_and_comparability_policy": {
+            "policy_id": result.comparability_policy_id,
+            "policy_hash": result.comparability_policy_hash,
+            "hard_gate_results": result.hard_gate_results,
+            "failed_hard_gates": result.failed_hard_gates,
+            "unknown_hard_fields": result.unknown_hard_fields,
+        },
+        "tier_coefficients": coefficient_payload,
+        "coefficient_version": coefficient_version,
+        "calibration_dataset_hash": calibration_dataset_hash,
+        "pricing_policy": {
+            "version": result.policy_version,
+            "sha256": policy_hash,
+            "config": policy_config,
+        },
+        "robust_diagnostic": cluster_diagnostic_to_dict(result.cluster_diagnostic),
+        "robust_policy_fingerprint": result.robust_policy_fingerprint,
+        "parser_contract": {
+            "parser_version": parser_version,
+            "classifier_version": classifier_version,
+            "comparison_evidence_contract": (
+                "comparison-evidence-v1"
+                if fingerprint_version == DECISION_FINGERPRINT_V1
+                else "comparison-evidence-v2"
+                if fingerprint_version == DECISION_FINGERPRINT_V2
+                else "comparison-evidence-v3"
+            ),
+        },
+        "build_identity": build_identity or "NOT_AVAILABLE",
+        "rounding_policy": {
+            "price_tick": price_tick,
+            "price_tick_version": price_tick_version,
+        },
+        "numeric_precision": {
+            "profile_version": TRANSCENDENTAL_PROFILE_VERSION,
+            "relative_tolerance": str(TRANSCENDENTAL_RELATIVE_TOLERANCE),
+        },
+        "decision": {
+            "action": result.action.value,
+            "fair_price": result.fair_price,
+            "recommended_price": result.recommended_price,
+            "lower_bound": result.lower_bound,
+            "upper_bound": result.upper_bound,
+            "reasons": result.reasons,
+            "automatic_eligible": result.automatic_eligible,
+        },
+    }
+    if fingerprint_version == DECISION_FINGERPRINT_V3:
+        payload["semantic_comparability_reviews"] = sorted(
+            (dict(item) for item in comparability_reviews),
+            key=lambda item: (
+                str(item.get("market_observation_id") or ""),
+                str(item.get("review_id") or ""),
+            ),
+        )
+    return canonicalize(payload)
 
 
 def canonical_sha256(value: Any) -> str:
@@ -265,6 +288,7 @@ def canonicalize(value: Any) -> Any:
 __all__ = [
     "DECISION_FINGERPRINT_V1",
     "DECISION_FINGERPRINT_V2",
+    "DECISION_FINGERPRINT_V3",
     "DECISION_FINGERPRINT_VERSION",
     "build_decision_fingerprint_payload",
     "canonical_json",

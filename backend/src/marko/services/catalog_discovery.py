@@ -26,6 +26,7 @@ from marko.infrastructure.db.models import (
     CatalogDiscoveryCapture,
     CatalogDiscoveryOffer,
     CatalogDiscoveryRun,
+    CatalogIdentityLink,
     CrossLink,
     MarketplaceStore,
     ScrapeEvidenceBlob,
@@ -54,6 +55,11 @@ from marko.services.scraper_contract import (
     ScrapeOutput,
 )
 from marko.services.source_access import require_live_prom_marketplace_collection
+from metis.pricing.raise_policy import (
+    RaisePolicyConfigError,
+    RaiseStrategy,
+    load_raise_policy,
+)
 from metis.pricing import (
     CandidateItem,
     CandidateSelectionConfig,
@@ -152,6 +158,37 @@ class _SelectionRuntime:
     # Validated ``(category, tier)`` multipliers. Empty until calibration has
     # run, which keeps every off-level candidate out of the price basis.
     calibrated_premiums: Mapping[tuple[str, ProductTier], Decimal]
+    # True when the deployment's pricing strategy targets the cheapest
+    # comparable offer regardless of level, which retires the two tier gates.
+    tier_agnostic: bool
+
+
+def tier_agnostic_pricing(settings: Settings) -> bool:
+    """Read the tier-agnostic decision from the deployment's pricing strategy.
+
+    The strategy file is the single source of truth: the owner's choice lives in
+    ``raise_policy.yaml`` because it is a pricing decision, and re-declaring it
+    in the comparability config would let the collector and the pricing engine
+    classify the same offer differently.
+
+    An unreadable strategy stops the run instead of defaulting.  Both fallbacks
+    are wrong in a way that is hard to notice later: assuming tier-agnostic
+    would admit unconverted cross-level prices, and assuming the opposite would
+    quietly file thousands of comparable offers as ``REFERENCE_ONLY`` and look
+    like poor market coverage rather than a broken config.
+    """
+
+    configured = settings.pricing_raise_policy_path.strip()
+    if not configured:
+        return False
+    try:
+        policy = load_raise_policy(resolve_backend_path(configured))
+    except RaisePolicyConfigError as exc:
+        raise CatalogDiscoveryError(
+            "CATALOG_DISCOVERY_RAISE_POLICY_INVALID",
+            f"Стратегия цен не читается, сбор остановлен: {exc}",
+        ) from exc
+    return policy.strategy is RaiseStrategy.BUDGET_FLOOR and policy.tier_agnostic
 
 
 def catalog_product_key(
@@ -181,6 +218,20 @@ def catalog_product_key(
 
 
 def catalog_discovery_query(*, sku: str | None, oe: str | None) -> str:
+    """Pick the identifier to search the marketplace with.
+
+    WP-2 makes the empty-``oe`` branch the common case rather than the odd one:
+    a position whose article belongs to a component supplier now closes as
+    ``MPN_ONLY`` with no ``oe_norm`` at all, where before the article was
+    written into ``oe`` and searched as though it were one.  Falling back to the
+    article is right — an MPN finds the same supplier part on the market — but
+    it must be a stated choice, because the two searches answer different
+    questions and only the OE branch can find the vehicle maker's own part.
+    Which branch ran is recoverable from the offer's ``identity_status``
+    downstream; it is deliberately not encoded in the query string, which stays
+    a plain search term.
+    """
+
     query = normalize_catalog_code(oe) or normalize_catalog_code(sku)
     if not query:
         raise CatalogDiscoveryError(
@@ -244,6 +295,7 @@ async def collect_catalog_discovery(
             workspace_id=workspace_id,
             category=reference.category,
         ),
+        tier_agnostic=tier_agnostic_pricing(resolved_settings),
     )
     search_page_limit = resolved_settings.catalog_discovery_max_search_pages
     run = CatalogDiscoveryRun(
@@ -591,6 +643,7 @@ async def _persist_live_result(
             brand_tiers=selection.brand_tiers,
             category_context=category_context,
             calibrated_premiums=selection.calibrated_premiums,
+            tier_agnostic=selection.tier_agnostic,
         )
         verdicts.append(verdict)
         reason_codes.extend(
@@ -754,6 +807,16 @@ async def _confirmed_cross_oems(
     workspace_id: UUID,
     reference_oem: str,
 ) -> frozenset[str]:
+    """Numbers a confirmed link says name the same part as ``reference_oem``.
+
+    Two tables, one answer: ``cross_links`` holds pairs observed while pricing,
+    ``catalog_identity_links`` holds pairs read out of our own catalogue and the
+    KEMP sources (WP-3), which belong to no pricing run.  Both sides filter on
+    ``CONFIRMED``, so a link still under review — every kemp.ua link that no
+    second source corroborated, and every link carrying an anomaly — contributes
+    nothing here and therefore moves no price.
+    """
+
     normalized_reference = normalize_candidate_oem(reference_oem)
     if not normalized_reference:
         return frozenset()
@@ -766,6 +829,23 @@ async def _confirmed_cross_oems(
                     or_(
                         CrossLink.our_oem_norm == normalized_reference,
                         CrossLink.extracted_oem_norm == normalized_reference,
+                    ),
+                )
+            )
+        ).all()
+    )
+    rows.extend(
+        (
+            await session.execute(
+                select(
+                    CatalogIdentityLink.our_oem_norm,
+                    CatalogIdentityLink.extracted_oem_norm,
+                ).where(
+                    CatalogIdentityLink.workspace_id == workspace_id,
+                    CatalogIdentityLink.validation_status == "CONFIRMED",
+                    or_(
+                        CatalogIdentityLink.our_oem_norm == normalized_reference,
+                        CatalogIdentityLink.extracted_oem_norm == normalized_reference,
                     ),
                 )
             )

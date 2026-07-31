@@ -7,8 +7,8 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,10 @@ from marko.api.schemas.pricing import (
     CalibrationRequest,
     CatalogItemOverrideRequest,
     CatalogItemOverrideResponse,
+    ComparabilityFeedbackRequest,
+    ComparabilityReviewRequest,
+    ComparabilityReviewResponse,
+    ComparabilityStatusResponse,
     PricingEvaluateRequest,
     PricingEvaluateResponse,
     PricingRunCreateRequest,
@@ -31,6 +35,7 @@ from marko.api.schemas.pricing import (
     RecommendationDecisionRequest,
     RecommendationDecisionResponse,
     RecommendationEvidenceResponse,
+    RecommendationActionCountsResponse,
     RecommendationPageResponse,
     RecommendationReplayResponse,
     RecommendationResponse,
@@ -67,9 +72,20 @@ from marko.services.pricing_runs import (
 )
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.market_collection import _validated_listing_url
+from marko.services.llm_comparability import (
+    ComparabilityReviewNotFound,
+    ComparabilityReviewUnavailable,
+    add_comparability_feedback,
+    load_effective_review_map,
+    request_observation_comparability_review,
+)
 from marko.services.recommendation_replay import (
     RecommendationReplayUnavailable,
     replay_recommendation,
+)
+from marko.services.recommendation_export import (
+    RecommendationExportError,
+    export_recommendations,
 )
 from marko.worker.celery_app import celery_app
 from marko.services.scraper_metrics import (
@@ -78,6 +94,27 @@ from marko.services.scraper_metrics import (
 )
 
 router = APIRouter()
+
+
+@router.get(
+    "/comparability/status",
+    response_model=ComparabilityStatusResponse,
+)
+async def get_llm_comparability_status(
+    _current: CurrentUser,
+) -> ComparabilityStatusResponse:
+    settings = get_settings()
+    return ComparabilityStatusResponse(
+        mode=settings.pricing_llm_comparability_mode,
+        provider=settings.pricing_llm_provider,
+        model=settings.pricing_llm_model,
+        configured=bool(
+            settings.pricing_llm_comparability_mode != "off"
+            and settings.pricing_llm_api_key.get_secret_value().strip()
+            and settings.pricing_llm_model.strip()
+        ),
+        automatic_price_publication=False,
+    )
 
 
 @router.post("/evaluate", response_model=PricingEvaluateResponse)
@@ -170,6 +207,7 @@ def _normalized_offer_payload(item: object) -> dict[str, object]:
     "/runs", response_model=PricingRunResponse, status_code=status.HTTP_202_ACCEPTED
 )
 async def start_pricing_run(
+    request: Request,
     payload: PricingRunCreateRequest,
     current: WorkspaceAdmin,
     session: Annotated[AsyncSession, Depends(get_session)],
@@ -181,6 +219,7 @@ async def start_pricing_run(
             import_batch_id=payload.import_batch_id,
             celery_app=celery_app,
             policy_config=payload.policy,
+            correlation_id=getattr(request.state, "correlation_id", None),
         )
     except PricingTaskDispatchError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -433,7 +472,7 @@ async def get_recommendations(
             status_code=422, detail="confidence_min cannot exceed confidence_max"
         )
     try:
-        rows, total, resolved_run_id = await list_recommendations(
+        rows, total, resolved_run_id, action_counts = await list_recommendations(
             session,
             workspace_id=current.workspace_id,
             run_id=run_id,
@@ -459,6 +498,80 @@ async def get_recommendations(
         run_id=resolved_run_id,
         limit=limit,
         offset=offset,
+        action_counts=RecommendationActionCountsResponse.model_validate(action_counts),
+    )
+
+
+@router.get("/recommendations/export")
+async def download_recommendations(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    format: Literal["csv", "xlsx"] = "xlsx",
+    run_id: UUID | None = None,
+    action: Literal["RAISE", "HOLD", "LOWER", "MANUAL_REVIEW", "INSUFFICIENT_DATA"]
+    | None = None,
+    confidence_grade: str | None = None,
+    category: str | None = None,
+    queue: Literal["raise", "clearance", "review", "hold", "all"] = "all",
+    priority_score_type: str | None = None,
+    confidence_min: Annotated[Decimal | None, Query(ge=0, le=1)] = None,
+    confidence_max: Annotated[Decimal | None, Query(ge=0, le=1)] = None,
+    sort: Literal[
+        "ABSOLUTE_RECOMMENDED_CHANGE",
+        "PERCENT_RECOMMENDED_CHANGE",
+        "EXPECTED_GROSS_UPLIFT",
+        "CLEARANCE_CAPITAL_LOCK",
+        "REVIEW_PRIORITY",
+        "NEWEST",
+    ] = "ABSOLUTE_RECOMMENDED_CHANGE",
+) -> Response:
+    if (
+        confidence_min is not None
+        and confidence_max is not None
+        and confidence_min > confidence_max
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_CONFIDENCE_RANGE",
+                "message": "confidence_min cannot exceed confidence_max",
+            },
+        )
+    try:
+        export = await export_recommendations(
+            session,
+            workspace_id=current.workspace_id,
+            export_format=format,
+            run_id=run_id,
+            action=action,
+            confidence_grade=confidence_grade,
+            category=category,
+            queue=queue,
+            priority_score_type=priority_score_type,
+            confidence_min=confidence_min,
+            confidence_max=confidence_max,
+            sort=sort,
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "PRICING_RUN_NOT_FOUND",
+                "message": "Pricing run not found",
+            },
+        ) from exc
+    except RecommendationExportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return Response(
+        content=export.content,
+        media_type=export.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{export.filename}"',
+            "X-Export-Row-Count": str(export.row_count),
+        },
     )
 
 
@@ -503,6 +616,14 @@ async def get_recommendation_market_evidence(
         )
     except RecommendationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Recommendation not found") from exc
+    effective_reviews = await load_effective_review_map(
+        session,
+        [observation.id for observation, _ in rows],
+    )
+    llm_trace = recommendation.calculation_trace.get("llm_comparability")
+    llm_review_required = bool(
+        isinstance(llm_trace, dict) and llm_trace.get("required")
+    )
     normalized_by_id = {
         str(value.get("observation_id")): value
         for value in recommendation.calculation_trace.get("normalized_offers", [])
@@ -547,6 +668,7 @@ async def get_recommendation_market_evidence(
             outcome_counts_by_item[run_item_id][outcome_code] = int(count)
     response: list[RecommendationEvidenceResponse] = []
     for observation, classification in rows:
+        semantic_review = effective_reviews.get(observation.id)
         normalized = normalized_by_id.get(str(observation.id), {})
         excluded = excluded_by_id.get(str(observation.id), {})
         cohort_role = str(
@@ -660,9 +782,104 @@ async def get_recommendation_market_evidence(
                 comparability_policy_id=observation.comparability_policy_id,
                 comparability_policy_hash=observation.comparability_policy_hash,
                 comparison_evidence=observation.comparison_evidence,
+                candidate_snapshot=observation.candidate_snapshot,
+                llm_review_required=llm_review_required,
+                llm_pricing_eligible=bool(
+                    semantic_review is not None and semantic_review.comparable
+                ),
+                llm_review=(
+                    ComparabilityReviewResponse.model_validate(
+                        semantic_review.as_dict()
+                    )
+                    if semantic_review is not None
+                    else None
+                ),
             )
         )
     return response
+
+
+@router.post(
+    "/observations/{observation_id}/comparability-reviews",
+    response_model=ComparabilityReviewResponse,
+)
+async def review_market_observation_comparability(
+    observation_id: UUID,
+    payload: ComparabilityReviewRequest,
+    current: WorkspaceAdmin,
+) -> ComparabilityReviewResponse:
+    """Run or retrieve the immutable semantic review for one candidate."""
+
+    try:
+        review = await request_observation_comparability_review(
+            observation_id,
+            workspace_id=current.workspace_id,
+            force=payload.force,
+        )
+    except ComparabilityReviewNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "COMPARABILITY_OBSERVATION_NOT_FOUND",
+                "message": "Market observation not found",
+            },
+        ) from exc
+    except ComparabilityReviewUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "LLM_COMPARABILITY_DISABLED",
+                "message": str(exc),
+            },
+        ) from exc
+    return ComparabilityReviewResponse.model_validate(review.as_dict())
+
+
+@router.post(
+    "/comparability-reviews/{review_id}/feedback",
+    response_model=ComparabilityReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_comparability_feedback(
+    review_id: UUID,
+    payload: ComparabilityFeedbackRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ComparabilityReviewResponse:
+    """Append a customer confirmation/correction as labelled evidence."""
+
+    try:
+        review = await add_comparability_feedback(
+            session,
+            workspace_id=current.workspace_id,
+            user_id=current.user.id,
+            review_id=review_id,
+            decision=payload.decision,
+            corrected_verdict=payload.corrected_verdict,
+            corrected_match_level=payload.corrected_match_level,
+            confidence=payload.confidence,
+            reason=payload.reason,
+            evidence_corrections=[
+                item.model_dump(mode="json") for item in payload.evidence_corrections
+            ],
+        )
+    except ComparabilityReviewNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "COMPARABILITY_REVIEW_NOT_FOUND",
+                "message": "Comparability review not found",
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "INVALID_COMPARABILITY_FEEDBACK",
+                "message": str(exc),
+            },
+        ) from exc
+    return ComparabilityReviewResponse.model_validate(review.as_dict())
 
 
 @router.get(

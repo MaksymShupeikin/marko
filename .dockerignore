@@ -22,6 +22,7 @@
 **/Pods
 
 .artifacts
+backups
 outputs
 *.log
 *.tmp

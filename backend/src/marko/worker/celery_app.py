@@ -42,6 +42,7 @@ celery_app.conf.update(
         "marko.worker.re_enrich_market_observations": {"queue": "celery"},
         "marko.worker.cleanup_scrape_evidence": {"queue": "celery"},
         "marko.worker.reconcile_scrape_outbox": {"queue": "celery"},
+        "marko.worker.reconcile_stale_workflows": {"queue": "celery"},
         "marko.worker.process_fitment_analysis": {"queue": "celery"},
     },
     beat_schedule={
@@ -52,6 +53,10 @@ celery_app.conf.update(
         "reconcile-scrape-dispatch-outbox": {
             "task": "marko.worker.reconcile_scrape_outbox",
             "schedule": max(5, settings.scrape_outbox_reconcile_interval_seconds),
+        },
+        "reconcile-stale-workflows": {
+            "task": "marko.worker.reconcile_stale_workflows",
+            "schedule": max(15, settings.workflow_reconcile_interval_seconds),
         },
     },
 )

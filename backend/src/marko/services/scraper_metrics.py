@@ -16,8 +16,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis as AsyncRedis
 
+from metis.pricing.observability import pricing_event
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
+    CatalogDiscoveryRun,
     MarketObservation,
     ObservationTierClassification,
     OfferProcessingOutcome,
@@ -34,6 +36,10 @@ from marko.infrastructure.db.models import (
     StoreSyncProductSnapshot,
     StoreSyncTaskExecution,
     SyncRun,
+)
+from marko.services.discovery_funnel import (
+    load_discovery_funnel,
+    render_discovery_funnel_prometheus,
 )
 from marko.infrastructure.db.session import engine
 from marko.services.pricing_runs import PricingRunNotFoundError
@@ -1113,6 +1119,10 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         available=str(resources["database_probe_latency_seconds"] is not None).lower(),
     )
     metric(
+        "database_probe_failed",
+        int(bool(resources.get("database_probe_failed", False))),
+    )
+    metric(
         "database_transaction_latency_seconds",
         resources["database_transaction_latency_seconds"],
         available="false",
@@ -1162,6 +1172,15 @@ async def render_latest_operational_prometheus(session: AsyncSession) -> str:
     latest_pricing = await session.scalar(
         select(PricingRun)
         .order_by(PricingRun.created_at.desc(), PricingRun.id.desc())
+        .limit(1)
+    )
+    latest_discovery = await session.scalar(
+        select(CatalogDiscoveryRun)
+        .where(CatalogDiscoveryRun.status.in_(("completed", "failed")))
+        .order_by(
+            CatalogDiscoveryRun.created_at.desc(),
+            CatalogDiscoveryRun.id.desc(),
+        )
         .limit(1)
     )
     sections = [
@@ -1225,6 +1244,25 @@ async def render_latest_operational_prometheus(session: AsyncSession) -> str:
                     session,
                     workspace_id=latest_pricing.workspace_id,
                     run_id=latest_pricing.id,
+                )
+            ).rstrip()
+        )
+    if latest_discovery is None:
+        sections.extend(
+            (
+                "# HELP marko_discovery_funnel_snapshot_available Whether a discovery funnel snapshot exists.",
+                "# TYPE marko_discovery_funnel_snapshot_available gauge",
+                "marko_discovery_funnel_snapshot_available 0",
+            )
+        )
+    else:
+        sections.append(
+            render_discovery_funnel_prometheus(
+                await load_discovery_funnel(
+                    session,
+                    workspace_id=latest_discovery.workspace_id,
+                    run_limit=400,
+                    category_limit=1,
                 )
             ).rstrip()
         )
@@ -1817,6 +1855,7 @@ def _resource_dependency_metrics(
         "process_resident_memory_bytes": memory_peak,
         "database_pool_in_use": pool_in_use,
         "database_probe_latency_seconds": database_probe_latency_seconds,
+        "database_probe_failed": database_probe_latency_seconds is None,
         "database_transaction_latency_seconds": None,
         "broker_publish_latency_seconds": None,
         "broker_consumer_lag": None,
@@ -1835,7 +1874,15 @@ async def _database_probe_latency(
     started = time.perf_counter()
     try:
         await session.execute(select(1))
-    except Exception:
+    except Exception as exc:
+        error_fingerprint = hashlib.sha256(
+            f"{type(exc).__name__}:{exc}".encode("utf-8", errors="replace")
+        ).hexdigest()
+        pricing_event(
+            "database_probe_failed",
+            exception_type=type(exc).__name__,
+            error_fingerprint=error_fingerprint,
+        )
         return None
     return round(time.perf_counter() - started, 6)
 

@@ -79,6 +79,26 @@ def test_host_runner_has_full_failure_matrix_and_scoped_cleanup() -> None:
     assert "container prune" not in source
 
 
+def test_host_runner_previews_catalog_before_importing_selected_sheet() -> None:
+    source = (ROOT / "scripts/run_prompt_15_015_e2e.py").read_text(encoding="utf-8")
+
+    preview_index = source.index('f"{api_url}/api/v1/catalog/imports/preview"')
+    import_index = source.index('f"{api_url}/api/v1/catalog/imports"', preview_index)
+
+    assert preview_index < import_index
+    assert '"sheet_name": selected_sheet["name"]' in source
+    assert 'if sheet["is_catalog_candidate"]' in source
+
+
+def test_host_runner_proves_duplicate_scheduler_is_fenced_without_waiting_for_exit() -> None:
+    source = (ROOT / "scripts/run_prompt_15_015_e2e.py").read_text(encoding="utf-8")
+
+    assert '"run", "-d", "--no-deps", "scheduler"' in source
+    assert "scheduler_singleton_lock_unavailable" in source
+    assert '"docker", "rm", "--force", duplicate_scheduler_container' in source
+    assert "second_scheduler.returncode == 75" not in source
+
+
 def test_e2e_probe_counts_physical_network_attempts_not_replay_requests() -> None:
     source = (ROOT / "backend/src/marko/e2e/probe.py").read_text(encoding="utf-8")
 
@@ -105,12 +125,69 @@ def test_browser_harness_uses_valid_explicit_locale_and_captures_errors() -> Non
     source = (ROOT / "e2e/browser/run.mjs").read_text(encoding="utf-8")
 
     assert "locale: 'ru-RU'" in source
+    assert "visibleText('Сравнение цен', 'BROWSER_PAGE_RENDERED')" in source
     assert "evaluate((element) => element.click())" in source
     assert ".getByLabel(text, { exact: false })" in source
     assert ".or(page.getByText(text, { exact: false }))" in source
     assert "getByRole('button', { name: 'Принять', exact: true })" in source
     assert "page.on('pageerror'" in source
     assert "page.on('requestfailed'" in source
+
+
+def test_browser_harness_executes_operator_workflow_after_host_fault_checks() -> None:
+    browser_source = (ROOT / "e2e/browser/run.mjs").read_text(encoding="utf-8")
+    host_source = (ROOT / "scripts/run_prompt_15_015_e2e.py").read_text(
+        encoding="utf-8"
+    )
+
+    marker = "host-business-checks-complete"
+    assert marker in browser_source
+    assert marker in host_source
+    assert "browser-container-state.json" in host_source
+    assert "browser-container.log" in host_source
+    assert "waitForArtifactMarker" in browser_source
+    assert "`${frontendUrl}/#/${tab}`" in browser_source
+    assert "setFiles('/artifacts/ui-catalog-fixture.xlsx')" in browser_source
+    assert '"ui_catalog_xlsx": ui_catalog_hash' in host_source
+    assert "BROWSER_CATALOG_SHEET_SELECTED" in browser_source
+    assert "Catalog · 3 строк" in browser_source
+    assert "BROWSER_CATALOG_IMPORT_PARTIAL" in browser_source
+    assert "BROWSER_CATALOG_IMPORT_COUNTS" in browser_source
+    assert "BROWSER_EXPORT_CSV_SELECTED" in browser_source
+    assert "BROWSER_EXPORT_CONTROL_VISIBLE" in browser_source
+    assert "coordinate within Flutter disabled popup semantics container" in browser_source
+    assert "BROWSER_EXPORT_DOWNLOADED" in browser_source
+    assert "waitForResponse" in browser_source
+    assert "const responsePromise = waitForCsvExport(30000)" in browser_source
+    assert "content-disposition" in browser_source
+    assert "page.setViewportSize({ width: 375, height: 812 })" in browser_source
+    assert "BROWSER_PRICING_RUN_STARTED" in browser_source
+    assert "BROWSER_PRICING_RUN_FINISHED" in browser_source
+    assert "ui-pricing-run.json" in browser_source
+    assert "ui-pricing-run.json" in host_source
+    assert '"stop", "pricing-worker"' in host_source
+    assert '"start", "pricing-worker"' in host_source
+    assert "BROWSER_UKRAINIAN_LOCALE" in browser_source
+    assert "browser-mobile-uk.png" in browser_source
+
+
+def test_headless_export_skips_only_the_native_save_dialog_in_e2e_builds() -> None:
+    source = (
+        ROOT / "frontend/lib/features/pricing/recommendation_export_button.dart"
+    ).read_text(encoding="utf-8")
+
+    assert "Environment.e2eMode ? _acknowledgeE2eDownload : _saveDownload" in source
+    assert "FilePicker.saveFile(" in source
+
+
+def test_ui_pricing_run_uses_fixture_route_only_in_e2e_builds() -> None:
+    source = (ROOT / "frontend/lib/features/pricing/pricing_api.dart").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Environment.e2eMode" in source
+    assert "'/api/v1/e2e/pricing/runs'" in source
+    assert "'/api/v1/pricing/runs'" in source
 
 
 def test_blocked_evidence_never_claims_unexecuted_e2e() -> None:

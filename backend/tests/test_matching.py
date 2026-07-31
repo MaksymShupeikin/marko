@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from marko.services.matching import (
     _MAX_QUERY_TOKENS,
     Match,
@@ -141,11 +143,18 @@ def test_match_offer_allows_brand_mismatch_to_reach_comparability():
 
 
 def test_price_value_from_price():
-    assert _price_value(product(price="1234.5")) == 1234.5
+    assert _price_value(product(price="1234.5")) == Decimal("1234.5")
 
 
 def test_price_value_falls_back_to_price_original():
-    assert _price_value(product(price=None, priceOriginal="50")) == 50.0
+    assert _price_value(product(price=None, priceOriginal="50")) == Decimal("50")
+
+
+def test_price_value_preserves_decimal_digits_beyond_binary_float_precision():
+    raw = "1234.567890123456789"
+
+    assert _price_value(product(price=raw)) == Decimal(raw)
+    assert str(_price_value(product(price=raw))) == raw
 
 
 def test_price_value_none_when_missing():
@@ -176,7 +185,7 @@ def test_build_comparison_keeps_cheapest_per_seller():
         company={"id": 5, "name": "B"},
     )
     comparison = build_comparison(seed, [dear, cheap], params())
-    assert [o.price for o in comparison.offers] == [700.0]
+    assert [o.price for o in comparison.offers] == [Decimal("700")]
 
 
 def test_build_comparison_skips_seed_own_seller():
@@ -206,7 +215,10 @@ def test_build_comparison_sorts_and_caps_max_sellers():
         for i, price in [(2, 900), (3, 500), (4, 700)]
     ]
     comparison = build_comparison(seed, candidates, params(max_sellers=2))
-    assert [o.price for o in comparison.offers] == [500.0, 700.0]
+    assert [o.price for o in comparison.offers] == [
+        Decimal("500"),
+        Decimal("700"),
+    ]
 
 
 def test_build_comparison_counts_all_scanned():
@@ -224,7 +236,11 @@ def test_build_comparison_counts_all_scanned():
 
 def test_comparison_stats_min_median_max():
     comp = comparison_with_prices([300, 500, 700])
-    assert (comp.min_price, comp.median_price, comp.max_price) == (300.0, 500.0, 700.0)
+    assert (comp.min_price, comp.median_price, comp.max_price) == (
+        Decimal("300"),
+        Decimal("500"),
+        Decimal("700"),
+    )
 
 
 def test_comparison_spread_pct():
@@ -234,7 +250,21 @@ def test_comparison_spread_pct():
 
 def test_comparison_savings_vs_seed():
     comp = comparison_with_prices([600], seed_price="1000")
-    assert comp.savings_vs_seed == 400.0
+    assert comp.savings_vs_seed == Decimal("400")
+
+
+def test_comparison_money_serializes_as_decimal_strings():
+    comp = comparison_with_prices(
+        ["0.100000000000000001", "0.300000000000000003"],
+        seed_price="0.500000000000000005",
+    )
+
+    payload = comp.as_dict()
+
+    assert payload["stats"]["min_price"] == "0.100000000000000001"
+    assert payload["stats"]["median_price"] == "0.200000000000000002"
+    assert payload["stats"]["savings_vs_seed"] == "0.400000000000000004"
+    assert payload["offers"][0]["price"] == "0.100000000000000001"
 
 
 def test_comparison_empty_stats_are_none():

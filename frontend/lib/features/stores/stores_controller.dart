@@ -184,25 +184,121 @@ final storesControllerProvider =
     AsyncNotifierProvider<StoresController, StoresState>(StoresController.new);
 
 class StoreProductsController extends AsyncNotifier<StoreProductsState> {
-  StoreProductsController(this.storeId);
+  StoreProductsController(
+    this.storeId, {
+    this.searchDebounce = const Duration(milliseconds: 350),
+  });
 
   final String storeId;
+  final Duration searchDebounce;
+
+  String _query = '';
+  Timer? _debounce;
+  int _searchGeneration = 0;
+
   StoresApi get _api => ref.read(storesApiProvider);
+  StoreProductsState? get _current => state.value;
 
   @override
   Future<StoreProductsState> build() async {
+    ref.onDispose(() {
+      _debounce?.cancel();
+      _searchGeneration++;
+    });
     final api = ref.watch(storesApiProvider);
     final storeFuture = api.getStore(storeId);
-    final productsFuture = api.listProducts(storeId);
+    final productsFuture = api.listProducts(storeId, query: _query);
     return StoreProductsState(
       store: await storeFuture,
       page: await productsFuture,
+      query: _query,
     );
   }
 
   Future<void> reload() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(build);
+  }
+
+  /// Types into the search box: debounced so a long article is one request.
+  void search(String value) {
+    _debounce?.cancel();
+    if (value.trim() == _query.trim()) return;
+    _query = value;
+    if (searchDebounce == Duration.zero) {
+      unawaited(_runSearch());
+      return;
+    }
+    _debounce = Timer(searchDebounce, () => unawaited(_runSearch()));
+  }
+
+  /// Applies a query carried by the route, e.g. after following a cross-store
+  /// suggestion, without waiting for the typing debounce.
+  Future<void> applyQuery(String value) {
+    _debounce?.cancel();
+    if (value.trim() == _query.trim()) return Future<void>.value();
+    _query = value;
+    return _runSearch();
+  }
+
+  Future<void> _runSearch() async {
+    final current = _current;
+    if (current == null) return;
+    final generation = ++_searchGeneration;
+    final query = _query;
+    state = AsyncData(
+      current.copyWith(
+        query: query,
+        isSearching: true,
+        isSearchingElsewhere: false,
+        clearElsewhere: true,
+        clearError: true,
+      ),
+    );
+    try {
+      final page = await _api.listProducts(storeId, query: query);
+      if (generation != _searchGeneration) return;
+      final searched = (_current ?? current).copyWith(
+        page: page,
+        isSearching: false,
+      );
+      state = AsyncData(searched);
+      if (page.items.isEmpty && query.trim().isNotEmpty) {
+        await _searchOtherStores(generation, query);
+      }
+    } catch (error) {
+      if (generation != _searchGeneration) return;
+      state = AsyncData(
+        (_current ?? current).copyWith(
+          isSearching: false,
+          error: error.toString(),
+        ),
+      );
+    }
+  }
+
+  Future<void> _searchOtherStores(int generation, String query) async {
+    final current = _current;
+    if (current == null) return;
+    state = AsyncData(current.copyWith(isSearchingElsewhere: true));
+    try {
+      final result = await _api.searchOtherStores(storeId, query);
+      if (generation != _searchGeneration) return;
+      state = AsyncData(
+        (_current ?? current).copyWith(
+          isSearchingElsewhere: false,
+          elsewhere: result,
+        ),
+      );
+    } catch (error) {
+      if (generation != _searchGeneration) return;
+      state = AsyncData(
+        (_current ?? current).copyWith(
+          isSearchingElsewhere: false,
+          error: error.toString(),
+        ),
+      );
+    }
   }
 
   Future<void> loadMore() async {
@@ -215,6 +311,7 @@ class StoreProductsController extends AsyncNotifier<StoreProductsState> {
       final next = await _api.listProducts(
         storeId,
         offset: current.page.items.length,
+        query: current.query,
       );
       state = AsyncData(
         current.copyWith(
@@ -222,6 +319,8 @@ class StoreProductsController extends AsyncNotifier<StoreProductsState> {
           page: ProductPage(
             items: [...current.page.items, ...next.items],
             total: next.total,
+            limit: next.limit,
+            offset: current.page.offset,
           ),
         ),
       );

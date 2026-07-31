@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from statistics import median
 from types import MappingProxyType
 from typing import Any, Iterable
@@ -132,12 +133,52 @@ class Match:
     score: float
 
 
-def match_offer(seed: Product, cand: Product, threshold: float) -> Match | None:
-    """Retrieve a candidate without treating retrieval as comparability proof."""
+def match_offer(
+    seed: Product,
+    cand: Product,
+    threshold: float,
+    identity_source: str | None = None,
+    search_number: str | None = None,
+) -> Match | None:
+    """Retrieve a candidate without treating retrieval as comparability proof.
+
+    ``identity_source`` names a marketplace grouping that already filed this
+    offer with our part — prom.ua's ``/auto/oen/`` listing for our normalized
+    part code.  Then the wording is not consulted: sellers there do not repeat
+    the number in their titles, and requiring them to would discard the very
+    offers the listing was consulted for.
+
+    ``search_number`` is the number the marketplace was searched by.  A listing
+    that repeats it is exactly what the identity gate downstream accepts as
+    ``TITLE`` evidence, so refusing it here on the wording alone discards
+    candidates the pipeline would have taken.  Measured over the 12 catalogue
+    positions with no part-code page on 2026-07-31: name similarity found three
+    or more independent sellers for 2 of them, the number in the text for 5, and
+    the two signals together for 6 — they overlap only partly, which is why this
+    is an additional route and not a replacement.
+
+    The laterality check still runs first.  It is a retrieval-level sanity check
+    and costs nothing, and a left part filed beside a right one is a mistake no
+    grouping should be trusted through.  Everything else about comparability is
+    decided downstream, exactly as it is for a fuzzy match — including the
+    ``WEAK_NUMERIC_IDENTITY`` flag that marks a short all-digit number found only
+    in free text, which is the collision this route is most exposed to.
+    """
+
     seed_tokens = normalize_tokens(seed.name)
     cand_tokens = normalize_tokens(cand.name)
     if laterality_conflict(seed_tokens, cand_tokens):
         return None
+    if identity_source:
+        return Match(identity_source, 1.0)
+    if search_number:
+        wanted = normalize_oe(search_number)
+        if wanted and any(
+            wanted in normalize_oe(field)
+            for field in (cand.name, cand.sku)
+            if field
+        ):
+            return Match("number", 1.0)
     seed_oe = normalize_oe(seed.oe_raw)
     candidate_oe = normalize_oe(cand.oe_raw)
     if seed_oe is not None and candidate_oe is not None:
@@ -156,13 +197,18 @@ def match_offer(seed: Product, cand: Product, threshold: float) -> Match | None:
     return None
 
 
-def _price_value(product: Product) -> float | None:
+def _price_value(product: Product) -> Decimal | None:
     """Best-effort numeric price for comparison, or None if unusable."""
     raw = product.price or product.price_original
     try:
-        return float(raw) if raw is not None else None
-    except (TypeError, ValueError):
+        parsed = Decimal(str(raw)) if raw is not None else None
+    except (InvalidOperation, TypeError, ValueError):
         return None
+    return parsed if parsed is not None and parsed.is_finite() else None
+
+
+def _decimal_text(value: Decimal | None) -> str | None:
+    return str(value) if value is not None else None
 
 
 @dataclass(frozen=True)
@@ -171,7 +217,7 @@ class Offer:
 
     product: Product
     match: Match
-    price: float
+    price: Decimal
     comparison_evidence: ComparisonEvidence
 
 
@@ -183,9 +229,13 @@ class PriceComparison:
     query: str
     offers: list[Offer]  # cheapest-per-seller, price-ascending, capped
     candidates_scanned: int
+    #: Where the candidates came from.  Persisted so a recommendation can be
+    #: read back knowing whether its basis was a text search or the
+    #: marketplace's own part-code listing.
+    source: str = "SEARCH"
 
     @property
-    def prices(self) -> list[float]:
+    def prices(self) -> list[Decimal]:
         return [offer.price for offer in self.offers]
 
     @property
@@ -193,15 +243,15 @@ class PriceComparison:
         return self.offers[0] if self.offers else None
 
     @property
-    def min_price(self) -> float | None:
+    def min_price(self) -> Decimal | None:
         return min(self.prices) if self.offers else None
 
     @property
-    def max_price(self) -> float | None:
+    def max_price(self) -> Decimal | None:
         return max(self.prices) if self.offers else None
 
     @property
-    def median_price(self) -> float | None:
+    def median_price(self) -> Decimal | None:
         return median(self.prices) if self.offers else None
 
     @property
@@ -209,37 +259,37 @@ class PriceComparison:
         lo, hi = self.min_price, self.max_price
         if not lo:
             return None
-        return round((hi - lo) / lo * 100, 1)
+        return float(((hi - lo) / lo * Decimal("100")).quantize(Decimal("0.1")))
 
     @property
-    def seed_price(self) -> float | None:
+    def seed_price(self) -> Decimal | None:
         return _price_value(self.seed.product)
 
     @property
-    def savings_vs_seed(self) -> float | None:
+    def savings_vs_seed(self) -> Decimal | None:
         """How much the cheapest offer saves against the seed's own price."""
         seed_p, lo = self.seed_price, self.min_price
         if seed_p is None or lo is None:
             return None
-        return round(seed_p - lo, 2)
+        return seed_p - lo
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "seed": {
                 **self.seed.product.as_dict(),
                 "buybox_seller_count": self.seed.seller_count,
-                "buybox_min_price": self.seed.min_price,
-                "buybox_max_price": self.seed.max_price,
+                "buybox_min_price": _decimal_text(self.seed.min_price),
+                "buybox_max_price": _decimal_text(self.seed.max_price),
             },
             "query": self.query,
             "candidates_scanned": self.candidates_scanned,
             "stats": {
                 "sellers_compared": len(self.offers),
-                "min_price": self.min_price,
-                "median_price": self.median_price,
-                "max_price": self.max_price,
+                "min_price": _decimal_text(self.min_price),
+                "median_price": _decimal_text(self.median_price),
+                "max_price": _decimal_text(self.max_price),
                 "spread_pct": self.spread_pct,
-                "savings_vs_seed": self.savings_vs_seed,
+                "savings_vs_seed": _decimal_text(self.savings_vs_seed),
             },
             "offers": [
                 {
@@ -248,7 +298,7 @@ class PriceComparison:
                     "model_id": offer.product.model_id,
                     "seller_name": offer.product.seller_name,
                     "seller_id": offer.product.seller_id,
-                    "price": offer.price,
+                    "price": _decimal_text(offer.price),
                     "currency": offer.product.currency,
                     "presence": offer.product.presence,
                     "match_kind": offer.match.kind,
@@ -279,6 +329,18 @@ class ComparisonParams:
     query: str
     threshold: float
     max_sellers: int
+    #: Set when the candidates arrive from a marketplace grouping rather than a
+    #: text search, so retrieval does not re-derive an identity already asserted.
+    identity_source: str | None = None
+    #: The number the search was run by, accepted as retrieval evidence when a
+    #: listing repeats it.
+    search_number: str | None = None
+    #: Every storefront of ours, not merely the one that owns the seed.  KEMP
+    #: runs four on prom.ua and they upload identical cards, so they resemble our
+    #: product better than any competitor does: measured 2026-07-31, 48 of 65
+    #: name matches were our own shops, and each of them consumed a slot of the
+    #: ``max_sellers`` cap before the pricing gates ever saw it.
+    excluded_seller_ids: frozenset[str] = frozenset()
 
 
 def build_comparison(
@@ -295,7 +357,17 @@ def build_comparison(
             continue
         if seed_product.seller_id and cand.seller_id == seed_product.seller_id:
             continue
-        match = match_offer(seed_product, cand, params.threshold)
+        if params.excluded_seller_ids and (
+            str(cand.seller_id or "") in params.excluded_seller_ids
+        ):
+            continue
+        match = match_offer(
+            seed_product,
+            cand,
+            params.threshold,
+            params.identity_source,
+            params.search_number,
+        )
         if match is None:
             continue
         price = _price_value(cand)
@@ -320,6 +392,7 @@ def build_comparison(
 
     offers = sorted(cheapest_by_seller.values(), key=lambda offer: offer.price)
     return PriceComparison(
+        source=params.identity_source or "SEARCH",
         seed=seed,
         query=params.query,
         offers=offers[: params.max_sellers],
@@ -354,6 +427,13 @@ def build_product_comparison_evidence(
             state=oe_state,
             raw_value=candidate.oe_raw,
             normalized_value=candidate_oe,
+            evidence_refs=refs,
+        ),
+        # Prom category ids are useful retrieval hints but are too broad to
+        # prove that two sellable parts have the same type.  The semantic
+        # reviewer may fill this UNKNOWN value with cited card evidence.
+        "part_type": DimensionEvidence(
+            state=EvidenceState.UNKNOWN,
             evidence_refs=refs,
         ),
         "brand_manufacturer": categorical_dimension(

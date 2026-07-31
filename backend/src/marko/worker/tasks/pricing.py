@@ -35,17 +35,20 @@ settings = get_settings()
     name="marko.worker.start_pricing_run",
     bind=True,
     max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=120,
+    time_limit=150,
 )
 def start_pricing_run_task(self, run_id: str) -> int:
     parsed_run_id = UUID(run_id)
     try:
         event_ids = run_async(prepare_run_dispatch(parsed_run_id))
         batch_size = max(1, get_settings().pricing_dispatch_batch_size)
-        dispatched = 0
-        for start in range(0, len(event_ids), batch_size):
-            dispatched += run_async(
-                _publish_dispatch_events(event_ids[start : start + batch_size])
-            )
+        # Publish one bounded batch. Remaining transactional-outbox rows are
+        # drained by the periodic reconciler, keeping orchestration below its
+        # hard task limit even for a very large catalog.
+        dispatched = run_async(_publish_dispatch_events(event_ids[:batch_size]))
         if not event_ids:
             event_id = run_async(
                 enqueue_collection_finalizer_dispatch(
@@ -111,6 +114,10 @@ def process_pricing_item_task(self, run_item_id: str) -> str:
     name="marko.worker.finalize_pricing_collection",
     bind=True,
     max_retries=5,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=240,
+    time_limit=300,
 )
 def finalize_pricing_collection_task(self, run_id: str) -> int:
     parsed_run_id = UUID(run_id)
@@ -122,7 +129,8 @@ def finalize_pricing_collection_task(self, run_id: str) -> int:
             return 0
         event_ids = run_async(calibrate_run_and_prepare_calculations(parsed_run_id))
         run_async(mark_run_calculating(parsed_run_id, task_id=self.request.id))
-        run_async(_publish_dispatch_events(event_ids))
+        batch_size = max(1, get_settings().pricing_dispatch_batch_size)
+        run_async(_publish_dispatch_events(event_ids[:batch_size]))
         if not event_ids:
             run_async(finalize_pricing_run(parsed_run_id))
         return len(event_ids)
@@ -143,6 +151,8 @@ def finalize_pricing_collection_task(self, run_id: str) -> int:
     max_retries=3,
     acks_late=True,
     reject_on_worker_lost=True,
+    soft_time_limit=120,
+    time_limit=180,
 )
 def calculate_pricing_item_task(self, run_item_id: str) -> str:
     item_id = UUID(run_item_id)
@@ -163,6 +173,8 @@ def calculate_pricing_item_task(self, run_item_id: str) -> str:
     max_retries=3,
     acks_late=True,
     reject_on_worker_lost=True,
+    soft_time_limit=240,
+    time_limit=300,
 )
 def re_enrich_market_observations_task(
     self,

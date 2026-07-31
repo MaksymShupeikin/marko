@@ -31,9 +31,9 @@ class MarkoTheme extends ThemeExtension<MarkoTheme> {
     brandSoft: Color(0xFFEBEFFF),
     positive: Color(0xFF167A55),
     positiveSoft: Color(0xFFE7F4EE),
-    negative: Color(0xFFC44F4F),
+    negative: Color(0xFFB13A3A),
     negativeSoft: Color(0xFFFBECEC),
-    warning: Color(0xFFA86D16),
+    warning: Color(0xFF9A5B00),
     warningSoft: Color(0xFFFFF3DC),
     panelRadius: 12,
   );

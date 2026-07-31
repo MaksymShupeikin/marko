@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any, Iterator
 
@@ -18,10 +19,28 @@ from marko.services.matching import (
     build_comparison,
     build_search_query,
 )
-from marko.services.parser_models import ListingPage, Product, SeedInfo, Seller
+from marko.services.parser_models import (
+    ListingPage,
+    MotorsContext,
+    Product,
+    SeedInfo,
+    Seller,
+)
 
 from .client import HttpClient
-from .parser import parse_listing, parse_product_page, parse_search
+from .parser import (
+    parse_listing,
+    parse_motors_context,
+    parse_oe_listing,
+    parse_product_page,
+    parse_search,
+)
+
+#: prom.ua returns thirty products per automotive listing page.
+OE_OFFERS_PER_PAGE = 30
+#: Recorded on a comparison whose candidates came from the marketplace's own
+#: part-code listing rather than from a text search.
+MOTORS_IDENTITY_SOURCE = "PROM_OE_PAGE"
 
 log = logging.getLogger(__name__)
 
@@ -202,7 +221,9 @@ class PromGateway:
         lang = (match.group("lang") or "ua").lower()
 
         with HttpClient(self._config) as client:
-            seed = self._fetch_seed(client, seed_url, lang)
+            seed, motors = self._fetch_seed_with_motors(client, seed_url, lang)
+            if motors is not None and motors.has_oe_page:
+                return self._compare_via_oe_page(client, seed, motors, lang)
             search_query = query or build_search_query(seed.product)
             log.info(
                 "Seed: %s | бренд=%s | model_id=%s | buyBox=%s продавців (%s–%s)",
@@ -238,9 +259,78 @@ class PromGateway:
         )
         return comparison
 
+    def _compare_via_oe_page(
+        self,
+        client: HttpClient,
+        seed: SeedInfo,
+        context: MotorsContext,
+        lang: str,
+    ) -> PriceComparison:
+        """Compare against the marketplace's own grouping instead of a search.
+
+        Measured on 2026-07-31: searching for one Touareg radiator's OE returned
+        22 offers priced 1087 to 12968 — the matching was right and the cohort
+        was still four classes of radiator — while prom.ua files that same code
+        with 114 offers behind it.  A search finds what the words happen to say;
+        this finds what the marketplace itself grouped.
+        """
+
+        candidates = self._collect_oe_candidates(client, context, lang)
+        comparison = build_comparison(
+            seed,
+            candidates,
+            ComparisonParams(
+                query=context.normalized_part_code or "",
+                threshold=self._config.similarity_threshold,
+                max_sellers=self._config.max_sellers,
+                identity_source=MOTORS_IDENTITY_SOURCE,
+            ),
+        )
+        log.info(
+            "Джерело: сторінка коду %s | продавців %d (переглянуто %d)",
+            context.normalized_part_code,
+            len(comparison.offers),
+            comparison.candidates_scanned,
+        )
+        return comparison
+
     def _fetch_seed(self, client: HttpClient, seed_url: str, lang: str) -> SeedInfo:
+        return self._fetch_seed_with_motors(client, seed_url, lang)[0]
+
+    def _fetch_seed_with_motors(
+        self, client: HttpClient, seed_url: str, lang: str
+    ) -> tuple[SeedInfo, MotorsContext | None]:
+        """One fetch, both readings: the card and its automotive context."""
+
         html = client.get_html(seed_url)
-        return parse_product_page(html, lang)
+        return parse_product_page(html, lang), parse_motors_context(html, lang)
+
+    def _collect_oe_candidates(
+        self, client: HttpClient, context: MotorsContext, lang: str
+    ) -> Iterator[Product]:
+        """Every seller's offer prom.ua filed under our normalized part code.
+
+        The marketplace ignores the sort parameters tried on 2026-07-31, so the
+        cheap end is only reachable after the pages are in hand; the page cap is
+        the same one the search path uses.
+
+        A second, gate-applying copy of this walk lives in
+        ``marko.services.prom_motors``.  They are deliberately not shared: this
+        is an extraction boundary and must not import the pricing gates.
+        """
+
+        base = context.oe_page_url(lang)
+        if base is None:
+            return
+        first = client.get_html(base)
+        page = parse_oe_listing(first, lang)
+        yield from page.products
+        reported = page.total or 0
+        pages = math.ceil(reported / OE_OFFERS_PER_PAGE) if reported else 1
+        for number in range(2, min(self._config.max_search_pages, pages) + 1):
+            yield from parse_oe_listing(
+                client.get_html(f"{base}?page={number}"), lang
+            ).products
 
     def _collect_candidates(
         self,

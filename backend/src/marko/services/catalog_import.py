@@ -45,6 +45,7 @@ from marko.services.scraper_contract import (
     ScraperErrorCode,
     classify_scraper_exception,
 )
+from marko.services.scraper_outbox import enqueue_dispatch
 from marko.services.source_access import require_live_prom_marketplace_collection
 
 import marko.repositories.listings as listings_repo
@@ -81,6 +82,22 @@ class StoreSyncClaim:
     deadline_at: datetime
     task_id: str | None
     fencing_token: int = 0
+    start_page: int = 1
+    page_budget: int = 100
+    total_page_limit: int = 1000
+    failed_executions_before: int = 0
+
+
+@dataclass(frozen=True)
+class StoreSyncTaskResult:
+    persisted_products: int
+    continuation_dispatch_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class StoreSyncChunkResult:
+    persisted_products: int
+    catalog_pages_fetched: int
 
 
 @dataclass(frozen=True)
@@ -115,7 +132,7 @@ async def import_store_catalog(
     task_id: str | None = None,
     is_redelivery: bool = False,
     redelivery_reason: str | None = None,
-) -> int:
+) -> StoreSyncTaskResult:
     """Execute one bounded task attempt for one ``store_sync`` logical item."""
 
     claim = await _claim_execution(
@@ -125,7 +142,9 @@ async def import_store_catalog(
         redelivery_reason=redelivery_reason,
     )
     if claim is None:
-        return await _persisted_product_count(sync_run_id)
+        return StoreSyncTaskResult(
+            persisted_products=await _persisted_product_count(sync_run_id)
+        )
 
     settings = get_settings()
     probe = AttemptResourceProbe()
@@ -144,14 +163,41 @@ async def import_store_catalog(
             guard=DistributedCollectionGuard(settings, namespace="prom"),
             live_request_gate=require_live_prom_marketplace_collection,
         )
-        imported = await _run_import(claim, trace)
+        chunk = await _run_import(claim, trace)
         measurement = probe.finish()
-        persisted = await _finish_success(claim, imported, measurement)
+        if _chunk_reached_page_budget(claim, chunk.catalog_pages_fetched):
+            next_page = claim.start_page + chunk.catalog_pages_fetched
+            if next_page > claim.total_page_limit:
+                raise ScraperBoundaryError(
+                    ScraperErrorCode.INVALID_INPUT,
+                    "Store catalog reached the configured total page limit "
+                    f"({claim.total_page_limit}) before an end page was observed",
+                    retryable=False,
+                )
+            dispatch_id = await _finish_chunk(
+                claim,
+                chunk,
+                measurement,
+                next_page=next_page,
+            )
+            return StoreSyncTaskResult(
+                persisted_products=chunk.persisted_products,
+                continuation_dispatch_id=dispatch_id,
+            )
+        persisted = await _finish_success(
+            claim,
+            chunk.persisted_products,
+            measurement,
+        )
         if not persisted:
-            return await _persisted_product_count(sync_run_id)
-        return imported
+            return StoreSyncTaskResult(
+                persisted_products=await _persisted_product_count(sync_run_id)
+            )
+        return StoreSyncTaskResult(persisted_products=chunk.persisted_products)
     except StaleCatalogImportClaim:
-        return await _persisted_product_count(sync_run_id)
+        return StoreSyncTaskResult(
+            persisted_products=await _persisted_product_count(sync_run_id)
+        )
     except Exception as exc:
         failure: Exception = exc
         measurement = probe.finish()
@@ -159,7 +205,9 @@ async def import_store_catalog(
             try:
                 await _flush_trace_only(claim, trace)
             except StaleCatalogImportClaim:
-                return await _persisted_product_count(sync_run_id)
+                return StoreSyncTaskResult(
+                    persisted_products=await _persisted_product_count(sync_run_id)
+                )
             except Exception as trace_exc:
                 failure = ScraperBoundaryError(
                     ScraperErrorCode.EVIDENCE_PERSISTENCE,
@@ -169,7 +217,7 @@ async def import_store_catalog(
                 )
         boundary = _catalog_boundary(failure)
         exhausted = (
-            claim.execution_no >= claim.max_task_executions
+            claim.failed_executions_before + 1 >= claim.max_task_executions
             or datetime.now(UTC) >= claim.deadline_at
         )
         if exhausted and boundary.retryable:
@@ -181,14 +229,18 @@ async def import_store_catalog(
         try:
             persisted = await _finish_failure(claim, boundary, measurement)
         except StaleCatalogImportClaim:
-            return await _persisted_product_count(sync_run_id)
+            return StoreSyncTaskResult(
+                persisted_products=await _persisted_product_count(sync_run_id)
+            )
         except Exception as state_exc:
             raise RetryableCatalogImportError(
                 "Could not persist store-sync terminal/retry state: "
                 f"{type(state_exc).__name__}: {state_exc}"
             ) from state_exc
         if not persisted:
-            return await _persisted_product_count(sync_run_id)
+            return StoreSyncTaskResult(
+                persisted_products=await _persisted_product_count(sync_run_id)
+            )
         if boundary.retryable:
             raise RetryableCatalogImportError(str(boundary)) from failure
         raise TerminalCatalogImportError(str(boundary)) from failure
@@ -232,12 +284,24 @@ async def _claim_execution(
                 f"Sync run {sync_run_id} is already {sync_run.scrape_state}"
             )
         now = datetime.now(UTC)
+        settings = get_settings()
         deadline = sync_run.scrape_deadline_at
         if deadline is None:
             deadline = now + timedelta(
-                seconds=max(1, get_settings().store_sync_item_deadline_seconds)
+                seconds=max(1, settings.store_sync_item_deadline_seconds)
             )
             sync_run.scrape_deadline_at = deadline
+        failed_executions_before = int(
+            await session.scalar(
+                select(func.count(StoreSyncTaskExecution.id)).where(
+                    StoreSyncTaskExecution.sync_run_id == sync_run.id,
+                    StoreSyncTaskExecution.outcome.in_(
+                        ("retryable_failure", "worker_lost")
+                    ),
+                )
+            )
+            or 0
+        )
         lease_active = (
             sync_run.scrape_state == "running"
             and sync_run.scrape_lease_expires_at is not None
@@ -248,7 +312,7 @@ async def _claim_execution(
             return None
         if (
             now >= deadline
-            or sync_run.scrape_task_executions >= sync_run.scrape_max_task_executions
+            or failed_executions_before >= sync_run.scrape_max_task_executions
         ):
             sync_run.status = SyncStatus.failed
             sync_run.scrape_state = "failed"
@@ -262,8 +326,30 @@ async def _claim_execution(
                 f"Store {sync_run.store_id} does not exist"
             )
 
+        start_page = _checkpoint_next_page(
+            sync_run.scrape_checkpoint,
+            fallback=sync_run.scrape_catalog_pages + 1,
+        )
+        total_page_limit = (
+            settings.store_sync_scraper_max_pages
+            if settings.store_sync_scraper_max_pages > 0
+            else settings.store_sync_scraper_total_page_limit
+        )
+        if start_page > total_page_limit:
+            sync_run.status = SyncStatus.failed
+            sync_run.scrape_state = "failed"
+            sync_run.error = (
+                "Store-sync total page limit was reached before completion"
+            )
+            sync_run.finished_at = now
+            await session.commit()
+            raise TerminalCatalogImportError(sync_run.error)
+        page_budget = min(
+            settings.store_sync_scraper_pages_per_task,
+            total_page_limit - start_page + 1,
+        )
         execution_no = sync_run.scrape_task_executions + 1
-        redelivered = is_redelivery or execution_no > 1
+        redelivered = is_redelivery
         expired_owner = sync_run.scrape_state == "running" and (
             sync_run.scrape_lease_expires_at is None
             or _aware(sync_run.scrape_lease_expires_at) <= now
@@ -296,7 +382,12 @@ async def _claim_execution(
             fencing_token=fencing_token,
             is_redelivery=redelivered,
             redelivery_reason=(
-                redelivery_reason or ("bounded_retry" if execution_no > 1 else None)
+                redelivery_reason
+                or (
+                    "bounded_continuation"
+                    if start_page > 1 and not redelivered
+                    else None
+                )
             ),
             outcome="running",
             started_at=now,
@@ -304,7 +395,6 @@ async def _claim_execution(
         session.add(execution)
         sync_run.status = SyncStatus.running
         sync_run.scrape_state = "running"
-        settings = get_settings()
         sync_run.scrape_owner_task_id = task_id
         sync_run.scrape_lease_expires_at = now + timedelta(
             seconds=max(1, settings.store_sync_lease_seconds)
@@ -319,6 +409,9 @@ async def _claim_execution(
             "stage": "running",
             "item_kind": "store_sync",
             "execution_no": execution_no,
+            "start_page": start_page,
+            "page_budget": page_budget,
+            "next_page": start_page,
             "replay_entries": 0,
             "at": now.isoformat(),
         }
@@ -342,29 +435,44 @@ async def _claim_execution(
             max_task_executions=sync_run.scrape_max_task_executions,
             deadline_at=deadline,
             task_id=task_id,
+            start_page=start_page,
+            page_budget=page_budget,
+            total_page_limit=total_page_limit,
+            failed_executions_before=failed_executions_before,
         )
 
 
 async def _run_import(
     claim: StoreSyncClaim,
     trace: ScrapeExecutionTrace,
-) -> int:
+) -> StoreSyncChunkResult:
     settings = get_settings()
     config = ScrapeConfig(
         delay=settings.pricing_scraper_request_delay_seconds,
         delay_jitter=settings.pricing_scraper_request_jitter_seconds,
         timeout=settings.store_sync_scraper_http_timeout_seconds,
         max_attempts=max(1, settings.store_sync_scraper_http_max_attempts),
-        max_pages=max(0, settings.store_sync_scraper_max_pages),
+        max_pages=claim.page_budget,
+        start_page=claim.start_page,
     )
     batch: list[Product] = []
+    catalog_pages_fetched = 0
     with scrape_execution(trace):
-        for product in PromGateway(config).scrape(claim.store_url, strict=True):
-            batch.append(product)
-            if len(batch) >= _BATCH_SIZE:
+        try:
+            for product in PromGateway(config).scrape(claim.store_url, strict=True):
+                batch.append(product)
+                if len(batch) >= _BATCH_SIZE:
+                    catalog_pages_fetched += await _persist_progress(
+                        claim,
+                        trace,
+                        batch,
+                    )
+                    batch = []
+        except Exception:
+            if batch:
                 await _persist_progress(claim, trace, batch)
-                batch = []
-        await _persist_progress(claim, trace, batch)
+            raise
+        catalog_pages_fetched += await _persist_progress(claim, trace, batch)
 
     imported = await _persisted_product_count(claim.sync_run_id)
     if imported == 0:
@@ -373,17 +481,20 @@ async def _run_import(
             "Prom returned no valid products for this store",
             retryable=False,
         )
-    return imported
+    return StoreSyncChunkResult(
+        persisted_products=imported,
+        catalog_pages_fetched=catalog_pages_fetched,
+    )
 
 
 async def _persist_progress(
     claim: StoreSyncClaim,
     trace: ScrapeExecutionTrace,
     products: list[Product],
-) -> None:
+) -> int:
     completed_requests = trace.drain_completed_requests()
     if not products and not completed_requests:
-        return
+        return 0
     try:
         async with async_session_factory() as session:
             sync_run = await session.scalar(
@@ -434,6 +545,9 @@ async def _persist_progress(
             sync_run.scrape_checkpoint = {
                 "stage": "checkpointed",
                 "execution_no": claim.execution_no,
+                "start_page": claim.start_page,
+                "page_budget": claim.page_budget,
+                "next_page": sync_run.scrape_catalog_pages + 1,
                 "products_persisted": sync_run.scrape_products_persisted,
                 "logical_requests": trace_stats.logical_requests,
                 "physical_attempts": trace_stats.physical_attempts,
@@ -446,6 +560,7 @@ async def _persist_progress(
                 seconds=max(1, get_settings().store_sync_lease_seconds)
             )
             await session.commit()
+            return trace_stats.catalog_pages
     except Exception:
         trace.restore_completed_requests(completed_requests)
         raise
@@ -488,6 +603,9 @@ async def _flush_trace_only(
             sync_run.scrape_checkpoint = {
                 "stage": "attempt_trace_persisted",
                 "execution_no": claim.execution_no,
+                "start_page": claim.start_page,
+                "page_budget": claim.page_budget,
+                "next_page": sync_run.scrape_catalog_pages + 1,
                 "logical_requests": stats.logical_requests,
                 "physical_attempts": stats.physical_attempts,
                 "at": datetime.now(UTC).isoformat(),
@@ -693,6 +811,87 @@ async def _finish_success(
         return True
 
 
+async def _finish_chunk(
+    claim: StoreSyncClaim,
+    chunk: StoreSyncChunkResult,
+    measurement: AttemptMeasurement,
+    *,
+    next_page: int,
+) -> UUID | None:
+    """Commit a visible partial result and enqueue the next bounded page chunk."""
+
+    async with async_session_factory() as session:
+        sync_run = await session.scalar(
+            select(SyncRun).where(SyncRun.id == claim.sync_run_id).with_for_update()
+        )
+        execution = await session.get(StoreSyncTaskExecution, claim.execution_id)
+        if sync_run is None or execution is None:
+            raise TerminalCatalogImportError("Store-sync dependencies disappeared")
+        if not _store_claim_is_current(sync_run, execution, claim):
+            await _mark_stale_store_execution(
+                session,
+                execution,
+                "Store-sync chunk completion rejected by execution fence",
+            )
+            return None
+
+        now = datetime.now(UTC)
+        sync_run.status = SyncStatus.queued
+        sync_run.scrape_state = "queued"
+        sync_run.scrape_owner_task_id = None
+        sync_run.scrape_lease_expires_at = None
+        sync_run.progress_current = chunk.persisted_products
+        sync_run.progress_total = None
+        sync_run.scrape_products_persisted = chunk.persisted_products
+        sync_run.scrape_evidence_coverage = await evidence_coverage_ratio(
+            session,
+            sync_run_id=claim.sync_run_id,
+            execution_no=claim.execution_no,
+        )
+        sync_run.scrape_raw_evidence_bytes = await retained_raw_evidence_bytes(
+            session,
+            sync_run_id=claim.sync_run_id,
+        )
+        sync_run.scrape_checkpoint = {
+            "stage": "chunk_succeeded",
+            "execution_no": claim.execution_no,
+            "start_page": claim.start_page,
+            "pages_fetched": chunk.catalog_pages_fetched,
+            "next_page": next_page,
+            "products_persisted": chunk.persisted_products,
+            "at": now.isoformat(),
+        }
+        execution.outcome = "succeeded"
+        execution.wall_time_ms = measurement.wall_time_ms
+        execution.cpu_time_ms = measurement.cpu_time_ms
+        execution.memory_peak_bytes = measurement.memory_peak_bytes
+        execution.finished_at = now
+        dispatch = await enqueue_dispatch(
+            session,
+            event_key=f"store-sync:{sync_run.id}:page:{next_page}:v1",
+            aggregate_type="sync_run",
+            aggregate_id=sync_run.id,
+            workspace_id=sync_run.workspace_id,
+            task_name="marko.worker.import_store_catalog",
+            task_args=[str(sync_run.id)],
+            queue="store-sync",
+            max_attempts=20,
+        )
+        sync_run.task_id = dispatch.task_id
+        await session.commit()
+        pricing_event(
+            "scrape_chunk_completed",
+            item_kind="store_sync",
+            sync_run_id=str(sync_run.id),
+            execution_no=claim.execution_no,
+            start_page=claim.start_page,
+            pages_fetched=chunk.catalog_pages_fetched,
+            next_page=next_page,
+            products_persisted=chunk.persisted_products,
+        )
+        return dispatch.id
+
+
 async def _finish_failure(
     claim: StoreSyncClaim,
     error: ScraperBoundaryError,
@@ -723,6 +922,8 @@ async def _finish_failure(
         sync_run.scrape_checkpoint = {
             "stage": "terminal_failure" if terminal else "retry_wait",
             "execution_no": claim.execution_no,
+            "start_page": claim.start_page,
+            "next_page": sync_run.scrape_catalog_pages + 1,
             "error_category": error.code.value,
             "at": now.isoformat(),
         }
@@ -889,6 +1090,29 @@ async def _refresh_store_execution_measurement(
         if execution.outcome != "running":
             execution.finished_at = datetime.now(UTC)
         await session.commit()
+
+
+def _checkpoint_next_page(
+    checkpoint: dict[str, object] | None,
+    *,
+    fallback: int,
+) -> int:
+    value = (checkpoint or {}).get("next_page")
+    try:
+        parsed = int(value) if value is not None else fallback
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(1, fallback, parsed)
+
+
+def _chunk_reached_page_budget(
+    claim: StoreSyncClaim,
+    catalog_pages_fetched: int,
+) -> bool:
+    return (
+        claim.page_budget > 0
+        and catalog_pages_fetched >= claim.page_budget
+    )
 
 
 def _catalog_boundary(exc: Exception) -> ScraperBoundaryError:

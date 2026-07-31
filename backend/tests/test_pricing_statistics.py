@@ -74,6 +74,22 @@ def test_tick_rounding_has_explicit_direction() -> None:
     assert round_up_to_tick(Decimal("100.1"), tick) == Decimal("101")
 
 
+@pytest.mark.parametrize(
+    ("value", "tick", "expected"),
+    [
+        ("100.5", "1", "101"),
+        ("1.005", "0.01", "1.01"),
+        ("9007199254740993.5", "1", "9007199254740994"),
+    ],
+)
+def test_tick_rounding_uses_decimal_half_up_at_precision_boundaries(
+    value: str,
+    tick: str,
+    expected: str,
+) -> None:
+    assert round_to_tick(Decimal(value), Decimal(tick)) == Decimal(expected)
+
+
 def test_winsorization_caps_tails_without_becoming_primary_estimator() -> None:
     values = tuple(Decimal(value) for value in (1, 2, 3, 4, 100))
     result = winsorize(values, lower=Decimal("0.1"), upper=Decimal("0.9"))

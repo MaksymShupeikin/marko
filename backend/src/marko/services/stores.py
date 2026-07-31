@@ -19,6 +19,11 @@ from marko.infrastructure.db.models import (
     WorkspaceStore,
 )
 from marko.core.config import get_settings
+from marko.services.catalog_search import (
+    MAX_CROSS_STORE_MATCHES,
+    CrossStoreSearch,
+    search_other_stores,
+)
 from marko.services.seller_url_resolver import resolve_prom_seller
 from marko.services.source_access import require_live_prom_marketplace_collection
 from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
@@ -58,6 +63,7 @@ class ProductPage:
     total: int
     limit: int
     offset: int
+    query: str | None = None
 
 
 async def register_store(
@@ -101,8 +107,8 @@ async def queue_store_sync(
     workspace_id: UUID,
     celery_app: Celery,
 ) -> SyncRun:
-    require_live_prom_marketplace_collection()
     await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
+    require_live_prom_marketplace_collection()
     sync_run, created, dispatch_id = await _get_or_create_sync_run(
         session, store_id=store_id, workspace_id=workspace_id
     )
@@ -152,6 +158,7 @@ async def _get_or_create_sync_run(
         "stage": "queued",
         "item_kind": "store_sync",
         "item_version": sync_run.scrape_item_version,
+        "next_page": 1,
         "at": datetime.now(UTC).isoformat(),
     }
     dispatch = await enqueue_dispatch(
@@ -204,13 +211,36 @@ async def list_store_products(
     workspace_id: UUID,
     limit: int,
     offset: int,
+    query: str | None = None,
 ) -> ProductPage:
     await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
-    total = await listings_repo.count_listings_for_store(session, store_id)
+    total = await listings_repo.count_listings_for_store(session, store_id, query)
     items = await listings_repo.list_listings_for_store(
-        session, store_id, limit, offset
+        session, store_id, limit, offset, query
     )
-    return ProductPage(items=items, total=total, limit=limit, offset=offset)
+    return ProductPage(
+        items=items, total=total, limit=limit, offset=offset, query=query
+    )
+
+
+async def search_store_neighbours(
+    session: AsyncSession,
+    *,
+    store_id: UUID,
+    workspace_id: UUID,
+    query: str,
+    limit: int = MAX_CROSS_STORE_MATCHES,
+) -> CrossStoreSearch:
+    """Replay a catalog query against every other store of the workspace."""
+
+    await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
+    return await search_other_stores(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+        query=query,
+        limit=limit,
+    )
 
 
 async def delete_owned_store(

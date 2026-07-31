@@ -28,6 +28,15 @@ def test_catalog_discovery_prefers_normalized_oe_over_sku() -> None:
     )
 
 
+def test_catalog_discovery_falls_back_to_sku_when_wp2_leaves_oe_empty() -> None:
+    """After WP-2 an aftermarket position has no ``oe_norm`` at all. The search
+    still runs, on the supplier article, and this is the intended branch — not
+    a short-circuit nobody noticed."""
+
+    assert catalog_discovery_query(sku="313856", oe=None) == "313856"
+    assert catalog_discovery_query(sku="313856", oe="   ") == "313856"
+
+
 def test_catalog_discovery_product_key_is_format_stable() -> None:
     formatted = catalog_product_key(
         sku="7E5 827 505 A",
