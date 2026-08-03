@@ -529,8 +529,8 @@ def test_the_raw_form_survives_normalization(config) -> None:
 
 def test_the_two_normalizers_in_the_repo_still_agree() -> None:
     """``normalize_cross_oem`` seeds the graph and ``norm_oem`` reads it back.
-    They are separate functions with identical bodies today; the day they drift
-    the graph silently stops matching and no test would otherwise notice."""
+    Both delegate to one identifier contract; this assertion protects the
+    public wrappers used on the write and read sides of the graph."""
 
     from metis.pricing import normalize_candidate_oem
 
@@ -541,6 +541,7 @@ def test_the_two_normalizers_in_the_repo_still_agree() -> None:
         "ОЕ-123",
         "OP-WP-5571",
         "А123",
+        "4А0807345A",
         "",
     ):
         assert normalize_cross_oem(value) == normalize_candidate_oem(value)

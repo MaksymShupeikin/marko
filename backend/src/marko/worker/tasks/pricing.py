@@ -23,6 +23,7 @@ from marko.services.market_collection import (
     reset_pricing_calculation_for_retry,
     reset_pricing_item_for_retry,
 )
+from marko.services.ai_evidence_shadow import process_ai_evidence_position
 from marko.services.scraper_outbox import publish_dispatch
 from marko.services.oe_reenrichment import re_enrich_retained_observations
 from marko.worker.async_runtime import run_async
@@ -195,6 +196,27 @@ def re_enrich_market_observations_task(
             )
         )
         return report.as_dict()
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            raise
+        raise self.retry(exc=exc, countdown=min(120, 5 * (2**self.request.retries)))
+
+
+@celery_app.task(
+    name="marko.worker.process_ai_evidence_position",
+    bind=True,
+    max_retries=5,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def process_ai_evidence_position_task(self, run_item_id: str) -> dict[str, object]:
+    """Shadow-only AI evidence pass over deterministic persisted candidates."""
+
+    item_id = UUID(run_item_id)
+    try:
+        return run_async(process_ai_evidence_position(item_id)).as_dict()
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             raise

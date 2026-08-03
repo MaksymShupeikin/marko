@@ -15,8 +15,13 @@ import 'package:marko_client/features/pricing/pricing_models.dart';
 import 'package:marko_client/features/pricing/pricing_reason_labels.dart';
 import 'package:marko_client/features/pricing/pricing_run_panel.dart';
 import 'package:marko_client/features/pricing/recommendation_export_button.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // An outstanding run attempt outlives the widget, so the run panel now needs
+  // the platform storage it is written to.
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets(
     'catalog import requires explicit sheet and exposes partial row reasons',
     (tester) async {
@@ -228,7 +233,9 @@ void main() {
     tester,
   ) async {
     var startRequests = 0;
+    var previewRequests = 0;
     var finishedCallbacks = 0;
+    Map<String, dynamic>? startBody;
     final client = MockClient((request) async {
       if (request.method == 'GET' &&
           request.url.path == '/api/v1/pricing/runs') {
@@ -249,8 +256,14 @@ void main() {
         });
       }
       if (request.method == 'POST' &&
+          request.url.path == '/api/v1/pricing/runs/preview') {
+        previewRequests += 1;
+        return _jsonResponse(_runScopePreviewJson());
+      }
+      if (request.method == 'POST' &&
           request.url.path == '/api/v1/pricing/runs') {
         startRequests += 1;
+        startBody = jsonDecode(request.body) as Map<String, dynamic>;
         return _jsonResponse(_runJson('pending'), statusCode: 202);
       }
       if (request.method == 'GET' &&
@@ -281,11 +294,30 @@ void main() {
     expect(finishedCallbacks, 1);
     expect(find.text('Расчёт завершён'), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    // Область замораживается до запуска, а не после него.
+    expect(
+      previewRequests,
+      1,
+      reason: 'запуск обязан сначала показать владельцу цену решения',
+    );
+    // Сервер отвергает полный каталог без явного согласия, поэтому клиент
+    // обязан его передать — иначе владелец видит 422 вместо расчёта.
+    expect(startBody?['confirm_full_catalog'], isTrue);
+    expect(startBody?['scope_mode'], 'FULL_CATALOG');
+    // Повторное нажатие на ту же область не должно создавать второй прогон.
+    expect(startBody?['idempotency_key'], isNotNull);
+    // Хеши клиент больше не шлёт: подтверждением служит непрозрачный токен,
+    // выданный сервером вместе с предпросмотром.
+    expect(startBody?['preview_token'], isNotNull);
+    expect(startBody?.containsKey('expected_scope_hash'), isFalse);
+    expect(startBody?.containsKey('expected_catalog_snapshot_hash'), isFalse);
   });
 
   testWidgets('member sees status but no pricing-run admin actions', (
     tester,
   ) async {
+    var statusFetches = 0;
     final client = MockClient((request) async {
       if (request.url.path == '/api/v1/pricing/runs') {
         return _jsonResponse({
@@ -302,6 +334,12 @@ void main() {
           'limit': 100,
           'offset': 0,
         });
+      }
+      if (request.url.path == '/api/v1/pricing/runs/run-1') {
+        statusFetches += 1;
+        return _jsonResponse(
+          _runJson(statusFetches == 1 ? 'running' : 'completed'),
+        );
       }
       return http.Response('not found', 404);
     });
@@ -320,7 +358,19 @@ void main() {
     expect(find.byKey(const ValueKey('pricing-run-start')), findsNothing);
     expect(find.byKey(const ValueKey('pricing-run-cancel')), findsNothing);
     expect(find.textContaining('доступны администратору'), findsOneWidget);
-    expect(find.text('Correlation ID: corr-run-1'), findsOneWidget);
+    expect(
+      find.text('Номер расчёта для поддержки: corr-run-1'),
+      findsOneWidget,
+    );
+
+    // Status is live for members too: the resumed poll carries the run to its
+    // end without any admin control appearing.
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(statusFetches, 2);
+    expect(find.text('Расчёт завершён'), findsOneWidget);
+    expect(find.byKey(const ValueKey('pricing-run-cancel')), findsNothing);
   });
 
   testWidgets('discovery funnel loads lazily and exposes gate ceilings', (
@@ -341,7 +391,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(requests, 0, reason: 'collapsed observability must not poll');
-    await tester.tap(find.text('Воронка discovery и потолки гейтов'));
+    await tester.tap(find.text('Почему конкуренты не попали в расчёт'));
     await tester.pumpAndSettle();
 
     expect(requests, 1);
@@ -351,7 +401,10 @@ void main() {
     );
     expect(find.textContaining('OEM identity'), findsOneWidget);
     expect(find.textContaining('потолок разблокировки 34.8%'), findsOneWidget);
-    expect(find.text('Correlation ID: corr-funnel-1'), findsOneWidget);
+    expect(
+      find.text('Номер расчёта для поддержки: corr-funnel-1'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('export sends active filters and saves the returned bytes', (
@@ -568,4 +621,30 @@ Map<String, dynamic> _discoveryFunnelJson() => {
       'gates': <String, dynamic>{},
     },
   ],
+};
+
+/// Замороженная область ценового прогона.
+///
+/// Отдельное имя от `_previewJson`, который описывает предпросмотр импорта
+/// каталога: формы разные, и подмена одной другой молча обнуляет подтверждение.
+Map<String, dynamic> _runScopePreviewJson() => {
+  'scope_contract_version': 'v1',
+  'import_batch_id': 'batch-1',
+  'scope_mode': 'FULL_CATALOG',
+  'policy_version': 'test-v1',
+  'catalog_snapshot_hash': 'a' * 64,
+  'scope_hash': 'b' * 64,
+  'preview_token': 'mrp1_testtoken0000000000000000000000000000',
+  'requires_full_catalog_confirmation': true,
+  'estimate': {
+    'requested_items': 3,
+    'eligible_items': 3,
+    'excluded_items': 0,
+    'unique_scrape_inputs': 3,
+    'duplicate_items': 0,
+    'worst_case_duration_seconds': 120,
+  },
+  'exclusions': <Map<String, dynamic>>[],
+  'exclusions_truncated': false,
+  'scope_manifest': <String, dynamic>{},
 };

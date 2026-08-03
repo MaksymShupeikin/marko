@@ -134,8 +134,15 @@ def test_the_card_yields_the_code_the_supersessions_and_the_listing() -> None:
     )
 
 
-def test_a_superseding_numbers_page_is_not_taken_for_ours() -> None:
-    """A later number's listing is a different market for a part we do not sell."""
+def test_a_related_numbers_listing_is_taken_but_marked_as_a_widening() -> None:
+    """Refusing it outright was the first rule here, and the data overturned it.
+
+    Measured 2026-07-31: 3 of the 12 positions with no listing of their own do
+    have one under a number in their supersession chain, and for ``7P6121253``
+    that number is ``95810613200`` — the Porsche side of the same radiator.
+    Taking it is right; taking it silently is not, because the offers there are
+    an analogue and not the same code.
+    """
 
     html = _card_html(
         {
@@ -152,8 +159,36 @@ def test_a_superseding_numbers_page_is_not_taken_for_ours() -> None:
     context = parse_motors_context(html)
 
     assert context is not None
-    assert context.has_oe_page is False
-    assert context.oe_page_url() is None
+    assert context.has_oe_page is True
+    assert context.via_oe_number == "7L6121253C"
+    assert context.is_widened is True
+
+
+def test_our_own_code_is_preferred_over_a_related_one() -> None:
+    """Order in the chain must not decide which market we compare against."""
+
+    html = _card_html(
+        {
+            "normalizedPartCode": "7L6121253",
+            "compatibleOENumbers": [
+                {
+                    "oeNumberNormalized": "7L6121253C",
+                    "oeNumberPage": {"id": 999, "alias": "7l6121253c"},
+                },
+                {
+                    "oeNumberNormalized": "7L6121253",
+                    "oeNumberPage": {"id": 1146851, "alias": "7l6121253"},
+                },
+            ],
+        }
+    )
+
+    context = parse_motors_context(html)
+
+    assert context is not None
+    assert context.oe_page_id == 1146851
+    assert context.via_oe_number == "7L6121253"
+    assert context.is_widened is False
 
 
 def test_a_product_outside_the_automotive_vertical_is_not_an_error() -> None:

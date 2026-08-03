@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,6 +20,7 @@ from metis.pricing import (
 )
 from metis.pricing.raise_policy import (
     RaiseOutcome,
+    RaisePolicy,
     RaiseStrategy,
     decide_raise,
     load_raise_policy,
@@ -29,7 +30,7 @@ from marko.services.market_collection import (
     customer_budget_floor_trace,
 )
 from marko.services.cost_privacy import privacy_safe_mapping
-from marko.services.pricing_runs import policy_to_dict
+from marko.services.pricing_runs import execution_policy_hash, policy_to_dict
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -123,26 +124,56 @@ def test_active_strategy_is_owner_approved_budget_floor() -> None:
     assert BUDGET_POLICY.target_floor_ratio == Decimal("0")
 
 
-def test_run_policy_identity_records_every_owner_decision_input() -> None:
-    identity = policy_to_dict(
-        PricingPolicy(raise_policy=BUDGET_POLICY)
-    )["raise_policy_identity"]
+def test_run_policy_snapshot_records_every_raise_policy_field() -> None:
+    """Снимок несёт ВСЕ поля политики повышения, а не выбранное подмножество.
 
-    assert identity == {
-        "strategy": "budget_floor",
-        "method_version": "raise-policy-v2",
-        "source_sha256": BUDGET_POLICY.source_sha256,
-        "psychological_step": "1",
-        "minimum_discount": "0.02",
-        "maximum_discount": "0.05",
-        "target_floor_ratio": "0",
-        "floor_corroboration_sellers": 1,
-        "tier_agnostic": True,
-        "allow_lower": True,
-        "ignore_stock_status": True,
-        "ignore_cost_floor": True,
-        "owner_decision_reference": "customer-reply-2026-07-30",
-    }
+    Раньше здесь сохранялся «отпечаток личности» из тринадцати полей, а
+    ``target_quantile``, ``min_evidence``, ``max_step_pct`` и пороги уверенности
+    в него не входили.  Их правка в файле развёртывания меняла результат
+    прогона, не меняя ни одного сохранённого байта: расхождение было
+    невидимым.  Тест перечисляет поля не именами, а составом датакласса —
+    новое поле ``RaisePolicy`` обязано попасть в снимок само.
+    """
+
+    snapshot = policy_to_dict(PricingPolicy(raise_policy=BUDGET_POLICY))
+    persisted = snapshot["raise_policy"]
+
+    assert set(persisted) == {item.name for item in fields(RaisePolicy)}
+    assert persisted["strategy"] == "budget_floor"
+    assert persisted["method_version"] == "raise-policy-v2"
+    assert persisted["source_sha256"] == BUDGET_POLICY.source_sha256
+    assert persisted["owner_decision_reference"] == "customer-reply-2026-07-30"
+    # Именно те поля, которых прежде не было — и которые решают, куда встанет
+    # рекомендация.
+    assert persisted["target_quantile"] == str(BUDGET_POLICY.target_quantile)
+    assert persisted["min_evidence"] == BUDGET_POLICY.min_evidence
+    assert persisted["max_step_pct"] == str(BUDGET_POLICY.max_step_pct)
+    assert persisted["min_change_pct"] == str(BUDGET_POLICY.min_change_pct)
+    assert persisted["high_min_evidence"] == BUDGET_POLICY.high_min_evidence
+    assert persisted["medium_min_evidence"] == BUDGET_POLICY.medium_min_evidence
+
+
+def test_changing_any_raise_policy_field_changes_the_stored_bytes() -> None:
+    """Изменение любого поля обязано менять и байты снимка, и его отпечаток."""
+
+    baseline = PricingPolicy(raise_policy=BUDGET_POLICY)
+    baseline_hash = execution_policy_hash(policy_to_dict(baseline))
+    for name in (item.name for item in fields(RaisePolicy)):
+        current = getattr(BUDGET_POLICY, name)
+        if isinstance(current, bool):
+            mutated_value: object = not current
+        elif isinstance(current, Decimal):
+            mutated_value = current + Decimal("0.01")
+        elif isinstance(current, int):
+            mutated_value = current + 1
+        elif isinstance(current, str) or current is None:
+            mutated_value = f"p15017-{name}"
+        else:
+            mutated_value = current
+        mutated = PricingPolicy(
+            raise_policy=replace(BUDGET_POLICY, **{name: mutated_value})
+        )
+        assert execution_policy_hash(policy_to_dict(mutated)) != baseline_hash, name
 
 
 def test_budget_floor_raises_to_high_end_of_customer_band() -> None:

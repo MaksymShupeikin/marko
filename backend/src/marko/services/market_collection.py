@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, replace
+import functools
 import hashlib
 import json
 import math
@@ -47,9 +48,11 @@ from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.gateway import PromGateway
 from metis.pricing import (
     CalibrationPair,
+    normalize_oe,
     COMPARABILITY_CONTRACT_VERSION,
     CoefficientModel,
     CohortRole,
+    ComparisonEvidence,
     CompetitorOffer,
     ProductTier,
     PricingResult,
@@ -78,7 +81,10 @@ from metis.pricing.numeric import (
 from metis.pricing.statistics import median as decimal_median
 from metis.pricing.observability import pricing_event
 from marko.services.collection_guard import DistributedCollectionGuard
-from marko.services.catalog_costs import get_decrypted_catalog_cost
+from marko.services.catalog_costs import (
+    decrypt_cost_record,
+    get_decrypted_catalog_cost,
+)
 from marko.services.calibration_eligibility import (
     CALIBRATION_ELIGIBILITY_VERSION,
     calibration_identity_record,
@@ -91,6 +97,7 @@ from marko.services.decision_fingerprint import (
 )
 from marko.services.matching import PriceComparison
 from marko.services.llm_comparability import (
+    ComparabilityMatchLevel,
     EffectiveComparabilityReview,
     apply_effective_review_to_evidence,
     ensure_run_item_comparability_reviews,
@@ -99,6 +106,8 @@ from marko.services.llm_comparability import (
 )
 from marko.services.offer_identity import (
     ConfirmedCross,
+    SOURCE_PAGE_ASSERTION_CONFIDENCE,
+    SourceAssertion,
     OE_EXTRACTOR_VERSION,
     OeVerificationStatus,
     bind_oe_verification,
@@ -108,6 +117,9 @@ from marko.services.offer_identity import (
     verify_offer_identity,
 )
 from marko.services.offer_processing import (
+    ACQUISITION_CONTRACT_VERSION,
+    AcceptedCandidate,
+    AcquisitionLineage,
     EvidenceAccountingError,
     OfferAccounting,
     OfferOutcomeCode,
@@ -117,14 +129,23 @@ from marko.services.offer_processing import (
     safe_offer_sample,
 )
 from marko.services.pricing_runs import (
+    FrozenCatalogItem,
+    PricingRunSnapshotError,
     build_pricing_context,
     activation_artifact_verified,
     calibrate_tier_coefficients,
+    frozen_catalog_item_from_snapshot,
     get_latest_override,
+    load_run_item_start_cost_record,
+    uses_frozen_start_inputs,
+    load_run_execution_policy,
     load_target_tier_coefficients,
     persist_run_calibration_pairs,
-    policy_from_dict,
     require_activated_run_policy,
+    resolve_execution_override,
+    run_is_bounded,
+    verified_start_snapshot,
+    verify_run_membership,
 )
 from marko.services.scrape_journal import (
     evidence_coverage_ratio,
@@ -142,15 +163,21 @@ from marko.services.scraper_contract import (
     AttemptResourceProbe,
     FrozenPromScraperAdapter,
     PROM_ADAPTER_VERSION,
+    RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED,
     ScrapeInput,
     ScrapeOutput,
     ScraperBoundaryError,
     ScraperErrorCode,
     build_acquisition_input,
     classify_scraper_exception,
+    retrieval_kind_is_widened,
 )
 from marko.services.scraper_outbox import enqueue_dispatch
 from marko.services.source_access import require_live_prom_marketplace_collection
+from marko.services.ai_evidence_extraction import (
+    AI_EVIDENCE_SELECTION_VERSION,
+    resolve_ai_evidence_config,
+)
 
 
 class PricingItemNotFoundError(LookupError):
@@ -159,6 +186,160 @@ class PricingItemNotFoundError(LookupError):
 
 class PermanentCollectionError(RuntimeError):
     pass
+
+
+# ---------------------------------------------------------------------------
+# F4: одна авторитетная точка разрешения замороженных входов позиции
+# ---------------------------------------------------------------------------
+
+
+class FrozenBindingError(PricingRunSnapshotError):
+    """Снимок не привязан к той строке членства, в которой лежит."""
+
+
+#: Поля снимка, отсутствие которых раньше подменялось значением по умолчанию.
+#: ``source_row`` становился нулём, ``mpn_norm``/``name`` — пустой строкой,
+#: ``identity_status`` — ``UNRESOLVED``. Каждое из них влияет на отождествление
+#: и на отчётность, поэтому дырка в снимке обязана быть отказом, а не догадкой.
+_REQUIRED_SNAPSHOT_FIELDS: tuple[tuple[str, type | tuple[type, ...]], ...] = (
+    ("catalog_item_id", str),
+    ("source_row", int),
+    ("sku", str),
+    ("oe_norm", str),
+    ("mpn_norm", str),
+    ("name", str),
+    ("category", str),
+    ("current_price", str),
+    ("currency", str),
+    ("stock_status", str),
+    ("identity_status", str),
+    ("membership_position", int),
+)
+
+
+def _snapshot_binding_value(value: Any) -> str | None:
+    """Каноническая форма ссылки из снимка/строки для точного сравнения."""
+
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    return text_value or None
+
+
+def resolve_bound_execution_item(
+    run: PricingRun,
+    run_item: PricingRunItem,
+    live_item: CatalogItem | None = None,
+) -> CatalogItem | FrozenCatalogItem:
+    """Единственная авторитетная точка чтения «позиции каталога» исполнением.
+
+    Самоподписанный снимок доказывает лишь то, что его не правили: он ничего не
+    говорит о том, ТУ ЛИ строку членства он описывает. Пересчитать честный хеш
+    поверх снимка позиции B и положить его в ``PricingRunItem`` позиции A было
+    достаточно, чтобы прогон считал по чужому товару. Поэтому здесь проверяется
+    не только отпечаток, но и совпадение всех связей: прогон, позиция каталога,
+    место в замороженном членстве, правка оператора и запись себестоимости.
+
+    Живая строка ``CatalogItem`` после этого используется ТОЛЬКО как
+    неавторитетные данные отображения (см. :func:`display_catalog_item`);
+    ничего, что попадает в цену, отождествление или коэффициенты, из неё не
+    читается.
+    """
+
+    if getattr(run_item, "pricing_run_id", None) != getattr(run, "id", None):
+        raise FrozenBindingError(
+            "START_SNAPSHOT_UNBOUND: run item "
+            f"{getattr(run_item, 'id', None)} belongs to run "
+            f"{getattr(run_item, 'pricing_run_id', None)}, not {getattr(run, 'id', None)}"
+        )
+    if live_item is not None and _snapshot_binding_value(
+        getattr(live_item, "id", None)
+    ) != _snapshot_binding_value(getattr(run_item, "catalog_item_id", None)):
+        raise FrozenBindingError(
+            "START_SNAPSHOT_UNBOUND: the live catalog row handed to execution is "
+            "not the row this membership names"
+        )
+    if not run_is_bounded(run):
+        # Прогон без контракта области — историческая, явно помеченная ветка.
+        if live_item is None:
+            raise FrozenBindingError(
+                "START_SNAPSHOT_UNBOUND: a legacy unbounded run needs its live row"
+            )
+        return live_item
+
+    snapshot = verified_start_snapshot(run_item)
+    _require_complete_snapshot(run_item, snapshot)
+    _require_snapshot_bindings(run_item, snapshot)
+    return frozen_catalog_item_from_snapshot(snapshot)
+
+
+def _require_complete_snapshot(
+    run_item: PricingRunItem, snapshot: Mapping[str, Any]
+) -> None:
+    """Ни одно обязательное поле не подменяется значением по умолчанию."""
+
+    for name, expected in _REQUIRED_SNAPSHOT_FIELDS:
+        if name not in snapshot:
+            raise FrozenBindingError(
+                f"START_SNAPSHOT_INCOMPLETE: run item {run_item.id} snapshot has "
+                f"no {name}; refusing to substitute a default"
+            )
+        value = snapshot[name]
+        if expected is int:
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise FrozenBindingError(
+                    f"START_SNAPSHOT_CORRUPT: {name} is not an integer"
+                )
+            continue
+        if not isinstance(value, str):
+            raise FrozenBindingError(
+                f"START_SNAPSHOT_CORRUPT: {name} is not a string"
+            )
+        # ``mpn_norm`` законно бывает пустым; остальные обязаны нести значение.
+        if name != "mpn_norm" and not value.strip():
+            raise FrozenBindingError(
+                f"START_SNAPSHOT_INCOMPLETE: {name} is empty"
+            )
+
+
+def _require_snapshot_bindings(
+    run_item: PricingRunItem, snapshot: Mapping[str, Any]
+) -> None:
+    """Снимок обязан описывать именно эту строку членства."""
+
+    bindings = (
+        ("catalog_item_id", snapshot.get("catalog_item_id"), run_item.catalog_item_id),
+        (
+            "membership_position",
+            snapshot.get("membership_position"),
+            run_item.membership_position,
+        ),
+        (
+            "catalog_item_override_id",
+            snapshot.get("catalog_item_override_id"),
+            run_item.catalog_item_override_id,
+        ),
+        ("cost_record_id", snapshot.get("cost_record_id"), run_item.cost_record_id),
+    )
+    for name, frozen_value, row_value in bindings:
+        if _snapshot_binding_value(frozen_value) != _snapshot_binding_value(row_value):
+            raise FrozenBindingError(
+                f"START_SNAPSHOT_MISBOUND: run item {run_item.id} names "
+                f"{name}={row_value!r} while its frozen snapshot names "
+                f"{frozen_value!r}"
+            )
+
+
+def display_catalog_item(live_item: CatalogItem | None) -> CatalogItem | None:
+    """Живая строка каталога — исключительно для отображения.
+
+    Существует, чтобы каждое обращение к живому каталогу внутри исполнения было
+    названо явно. Читать отсюда что-либо, что влияет на цену, отождествление
+    или подбор коэффициентов, нельзя: для этого есть
+    :func:`resolve_bound_execution_item`.
+    """
+
+    return live_item
 
 
 def customer_budget_floor_trace(
@@ -297,6 +478,10 @@ class CollectionClaim:
     scrape_input: AcquisitionInput | None = None
     stored_output: ScrapeOutput | None = None
     terminal_error: ScraperBoundaryError | None = None
+    #: Every storefront the run's workspace owns.  Carried on the claim so
+    #: acquisition can drop them before ``max_sellers`` is applied instead of
+    #: only recognizing them once the evidence is already materialized.
+    excluded_seller_ids: frozenset[str] = frozenset()
 
 
 async def prepare_run_dispatch(run_id: UUID) -> list[UUID]:
@@ -481,9 +666,12 @@ async def process_pricing_item(
         return claim.run_id
     try:
         comparison = await asyncio.to_thread(
-            _collect_comparison,
-            claim.product_url,
-            claim.oe_norm,
+            functools.partial(
+                _collect_comparison,
+                claim.product_url,
+                claim.oe_norm,
+                excluded_seller_ids=claim.excluded_seller_ids,
+            )
         )
     except ValueError as exc:
         raise PermanentCollectionError(str(exc)) from exc
@@ -524,9 +712,12 @@ async def _process_target_collection(claim: CollectionClaim) -> UUID:
             live_request_gate=require_live_prom_marketplace_collection,
         )
         output = await asyncio.to_thread(
-            _collect_target_output,
-            scrape_input,
-            trace,
+            functools.partial(
+                _collect_target_output,
+                scrape_input,
+                trace,
+                excluded_seller_ids=claim.excluded_seller_ids,
+            )
         )
     except Exception as exc:
         measurement = probe.finish()
@@ -589,6 +780,8 @@ async def _process_target_collection(claim: CollectionClaim) -> UUID:
 def _collect_target_output(
     scrape_input: AcquisitionInput,
     trace: ScrapeExecutionTrace,
+    *,
+    excluded_seller_ids: frozenset[str] = frozenset(),
 ) -> ScrapeOutput:
     settings = get_settings()
     config = ScrapeConfig(
@@ -600,7 +793,10 @@ def _collect_target_output(
         max_search_pages=max(1, settings.pricing_scraper_max_search_pages),
     )
     with scrape_execution(trace):
-        output = FrozenPromScraperAdapter(config).extract(scrape_input)
+        output = FrozenPromScraperAdapter(
+            config,
+            excluded_seller_ids=excluded_seller_ids,
+        ).extract(scrape_input)
     _raise_on_required_request_failure(trace)
     return output
 
@@ -658,13 +854,22 @@ def _verified_target_output(target: ScrapeTarget) -> ScrapeOutput:
     return output
 
 
-def _collect_comparison(product_url: str, oe_norm: str) -> PriceComparison:
+def _collect_comparison(
+    product_url: str,
+    oe_norm: str,
+    *,
+    excluded_seller_ids: frozenset[str] = frozenset(),
+) -> PriceComparison:
     settings = get_settings()
     require_live_prom_marketplace_collection(settings)
     with DistributedCollectionGuard(settings) as guard:
         guard.wait_for_slot()
         try:
-            comparison = PromGateway().compare(product_url, query=oe_norm)
+            comparison = PromGateway().compare(
+                product_url,
+                query=oe_norm,
+                excluded_seller_ids=excluded_seller_ids,
+            )
         except Exception:
             guard.record_failure()
             raise
@@ -722,9 +927,12 @@ async def _claim_item(
         if item.status not in {"queued", "collecting", "collected"}:
             return None
         run = await session.get(PricingRun, item.pricing_run_id)
-        catalog_item = await session.get(CatalogItem, item.catalog_item_id)
-        if run is None or catalog_item is None:
+        live_catalog_item = await session.get(CatalogItem, item.catalog_item_id)
+        if run is None or live_catalog_item is None:
             raise PricingItemNotFoundError("Pricing run item dependencies are missing")
+        # Сбор идёт по замороженным URL и OE: смена ссылки или артикула после
+        # старта не должна увести идущий прогон на другой товар.
+        catalog_item = resolve_bound_execution_item(run, item, live_catalog_item)
         if run.cancel_requested:
             item.status = "cancelled"
             item.finished_at = datetime.now(UTC)
@@ -743,6 +951,9 @@ async def _claim_item(
             )
         if item.status == "collecting" and item.task_id and item.task_id != task_id:
             return None
+        excluded_seller_ids = frozenset(
+            await _owned_seller_external_ids(session, run.workspace_id)
+        )
         item.status = "collecting"
         item.task_id = task_id or item.task_id
         item.attempts += 1
@@ -757,6 +968,7 @@ async def _claim_item(
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
             oe_norm=catalog_item.oe_norm,
+            excluded_seller_ids=excluded_seller_ids,
         )
 
 
@@ -1021,6 +1233,11 @@ async def _claim_target_item(
         now=now,
         advance_fence=True,
     )
+    # Read inside the claim transaction so acquisition can drop our own
+    # storefronts before the seller cap rather than after it.
+    excluded_seller_ids = frozenset(
+        await _owned_seller_external_ids(session, run.workspace_id)
+    )
     settings = get_settings()
     target.status = "collecting"
     target.execution_status = "RUNNING"
@@ -1067,6 +1284,7 @@ async def _claim_target_item(
         execution_no=execution_no,
         task_id=task_id,
         scrape_input=scrape_input,
+        excluded_seller_ids=excluded_seller_ids,
     )
 
 
@@ -1451,8 +1669,13 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
         run = await session.get(PricingRun, target.pricing_run_id)
         if run is None:
             raise PricingItemNotFoundError("Pricing run disappeared")
-        rows = list(
-            (
+        # Отождествление и материализация наблюдений тоже читают позицию
+        # каталога (OE, категория). Для прогона с контрактом сюда обязан
+        # приехать замороженный вид, иначе часть прогона сравнивается с одним
+        # артикулом, часть — с другим, и следа об этом не остаётся.
+        rows = [
+            (run_item, resolve_bound_execution_item(run, run_item, live_item))
+            for run_item, live_item in (
                 await session.execute(
                     select(PricingRunItem, CatalogItem)
                     .join(
@@ -1463,22 +1686,12 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
                     .order_by(PricingRunItem.created_at, PricingRunItem.id)
                 )
             ).all()
-        )
-        owned_sellers = set(
-            (
-                await session.scalars(
-                    select(MarketplaceStore.external_id)
-                    .join(
-                        WorkspaceStore,
-                        WorkspaceStore.store_id == MarketplaceStore.id,
-                    )
-                    .where(
-                        WorkspaceStore.workspace_id == run.workspace_id,
-                        WorkspaceStore.kind == StoreKind.owned,
-                    )
-                )
-            ).all()
-        )
+        ]
+        # Defence in depth.  Acquisition already drops these before the seller
+        # cap; this second pass still has to run, because a target collected
+        # before a store was registered — or by an older worker — can carry our
+        # own storefronts into materialization.
+        owned_sellers = await _owned_seller_external_ids(session, run.workspace_id)
         brand_tiers, brand_confidence = await _load_brand_rules(
             session,
             run.workspace_id,
@@ -1557,6 +1770,12 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
                     observed_at=observed_at,
                     source_type=target.source_type,
                     confirmed_crosses=confirmed_crosses,
+                    # Конверт приобретения: подготовленный URL, идентичность
+                    # запроса и запрошенный номер приезжают из самого payload-а,
+                    # а не восстанавливаются из каталога.
+                    prepared_url=output.prepared_url,
+                    acquisition_input_hash=output.input_hash,
+                    acquisition_query=output.acquisition_query,
                 )
                 _validate_offer_accounting(
                     accounting,
@@ -1564,6 +1783,12 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
                     pricing_run_item_id=run_item.id,
                 )
                 item_accounting = accounting
+                await _enqueue_ai_evidence_shadow(
+                    session,
+                    run=run,
+                    run_item=run_item,
+                    capture=capture,
+                )
                 aggregate_accounting = OfferAccounting(
                     retrieved=aggregate_accounting.retrieved + accounting.retrieved,
                     observations_persisted=(
@@ -2034,6 +2259,104 @@ def _validate_offer_accounting(
         raise
 
 
+def _record_acquisition(raw_offer: Any) -> Mapping[str, Any] | None:
+    """The origin block the acquisition boundary attached to one candidate."""
+
+    if not isinstance(raw_offer, Mapping):
+        return None
+    value = raw_offer.get("acquisition")
+    return value if isinstance(value, Mapping) else None
+
+
+def _persisted_retrieval_kind(raw_offer: Any, candidate: AcceptedCandidate) -> str:
+    """Retrieval kind stored on the observation, widening never lost.
+
+    ``retrieval_kind`` is the only origin field that survives the
+    ``comparison_evidence_from_dict``/``_to_dict`` round trip OE re-enrichment
+    performs, so it carries the widening.  A payload whose provenance block and
+    retrieval kind disagree is resolved towards the widened reading: claiming
+    our own part code's market when the offers came from a related number's is
+    the failure that must not be storable.
+    """
+
+    acquisition = _record_acquisition(raw_offer)
+    if acquisition is not None and bool(acquisition.get("is_widened")):
+        return RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED
+    return candidate.retrieval_kind
+
+
+#: Колонки первого класса, в которых живёт родословная приобретения.
+#: ``via_oe_number`` и три ``source_assertion_*`` уже есть в схеме; остальные
+#: перечислены здесь, чтобы миграция и код называли один и тот же набор.
+ACQUISITION_LINEAGE_COLUMNS: tuple[str, ...] = (
+    "source_assertion_source",
+    "source_assertion_method",
+    "source_assertion_queried_oe_norm",
+    "source_assertion_source_url",
+    "source_assertion_input_hash",
+)
+
+
+def _acquisition_capture_binding(
+    raw_manifest: Mapping[str, Any],
+    lineage: AcquisitionLineage,
+) -> str:
+    """Привязать проверенный манифест к самому запросу, а не только к байтам.
+
+    Голый хеш блоба доказывает лишь то, что какие-то байты сохранены. Он не
+    называет ни подготовленный URL, ни запрошенный номер, ни идентичность
+    запроса — то есть два разных приобретения с одинаковым манифестом
+    неразличимы, и заявление одного можно предъявить за другое. Отпечаток
+    считается только для приобретения, которое действительно что-то утверждает.
+    """
+
+    manifest_hash = str(raw_manifest.get("raw_content_sha256") or "").strip()
+    if not manifest_hash or not lineage.asserts_identity:
+        return ""
+    return canonical_sha256(
+        {
+            "binding_version": ACQUISITION_CONTRACT_VERSION,
+            "raw_capture_id": str(raw_manifest.get("raw_capture_id") or ""),
+            "raw_content_sha256": manifest_hash,
+            "source_record_id": str(raw_manifest.get("source_record_id") or ""),
+            "acquisition_source": lineage.source,
+            "acquisition_method": lineage.method,
+            "retrieval_kind": lineage.retrieval_kind,
+            "queried_oe_norm": lineage.queried_oe_norm,
+            "via_oe_number": lineage.via_oe_number,
+            "source_url": lineage.source_url,
+            "input_hash": lineage.input_hash,
+        }
+    )
+
+
+def _bind_acquisition_lineage(
+    observation: MarketObservation,
+    lineage: AcquisitionLineage,
+    *,
+    asserted: bool,
+) -> None:
+    """Записать родословную приобретения на наблюдение первым классом.
+
+    Внутри ``comparison_evidence`` её переживал только ``retrieval_kind``:
+    кодек повторного обогащения выбрасывает незнакомые ключи, поэтому источник,
+    способ, запрошенный номер и URL терялись ровно там, где их потом нужно
+    перепроверять.
+    """
+
+    values = {
+        "source_assertion_source": lineage.source if asserted else None,
+        "source_assertion_method": lineage.method if asserted else None,
+        "source_assertion_queried_oe_norm": (
+            lineage.queried_oe_norm if asserted else None
+        ),
+        "source_assertion_source_url": lineage.source_url if asserted else None,
+        "source_assertion_input_hash": lineage.input_hash if asserted else None,
+    }
+    for name, value in values.items():
+        setattr(observation, name, value)
+
+
 async def _persist_payload_observations(
     session,
     *,
@@ -2048,9 +2371,12 @@ async def _persist_payload_observations(
     observed_at: datetime,
     source_type: str,
     confirmed_crosses: tuple[ConfirmedCross, ...] = (),
+    prepared_url: str | None = None,
+    acquisition_input_hash: str | None = None,
+    acquisition_query: str | None = None,
 ) -> OfferAccounting:
     policy = (
-        policy_from_dict(run.policy_config) if hasattr(run, "policy_config") else None
+        load_run_execution_policy(run) if hasattr(run, "policy_config") else None
     )
     persisted = 0
     rejected = 0
@@ -2061,6 +2387,9 @@ async def _persist_payload_observations(
         processed = process_offer_candidate(
             raw_offer,
             fallback_index=raw_offer_index,
+            prepared_url=prepared_url,
+            input_hash=acquisition_input_hash,
+            fallback_queried_oe=acquisition_query,
         )
         if isinstance(processed, RejectedOffer):
             session.add(
@@ -2169,6 +2498,30 @@ async def _persist_payload_observations(
                     candidate.upstream_comparison_evidence
                 )
             oe_items = extract_oe_evidence(evidence_source, raw_manifest)
+            lineage = candidate.acquisition
+            effective_retrieval_kind = _persisted_retrieval_kind(raw_offer, candidate)
+            # Что именно утверждает источник. Продавцы на странице кода детали
+            # номер в заголовке не повторяют, поэтому без этого предложение с
+            # готового рынка площадки становится UNKNOWN и в цену не попадает.
+            #
+            # Заявление собирается ТОЛЬКО из родословной приобретения. Раньше
+            # запрошенный номер брался из ``catalog_item.oe_norm`` — то есть из
+            # НАШЕГО намерения, — и поэтому запись с ``retrieval_kind``
+            # страницы кода, но приобретённая поиском, доезжала до
+            # ``VERIFIED_EXACT``. Родословная, которая ничего не утверждает,
+            # даёт ``None``, и проверяющий работает по одним уликам карточки.
+            source_assertion = SourceAssertion.from_lineage(
+                lineage,
+                capture_sha256=_acquisition_capture_binding(raw_manifest, lineage),
+                confidence=SOURCE_PAGE_ASSERTION_CONFIDENCE,
+            )
+            # Заявление хранится только когда источник действительно
+            # авторитетен ДЛЯ НАШЕГО номера. Обычный поиск авторитетом не
+            # является, поэтому у него все поля пусты: иначе строка выглядит
+            # как утверждение площадки, которого никто не делал.
+            asserted = source_assertion is not None and (
+                source_assertion.authoritative_for(normalize_oe(catalog_item.oe_norm))
+            )
             verification = verify_offer_identity(
                 catalog_item.oe_norm,
                 oe_items,
@@ -2177,6 +2530,7 @@ async def _persist_payload_observations(
                     isinstance(raw_offer, Mapping)
                     and raw_offer.get("legacy_unverified")
                 ),
+                source_assertion=source_assertion,
             )
             parser_contract_verified = bool(
                 str(run.parser_version).strip() == PROM_ADAPTER_VERSION
@@ -2205,7 +2559,7 @@ async def _persist_payload_observations(
             )
             comparison_evidence = replace(
                 comparison_evidence,
-                retrieval_kind=candidate.retrieval_kind,
+                retrieval_kind=effective_retrieval_kind,
             )
             comparison_evidence = bind_oe_verification(
                 comparison_evidence,
@@ -2261,6 +2615,29 @@ async def _persist_payload_observations(
                 else None
             )
             observation = MarketObservation(
+                # Заявление источника — первым классом, вместе с происхождением.
+                # Внутри ``comparison_evidence`` его переживал только
+                # ``retrieval_kind``: кодек повторного обогащения выбрасывает
+                # незнакомые ключи.
+                via_oe_number=candidate.via_oe_number if asserted else None,
+                # Заявление пишется целиком или не пишется вовсе: способ
+                # извлечения без захвата — это заявление без основания, и
+                # ``ck_market_observation_source_assertion_provenance`` такую
+                # строку отвергает. Захват бывает неполным (см.
+                # ``extract_oe_evidence``), поэтому условие обязательно.
+                source_assertion_retrieval_kind=(
+                    effective_retrieval_kind if asserted else None
+                ),
+                source_assertion_capture_sha256=(
+                    source_assertion.capture_sha256.strip()
+                    if asserted and source_assertion is not None
+                    else None
+                ),
+                source_assertion_confidence=(
+                    source_assertion.confidence
+                    if asserted and source_assertion is not None
+                    else None
+                ),
                 pricing_run_item_id=run_item.id,
                 catalog_item_id=catalog_item.id,
                 raw_capture_id=capture.id,
@@ -2277,7 +2654,14 @@ async def _persist_payload_observations(
                 condition_state=condition_assessment.state.value,
                 condition_reason_codes=list(condition_assessment.reason_codes),
                 cross_candidates=cross_candidates,
-                candidate_snapshot=_candidate_review_snapshot(product),
+                candidate_snapshot=_candidate_review_snapshot(
+                    product,
+                    raw_capture_id=capture.id,
+                    capture_content_sha256=capture.content_sha256,
+                    raw_offer_index=candidate.raw_offer_index,
+                    raw_offer_sha256=payload_sha256,
+                    source_listing_id=source_listing_id,
+                ),
                 brand_raw=brand,
                 matched_oe_norm=verification.verified_matched_oe_norm,
                 search_oe_norm=catalog_item.oe_norm,
@@ -2322,6 +2706,9 @@ async def _persist_payload_observations(
                 cross_link_id=cross_link_id,
                 observed_at=observed_at,
             )
+            # Источник, способ, запрошенный номер и подготовленный URL —
+            # рядом с захватом, на который они опираются.
+            _bind_acquisition_lineage(observation, lineage, asserted=asserted)
             tier_record = ObservationTierClassification(
                 market_observation_id=observation.id,
                 tier=classification.tier.value,
@@ -2383,6 +2770,14 @@ async def _persist_payload_observations(
                 reason_codes=(
                     verification.status.value,
                     *source_assessment.reason_codes,
+                    *(
+                        ("ACQUIRED_VIA_WIDENED_OE",)
+                        if retrieval_kind_is_widened(effective_retrieval_kind)
+                        else ()
+                    ),
+                    # Почему родословную нельзя было принять целиком: рынок
+                    # сохранён, заявление — нет, и причина названа.
+                    *candidate.acquisition_reason_codes,
                 ),
                 payload_sha256=payload_sha256,
                 safe_sample=safe_offer_sample(
@@ -2568,20 +2963,8 @@ async def _persist_comparison(
         )
         session.add(capture)
         await session.flush()
-        owned_sellers = set(
-            (
-                await session.scalars(
-                    select(MarketplaceStore.external_id)
-                    .join(
-                        WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id
-                    )
-                    .where(
-                        WorkspaceStore.workspace_id == run.workspace_id,
-                        WorkspaceStore.kind == StoreKind.owned,
-                    )
-                )
-            ).all()
-        )
+        # Defence in depth, as in target materialization above.
+        owned_sellers = await _owned_seller_external_ids(session, run.workspace_id)
         brand_tiers, brand_confidence = await _load_brand_rules(
             session, run.workspace_id
         )
@@ -2612,6 +2995,12 @@ async def _persist_comparison(
             pricing_run_id=run.id,
             pricing_run_item_id=run_item.id,
         )
+        await _enqueue_ai_evidence_shadow(
+            session,
+            run=run,
+            run_item=run_item,
+            capture=capture,
+        )
         run_item.status = "classified"
         run_item.checkpoint = {
             "stage": "classified",
@@ -2622,6 +3011,62 @@ async def _persist_comparison(
             "at": observed_at.isoformat(),
         }
         await session.commit()
+
+
+async def _enqueue_ai_evidence_shadow(
+    session,
+    *,
+    run: PricingRun,
+    run_item: PricingRunItem,
+    capture: RawMarketCapture,
+) -> None:
+    """Transactional outbox handoff after deterministic rows have been flushed."""
+
+    if not resolve_ai_evidence_config(get_settings()).enabled:
+        return
+    await enqueue_dispatch(
+        session,
+        event_key=(
+            f"pricing-run:{run.id}:ai-evidence:{run_item.id}:"
+            f"{capture.content_sha256}:{AI_EVIDENCE_SELECTION_VERSION}"
+        ),
+        aggregate_type="pricing_run_item_ai_evidence",
+        aggregate_id=run_item.id,
+        workspace_id=run.workspace_id,
+        task_name="marko.worker.process_ai_evidence_position",
+        task_args=[str(run_item.id)],
+        queue="pricing-calculation",
+    )
+
+
+async def _owned_seller_external_ids(session, workspace_id: UUID) -> set[str]:
+    """Marketplace ids of every storefront this workspace owns.
+
+    KEMP runs four on prom.ua with identical cards, so they resemble our own
+    product better than any competitor does.  The same list is read twice on
+    purpose: once before acquisition, so they never spend a slot of the seller
+    cap, and again during materialization, so one that slipped through is still
+    filed as ours rather than as the market.
+    """
+
+    rows = (
+        await session.scalars(
+            select(MarketplaceStore.external_id)
+            .join(
+                WorkspaceStore,
+                WorkspaceStore.store_id == MarketplaceStore.id,
+            )
+            .where(
+                WorkspaceStore.workspace_id == workspace_id,
+                WorkspaceStore.kind == StoreKind.owned,
+            )
+        )
+    ).all()
+    # ``None`` must not become the string "None": that would exclude a seller
+    # nobody owns and, worse, read as a populated exclusion list.
+    return {
+        str(value).strip() for value in rows if value is not None and str(value).strip()
+    }
 
 
 async def _load_brand_rules(
@@ -2774,7 +3219,9 @@ async def calibrate_run_and_prepare_calculations(run_id: UUID) -> list[UUID]:
         if run is None:
             raise PricingItemNotFoundError(str(run_id))
         workspace_id = run.workspace_id
-        policy = policy_from_dict(run.policy_config)
+        # Калибровка — тоже вход расчёта: она обязана идти по снимку прогона.
+        await verify_run_membership(session, run)
+        policy = load_run_execution_policy(run)
         settings = get_settings()
         require_activated_run_policy(
             policy,
@@ -3271,8 +3718,8 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             await finalize_pricing_run(run_item.pricing_run_id)
             return
         run = await session.get(PricingRun, run_item.pricing_run_id)
-        catalog_item = await session.get(CatalogItem, run_item.catalog_item_id)
-        if run is None or catalog_item is None:
+        live_catalog_item = await session.get(CatalogItem, run_item.catalog_item_id)
+        if run is None or live_catalog_item is None:
             raise PricingItemNotFoundError(
                 "Pricing calculation dependencies are missing"
             )
@@ -3282,6 +3729,13 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             await session.commit()
             await finalize_pricing_run(run.id)
             return
+        # Ограниченный прогон считает по замороженному виду позиции. Живая
+        # строка каталога дальше не используется: она нужна была только чтобы
+        # убедиться, что позиция ещё существует.
+        await verify_run_membership(session, run)
+        catalog_item = resolve_bound_execution_item(
+            run, run_item, live_catalog_item
+        )
 
         rows = list(
             (
@@ -3323,15 +3777,39 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             )
             for observation, classification in latest.values()
         ]
-        override = await get_latest_override(session, catalog_item.id)
+        # Прогон считает по входам, замороженным на старте, а не по текущим.
+        # Иначе правка каталога или себестоимости, поданная оператором уже во
+        # время расчёта, попадала бы в идущий прогон, и один и тот же прогон
+        # нельзя было бы воспроизвести: часть позиций посчитана по старым
+        # данным, часть по новым, а в отчёте об этом ни следа.
+        #
+        # Прогоны, начатые до появления замороженной области
+        # (``scope_contract_version`` пуст или ``LEGACY_UNBOUNDED``), таких
+        # ссылок не имеют, поэтому для них сохраняется прежнее поведение —
+        # это единственный способ досчитать их без переписывания истории.
+        if not uses_frozen_start_inputs(run, run_item):
+            override = await get_latest_override(session, catalog_item.id)
+            configured_cost = await get_decrypted_catalog_cost(
+                session,
+                workspace_id=run.workspace_id,
+                catalog_item_id=catalog_item.id,
+                settings=settings,
+            )
+        else:
+            # Значения правки берутся из проверенного снимка, а не из строки,
+            # на которую он ссылается: ссылка ведёт в живые данные.
+            override = resolve_execution_override(run, run_item)
+            configured_cost = decrypt_cost_record(
+                await load_run_item_start_cost_record(session, run_item),
+                workspace_id=run.workspace_id,
+                catalog_item_id=catalog_item.id,
+                settings=settings,
+            )
         context = build_pricing_context(catalog_item, override)
-        configured_cost = await get_decrypted_catalog_cost(
-            session,
-            workspace_id=run.workspace_id,
-            catalog_item_id=catalog_item.id,
-            settings=settings,
-        )
-        policy = policy_from_dict(run.policy_config)
+        # Политика читается ТОЛЬКО из снимка прогона с пересчётом отпечатка:
+        # файл развёртывания — источник для нового предпросмотра, а не для уже
+        # принятого расчёта.
+        policy = load_run_execution_policy(run)
         require_activated_run_policy(
             policy,
             robust_v3_enabled=settings.pricing_v3_robust_dispersion_enabled,
@@ -3810,6 +4288,34 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
     await finalize_pricing_run(run_item.pricing_run_id)
 
 
+def _widened_match_level_ceiling(
+    match_level: str | None,
+    comparison_evidence: ComparisonEvidence | None,
+) -> str | None:
+    """Cap the grade at ``ACCEPTABLE_ANALOGUE`` for a related number's market.
+
+    When our own part code has no listing on prom.ua the market is taken by a
+    number from its supersession chain.  That is a different sellable part
+    until something proves otherwise, so ``EXACT`` is not available here no
+    matter what the semantic reviewer said.  The decision is deterministic and
+    lives on the persistence/domain side: it reads only the ``retrieval_kind``
+    stored with the observation.
+
+    The ceiling only ever lowers a grade.  ``SUSPICIOUS`` and
+    ``NOT_APPLICABLE`` pass through untouched — it has no business promoting
+    anything.
+    """
+
+    if match_level != ComparabilityMatchLevel.EXACT.value:
+        return match_level
+    retrieval_kind = (
+        comparison_evidence.retrieval_kind if comparison_evidence is not None else None
+    )
+    if not retrieval_kind_is_widened(retrieval_kind):
+        return match_level
+    return ComparabilityMatchLevel.ACCEPTABLE_ANALOGUE.value
+
+
 def _domain_offer(
     observation: MarketObservation,
     classification: ObservationTierClassification,
@@ -3877,8 +4383,9 @@ def _domain_offer(
         semantic_review_verdict=(
             semantic_review.verdict.value if semantic_review is not None else None
         ),
-        semantic_review_match_level=(
-            semantic_review.match_level.value if semantic_review is not None else None
+        semantic_review_match_level=_widened_match_level_ceiling(
+            semantic_review.match_level.value if semantic_review is not None else None,
+            comparison_evidence,
         ),
         semantic_review_confidence=(
             semantic_review.confidence if semantic_review is not None else None
@@ -4267,7 +4774,15 @@ def _optional_string(value: Any) -> str | None:
     return normalized or None
 
 
-def _candidate_review_snapshot(product: Mapping[str, Any]) -> dict[str, Any]:
+def _candidate_review_snapshot(
+    product: Mapping[str, Any],
+    *,
+    raw_capture_id: UUID,
+    capture_content_sha256: str,
+    raw_offer_index: int,
+    raw_offer_sha256: str,
+    source_listing_id: str,
+) -> dict[str, Any]:
     """Retain normalized candidate fields needed by the semantic reviewer."""
 
     allowed = {
@@ -4322,6 +4837,15 @@ def _candidate_review_snapshot(product: Mapping[str, Any]) -> dict[str, Any]:
         }
     return {
         "schema_version": "marko-candidate-review-snapshot-v1",
+        "source_locator": {
+            "locator_version": "marko-ai-evidence-source-locator-v1",
+            "raw_capture_id": str(raw_capture_id),
+            "capture_content_sha256": capture_content_sha256,
+            "raw_offer_index": raw_offer_index,
+            "raw_offer_sha256": raw_offer_sha256,
+            "source_listing_id": source_listing_id,
+            "source_pointer": f"/candidate_records/{raw_offer_index}",
+        },
         "product": decoded,
     }
 

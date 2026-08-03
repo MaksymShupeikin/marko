@@ -438,6 +438,22 @@ def test_the_widened_ina_rule_still_admits_ordinary_nine_digit_oes(kinds) -> Non
     assert _resolve(_v2(oe="058109244", article=""), kinds).oe_norm == "058109244"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("КМ 281", "KM281"), ("КМ 533", "KM533"), ("ОС 232", "OC232")],
+)
+def test_cyrillic_homoglyphs_in_the_oe_column_are_recovered(
+    raw: str,
+    expected: str,
+    kinds,
+) -> None:
+    identity = _resolve(_v2(oe=raw, article=""), kinds)
+
+    assert identity.identity_status is IdentityStatus.OE_CONFIRMED
+    assert identity.reason is IdentityReason.OE_COLUMN
+    assert identity.oe_norm == expected
+
+
 def test_the_newer_layout_loads_without_a_brand_column(oe_map) -> None:
     assert len(oe_map.rows) == 7743
     assert all(row.article_brand == "" for row in oe_map.rows)
@@ -447,14 +463,14 @@ def test_the_newer_layout_loads_without_a_brand_column(oe_map) -> None:
 def test_the_newer_file_nearly_doubles_the_positions_with_an_oe(
     oe_map, reference, kinds
 ) -> None:
-    """The measured payoff of taking the 2026-07-29 file: 3248 → 6161."""
+    """Homoglyph recovery raises the measured combined coverage to 6160."""
 
     old = {i.mpn for i in resolve_all(reference, kinds=kinds, tokens=TOKENS) if i.has_oe}
     new = {i.mpn for i in resolve_all(oe_map, kinds=kinds, tokens=TOKENS) if i.has_oe}
 
     assert len(old) == 3248
-    assert len(new) == 5795
-    assert len(old | new) == 6157
+    assert len(new) == 5798
+    assert len(old | new) == 6160
 
 
 def test_the_two_files_join_cleanly_on_the_internal_code(oe_map, reference) -> None:

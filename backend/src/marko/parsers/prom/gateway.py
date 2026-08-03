@@ -210,6 +210,7 @@ class PromGateway:
         query: str | None = None,
         *,
         strict: bool = False,
+        excluded_seller_ids: frozenset[str] = frozenset(),
     ) -> PriceComparison:
         """Compare a seed product against similar offers from other sellers."""
         match = _PRODUCT_URL_RE.search(seed_url)
@@ -223,7 +224,9 @@ class PromGateway:
         with HttpClient(self._config) as client:
             seed, motors = self._fetch_seed_with_motors(client, seed_url, lang)
             if motors is not None and motors.has_oe_page:
-                return self._compare_via_oe_page(client, seed, motors, lang)
+                return self._compare_via_oe_page(
+                    client, seed, motors, lang, excluded_seller_ids
+                )
             search_query = query or build_search_query(seed.product)
             log.info(
                 "Seed: %s | бренд=%s | model_id=%s | buyBox=%s продавців (%s–%s)",
@@ -249,6 +252,8 @@ class PromGateway:
                     query=search_query,
                     threshold=self._config.similarity_threshold,
                     max_sellers=self._config.max_sellers,
+                    search_number=query,
+                    excluded_seller_ids=excluded_seller_ids,
                 ),
             )
 
@@ -265,6 +270,7 @@ class PromGateway:
         seed: SeedInfo,
         context: MotorsContext,
         lang: str,
+        excluded_seller_ids: frozenset[str] = frozenset(),
     ) -> PriceComparison:
         """Compare against the marketplace's own grouping instead of a search.
 
@@ -273,6 +279,13 @@ class PromGateway:
         was still four classes of radiator — while prom.ua files that same code
         with 114 offers behind it.  A search finds what the words happen to say;
         this finds what the marketplace itself grouped.
+
+        ``via_oe_number`` and ``is_widened`` leave with the comparison.  When
+        our own code has no listing the walk falls back to one from its
+        supersession chain, and an offer taken from a *related* number's market
+        is not the same sellable part until something downstream says so.  The
+        context has known this since the parser was written; dropping it here
+        was what made the widening invisible past this method.
         """
 
         candidates = self._collect_oe_candidates(client, context, lang)
@@ -284,11 +297,17 @@ class PromGateway:
                 threshold=self._config.similarity_threshold,
                 max_sellers=self._config.max_sellers,
                 identity_source=MOTORS_IDENTITY_SOURCE,
+                via_oe_number=context.via_oe_number,
+                is_widened=context.is_widened,
+                excluded_seller_ids=excluded_seller_ids,
             ),
         )
         log.info(
-            "Джерело: сторінка коду %s | продавців %d (переглянуто %d)",
+            "Джерело: сторінка коду %s (взято за %s%s) | продавців %d "
+            "(переглянуто %d)",
             context.normalized_part_code,
+            context.via_oe_number or context.normalized_part_code,
+            ", розширення" if context.is_widened else "",
             len(comparison.offers),
             comparison.candidates_scanned,
         )

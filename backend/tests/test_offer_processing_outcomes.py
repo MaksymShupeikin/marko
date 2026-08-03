@@ -16,9 +16,9 @@ from marko.services.offer_processing import (
     process_offer_candidate,
     resolve_offer_price_boundary,
 )
-from marko.services.pricing_runs import policy_to_dict
+from marko.services.pricing_runs import policy_from_dict, policy_to_dict
 from marko.services.scraper_contract import PROM_ADAPTER_VERSION
-from metis.pricing import PricingPolicy, ProductTier
+from metis.pricing import ProductTier
 
 
 def _offer(**overrides):
@@ -175,16 +175,17 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
         run=SimpleNamespace(
             id=uuid4(),
             parser_version=PROM_ADAPTER_VERSION,
-            policy_config=policy_to_dict(PricingPolicy()),
+            policy_config=policy_to_dict(policy_from_dict(None)),
         ),
         run_item=SimpleNamespace(id=uuid4()),
         catalog_item=SimpleNamespace(
             id=uuid4(), category="brakes", oe_norm="1K0121251"
         ),
-        capture=SimpleNamespace(
-            id=uuid4(),
-            parser_version=PROM_ADAPTER_VERSION,
-            payload={
+            capture=SimpleNamespace(
+                id=uuid4(),
+                parser_version=PROM_ADAPTER_VERSION,
+                content_sha256="c" * 64,
+                payload={
                 "raw_evidence": raw_evidence,
                 "raw_manifest_sha256": canonical_sha256(raw_evidence),
             },

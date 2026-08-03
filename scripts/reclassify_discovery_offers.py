@@ -49,7 +49,6 @@ import argparse
 import asyncio
 import collections
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -61,7 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sqlalchemy import func, or_, select, update  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
-from marko.core.config import Settings, get_settings  # noqa: E402
+from marko.core.config import get_settings  # noqa: E402
 from marko.infrastructure.db.models import (  # noqa: E402
     CatalogDiscoveryOffer,
     CatalogDiscoveryRun,

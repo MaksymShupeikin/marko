@@ -1,4 +1,12 @@
-"""Total candidate validation and versioned source-confidence assessment."""
+"""Total candidate validation and versioned source-confidence assessment.
+
+This module also owns the *closed acquisition vocabulary*: the small set of
+values that may describe where one market came from and how it was taken.  It
+lives here, with no ``marko`` imports, so that both the frozen scraper boundary
+(:mod:`marko.services.scraper_contract`) and persistence
+(:mod:`marko.services.market_collection`) can validate against exactly the same
+contract without importing each other.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +19,11 @@ import json
 from typing import Any
 from urllib.parse import urlsplit
 
+from metis.pricing import normalize_oe
+
 
 SOURCE_CONFIDENCE_METHOD_VERSION = "source-confidence-v1"
+ACQUISITION_CONTRACT_VERSION = "acquisition-lineage-v1"
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
 _WEIGHTS = {
@@ -23,6 +34,362 @@ _WEIGHTS = {
     "url": Decimal("0.10"),
     "structured_completeness": Decimal("0.20"),
 }
+
+
+# --------------------------------------------------------------------------
+# Closed acquisition vocabulary
+# --------------------------------------------------------------------------
+#
+# Three orthogonal facts describe one acquisition, and all three are needed
+# before anything downstream may treat it as a claim about identity:
+#
+#   * ``source``          — whose surface produced the market;
+#   * ``method``          — how it was taken from that surface;
+#   * ``retrieval_kind``  — the per-record label that survives the
+#                           ``comparison_evidence`` round trip.
+#
+# Naming any one of them without the others is what let a text search be stored
+# with ``retrieval_kind=prom_oe_page`` and then be graded ``VERIFIED_EXACT``.
+
+#: prom.ua's own part-code page: the marketplace itself filed these offers.
+ACQUISITION_SOURCE_OE_PAGE = "PROM_OE_PAGE"
+#: An ordinary text search: word overlap, never a statement about identity.
+ACQUISITION_SOURCE_SEARCH = "SEARCH"
+#: Retained payloads that predate the acquisition contract.
+ACQUISITION_SOURCE_LEGACY = "LEGACY_UNKNOWN"
+ACQUISITION_SOURCES = frozenset(
+    {
+        ACQUISITION_SOURCE_OE_PAGE,
+        ACQUISITION_SOURCE_SEARCH,
+        ACQUISITION_SOURCE_LEGACY,
+    }
+)
+
+ACQUISITION_METHOD_OE_PAGE_LISTING = "OE_PAGE_LISTING"
+ACQUISITION_METHOD_TEXT_SEARCH = "TEXT_SEARCH"
+ACQUISITION_METHOD_LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
+ACQUISITION_METHODS = frozenset(
+    {
+        ACQUISITION_METHOD_OE_PAGE_LISTING,
+        ACQUISITION_METHOD_TEXT_SEARCH,
+        ACQUISITION_METHOD_LEGACY_UNVERIFIED,
+    }
+)
+
+RETRIEVAL_KIND_PRODUCT_SEED_COMPARISON = "product_seed_comparison"
+RETRIEVAL_KIND_SEARCH_QUERY = "search_query"
+RETRIEVAL_KIND_LEGACY_PRODUCT_SEED = "legacy_product_seed_comparison"
+#: Offline replay lane.  In the vocabulary because it is a real acquisition
+#: lane, and non-asserting because a fixture is not the marketplace speaking.
+RETRIEVAL_KIND_FIXTURE_REPLAY = "fixture_replay"
+RETRIEVAL_KIND_PROM_OE_PAGE = "prom_oe_page"
+RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED = "prom_oe_page_widened"
+
+#: Retrieval kinds whose market belongs to a number other than ours.
+WIDENED_RETRIEVAL_KINDS = frozenset({RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED})
+#: Retrieval kinds the marketplace itself grouped under a part code.
+ASSERTING_RETRIEVAL_KINDS = frozenset(
+    {RETRIEVAL_KIND_PROM_OE_PAGE, RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED}
+)
+_SEARCH_RETRIEVAL_KINDS = frozenset(
+    {
+        RETRIEVAL_KIND_PRODUCT_SEED_COMPARISON,
+        RETRIEVAL_KIND_SEARCH_QUERY,
+        RETRIEVAL_KIND_LEGACY_PRODUCT_SEED,
+        RETRIEVAL_KIND_FIXTURE_REPLAY,
+    }
+)
+
+_SOURCE_BY_METHOD = {
+    ACQUISITION_METHOD_OE_PAGE_LISTING: ACQUISITION_SOURCE_OE_PAGE,
+    ACQUISITION_METHOD_TEXT_SEARCH: ACQUISITION_SOURCE_SEARCH,
+    ACQUISITION_METHOD_LEGACY_UNVERIFIED: ACQUISITION_SOURCE_LEGACY,
+}
+
+
+class AcquisitionContractError(ValueError):
+    """One acquisition description contradicts itself.
+
+    Deliberately distinct from "the market was empty": an empty result is a
+    truthful answer, an inconsistent lineage is a payload that cannot be
+    believed at all.
+    """
+
+    def __init__(self, code: str, detail: str = "") -> None:
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code = code
+        self.detail = detail
+
+
+def method_for_retrieval_kind(retrieval_kind: str | None) -> str:
+    """The only acquisition method a given retrieval kind may belong to."""
+
+    kind = (retrieval_kind or "").strip()
+    if kind in ASSERTING_RETRIEVAL_KINDS:
+        return ACQUISITION_METHOD_OE_PAGE_LISTING
+    if kind in _SEARCH_RETRIEVAL_KINDS:
+        return ACQUISITION_METHOD_TEXT_SEARCH
+    return ACQUISITION_METHOD_LEGACY_UNVERIFIED
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionLineage:
+    """Where one market came from, as a closed and mutually consistent whole.
+
+    Every field is evidence produced by the acquisition itself.  Nothing here
+    may be reconstructed from the catalog: the moment ``queried_oe_norm`` is
+    filled in from ``CatalogItem.oe_norm`` the record stops being a statement
+    by the marketplace and becomes a restatement of our own intent.
+    """
+
+    source: str
+    method: str
+    retrieval_kind: str
+    is_widened: bool
+    #: The number the page was actually requested by, as the acquisition
+    #: reported it.  ``None`` for a text search — a search asserts nothing.
+    queried_oe_norm: str | None
+    #: The number whose market was actually taken (widening only).
+    via_oe_number: str | None
+    #: The prepared/source URL the request was issued against.
+    source_url: str | None
+    #: Identity of the acquisition request itself, so the retained bytes can be
+    #: bound to *this* request rather than to any capture with the same hash.
+    input_hash: str | None = None
+    contract_version: str = ACQUISITION_CONTRACT_VERSION
+
+    @property
+    def asserts_identity(self) -> bool:
+        """Whether this acquisition may stand in for missing card evidence."""
+
+        return self.method == ACQUISITION_METHOD_OE_PAGE_LISTING
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "method": self.method,
+            "is_widened": self.is_widened,
+            "queried_oe_norm": self.queried_oe_norm,
+            "via_oe_number": self.via_oe_number,
+            "source_url": self.source_url,
+            "input_hash": self.input_hash,
+            "contract_version": self.contract_version,
+        }
+
+    @classmethod
+    def unverified(
+        cls,
+        *,
+        retrieval_kind: str | None,
+        via_oe_number: str | None = None,
+        is_widened: bool = False,
+    ) -> AcquisitionLineage:
+        """A lineage that can never assert identity.
+
+        Used for retained payloads and for any block that failed the contract:
+        the market datum survives, the claim about identity does not.
+        """
+
+        via = (via_oe_number or "").strip() or None
+        return cls(
+            source=ACQUISITION_SOURCE_LEGACY,
+            method=ACQUISITION_METHOD_LEGACY_UNVERIFIED,
+            retrieval_kind=(retrieval_kind or "").strip()[:80],
+            is_widened=bool(is_widened) and via is not None,
+            queried_oe_norm=None,
+            via_oe_number=via,
+            source_url=None,
+            input_hash=None,
+        )
+
+    @classmethod
+    def validated(
+        cls,
+        raw: Any,
+        *,
+        retrieval_kind: str | None,
+        prepared_url: str | None = None,
+        input_hash: str | None = None,
+        fallback_queried_oe: str | None = None,
+        require_url_binding: bool = False,
+    ) -> AcquisitionLineage:
+        """Build a lineage or refuse; never silently repair a contradiction."""
+
+        kind = (retrieval_kind or "").strip()
+        if raw is None:
+            if kind in ASSERTING_RETRIEVAL_KINDS:
+                raise AcquisitionContractError(
+                    "ACQUISITION_BLOCK_MISSING",
+                    f"{kind} claims a part-code page with no acquisition block",
+                )
+            raw = {}
+        if not isinstance(raw, Mapping):
+            raise AcquisitionContractError(
+                "ACQUISITION_BLOCK_NOT_MAPPING", type(raw).__name__
+            )
+
+        expected_method = method_for_retrieval_kind(kind)
+        if expected_method == ACQUISITION_METHOD_LEGACY_UNVERIFIED and kind:
+            raise AcquisitionContractError("ACQUISITION_RETRIEVAL_KIND_UNKNOWN", kind)
+        expected_source = _SOURCE_BY_METHOD[expected_method]
+
+        stated_source = str(raw.get("source") or "").strip().upper()
+        if stated_source and stated_source not in ACQUISITION_SOURCES:
+            raise AcquisitionContractError(
+                "ACQUISITION_SOURCE_UNKNOWN", stated_source[:80]
+            )
+        if stated_source and stated_source != expected_source:
+            raise AcquisitionContractError(
+                "ACQUISITION_SOURCE_CONFLICT",
+                f"{kind} cannot come from {stated_source}",
+            )
+        stated_method = str(raw.get("method") or "").strip().upper()
+        if stated_method and stated_method not in ACQUISITION_METHODS:
+            raise AcquisitionContractError(
+                "ACQUISITION_METHOD_UNKNOWN", stated_method[:80]
+            )
+        if stated_method and stated_method != expected_method:
+            raise AcquisitionContractError(
+                "ACQUISITION_METHOD_CONFLICT",
+                f"{kind} cannot be taken by {stated_method}",
+            )
+
+        stated_widened = bool(raw.get("is_widened"))
+        kind_widened = kind in WIDENED_RETRIEVAL_KINDS
+        if stated_widened != kind_widened:
+            raise AcquisitionContractError(
+                "ACQUISITION_WIDENING_CONFLICT",
+                f"is_widened={stated_widened} with retrieval_kind={kind!r}",
+            )
+
+        via_raw = str(raw.get("via_oe_number") or "").strip() or None
+        via_norm = normalize_oe(via_raw) if via_raw else None
+        queried_raw = str(raw.get("queried_oe_norm") or "").strip() or None
+        if queried_raw is None:
+            queried_raw = (fallback_queried_oe or "").strip() or None
+        queried_norm = normalize_oe(queried_raw) if queried_raw else None
+
+        if expected_method == ACQUISITION_METHOD_OE_PAGE_LISTING:
+            if queried_norm is None:
+                raise AcquisitionContractError(
+                    "ACQUISITION_QUERY_OE_MISSING",
+                    "a part-code page must name the number it was requested by",
+                )
+            if kind_widened:
+                if via_norm is None:
+                    raise AcquisitionContractError(
+                        "ACQUISITION_VIA_OE_MISSING",
+                        "a widened acquisition must name the number it used",
+                    )
+                if via_norm == queried_norm:
+                    raise AcquisitionContractError(
+                        "ACQUISITION_WIDENING_WITHOUT_A_DIFFERENT_NUMBER",
+                        f"{via_norm} is the requested number",
+                    )
+            elif via_norm is not None and via_norm != queried_norm:
+                raise AcquisitionContractError(
+                    "ACQUISITION_VIA_OE_NOT_WIDENED",
+                    f"market taken by {via_norm}, requested {queried_norm}",
+                )
+        else:
+            if queried_raw is not None and raw.get("queried_oe_norm"):
+                raise AcquisitionContractError(
+                    "ACQUISITION_QUERY_OE_ON_SEARCH",
+                    "a text search does not assert a part number",
+                )
+            queried_norm = None
+            if via_norm is not None:
+                raise AcquisitionContractError(
+                    "ACQUISITION_VIA_OE_ON_SEARCH",
+                    "a text search cannot be taken by a related number",
+                )
+
+        prepared = (prepared_url or "").strip() or None
+        stated_url = str(raw.get("source_url") or "").strip() or None
+        if stated_url is not None and prepared is not None and stated_url != prepared:
+            raise AcquisitionContractError(
+                "ACQUISITION_SOURCE_URL_MISMATCH",
+                f"{stated_url} is not the prepared URL {prepared}",
+            )
+        # ``require_url_binding`` is only true for the caller that owns the
+        # payload envelope and therefore knows whether a prepared URL exists at
+        # all.  A caller handing us a bare record cannot distinguish "there was
+        # no URL" from "I did not pass it", so it must not be able to reject.
+        if require_url_binding and stated_url is not None and prepared is None:
+            raise AcquisitionContractError(
+                "ACQUISITION_SOURCE_URL_UNEXPECTED",
+                "a query-only acquisition has no prepared URL",
+            )
+        if require_url_binding and stated_url is None and prepared is not None:
+            stated_url = prepared
+
+        stated_hash = str(raw.get("input_hash") or "").strip() or None
+        expected_hash = (input_hash or "").strip() or None
+        if (
+            stated_hash is not None
+            and expected_hash is not None
+            and stated_hash != expected_hash
+        ):
+            raise AcquisitionContractError(
+                "ACQUISITION_INPUT_HASH_MISMATCH",
+                "the block names a different acquisition request",
+            )
+
+        return cls(
+            source=expected_source,
+            method=expected_method,
+            retrieval_kind=kind,
+            is_widened=kind_widened,
+            queried_oe_norm=queried_norm,
+            via_oe_number=via_raw if kind_widened else None,
+            source_url=stated_url or prepared,
+            input_hash=stated_hash or expected_hash,
+        )
+
+    @classmethod
+    def from_record(
+        cls,
+        raw: Any,
+        *,
+        retrieval_kind: str | None,
+        prepared_url: str | None = None,
+        input_hash: str | None = None,
+        fallback_queried_oe: str | None = None,
+        require_url_binding: bool = False,
+    ) -> tuple[AcquisitionLineage, tuple[str, ...]]:
+        """Lineage plus the reason it could not be trusted, if it could not.
+
+        Persistence must not lose a market datum because its origin block is
+        malformed — it must lose the *claim*.  A contract failure therefore
+        degrades to :meth:`unverified` and reports why.
+        """
+
+        try:
+            return (
+                cls.validated(
+                    raw,
+                    retrieval_kind=retrieval_kind,
+                    prepared_url=prepared_url,
+                    input_hash=input_hash,
+                    fallback_queried_oe=fallback_queried_oe,
+                    require_url_binding=require_url_binding,
+                ),
+                (),
+            )
+        except AcquisitionContractError as exc:
+            block = raw if isinstance(raw, Mapping) else {}
+            return (
+                cls.unverified(
+                    retrieval_kind=retrieval_kind,
+                    via_oe_number=str(block.get("via_oe_number") or "").strip() or None,
+                    is_widened=bool(block.get("is_widened")),
+                ),
+                (exc.code,),
+            )
+
+
+#: Родословная retained-записи, о происхождении которой ничего не известно.
+_LEGACY_LINEAGE = AcquisitionLineage.unverified(retrieval_kind="legacy_unknown")
 
 
 class EvidenceAccountingError(ValueError):
@@ -55,10 +422,40 @@ class AcceptedCandidate:
     retrieval_score: Decimal | None
     product: Mapping[str, Any]
     upstream_comparison_evidence: Mapping[str, Any] | None
+    #: Номер, по которому фактически взят рынок. Отличается от нашего кода,
+    #: когда у него самого нет листинга и использован номер из цепочки
+    #: замещений. Без него расширенный кросс не может назвать, к чему относится.
+    via_oe_number: str | None
+    #: Расширение утверждается только вместе с ``via_oe_number``: заявление без
+    #: названного номера — заявление без содержания.
+    is_widened: bool
     price: Decimal
     reference_price: Decimal | None
     source_listing_id: str
     listing_identity_quality: Decimal
+    #: Полная типизированная родословная приобретения. ``LEGACY_UNVERIFIED``
+    #: там, где блок происхождения отсутствовал или противоречил сам себе.
+    acquisition: AcquisitionLineage = _LEGACY_LINEAGE
+    #: Почему родословную нельзя было принять целиком.
+    acquisition_reason_codes: tuple[str, ...] = ()
+
+    @property
+    def acquisition_source(self) -> str:
+        return self.acquisition.source
+
+    @property
+    def acquisition_method(self) -> str:
+        return self.acquisition.method
+
+    @property
+    def queried_oe_norm(self) -> str | None:
+        """Номер, по которому источник действительно брал рынок."""
+
+        return self.acquisition.queried_oe_norm
+
+    @property
+    def source_url(self) -> str | None:
+        return self.acquisition.source_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +501,17 @@ def process_offer_candidate(
     raw_offer: Any,
     *,
     fallback_index: int,
+    prepared_url: str | None = None,
+    input_hash: str | None = None,
+    fallback_queried_oe: str | None = None,
 ) -> AcceptedCandidate | RejectedOffer:
-    """Return exactly one typed validation result for one retrieved element."""
+    """Return exactly one typed validation result for one retrieved element.
+
+    ``prepared_url``/``input_hash``/``fallback_queried_oe`` describe the
+    acquisition request this element was retrieved by.  They are supplied by
+    the caller that owns the payload envelope; a record whose own block
+    disagrees with them keeps its price but loses its identity claim.
+    """
 
     if not isinstance(raw_offer, Mapping):
         return _rejected(
@@ -218,20 +624,46 @@ def process_offer_candidate(
             "OFFER_NOT_DETERMINISTIC_JSON",
             raw_offer,
         )
+    retrieval_kind = str(
+        raw_offer.get("retrieval_kind")
+        or raw_offer.get("match_kind")
+        or "legacy_unknown"
+    )[:80]
+    raw_acquisition = raw_offer.get("acquisition")
+    if raw_acquisition is None and "acquisition" not in raw_offer:
+        raw_acquisition = None
+    # Признак расширения раньше жил только в блоке; ``retrieval_kind`` и блок
+    # могли разойтись. Приводим их к самому осторожному прочтению ДО проверки
+    # контракта: объявить рынок родственного номера своим — та ошибка, которую
+    # хранить нельзя.
+    if (
+        isinstance(raw_acquisition, Mapping)
+        and bool(raw_acquisition.get("is_widened"))
+        and str(raw_acquisition.get("via_oe_number") or "").strip()
+        and retrieval_kind in ASSERTING_RETRIEVAL_KINDS
+    ):
+        retrieval_kind = RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED
+    lineage, acquisition_reasons = AcquisitionLineage.from_record(
+        raw_acquisition,
+        retrieval_kind=retrieval_kind,
+        prepared_url=prepared_url,
+        input_hash=input_hash,
+        fallback_queried_oe=fallback_queried_oe,
+    )
     return AcceptedCandidate(
         raw_offer_index=raw_index,
-        retrieval_kind=str(
-            raw_offer.get("retrieval_kind")
-            or raw_offer.get("match_kind")
-            or "legacy_unknown"
-        )[:80],
+        retrieval_kind=retrieval_kind,
         retrieval_score=retrieval_score,
         product=dict(product),
         upstream_comparison_evidence=(dict(upstream) if upstream is not None else None),
+        via_oe_number=lineage.via_oe_number if lineage.is_widened else None,
+        is_widened=lineage.is_widened,
         price=price,
         reference_price=reference_price,
         source_listing_id=source_listing_id,
         listing_identity_quality=listing_quality,
+        acquisition=lineage,
+        acquisition_reason_codes=acquisition_reasons,
     )
 
 
@@ -440,8 +872,27 @@ def _valid_prom_url(value: str) -> bool:
 
 
 __all__ = [
+    "ACQUISITION_CONTRACT_VERSION",
+    "ACQUISITION_METHODS",
+    "ACQUISITION_METHOD_LEGACY_UNVERIFIED",
+    "ACQUISITION_METHOD_OE_PAGE_LISTING",
+    "ACQUISITION_METHOD_TEXT_SEARCH",
+    "ACQUISITION_SOURCES",
+    "ACQUISITION_SOURCE_LEGACY",
+    "ACQUISITION_SOURCE_OE_PAGE",
+    "ACQUISITION_SOURCE_SEARCH",
+    "ASSERTING_RETRIEVAL_KINDS",
+    "RETRIEVAL_KIND_LEGACY_PRODUCT_SEED",
+    "RETRIEVAL_KIND_PRODUCT_SEED_COMPARISON",
+    "RETRIEVAL_KIND_PROM_OE_PAGE",
+    "RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED",
+    "RETRIEVAL_KIND_SEARCH_QUERY",
+    "WIDENED_RETRIEVAL_KINDS",
     "AcceptedCandidate",
+    "AcquisitionContractError",
+    "AcquisitionLineage",
     "EvidenceAccountingError",
+    "method_for_retrieval_kind",
     "OfferAccounting",
     "OfferOutcomeCode",
     "RejectedOffer",

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 import json
 from types import SimpleNamespace
+import uuid
 from uuid import uuid4
 
 import httpx
@@ -11,6 +13,7 @@ from pydantic import ValidationError
 import pytest
 
 from marko.core.config import Settings
+from marko.services import llm_comparability
 from marko.services.llm_comparability import (
     ComparabilityMatchLevel,
     ComparabilityVerdict,
@@ -419,6 +422,237 @@ def test_missing_or_uncertain_semantic_review_is_fail_closed(
     assert result.action is RecommendationAction.INSUFFICIENT_DATA
     assert result.recommended_price is None
     assert result.excluded[0].reason == expected_reason
+
+
+def _confirmed_review(observation_id: uuid.UUID) -> EffectiveComparabilityReview:
+    return EffectiveComparabilityReview(
+        review_id=uuid4(),
+        market_observation_id=observation_id,
+        input_hash="0" * 64,
+        verdict=ComparabilityVerdict.COMPARABLE,
+        match_level=ComparabilityMatchLevel.ACCEPTABLE_ANALOGUE,
+        confidence=Decimal("0.9"),
+        rationale="Same part type and OE reference.",
+        dimension_findings=(),
+        hard_stop_conflicts=(),
+        decision_source="LLM",
+        status="COMPLETED",
+        provider="openai_responses",
+        model_id="gpt-test",
+        prompt_version="v1",
+        reviewed_at=datetime(2026, 8, 1, tzinfo=UTC),
+        cache_hit_review_id=None,
+    )
+
+
+def _patch_review_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    confirm: bool = True,
+) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    """Stub both outcomes of the walk: a judgement and a ceiling skip.
+
+    Both must be stubbed. The skip path reaches PostgreSQL, so a test that
+    stubs only the judgement fails on a live connection rather than on its own
+    assertion.
+    """
+
+    judged: list[uuid.UUID] = []
+    skipped: list[uuid.UUID] = []
+
+    async def fake_review(
+        observation_id: uuid.UUID,
+        **_: object,
+    ) -> EffectiveComparabilityReview:
+        judged.append(observation_id)
+        review = _confirmed_review(observation_id)
+        if confirm:
+            return review
+        return replace(
+            review,
+            verdict=ComparabilityVerdict.NOT_COMPARABLE,
+            match_level=ComparabilityMatchLevel.NOT_APPLICABLE,
+        )
+
+    async def fake_skip(
+        observation_id: uuid.UUID,
+        **_: object,
+    ) -> EffectiveComparabilityReview:
+        skipped.append(observation_id)
+        return replace(
+            _confirmed_review(observation_id),
+            verdict=ComparabilityVerdict.INSUFFICIENT_DATA,
+            match_level=ComparabilityMatchLevel.NOT_APPLICABLE,
+            status="SKIPPED",
+        )
+
+    monkeypatch.setattr(
+        llm_comparability,
+        "request_observation_comparability_review",
+        fake_review,
+    )
+    monkeypatch.setattr(
+        llm_comparability,
+        "skip_observation_comparability_review",
+        fake_skip,
+    )
+    return judged, skipped
+
+
+@pytest.mark.asyncio
+async def test_review_stops_once_enough_offers_are_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A part-code page keeps a median 81 offers past the gates.
+
+    Judging all of them costs one provider call each.  The cohort is ordered
+    cheapest first, so once ``pricing_llm_max_confirmed_reviews`` offers are
+    confirmed the rest cannot change a decision taken against the cheapest
+    comparable offer, and the walk must stop instead of paying for the tail.
+    """
+
+    observation_ids = [uuid4() for _ in range(30)]
+    reviewed, _skipped = _patch_review_calls(monkeypatch)
+    settings = Settings(pricing_llm_comparability_mode="off")
+
+    await llm_comparability._ensure_observation_ids(
+        observation_ids,
+        settings=settings,
+        provider=None,
+    )
+
+    assert len(reviewed) < len(observation_ids)
+    ceiling = settings.pricing_llm_max_confirmed_reviews
+    # Bounded overshoot: a wave of ``pricing_llm_max_concurrency`` is in flight
+    # when the ceiling is reached, so at most one full wave beyond it.
+    assert len(reviewed) <= ceiling + settings.pricing_llm_max_concurrency
+    # Cheapest first: the walk consumes the cohort in the order it was given.
+    assert reviewed == observation_ids[: len(reviewed)]
+
+
+@pytest.mark.asyncio
+async def test_ceiling_stops_exactly_on_the_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reaching the ceiling is enough; exceeding it is not required.
+
+    The wave divides the ceiling evenly here, so an off-by-one in the stop
+    condition costs a whole extra wave of provider calls.
+    """
+
+    observation_ids = [uuid4() for _ in range(30)]
+    reviewed, _skipped = _patch_review_calls(monkeypatch)
+
+    await llm_comparability._ensure_observation_ids(
+        observation_ids,
+        settings=Settings(
+            pricing_llm_comparability_mode="off",
+            pricing_llm_max_concurrency=5,
+            pricing_llm_max_confirmed_reviews=10,
+        ),
+        provider=None,
+    )
+
+    assert len(reviewed) == 10
+
+
+@pytest.mark.asyncio
+async def test_ceiling_records_a_skip_for_every_offer_it_does_not_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The finalizer barrier counts reviews, not judgements.
+
+    ``claim_collection_finalization`` refuses to finalize while any observation
+    of a classified item lacks a review row.  An early stop that simply walks
+    away leaves that barrier permanently unmet, the finalizer task returns 0
+    without retrying, and the run never reaches a terminal state.  So every
+    offer the ceiling declines to judge must still get an explicit SKIPPED row:
+    no provider call, but a decision on the record.
+    """
+
+    observation_ids = [uuid4() for _ in range(30)]
+    judged, skipped = _patch_review_calls(monkeypatch)
+
+    await llm_comparability._ensure_observation_ids(
+        observation_ids,
+        settings=Settings(
+            pricing_llm_comparability_mode="shadow",
+            pricing_llm_api_key="sk-test",
+            pricing_llm_model="gpt-test",
+        ),
+        provider=None,
+    )
+
+    # The barrier's invariant: every observation carries a decision.
+    assert sorted(judged + skipped, key=str) == sorted(observation_ids, key=str)
+    assert judged, "the ceiling must still judge the cheapest offers"
+    assert skipped, "a 30-offer cohort must exceed the default ceiling of 10"
+    # Judged offers are the cheapest ones; the skipped tail is what follows.
+    assert judged == observation_ids[: len(judged)]
+    assert skipped == observation_ids[len(judged) :]
+
+
+@pytest.mark.asyncio
+async def test_required_mode_judges_every_offer_despite_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In ``required`` mode an unjudged offer is not neutral — it is excluded.
+
+    ``engine.py`` turns a missing review into ``MANUAL_LLM_COMPARABILITY_MISSING``,
+    so stopping early would not merely save calls, it would shrink the evidence
+    base behind the price.  The *confirmation* ceiling is a cost bound and must
+    not become a silent evidence bound: in this mode it never truncates the
+    cohort.  The provider-call budget is the bound that does apply here, so it
+    is set wide enough to pay for the whole cohort — what the budget does when
+    it is not is proved in ``test_llm_comparability_provider_budget.py``.
+    """
+
+    observation_ids = [uuid4() for _ in range(30)]
+    reviewed, skipped = _patch_review_calls(monkeypatch)
+
+    await llm_comparability._ensure_observation_ids(
+        observation_ids,
+        settings=Settings(
+            pricing_llm_comparability_mode="required",
+            pricing_llm_api_key="sk-test",
+            pricing_llm_model="gpt-test",
+            pricing_llm_max_provider_calls_per_position=len(observation_ids),
+        ),
+        provider=None,
+    )
+
+    assert reviewed == observation_ids
+    assert skipped == [], "required mode must judge, never skip"
+
+
+@pytest.mark.asyncio
+async def test_every_offer_is_reviewed_when_none_are_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ceiling counts confirmations, not calls.
+
+    A cohort the reviewer rejects never reaches the ceiling, so every offer is
+    still judged.  This is the residual worst case the ceiling does not bound;
+    what bounds it is ``pricing_llm_max_provider_calls_per_position``, which is
+    widened here so this test still measures the ceiling alone.
+    """
+
+    # Comfortably more than the ceiling: a cohort short enough to exhaust in a
+    # few waves would not tell a confirmation count from a call count.
+    observation_ids = [uuid4() for _ in range(30)]
+    reviewed, skipped = _patch_review_calls(monkeypatch, confirm=False)
+
+    await llm_comparability._ensure_observation_ids(
+        observation_ids,
+        settings=Settings(
+            pricing_llm_comparability_mode="off",
+            pricing_llm_max_provider_calls_per_position=len(observation_ids),
+        ),
+        provider=None,
+    )
+
+    assert reviewed == observation_ids
+    assert skipped == [], "nothing was declined, so nothing needs a skip row"
 
 
 def test_required_mode_needs_api_key_and_off_mode_does_not() -> None:

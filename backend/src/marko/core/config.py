@@ -7,9 +7,10 @@ from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from marko.core.ai_model_identity import is_immutable_model_snapshot
 from marko.core.cost_encryption import CostKeyring, parse_cost_keyring
 
 
@@ -94,6 +95,78 @@ class Settings(BaseSettings):
     pricing_llm_max_output_tokens: int = Field(default=1600, ge=256, le=8000)
     pricing_llm_max_images: int = Field(default=4, ge=0, le=10)
     pricing_llm_max_concurrency: int = Field(default=4, ge=1, le=32)
+    # How many confirmed offers are enough for one catalogue position.  The
+    # cohort is judged cheapest first, so once this many are comparable the
+    # dearer tail cannot move a decision taken against the cheapest comparable
+    # offer.  The default equals ``pricing_scraper_max_sellers``, which is the
+    # cap the collector already applies, so it changes nothing until that cap is
+    # raised: a part-code page keeps a median 81 offers past the gates, and
+    # without a ceiling raising the cap turns ~46k provider calls per catalogue
+    # into ~376k.
+    pricing_llm_max_confirmed_reviews: int = Field(default=10, ge=1, le=200)
+    # Hard bound on provider calls spent on ONE catalogue position, applied in
+    # every mode.  The confirmation ceiling above bounds nothing in ``required``
+    # mode, where it is deliberately raised to the cohort size, and it bounds
+    # nothing in any mode when the cohort confirms nothing -- it counts
+    # confirmations, not calls.  Cohort width is not a bound either: acquisition
+    # is page-capped rather than seller-capped, so a part-code page keeps a
+    # median 81 offers past the gates.  This is the only number that caps the
+    # bill.
+    #
+    # Exhausting it is fail-closed and explicit, never a silent downgrade of
+    # ``required`` to ``shadow``: the offers it declines carry an
+    # ``INSUFFICIENT_DATA`` decision stamped
+    # ``LLM_PROVIDER_CALL_BUDGET_EXHAUSTED``, which ``engine.py`` turns into
+    # ``MANUAL_LLM_COMPARABILITY_INSUFFICIENT`` and routes to manual review.
+    # They are decisions on the record, so the finalizer barrier still clears.
+    #
+    # The default equals ``pricing_scraper_max_sellers``, the cap the collector
+    # already applies, so it changes nothing until that cap is raised: at ~46k
+    # provider calls per catalogue today, an unbounded ``required`` mode over
+    # 81-offer cohorts would cost ~376k.
+    pricing_llm_max_provider_calls_per_position: int = Field(
+        default=10,
+        ge=1,
+        le=200,
+    )
+    # --- AI-assisted evidence extraction (round 6) --------------------------
+    #
+    # ``off`` by default and there is no ``required`` value: this path reads a
+    # capture and proposes what it says, it does not decide a price, so the only
+    # useful second state is one where its output is recorded and compared
+    # against the deterministic verifier without anything downstream consuming
+    # it.  Adding ``required`` before that comparison exists would let an
+    # unmeasured extractor gate the pipeline.
+    pricing_ai_evidence_mode: Literal["off", "shadow"] = "off"
+    pricing_ai_evidence_api_key: SecretStr = SecretStr("")
+    pricing_ai_evidence_model: str = "gpt-5.6-luna"
+    # ``medium`` deliberately, and it is not to be raised as a default.  Effort
+    # is billed, the ceiling here is per candidate per position, and nothing has
+    # yet shown that a higher setting extracts facts a strict schema plus the
+    # deterministic verifier would not have caught anyway.  A deployment that
+    # wants more sets it explicitly and owns the bill.
+    pricing_ai_evidence_reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "medium"
+    pricing_ai_evidence_max_output_tokens: int = Field(default=1200, ge=256, le=4000)
+    # The retained capture text handed to the model.  Bounds the input bill and,
+    # with it, the blast radius of a capture that turned out to be a whole page
+    # of markup rather than an offer.
+    pricing_ai_evidence_max_input_chars: int = Field(default=20_000, ge=500, le=200_000)
+    pricing_ai_evidence_max_calls_per_position: int = Field(default=4, ge=1, le=200)
+    pricing_ai_evidence_max_candidates_per_position: int = Field(
+        default=4, ge=1, le=200
+    )
+    pricing_ai_evidence_max_concurrency: int = Field(default=2, ge=1, le=32)
+    # Escalation is a second, dearer call for the candidates the first pass
+    # could not resolve.  Off by default and inert unless a model *and* an
+    # effort are both named, so a half-configured escalation cannot quietly
+    # inherit the cheap model's settings and double the bill for nothing.
+    pricing_ai_evidence_escalation_enabled: bool = False
+    pricing_ai_evidence_escalation_model: str = ""
+    pricing_ai_evidence_escalation_reasoning_effort: (
+        Literal["none", "low", "medium", "high", "xhigh", "max"] | None
+    ) = None
     # Fitment is a later phase and is not part of the 2026-07-30 delivery, whose
     # scope the customer set as raise/cut against the cheapest comparable offer.
     # Its endpoints are implemented and tested but unreachable from the UI, so
@@ -110,6 +183,7 @@ class Settings(BaseSettings):
     firebase_messaging_sender_id: str = ""
     firebase_web_app_id: str = ""
     store_sync_worker_count: int = 2
+
     store_sync_max_task_executions: int = 3
     store_sync_item_deadline_seconds: int = 3600
     store_sync_lease_seconds: int = 300
@@ -165,6 +239,15 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @field_validator("pricing_ai_evidence_escalation_reasoning_effort", mode="before")
+    @classmethod
+    def _empty_ai_evidence_escalation_effort_is_unconfigured(
+        cls, value: object
+    ) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
 
     @model_validator(mode="after")
     def validate_security_boundary(self) -> Settings:
@@ -223,16 +306,50 @@ class Settings(BaseSettings):
                     "PRICING_LLM_MODEL is required when "
                     "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
                 )
-            llm_base_url = self.pricing_llm_base_url.strip().casefold()
-            if not (
-                llm_base_url.startswith("https://")
-                or (
-                    environment in {"development", "test", "e2e"}
-                    and llm_base_url.startswith("http://")
+            self._require_transport_base_url(environment)
+        if self.pricing_ai_evidence_mode != "off":
+            # Deliberately no API-key requirement, and this is the whole
+            # contract: a missing key must produce a typed ``UNCONFIGURED``
+            # extraction row with no HTTP request, not a process that refuses to
+            # boot.  Raising here would make an off-by-default, shadow-only
+            # feature able to take the API down on a deployment that merely
+            # flipped the mode -- and it would move the failure from a row an
+            # operator can read to a crash loop.
+            if not self.pricing_ai_evidence_model.strip():
+                raise ValueError(
+                    "PRICING_AI_EVIDENCE_MODEL is required when "
+                    "PRICING_AI_EVIDENCE_MODE is shadow"
                 )
+            if not is_immutable_model_snapshot(self.pricing_ai_evidence_model):
+                raise ValueError(
+                    "PRICING_AI_EVIDENCE_MODEL must be an immutable, bounded ASCII "
+                    "snapshot id documented by the provider or ending in YYYY-MM-DD "
+                    "when mode is shadow"
+                )
+            self._require_transport_base_url(environment)
+        if self.pricing_ai_evidence_escalation_enabled:
+            if self.pricing_ai_evidence_mode == "off":
+                raise ValueError(
+                    "PRICING_AI_EVIDENCE_ESCALATION_ENABLED requires "
+                    "PRICING_AI_EVIDENCE_MODE to be shadow"
+                )
+            if not self.pricing_ai_evidence_escalation_model.strip():
+                raise ValueError(
+                    "PRICING_AI_EVIDENCE_ESCALATION_MODEL is required when "
+                    "escalation is enabled"
+                )
+            if not is_immutable_model_snapshot(
+                self.pricing_ai_evidence_escalation_model
             ):
                 raise ValueError(
-                    "PRICING_LLM_BASE_URL must use HTTPS outside local/test environments"
+                    "PRICING_AI_EVIDENCE_ESCALATION_MODEL must be an immutable, "
+                    "bounded ASCII snapshot id documented by the provider or ending "
+                    "in YYYY-MM-DD"
+                )
+            if self.pricing_ai_evidence_escalation_reasoning_effort is None:
+                raise ValueError(
+                    "PRICING_AI_EVIDENCE_ESCALATION_REASONING_EFFORT is required "
+                    "when escalation is enabled"
                 )
         concurrent_collectors = max(
             1,
@@ -298,9 +415,57 @@ class Settings(BaseSettings):
                 )
         return self
 
+    def _require_transport_base_url(self, environment: str) -> None:
+        """One HTTPS rule for every consumer of the shared LLM transport.
+
+        Comparability and evidence extraction post to the same base URL with the
+        same credential, so the rule has to be stated once: two copies drift,
+        and the copy that drifts is the one nobody looked at.
+        """
+
+        llm_base_url = self.pricing_llm_base_url.strip().casefold()
+        if not (
+            llm_base_url.startswith("https://")
+            or (
+                environment in {"development", "test", "e2e"}
+                and llm_base_url.startswith("http://")
+            )
+        ):
+            raise ValueError(
+                "PRICING_LLM_BASE_URL must use HTTPS outside local/test environments"
+            )
+
     @property
     def is_production(self) -> bool:
         return self.environment.strip().casefold() == "production"
+
+    @property
+    def ai_evidence_extraction_enabled(self) -> bool:
+        return self.pricing_ai_evidence_mode != "off"
+
+    @property
+    def ai_evidence_api_key_configured(self) -> bool:
+        """Whether a credential exists at all -- never the credential itself.
+
+        The extraction service asks this instead of reaching for the secret, so
+        the "is it configured" decision cannot accidentally be made by
+        formatting the key into a log line or an error message.  ``SecretStr``
+        already redacts ``repr``; this keeps the value from being touched in the
+        first place.
+        """
+
+        return bool(
+            self.pricing_ai_evidence_api_key.get_secret_value().strip()
+            or self.pricing_llm_api_key.get_secret_value().strip()
+        )
+
+    @property
+    def ai_evidence_escalation_configured(self) -> bool:
+        return (
+            self.pricing_ai_evidence_escalation_enabled
+            and bool(self.pricing_ai_evidence_escalation_model.strip())
+            and self.pricing_ai_evidence_escalation_reasoning_effort is not None
+        )
 
     @property
     def effective_api_docs_enabled(self) -> bool:

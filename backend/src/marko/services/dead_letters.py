@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import PricingRun, ScrapeTarget, SyncRun
 import marko.repositories.stores as stores_repo
-from marko.services.pricing_runs import create_pricing_run
+from marko.services.pricing_runs import (
+    PricingRunError,
+    create_pricing_run,
+    plan_pricing_run_replay,
+)
 from marko.services.stores import queue_store_sync
 
 
@@ -195,19 +199,41 @@ async def replay_dead_letter(
         raise DeadLetterReplayError(
             "Pricing run is still active; finish or cancel it before replay"
         )
-    replay = await create_pricing_run(
-        session,
-        workspace_id=workspace_id,
-        import_batch_id=failed_run.import_batch_id,
-        celery_app=celery_app,
-        policy_config=failed_run.policy_config,
-    )
+    # Повтор наследует область упавшего прогона целиком: режим, упорядоченное
+    # членство, политику и отпечатки.  Без этого одна упавшая позиция
+    # ограниченного прогона превращалась бы в исполнение всего каталога.
+    try:
+        plan = plan_pricing_run_replay(
+            failed_run,
+            reason=f"dead-letter replay of scrape target {dead_letter_id}",
+            idempotency_key=_replay_idempotency_key(dead_letter_id),
+        )
+        replay = await create_pricing_run(
+            session,
+            workspace_id=workspace_id,
+            import_batch_id=plan.import_batch_id,
+            celery_app=celery_app,
+            start=plan.start,
+            policy_config=plan.policy_config,
+            scope_mode=plan.scope_mode,
+            catalog_item_ids=plan.catalog_item_ids,
+        )
+    except PricingRunError as exc:
+        # Область повтора не воспроизводится дословно — это отказ, а не повод
+        # запустить другую область под видом повтора.
+        raise DeadLetterReplayError(str(exc)) from exc
     return DeadLetterReplay(
         kind=kind,
         dead_letter_id=dead_letter_id,
         workflow_id=replay.id,
         workflow_status=replay.status,
     )
+
+
+def _replay_idempotency_key(dead_letter_id: UUID) -> str:
+    """Один dead-letter — один повтор, сколько бы раз кнопку ни нажали."""
+
+    return f"dead-letter-replay:{dead_letter_id}"
 
 
 def _terminal_at(

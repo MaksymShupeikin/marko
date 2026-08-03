@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'api_client.dart';
 import 'app_language.dart';
 import 'app_theme.dart';
+import 'session_expiry.dart';
 
 class MarkoWordmark extends StatelessWidget {
   const MarkoWordmark({this.compact = false, this.inverse = false, super.key});
@@ -177,7 +181,73 @@ class MarkoInlineMessage extends StatelessWidget {
   }
 }
 
-class MarkoAsyncErrorView extends StatelessWidget {
+String markoSessionExpiredMessage(BuildContext context) => context.localized(
+  ru:
+      'Сессия истекла. Войдите снова, чтобы продолжить работу; '
+      'несохранённые изменения на этой странице будут потеряны.',
+  uk:
+      'Сесія завершилася. Увійдіть знову, щоб продовжити роботу; '
+      'незбережені зміни на цій сторінці буде втрачено.',
+);
+
+/// The only action that resolves an expired session.
+class MarkoReauthenticateButton extends ConsumerWidget {
+  const MarkoReauthenticateButton({
+    super.key = const ValueKey('marko-reauthenticate'),
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return TextButton(
+      // Dropping the dead session is what actually re-opens the sign-in
+      // screen: the auth controller follows the client's state stream and the
+      // router redirects on it. It goes through the coordinator so the app
+      // also stops believing the session is expired once it no longer is —
+      // otherwise a signed-in operator keeps reading that it died.
+      onPressed: () => unawaited(
+        ref.read(markoSessionExpiredProvider.notifier).signOutForNewSession(),
+      ),
+      child: Text(context.localized(ru: 'Войти снова', uk: 'Увійти знову')),
+    );
+  }
+}
+
+/// The inline twin of [MarkoAsyncErrorView]'s expiry branch, for a session that
+/// dies while a page is already on screen. The rows the operator has already
+/// read stay: they were true when they arrived, and throwing them away costs
+/// their place in the list for nothing.
+class MarkoSessionExpiredMessage extends StatelessWidget {
+  const MarkoSessionExpiredMessage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MarkoInlineMessage(
+      message: markoSessionExpiredMessage(context),
+      tone: MarkoMessageTone.warning,
+      action: const MarkoReauthenticateButton(),
+    );
+  }
+}
+
+/// Marks a subtree whose page already answers an expired session.
+///
+/// The classification is app-wide, but the answer is one sentence and one
+/// button. A nested panel that repeated them would tell the operator twice
+/// that their session died and offer two identical ways to sign in, which
+/// reads as two different problems.
+class MarkoSessionExpiryAnswered extends InheritedWidget {
+  const MarkoSessionExpiryAnswered({required super.child, super.key});
+
+  static bool above(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<MarkoSessionExpiryAnswered>() !=
+      null;
+
+  @override
+  bool updateShouldNotify(MarkoSessionExpiryAnswered oldWidget) => false;
+}
+
+class MarkoAsyncErrorView extends ConsumerWidget {
   const MarkoAsyncErrorView({
     required this.error,
     required this.forbiddenResourceRu,
@@ -203,9 +273,15 @@ class MarkoAsyncErrorView extends StatelessWidget {
     return error.toString().contains('INSUFFICIENT_WORKSPACE_ROLE');
   }
 
+  /// Riverpod hands the raw exception through, so the shared classifier sees
+  /// exactly what the API client threw.
+  bool get _isUnauthorized => markoIsSessionExpired(error);
+
   @override
-  Widget build(BuildContext context) {
-    final message = _isForbidden
+  Widget build(BuildContext context, WidgetRef ref) {
+    final message = _isUnauthorized
+        ? markoSessionExpiredMessage(context)
+        : _isForbidden
         ? context.localized(
             ru:
                 'У вас нет доступа к $forbiddenResourceRu. '
@@ -222,10 +298,12 @@ class MarkoAsyncErrorView extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 560),
           child: MarkoInlineMessage(
             message: message,
-            tone: _isForbidden
+            tone: _isForbidden || _isUnauthorized
                 ? MarkoMessageTone.warning
                 : MarkoMessageTone.error,
-            action: _isForbidden || onRetry == null
+            action: _isUnauthorized
+                ? const MarkoReauthenticateButton()
+                : _isForbidden || onRetry == null
                 ? null
                 : TextButton(
                     onPressed: onRetry,

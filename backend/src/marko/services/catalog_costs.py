@@ -159,6 +159,29 @@ async def get_decrypted_catalog_cost(
         workspace_id=workspace_id,
         catalog_item_id=catalog_item_id,
     )
+    return decrypt_cost_record(
+        record,
+        workspace_id=workspace_id,
+        catalog_item_id=catalog_item_id,
+        settings=settings,
+    )
+
+
+def decrypt_cost_record(
+    record: CatalogItemCostRecord | None,
+    *,
+    workspace_id: UUID,
+    catalog_item_id: UUID,
+    settings: Settings | None = None,
+) -> Decimal | None:
+    """Расшифровать переданную запись себестоимости, а не «последнюю».
+
+    Отдельная функция нужна ценовому прогону: он обязан считать по записи,
+    действовавшей на момент старта, а не по той, что оператор подал уже во
+    время расчёта. Проверки приватности те же самые и не ослаблены — режим
+    приватности и полнота записи проверяются здесь, а не у вызывающего.
+    """
+
     if record is None or record.action == "CLEAR":
         return None
     selected = settings or get_settings()
@@ -199,6 +222,7 @@ __all__ = [
     "add_cost_clear_record",
     "add_encrypted_cost_record",
     "cost_configuration_map",
+    "decrypt_cost_record",
     "get_decrypted_catalog_cost",
     "get_latest_cost_record",
 ]

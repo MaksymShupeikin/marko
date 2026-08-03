@@ -301,7 +301,7 @@ def test_openapi_recommendation_page_exposes_population_action_counts() -> None:
     assert "offset" in properties
     counts_ref = properties["action_counts"]["$ref"]
     counts = schema["components"]["schemas"][counts_ref.rsplit("/", 1)[-1]]
-    assert set(counts["required"]) == {"raise", "lower", "review", "hold"}
+    assert set(counts["required"]) == {"raise", "lower", "review", "hold", "total"}
 
 
 def test_openapi_exposes_llm_comparability_review_and_feedback_contract() -> None:

@@ -219,6 +219,8 @@ def parse_motors_context(html: str, lang: str = "ua") -> MotorsContext | None:
     numbers: list[str] = []
     page_id: int | None = None
     alias: str | None = None
+    via_number: str | None = None
+    related: tuple[int, str, str] | None = None
     for entry in motors.get("compatibleOENumbers") or []:
         if not isinstance(entry, dict):
             continue
@@ -226,18 +228,24 @@ def parse_motors_context(html: str, lang: str = "ua") -> MotorsContext | None:
         if number:
             numbers.append(number)
         page = entry.get("oeNumberPage")
-        # The listing to consult is the one for *our* code.  A superseding
-        # number's page is a different market and would silently widen the
-        # comparison to a part we do not sell.
-        if (
-            isinstance(page, dict)
-            and page_id is None
-            and (normalized is None or number == normalized)
-        ):
-            candidate_id = page.get("id")
-            candidate_alias = _text_or_none(page.get("alias"))
-            if isinstance(candidate_id, int) and candidate_alias:
-                page_id, alias = candidate_id, candidate_alias
+        if not isinstance(page, dict):
+            continue
+        candidate_id = page.get("id")
+        candidate_alias = _text_or_none(page.get("alias"))
+        if not isinstance(candidate_id, int) or not candidate_alias:
+            continue
+        if page_id is None and (normalized is None or number == normalized):
+            page_id, alias, via_number = candidate_id, candidate_alias, number
+        elif related is None and number:
+            related = (candidate_id, candidate_alias, number)
+    if page_id is None and related is not None:
+        # Our own code has no listing, but a number in its supersession chain
+        # does.  Measured 2026-07-31: 3 of the 12 positions without a page of
+        # their own are in exactly this state, and for one of them the related
+        # number is the Porsche side of the same radiator.  The widening is
+        # taken rather than refused, and ``via_oe_number`` records it, so the
+        # offers can be graded as an analogue instead of an exact match.
+        page_id, alias, via_number = related
 
     product = get_nested(record, "result.product") or {}
     images = tuple(
@@ -247,6 +255,7 @@ def parse_motors_context(html: str, lang: str = "ua") -> MotorsContext | None:
     )
     group = motors.get("partGroupId")
     return MotorsContext(
+        via_oe_number=via_number,
         normalized_part_code=normalized,
         part_group_id=group if isinstance(group, int) else None,
         oe_page_id=page_id,

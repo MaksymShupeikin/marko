@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
+import re
 import time
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -62,6 +65,15 @@ from marko.services.scraper_scaling import (
 )
 from marko.services.scraper_outbox import OutboxHealth, outbox_health
 from marko.services.stores import SyncRunNotFoundError
+from marko.services.ai_cost_policy import (
+    AiCostPolicyError,
+    AiRateCard,
+    ESTIMATE_DISCLAIMER,
+    RateCardRegistry,
+    TokenUsage,
+    estimate_cost,
+    resolve_rate_card,
+)
 
 
 async def get_store_sync_scraper_metrics(
@@ -1214,13 +1226,9 @@ async def render_latest_operational_prometheus(session: AsyncSession) -> str:
         )
     )
     if latest_sync is None or latest_sync.workspace_id is None:
-        sections.append(
-            'marko_metrics_snapshot_available{item_kind="store_sync"} 0'
-        )
+        sections.append('marko_metrics_snapshot_available{item_kind="store_sync"} 0')
     else:
-        sections.append(
-            'marko_metrics_snapshot_available{item_kind="store_sync"} 1'
-        )
+        sections.append('marko_metrics_snapshot_available{item_kind="store_sync"} 1')
         sections.append(
             render_prometheus(
                 await get_store_sync_scraper_metrics(
@@ -2087,9 +2095,730 @@ def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
+# ---------------------------------------------------------------------------
+# AI-assisted evidence extraction: telemetry and the read-surface projection.
+#
+# The extraction service and its table are owned elsewhere; this section holds
+# the observability side of that feature -- counters, latency, token usage, an
+# estimated (never billed) spend, and the single tolerant reader that both the
+# metrics snapshot and the API response are built from, so the two can never
+# disagree about what a stored row means.
+# ---------------------------------------------------------------------------
+
+
+#: Terminal and intermediate outcomes worth a counter of their own.
+AI_EVIDENCE_OUTCOMES: Final[tuple[str, ...]] = (
+    "requested",
+    "cached",
+    "provider_attempts",
+    "completed",
+    "schema_invalid",
+    "citation_rejected",
+    "conflict",
+    "unconfigured",
+    "budget_exhausted",
+    "failed",
+    "skipped",
+)
+
+#: Exact field names that carry hidden model reasoning.  They are removed from
+#: every payload that leaves this process.  Matching is exact and normalized,
+#: never by substring, so ``reasoning_effort`` and ``reasoning_tokens`` -- which
+#: are configuration and billing facts, not reasoning content -- survive.
+HIDDEN_REASONING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "chain_of_thought",
+        "cot",
+        "deliberation",
+        "encrypted_content",
+        "encrypted_reasoning",
+        "hidden_reasoning",
+        "internal_monologue",
+        "raw_response",
+        "raw_completion",
+        "reasoning",
+        "reasoning_content",
+        "reasoning_details",
+        "reasoning_summary",
+        "reasoning_summary_text",
+        "reasoning_text",
+        "reasoning_trace",
+        "scratchpad",
+        "thinking",
+        "thought",
+        "thoughts",
+    }
+)
+
+_SECRET_KEY_MARKERS: Final[tuple[str, ...]] = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "session_key",
+)
+
+_SECRET_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:sk|rk|pk)-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-]{8,}"
+)
+
+REDACTED: Final[str] = "[REDACTED]"
+
+
+class AiEvidenceTelemetryError(RuntimeError):
+    """A payload reached an observability boundary carrying forbidden content."""
+
+
+def _normalized_key(value: object) -> str:
+    return str(value).strip().casefold()
+
+
+def _is_secret_key(key: object) -> bool:
+    normalized = _normalized_key(key)
+    return any(marker in normalized for marker in _SECRET_KEY_MARKERS)
+
+
+def _redact_secret_text(value: str) -> str:
+    return _SECRET_VALUE_PATTERN.sub(REDACTED, value)
+
+
+def public_evidence_payload(value: Any, *, depth: int = 0) -> Any:
+    """Strip hidden reasoning and secret material from a stored payload.
+
+    Applied to anything derived from a provider response before it reaches an
+    API response, a metric, or a log line.  Unknown keys are kept -- evidence is
+    the point of the feature -- but the two things that must never leave are
+    removed by name, and anything shaped like a credential is masked by value.
+    """
+
+    if depth > 12:
+        return None
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = _normalized_key(key)
+            if normalized in HIDDEN_REASONING_KEYS or _is_secret_key(key):
+                continue
+            result[str(key)] = public_evidence_payload(item, depth=depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [public_evidence_payload(item, depth=depth + 1) for item in value]
+    if isinstance(value, str):
+        return _redact_secret_text(value)
+    return value
+
+
+def assert_publishable(value: Any) -> Any:
+    """Fail closed if hidden reasoning or a credential survived scrubbing."""
+
+    def _walk(node: Any, depth: int) -> None:
+        if depth > 12:
+            return
+        if isinstance(node, Mapping):
+            for key, item in node.items():
+                normalized = _normalized_key(key)
+                if normalized in HIDDEN_REASONING_KEYS:
+                    raise AiEvidenceTelemetryError(
+                        f"hidden reasoning field {normalized!r} reached a boundary"
+                    )
+                if _is_secret_key(key):
+                    raise AiEvidenceTelemetryError(
+                        f"secret configuration field {normalized!r} reached a boundary"
+                    )
+                _walk(item, depth + 1)
+            return
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item, depth + 1)
+            return
+        if isinstance(node, str) and _SECRET_VALUE_PATTERN.search(node):
+            raise AiEvidenceTelemetryError("credential-shaped value reached a boundary")
+
+    _walk(value, 0)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class AiEvidenceFieldView:
+    """One extracted field with the citation that justifies it."""
+
+    field_name: str
+    value: str | None = None
+    excerpt: str | None = None
+    source_path: str | None = None
+    confidence: Decimal | None = None
+    verified: bool | None = None
+    verification_reason: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field_name,
+            "value": self.value,
+            "excerpt": self.excerpt,
+            "source_path": self.source_path,
+            "confidence": None if self.confidence is None else str(self.confidence),
+            "verified": self.verified,
+            "verification_reason": self.verification_reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AiEvidenceExtractionView:
+    """Thin typed adapter over one ``ai_evidence_extractions`` row.
+
+    The persistence agent owns the columns.  This reader accepts the contract
+    names first and a small set of aliases after that, so a column named
+    ``model`` instead of ``model_id`` degrades into a missing label rather than
+    an exception on a read-only endpoint.
+    """
+
+    extraction_id: UUID | None
+    workspace_id: UUID | None
+    market_observation_id: UUID | None
+    status: str
+    shadow_only: bool
+    provider: str | None
+    model_id: str | None
+    provider_model: str | None
+    reasoning_effort: str | None
+    prompt_version: str | None
+    schema_version: str | None
+    extractor_version: str | None
+    latency_ms: int
+    usage: TokenUsage | None
+    usage_error: str | None
+    verification_result: str | None
+    verification_reasons: dict[str, Any]
+    fields: tuple[AiEvidenceFieldView, ...]
+    error_code: str | None
+    created_at: datetime | None
+    persisted_spend_estimate: dict[str, Any] | None
+
+    @classmethod
+    def from_row(cls, row: Any) -> AiEvidenceExtractionView:
+        usage, usage_error = _row_usage(row)
+        return cls(
+            extraction_id=_row_uuid(row, ("id", "extraction_id")),
+            workspace_id=_row_uuid(row, ("workspace_id",)),
+            market_observation_id=_row_uuid(
+                row, ("market_observation_id", "observation_id")
+            ),
+            status=str(_row_value(row, ("status",), "UNKNOWN")),
+            shadow_only=_row_shadow_only(row),
+            provider=_row_text(row, ("provider",)),
+            model_id=_row_text(row, ("model_id", "model")),
+            provider_model=_row_text(row, ("provider_model",)),
+            reasoning_effort=_row_text(row, ("reasoning_effort",)),
+            prompt_version=_row_text(row, ("prompt_version",)),
+            schema_version=_row_text(row, ("schema_version",)),
+            extractor_version=_row_text(row, ("extractor_version",)),
+            latency_ms=max(0, _row_int(row, ("latency_ms",), 0)),
+            usage=usage,
+            usage_error=usage_error,
+            verification_result=_row_text(
+                row, ("verification_result", "verification_status")
+            ),
+            verification_reasons=_row_verification_reasons(row),
+            fields=_row_fields(row),
+            error_code=_row_text(row, ("error_code",)),
+            created_at=_row_datetime(
+                row,
+                (
+                    "extracted_at",
+                    "requested_at",
+                    "created_at",
+                    "completed_at",
+                    "started_at",
+                ),
+            ),
+            persisted_spend_estimate=_row_persisted_spend_estimate(row),
+        )
+
+    def as_public_dict(self) -> dict[str, Any]:
+        """The serialization contract: evidence yes, hidden reasoning never."""
+
+        payload = {
+            "extraction_id": None
+            if self.extraction_id is None
+            else str(self.extraction_id),
+            "market_observation_id": None
+            if self.market_observation_id is None
+            else str(self.market_observation_id),
+            "status": self.status,
+            "shadow_only": self.shadow_only,
+            "provider": self.provider,
+            "model_id": self.model_id,
+            "reasoning_effort": self.reasoning_effort,
+            "prompt_version": self.prompt_version,
+            "schema_version": self.schema_version,
+            "extractor_version": self.extractor_version,
+            "latency_ms": self.latency_ms,
+            "usage": None if self.usage is None else self.usage.as_dict(),
+            "usage_error": self.usage_error,
+            "verification_result": self.verification_result,
+            "verification_reasons": public_evidence_payload(self.verification_reasons),
+            "fields": [public_evidence_payload(item.as_dict()) for item in self.fields],
+            "error_code": self.error_code,
+            "created_at": None if self.created_at is None else self.created_at,
+        }
+        return assert_publishable(payload)
+
+
+def _row_value(row: Any, names: Sequence[str], default: Any = None) -> Any:
+    for name in names:
+        if isinstance(row, Mapping):
+            if name in row and row[name] is not None:
+                return row[name]
+            continue
+        value = getattr(row, name, None)
+        if value is not None:
+            return value
+    return default
+
+
+def _row_text(row: Any, names: Sequence[str]) -> str | None:
+    value = _row_value(row, names)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return _redact_secret_text(text) or None
+
+
+def _row_int(row: Any, names: Sequence[str], default: int) -> int:
+    value = _row_value(row, names)
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _row_uuid(row: Any, names: Sequence[str]) -> UUID | None:
+    value = _row_value(row, names)
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_datetime(row: Any, names: Sequence[str]) -> datetime | None:
+    value = _row_value(row, names)
+    return value if isinstance(value, datetime) else None
+
+
+def _row_shadow_only(row: Any) -> bool:
+    """Shadow-only means the result influenced nothing that priced anything."""
+
+    explicit = _row_value(row, ("shadow_only", "is_shadow"))
+    if isinstance(explicit, bool):
+        return explicit
+    mode = _row_text(row, ("mode", "extraction_mode"))
+    if mode is not None:
+        return mode.strip().casefold() != "required"
+    return True
+
+
+def _row_mapping(row: Any, names: Sequence[str]) -> dict[str, Any]:
+    value = _row_value(row, names)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+def _row_usage(row: Any) -> tuple[TokenUsage | None, str | None]:
+    usage_json = _row_mapping(row, ("usage",))
+    source: dict[str, Any] = dict(usage_json)
+    for column, key in (
+        ("input_tokens", "input_tokens"),
+        ("cached_input_tokens", "cached_input_tokens"),
+        ("output_tokens", "output_tokens"),
+        ("reasoning_tokens", "reasoning_tokens"),
+    ):
+        value = _row_value(row, (column,))
+        if value is not None and not isinstance(value, bool):
+            source[key] = value
+    if "input_tokens" not in source and "output_tokens" not in source:
+        return None, None
+    try:
+        return (
+            TokenUsage(
+                input_tokens=int(source.get("input_tokens", 0)),
+                cached_input_tokens=int(source.get("cached_input_tokens", 0) or 0),
+                output_tokens=int(source.get("output_tokens", 0) or 0),
+                reasoning_tokens=int(source.get("reasoning_tokens", 0) or 0),
+            ),
+            None,
+        )
+    except (AiCostPolicyError, TypeError, ValueError) as exc:
+        return None, str(exc)
+
+
+def _row_persisted_spend_estimate(row: Any) -> dict[str, Any] | None:
+    usage_json = _row_mapping(row, ("usage",))
+    value = usage_json.get("spend_estimate")
+    if not isinstance(value, Mapping):
+        return None
+    return public_evidence_payload({str(key): item for key, item in value.items()})
+
+
+def _row_verification_reasons(row: Any) -> dict[str, Any]:
+    """Scrub at the reader, so the metric aggregate is as safe as the API.
+
+    Per-field reasons are an open mapping, which makes them the one place a
+    provider payload can smuggle a reasoning dump into an aggregate that nobody
+    thinks of as a serialization boundary.
+    """
+
+    reasons = _row_mapping(
+        row, ("verification_reasons", "field_verification_reasons", "reasons")
+    )
+    return public_evidence_payload({str(key): value for key, value in reasons.items()})
+
+
+def _row_fields(row: Any) -> tuple[AiEvidenceFieldView, ...]:
+    raw = _row_value(row, ("fields", "extracted_fields", "evidence", "evidence_fields"))
+    if isinstance(raw, Mapping):
+        entries: list[Any] = [
+            {"field": key, **(dict(value) if isinstance(value, Mapping) else {})}
+            for key, value in raw.items()
+        ]
+    elif isinstance(raw, (list, tuple)):
+        entries = list(raw)
+    else:
+        return ()
+    reasons = _row_verification_reasons(row)
+    views: list[AiEvidenceFieldView] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        name = str(entry.get("field") or entry.get("name") or "").strip()
+        if not name:
+            continue
+        verified = entry.get("verified")
+        views.append(
+            AiEvidenceFieldView(
+                field_name=name,
+                value=_optional_text(entry.get("value")),
+                excerpt=_optional_text(entry.get("excerpt") or entry.get("quote")),
+                source_path=_optional_text(
+                    entry.get("source_path")
+                    or entry.get("source")
+                    or entry.get("json_path")
+                ),
+                confidence=_optional_decimal(entry.get("confidence")),
+                verified=verified if isinstance(verified, bool) else None,
+                verification_reason=_optional_text(
+                    entry.get("verification_reason") or reasons.get(name)
+                ),
+            )
+        )
+    return tuple(views)
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return _redact_secret_text(text)
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+@dataclass(slots=True)
+class AiEvidenceTelemetry:
+    """Process-local counters for one worker; scraped, never billed."""
+
+    counters: Counter = field(default_factory=Counter)
+    latencies_ms: list[float] = field(default_factory=list)
+    tokens: Counter = field(default_factory=Counter)
+    rate_versions: Counter = field(default_factory=Counter)
+
+    def reset(self) -> None:
+        self.counters.clear()
+        self.latencies_ms.clear()
+        self.tokens.clear()
+        self.rate_versions.clear()
+
+    def record(
+        self,
+        outcome: str,
+        *,
+        latency_ms: float | None = None,
+        usage: TokenUsage | None = None,
+        rate_version: str | None = None,
+        provider_attempts: int = 0,
+    ) -> None:
+        if outcome not in AI_EVIDENCE_OUTCOMES:
+            raise AiEvidenceTelemetryError(f"unknown ai evidence outcome {outcome!r}")
+        self.counters[outcome] += 1
+        if provider_attempts:
+            self.counters["provider_attempts"] += int(provider_attempts)
+        if latency_ms is not None and latency_ms >= 0:
+            self.latencies_ms.append(float(latency_ms))
+        if usage is not None:
+            self.tokens["input"] += usage.input_tokens
+            self.tokens["cached_input"] += usage.cached_input_tokens
+            self.tokens["uncached_input"] += usage.uncached_input_tokens
+            self.tokens["output"] += usage.output_tokens
+            self.tokens["reasoning"] += usage.reasoning_tokens
+        if rate_version:
+            self.rate_versions[rate_version] += 1
+
+    def recorded_usage(self) -> TokenUsage | None:
+        if not self.tokens:
+            return None
+        return TokenUsage(
+            input_tokens=int(self.tokens["input"]),
+            cached_input_tokens=int(self.tokens["cached_input"]),
+            output_tokens=int(self.tokens["output"]),
+            reasoning_tokens=int(self.tokens["reasoning"]),
+        )
+
+
+_AI_EVIDENCE_TELEMETRY = AiEvidenceTelemetry()
+
+
+def record_ai_evidence_outcome(
+    outcome: str,
+    *,
+    latency_ms: float | None = None,
+    usage: TokenUsage | None = None,
+    rate_version: str | None = None,
+    provider_attempts: int = 0,
+    telemetry: AiEvidenceTelemetry | None = None,
+    emit_event: bool = True,
+) -> None:
+    """Count one extraction outcome and, optionally, log a low-cardinality event."""
+
+    target = telemetry or _AI_EVIDENCE_TELEMETRY
+    target.record(
+        outcome,
+        latency_ms=latency_ms,
+        usage=usage,
+        rate_version=rate_version,
+        provider_attempts=provider_attempts,
+    )
+    if emit_event:
+        pricing_event(
+            "ai_evidence_extraction",
+            outcome=outcome,
+            latency_ms=None if latency_ms is None else round(float(latency_ms), 3),
+            input_tokens=None if usage is None else usage.input_tokens,
+            cached_input_tokens=None if usage is None else usage.cached_input_tokens,
+            output_tokens=None if usage is None else usage.output_tokens,
+            reasoning_tokens=None if usage is None else usage.reasoning_tokens,
+            rate_version=rate_version,
+            provider_attempts=provider_attempts or None,
+        )
+
+
+def reset_ai_evidence_telemetry() -> None:
+    _AI_EVIDENCE_TELEMETRY.reset()
+
+
+def ai_evidence_spend_estimate(
+    usage: TokenUsage | None,
+    *,
+    card: AiRateCard | None = None,
+    rate_version: str | None = None,
+    model_id: str | None = None,
+    registry: RateCardRegistry | None = None,
+) -> dict[str, Any]:
+    """Observability-only USD estimate from recorded tokens.
+
+    Never a bill.  A rate lookup that fails degrades into an ``unavailable``
+    block: an operator losing a number is acceptable, a metrics endpoint
+    raising because a rate card is missing is not.
+    """
+
+    if usage is None:
+        return {"available": False, "reason": "no_recorded_usage"}
+    try:
+        selected = card or resolve_rate_card(
+            rate_version=rate_version, model_id=model_id, registry=registry
+        )
+        estimate = estimate_cost(usage, selected)
+    except AiCostPolicyError as exc:
+        return {"available": False, "reason": str(exc)}
+    return {"available": True, **estimate.as_dict()}
+
+
+def ai_evidence_telemetry_snapshot(
+    telemetry: AiEvidenceTelemetry | None = None,
+    *,
+    card: AiRateCard | None = None,
+    rate_version: str | None = None,
+    model_id: str | None = None,
+    registry: RateCardRegistry | None = None,
+) -> dict[str, Any]:
+    """Structured, secret-free view of the process-local extraction counters."""
+
+    target = telemetry or _AI_EVIDENCE_TELEMETRY
+    usage = target.recorded_usage()
+    snapshot = {
+        "counters": {
+            name: int(target.counters.get(name, 0)) for name in AI_EVIDENCE_OUTCOMES
+        },
+        "latency_ms": _percentiles(list(target.latencies_ms)),
+        "latency_samples": len(target.latencies_ms),
+        "tokens": {} if usage is None else usage.as_dict(),
+        "rate_versions": {
+            str(name): int(value)
+            for name, value in sorted(target.rate_versions.items())
+        },
+        "spend_estimate": ai_evidence_spend_estimate(
+            usage,
+            card=card,
+            rate_version=rate_version,
+            model_id=model_id,
+            registry=registry,
+        ),
+        "estimate_disclaimer": ESTIMATE_DISCLAIMER,
+    }
+    return assert_publishable(snapshot)
+
+
+def summarize_ai_evidence_extractions(
+    rows: Iterable[Any],
+    *,
+    card: AiRateCard | None = None,
+    rate_version: str | None = None,
+    model_id: str | None = None,
+    registry: RateCardRegistry | None = None,
+) -> dict[str, Any]:
+    """Aggregate persisted extraction rows into a secret-free metric snapshot."""
+
+    views = [
+        row
+        if isinstance(row, AiEvidenceExtractionView)
+        else AiEvidenceExtractionView.from_row(row)
+        for row in rows
+    ]
+    statuses: Counter = Counter(view.status for view in views)
+    verification: Counter = Counter(
+        view.verification_result for view in views if view.verification_result
+    )
+    reasons: Counter = Counter(
+        str(reason)
+        for view in views
+        for reason in view.verification_reasons.values()
+        if isinstance(reason, str)
+    )
+    totals = Counter()
+    for view in views:
+        if view.usage is None:
+            continue
+        totals["input"] += view.usage.input_tokens
+        totals["cached_input"] += view.usage.cached_input_tokens
+        totals["output"] += view.usage.output_tokens
+        totals["reasoning"] += view.usage.reasoning_tokens
+    usage = (
+        TokenUsage(
+            input_tokens=int(totals["input"]),
+            cached_input_tokens=int(totals["cached_input"]),
+            output_tokens=int(totals["output"]),
+            reasoning_tokens=int(totals["reasoning"]),
+        )
+        if totals
+        else None
+    )
+    snapshot = {
+        "extractions_total": len(views),
+        "shadow_only_total": sum(1 for view in views if view.shadow_only),
+        "status_counts": {
+            str(key): int(value) for key, value in sorted(statuses.items())
+        },
+        "verification_counts": {
+            str(key): int(value) for key, value in sorted(verification.items())
+        },
+        "verification_reason_counts": {
+            str(key): int(value) for key, value in sorted(reasons.items())
+        },
+        "latency_ms": _percentiles([float(view.latency_ms) for view in views]),
+        "tokens": {} if usage is None else usage.as_dict(),
+        "spend_estimate": ai_evidence_spend_estimate(
+            usage,
+            card=card,
+            rate_version=rate_version,
+            model_id=model_id,
+            registry=registry,
+        ),
+        "estimate_disclaimer": ESTIMATE_DISCLAIMER,
+    }
+    return assert_publishable(snapshot)
+
+
+def render_ai_evidence_prometheus(snapshot: Mapping[str, Any]) -> str:
+    """Render the extraction snapshot without adding a client dependency."""
+
+    lines: list[str] = []
+
+    def metric(name: str, value: Any, **labels: Any) -> None:
+        label_text = ""
+        if labels:
+            encoded = ",".join(
+                f'{key}="{_escape_label(str(item))}"'
+                for key, item in sorted(labels.items())
+            )
+            label_text = f"{{{encoded}}}"
+        lines.append(f"{name}{label_text} {_prom_number(value)}")
+
+    for outcome, value in sorted(dict(snapshot.get("counters", {})).items()):
+        metric("marko_ai_evidence_outcomes_total", value, outcome=outcome)
+    for status, value in sorted(dict(snapshot.get("status_counts", {})).items()):
+        metric("marko_ai_evidence_status_total", value, status=status)
+    for result, value in sorted(dict(snapshot.get("verification_counts", {})).items()):
+        metric("marko_ai_evidence_verification_total", value, result=result)
+    for quantile, value in sorted(dict(snapshot.get("latency_ms", {})).items()):
+        metric("marko_ai_evidence_latency_ms", value, quantile=quantile)
+    for kind, value in sorted(dict(snapshot.get("tokens", {})).items()):
+        metric("marko_ai_evidence_tokens_total", value, kind=kind)
+    estimate = snapshot.get("spend_estimate", {})
+    if isinstance(estimate, Mapping) and estimate.get("available"):
+        metric(
+            "marko_ai_evidence_estimated_spend_usd",
+            estimate.get("total_usd"),
+            rate_version=str(estimate.get("rate_version", "unknown")),
+            estimate="not_billing_truth",
+        )
+    return "\n".join(lines) + "\n"
+
+
 __all__ = [
+    "AI_EVIDENCE_OUTCOMES",
+    "AiEvidenceExtractionView",
+    "AiEvidenceFieldView",
+    "AiEvidenceTelemetry",
+    "AiEvidenceTelemetryError",
+    "HIDDEN_REASONING_KEYS",
+    "ai_evidence_spend_estimate",
+    "ai_evidence_telemetry_snapshot",
+    "assert_publishable",
     "get_pricing_run_scraper_metrics",
     "get_store_sync_scraper_metrics",
+    "public_evidence_payload",
+    "record_ai_evidence_outcome",
+    "render_ai_evidence_prometheus",
     "render_latest_operational_prometheus",
     "render_prometheus",
+    "reset_ai_evidence_telemetry",
+    "summarize_ai_evidence_extractions",
 ]

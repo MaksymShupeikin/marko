@@ -28,6 +28,7 @@ from marko.services.catalog_costs import (
     add_cost_clear_record,
     add_encrypted_cost_record,
 )
+from marko.services.catalog_costs import decrypt_cost_record
 from marko.services.cost_privacy import (
     CostPrivacyBlocked,
     privacy_safe_validation_errors,
@@ -264,4 +265,109 @@ def test_non_persistence_pricing_api_rejects_raw_cost_and_redacts_validation_inp
                 "below_cost_floor": "900",
                 "reason": "legacy payload",
             }
+        )
+
+
+def test_decrypt_cost_record_honours_the_record_it_is_given() -> None:
+    """Прогон считает по себестоимости, замороженной на старте.
+
+    До появления этого шва расчёт звал ``get_decrypted_catalog_cost``, который
+    всегда берёт последнюю запись. Себестоимость, поданная оператором уже во
+    время расчёта, попадала в идущий прогон, и повторить его было нельзя.
+    """
+
+    workspace_id = uuid4()
+    item_id = uuid4()
+    frozen_id = uuid4()
+    later_id = uuid4()
+    settings = _server_settings()
+    keyring = settings.cost_keyring
+
+    frozen = encrypt_cost(
+        Decimal("100.00"),
+        workspace_id=workspace_id,
+        catalog_item_id=item_id,
+        record_id=frozen_id,
+        keyring=keyring,
+    )
+    later = encrypt_cost(
+        Decimal("999.00"),
+        workspace_id=workspace_id,
+        catalog_item_id=item_id,
+        record_id=later_id,
+        keyring=keyring,
+    )
+
+    def _record(record_id, encrypted):
+        return CatalogItemCostRecord(
+            id=record_id,
+            workspace_id=workspace_id,
+            catalog_item_id=item_id,
+            action="SET",
+            ciphertext=encrypted.ciphertext,
+            nonce=encrypted.nonce,
+            key_id=encrypted.key_id,
+            algorithm=encrypted.algorithm,
+            format_version=encrypted.format_version,
+        )
+
+    assert decrypt_cost_record(
+        _record(frozen_id, frozen),
+        workspace_id=workspace_id,
+        catalog_item_id=item_id,
+        settings=settings,
+    ) == Decimal("100.00")
+    # Более свежая запись существует, но расчёт её не спрашивал.
+    assert decrypt_cost_record(
+        _record(later_id, later),
+        workspace_id=workspace_id,
+        catalog_item_id=item_id,
+        settings=settings,
+    ) == Decimal("999.00")
+    # Снятая себестоимость остаётся снятой.
+    assert (
+        decrypt_cost_record(
+            CatalogItemCostRecord(
+                id=uuid4(),
+                workspace_id=workspace_id,
+                catalog_item_id=item_id,
+                action="CLEAR",
+            ),
+            workspace_id=workspace_id,
+            catalog_item_id=item_id,
+            settings=settings,
+        )
+        is None
+    )
+
+
+def test_decrypt_cost_record_still_refuses_when_privacy_mode_is_off() -> None:
+    """Новый шов не ослабляет приватность: проверка режима осталась внутри."""
+
+    workspace_id = uuid4()
+    item_id = uuid4()
+    record_id = uuid4()
+    encrypted = encrypt_cost(
+        Decimal("10.00"),
+        workspace_id=workspace_id,
+        catalog_item_id=item_id,
+        record_id=record_id,
+        keyring=_keyring(),
+    )
+    with pytest.raises(CostPrivacyBlocked):
+        decrypt_cost_record(
+            CatalogItemCostRecord(
+                id=record_id,
+                workspace_id=workspace_id,
+                catalog_item_id=item_id,
+                action="SET",
+                ciphertext=encrypted.ciphertext,
+                nonce=encrypted.nonce,
+                key_id=encrypted.key_id,
+                algorithm=encrypted.algorithm,
+                format_version=encrypted.format_version,
+            ),
+            workspace_id=workspace_id,
+            catalog_item_id=item_id,
+            settings=Settings(cost_privacy_mode="UNDECIDED"),
         )

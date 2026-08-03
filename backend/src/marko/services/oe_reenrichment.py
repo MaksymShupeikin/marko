@@ -4,6 +4,17 @@ The job deliberately reuses the canonical offer identity service.  It never
 uses ``search_oe_norm`` as candidate evidence and never performs HTTP calls.
 Rows with deterministic data failures retain a persistent error code; unknown
 exceptions abort the batch so they cannot become silent data loss.
+
+Two properties this module is responsible for:
+
+* it reads the **frozen** execution view of the catalog position, never the
+  live ``CatalogItem`` row.  Re-running identity against a catalog edited after
+  the run started would silently rewrite history under a different part number
+  and category;
+* it **reconstructs and revalidates** the persisted source assertion instead of
+  discarding it.  Dropping it downgraded every marketplace-grouped offer to
+  ``UNKNOWN`` on the next pass, which is a silent loss of verified identity;
+  accepting it unchecked would let stale evidence promote a row forever.
 """
 
 from __future__ import annotations
@@ -24,7 +35,6 @@ from metis.pricing import (
 )
 from metis.pricing.observability import pricing_event
 from marko.infrastructure.db.models import (
-    CatalogItem,
     MarketObservation,
     PricingRun,
     PricingRunItem,
@@ -33,13 +43,16 @@ from marko.infrastructure.db.models import (
 )
 from marko.infrastructure.db.session import async_session_factory
 from marko.services.market_collection import (
+    _acquisition_capture_binding,
     _candidate_raw_manifest,
     _load_confirmed_crosses,
+    resolve_bound_execution_item,
 )
 from marko.services.offer_identity import (
     OE_EXTRACTOR_VERSION,
     ConfirmedCross,
     OeVerificationStatus,
+    SourceAssertion,
     bind_oe_verification,
     evidence_items_to_dicts,
     extract_oe_evidence,
@@ -47,9 +60,14 @@ from marko.services.offer_identity import (
 )
 from marko.services.offer_processing import (
     AcceptedCandidate,
+    AcquisitionLineage,
     process_offer_candidate,
 )
-from marko.services.pricing_runs import policy_from_dict
+from marko.services.pricing_runs import (
+    FrozenCatalogItem,
+    PricingRunSnapshotError,
+    load_run_execution_policy,
+)
 from marko.services.scraper_contract import ScrapeOutput, ScraperBoundaryError
 
 
@@ -121,17 +139,74 @@ class OeReenrichmentReport:
         }
 
 
+def reconstruct_source_assertion(
+    observation: MarketObservation,
+    lineage: AcquisitionLineage,
+    raw_manifest: Mapping[str, Any],
+) -> SourceAssertion | None:
+    """Rebuild the persisted assertion and prove it still holds.
+
+    Four things have to agree before a stored assertion may be believed again:
+    the row actually carries one, the acquisition retained on disk still asserts
+    identity the same way, it still names the same widening number, and the
+    retained bytes still bind to the same request.  Anything else is a conflict
+    and fails closed — the row keeps its market datum and loses its promotion.
+
+    A row that never carried an assertion is never given one here: promotion is
+    a decision made at collection, against evidence that existed then.
+    """
+
+    persisted_kind = (observation.source_assertion_retrieval_kind or "").strip()
+    persisted_sha = (observation.source_assertion_capture_sha256 or "").strip()
+    persisted_confidence = observation.source_assertion_confidence
+    persisted_via = (observation.via_oe_number or "").strip() or None
+    if not persisted_kind:
+        # Никакого заявления не было — и повторное обогащение его не выдумывает.
+        return None
+    if not persisted_sha or persisted_confidence is None:
+        raise OeReenrichmentDataError("REENRICHMENT_ASSERTION_INCOMPLETE")
+    if not lineage.asserts_identity:
+        raise OeReenrichmentDataError("REENRICHMENT_ASSERTION_CONFLICT")
+    if lineage.retrieval_kind.strip() != persisted_kind:
+        raise OeReenrichmentDataError("REENRICHMENT_ASSERTION_CONFLICT")
+    if ((lineage.via_oe_number or "").strip() or None) != persisted_via:
+        raise OeReenrichmentDataError("REENRICHMENT_ASSERTION_CONFLICT")
+    recomputed = _acquisition_capture_binding(raw_manifest, lineage)
+    # Хранимая привязка бывает двух форм: нынешняя (запрос + байты) и прежняя
+    # (только хеш манифеста) для строк, собранных до введения привязки. Обе
+    # пересчитываются здесь из тех же удержанных улик; догадок нет ни в одной.
+    legacy_binding = str(raw_manifest.get("raw_content_sha256") or "").strip()
+    if persisted_sha not in {recomputed, legacy_binding} or not recomputed:
+        raise OeReenrichmentDataError("REENRICHMENT_ASSERTION_CAPTURE_MISMATCH")
+    return SourceAssertion.from_lineage(
+        lineage,
+        capture_sha256=persisted_sha,
+        confidence=persisted_confidence,
+    )
+
+
 def build_reenrichment_patch(
     *,
     observation: MarketObservation,
-    catalog_item: CatalogItem,
+    frozen_item: FrozenCatalogItem,
     capture: RawMarketCapture,
     run: PricingRun,
     confirmed_crosses: tuple[ConfirmedCross, ...] = (),
     structured_payload: Mapping[str, Any] | None = None,
 ) -> OeReenrichmentPatch:
-    """Derive a deterministic identity patch from retained capture bytes only."""
+    """Derive a deterministic identity patch from retained capture bytes only.
 
+    ``frozen_item`` is the catalog position **as the run froze it**.  It is not
+    an ORM row: passing the live ``CatalogItem`` here would let a category or
+    part-number edit made after the run started rewrite an already-computed
+    identity, and nothing in the observation would record that it happened.
+    """
+
+    frozen_oe = str(getattr(frozen_item, "oe_norm", "") or "").strip()
+    if frozen_oe and frozen_oe != str(observation.search_oe_norm or "").strip():
+        # Наблюдение и замороженная позиция описывают разные номера: одно из
+        # двух записано не туда, и догадываться какое — не наша роль.
+        raise OeReenrichmentDataError("REENRICHMENT_FROZEN_OE_CONFLICT")
     candidate = _candidate_for_observation(
         structured_payload if structured_payload is not None else capture.payload,
         observation.source_listing_id,
@@ -146,10 +221,16 @@ def build_reenrichment_patch(
             candidate.upstream_comparison_evidence
         )
     oe_items = extract_oe_evidence(evidence_source, raw_manifest)
+    # Заявление источника не выбрасывается и не принимается на веру: оно
+    # восстанавливается из удержанного приобретения и перепроверяется.
+    source_assertion = reconstruct_source_assertion(
+        observation, candidate.acquisition, raw_manifest
+    )
     verification = verify_offer_identity(
         observation.search_oe_norm,
         oe_items,
         confirmed_crosses,
+        source_assertion=source_assertion,
     )
     comparison = comparison_evidence_from_dict(observation.comparison_evidence)
     comparison = bind_oe_verification(
@@ -159,7 +240,7 @@ def build_reenrichment_patch(
         currency_raw=observation.currency_raw,
         currency_normalized=observation.currency,
         required_currency="UAH",
-        category=catalog_item.category,
+        category=frozen_item.category,
     )
     selected_cross = next(
         (
@@ -175,7 +256,10 @@ def build_reenrichment_patch(
     cross_link_id = (
         UUID(selected_cross.cross_link_id) if selected_cross is not None else None
     )
-    policy = policy_from_dict(run.policy_config)
+    # Замороженный снимок прогона, а не текущее развёртывание: загрузчик
+    # пересчитывает ``policy_snapshot_hash`` и падает на расхождении. Иначе
+    # правка развёрнутой политики меняла бы результат идущего прогона.
+    policy = load_run_execution_policy(run)
     automatic_eligible = bool(
         verification.verified
         and comparison.hard_gate_result == HardGateResult.PASS
@@ -226,15 +310,18 @@ async def re_enrich_retained_observations_in_session(
     retry_failed: bool = False,
 ) -> OeReenrichmentReport:
     bounded_size = max(1, min(int(batch_size), MAX_REENRICHMENT_BATCH_SIZE))
+    # Живая строка ``CatalogItem`` здесь больше не читается вовсе: позиция
+    # приезжает из замороженного снимка строки членства, привязанного к своему
+    # прогону. Иначе правка каталога после старта переписывала бы уже
+    # посчитанную идентичность задним числом.
     statement = (
         select(
             MarketObservation,
-            CatalogItem,
+            PricingRunItem,
             RawMarketCapture,
             PricingRun,
             ScrapeTarget,
         )
-        .join(CatalogItem, CatalogItem.id == MarketObservation.catalog_item_id)
         .join(RawMarketCapture, RawMarketCapture.id == MarketObservation.raw_capture_id)
         .outerjoin(ScrapeTarget, ScrapeTarget.id == RawMarketCapture.scrape_target_id)
         .join(
@@ -269,16 +356,17 @@ async def re_enrich_retained_observations_in_session(
     failure_counts: dict[str, int] = {}
     updated = 0
     attempted_at = datetime.now(UTC)
-    for observation, catalog_item, capture, run, target in rows:
+    for observation, run_item, capture, run, target in rows:
         try:
+            frozen_item = resolve_bound_execution_item(run, run_item)
             crosses = await _load_confirmed_crosses(
                 session,
                 run=run,
-                catalog_item=catalog_item,
+                catalog_item=frozen_item,
             )
             patch = build_reenrichment_patch(
                 observation=observation,
-                catalog_item=catalog_item,
+                frozen_item=frozen_item,
                 capture=capture,
                 run=run,
                 confirmed_crosses=crosses,
@@ -286,12 +374,15 @@ async def re_enrich_retained_observations_in_session(
             )
         except (
             OeReenrichmentDataError,
+            PricingRunSnapshotError,
             ScraperBoundaryError,
             TypeError,
             ValueError,
         ) as exc:
             if isinstance(exc, OeReenrichmentDataError):
                 code = exc.code
+            elif isinstance(exc, PricingRunSnapshotError):
+                code = f"REENRICHMENT_{str(exc).split(':', 1)[0][:60]}"
             elif isinstance(exc, ScraperBoundaryError):
                 code = f"REENRICHMENT_{exc.code.value.upper()}"
             else:
@@ -347,10 +438,22 @@ def _candidate_for_observation(
     structured_payload: Mapping[str, Any],
     source_listing_id: str,
 ) -> AcceptedCandidate:
+    # ``from_payload`` re-runs the closed acquisition contract over the retained
+    # bytes, so a record whose lineage no longer holds together cannot silently
+    # regain an identity claim on the second pass.
     output = ScrapeOutput.from_payload(structured_payload)
+    prepared_url = output.prepared_url
+    input_hash = output.input_hash
+    acquisition_query = output.acquisition_query
     matches: list[AcceptedCandidate] = []
     for index, raw_offer in enumerate(output.candidate_records):
-        result = process_offer_candidate(raw_offer, fallback_index=index)
+        result = process_offer_candidate(
+            raw_offer,
+            fallback_index=index,
+            prepared_url=prepared_url,
+            input_hash=input_hash,
+            fallback_queried_oe=acquisition_query,
+        )
         if (
             isinstance(result, AcceptedCandidate)
             and result.source_listing_id == source_listing_id
@@ -393,6 +496,7 @@ __all__ = [
     "OeReenrichmentPatch",
     "OeReenrichmentReport",
     "build_reenrichment_patch",
+    "reconstruct_source_assertion",
     "re_enrich_retained_observations",
     "re_enrich_retained_observations_in_session",
 ]

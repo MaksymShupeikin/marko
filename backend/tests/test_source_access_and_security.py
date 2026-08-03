@@ -194,7 +194,15 @@ async def test_source_status_is_explicit_and_live_run_is_blocked() -> None:
             source = await client.get("/api/v1/health/source-access")
             blocked = await client.post(
                 "/api/v1/pricing/runs",
-                json={"import_batch_id": str(uuid4())},
+                json={
+                    "import_batch_id": str(uuid4()),
+                    # Контракт ограниченного прогона: полный каталог требует
+                    # явного подтверждения ещё до проверки доступа к источнику,
+                    # а сам старт — контракта предпросмотра, выданного сервером.
+                    "confirm_full_catalog": True,
+                    "idempotency_key": "source-access-probe-0001",
+                    "preview_token": "mrp1_" + "A" * 43,
+                },
             )
     finally:
         application.dependency_overrides.clear()

@@ -18,9 +18,13 @@ class PricingApi {
     return PricingRecommendation.fromJson(payload as Map<String, dynamic>);
   }
 
+  /// [runId] binds the request to one pricing run. Omitting it lets the
+  /// backend fall back to the newest run, which silently changes the answer
+  /// whenever a run finishes mid-session.
   Future<RecommendationPage> listRecommendations({
     String queue = 'all',
     String? action,
+    String? runId,
     String sort = 'ABSOLUTE_RECOMMENDED_CHANGE',
     int limit = 50,
     int offset = 0,
@@ -33,15 +37,55 @@ class PricingApi {
         'sort': sort,
         'queue': queue,
         'action': ?action,
+        'run_id': ?runId,
       },
     );
     return RecommendationPage.fromJson(payload as Map<String, dynamic>);
   }
 
-  Future<PricingRunSummary> startRun(String importBatchId) async {
+  /// Заморозить область прогона и показать её цену до запуска.
+  ///
+  /// Без побочных эффектов: прогон не создаётся. Возвращённые хеши передаются
+  /// в [startRun], чтобы запуск отказался стартовать, если каталог успел
+  /// измениться между предпросмотром и подтверждением.
+  Future<PricingRunPreview> previewRun(
+    String importBatchId, {
+    String scopeMode = 'FULL_CATALOG',
+    List<String> catalogItemIds = const <String>[],
+  }) async {
+    final payload = await _client.postJson(
+      '/api/v1/pricing/runs/preview',
+      body: {
+        'import_batch_id': importBatchId,
+        'scope_mode': scopeMode,
+        if (catalogItemIds.isNotEmpty) 'catalog_item_ids': catalogItemIds,
+      },
+    );
+    return PricingRunPreview.fromJson(payload as Map<String, dynamic>);
+  }
+
+  Future<PricingRunSummary> startRun(
+    String importBatchId, {
+    String scopeMode = 'FULL_CATALOG',
+    List<String> catalogItemIds = const <String>[],
+    bool confirmFullCatalog = false,
+    String? idempotencyKey,
+    // Непрозрачный токен из ответа предпросмотра. Хеши клиент больше не шлёт:
+    // сервер сам их публиковал, и «подтверждение» состояло из значения,
+    // которое подтверждающий получил от подтверждаемого.
+    required String previewToken,
+  }) async {
     final payload = await _client.postJson(
       Environment.e2eMode ? '/api/v1/e2e/pricing/runs' : '/api/v1/pricing/runs',
-      body: {'import_batch_id': importBatchId},
+      body: {
+        'import_batch_id': importBatchId,
+        'scope_mode': scopeMode,
+        if (catalogItemIds.isNotEmpty) 'catalog_item_ids': catalogItemIds,
+        // Полный каталог — самый дорогой режим, сервер требует явного согласия.
+        if (scopeMode == 'FULL_CATALOG') 'confirm_full_catalog': confirmFullCatalog,
+        'idempotency_key': ?idempotencyKey,
+        'preview_token': previewToken,
+      },
     );
     return PricingRunSummary.fromJson(payload as Map<String, dynamic>);
   }
@@ -71,6 +115,7 @@ class PricingApi {
     required String queue,
     required String sort,
     String? action,
+    String? runId,
   }) {
     return _client.getBytes(
       '/api/v1/pricing/recommendations/export',
@@ -79,6 +124,7 @@ class PricingApi {
         'queue': queue,
         'sort': sort,
         'action': ?action,
+        'run_id': ?runId,
       },
       fallbackFilename: 'marko-recommendations.$format',
     );

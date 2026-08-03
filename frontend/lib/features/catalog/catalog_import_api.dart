@@ -38,6 +38,40 @@ class CatalogImportApi {
     return CatalogImportBatch.fromJson(payload as Map<String, dynamic>);
   }
 
+  /// Максимум, который принимает `/api/v1/catalog/items` за один запрос.
+  static const int _itemPageSize = 250;
+
+  /// Первые [limit] позиций импорта в порядке файла.
+  ///
+  /// Ограниченная область прогона описывается контрактом запуска только явным
+  /// списком идентификаторов, поэтому «первые 300» приходится собрать здесь.
+  /// Порядок задаёт сервер (`source_row`, затем `id`), так что выбор
+  /// воспроизводим и объясним владельцу: это начало его же файла.
+  Future<List<String>> listItemIds(String batchId, {required int limit}) async {
+    final ids = <String>[];
+    while (ids.length < limit) {
+      final page = limit - ids.length < _itemPageSize
+          ? limit - ids.length
+          : _itemPageSize;
+      final payload = await _client.getJson(
+        '/api/v1/catalog/items',
+        queryParameters: {
+          'batch_id': batchId,
+          'limit': '$page',
+          'offset': '${ids.length}',
+        },
+      );
+      final items = (payload as Map<String, dynamic>)['items'] as List<dynamic>;
+      ids.addAll(
+        items.map((item) => (item as Map<String, dynamic>)['id'] as String),
+      );
+      // Импорт кончился раньше запрошенной границы — это нормальный случай,
+      // а не ошибка: предпросмотр посчитает то, что действительно есть.
+      if (items.length < page) break;
+    }
+    return List<String>.unmodifiable(ids);
+  }
+
   Future<List<CatalogImportBatch>> list({int limit = 100}) async {
     final payload = await _client.getJson(
       '/api/v1/catalog/imports',

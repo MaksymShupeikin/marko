@@ -275,10 +275,25 @@ class MotorsContext:
     part_group_id: int | None
     oe_page_id: int | None
     oe_page_alias: str | None
+    #: The number whose listing was taken.  Equal to ``normalized_part_code``
+    #: normally; different when our own code has no listing and one from its
+    #: supersession chain was used instead, which is a widening and must be
+    #: visible to whatever grades the offers.
+    via_oe_number: str | None = None
     #: Supersession chain, normalized, our own code first when present.
     compatible_oe_numbers: tuple[str, ...] = ()
     compatible_vehicles: tuple[MotorsVehicle, ...] = ()
     images: tuple[str, ...] = ()
+
+    @property
+    def is_widened(self) -> bool:
+        """Whether the listing belongs to a related number rather than ours."""
+
+        return bool(
+            self.via_oe_number
+            and self.normalized_part_code
+            and self.via_oe_number != self.normalized_part_code
+        )
 
     @property
     def has_oe_page(self) -> bool:

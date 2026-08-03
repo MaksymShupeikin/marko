@@ -154,6 +154,7 @@ async def test_export_refuses_more_than_the_documented_limit(monkeypatch) -> Non
             "lower": 0,
             "review": 0,
             "hold": 0,
+            "total": 5001,
         }
 
     monkeypatch.setattr(recommendation_export, "list_recommendations", too_many)

@@ -9,6 +9,7 @@ import math
 import re
 import unicodedata
 
+from metis.identifiers import normalize_oem_identifier
 from metis.pricing.types import ProductTier
 
 from .types import (
@@ -65,7 +66,6 @@ FEATURE_WEIGHTS: Mapping[FitmentFeature, Decimal] = {
 if sum(FEATURE_WEIGHTS.values(), ZERO) != ONE:  # pragma: no cover - import invariant
     raise RuntimeError("fitment feature weights must sum to one")
 
-_PART_NUMBER_RE = re.compile(r"[^0-9A-Z]+")
 _SPACE_RE = re.compile(r"\s+")
 
 _AXLE_ALIASES = {
@@ -104,9 +104,7 @@ _CATEGORY_ALIASES = {
 def normalize_part_number(value: str | None) -> str | None:
     """Normalize an OE/article without ever parsing it as an integer."""
 
-    normalized = _PART_NUMBER_RE.sub(
-        "", unicodedata.normalize("NFKC", value or "").upper().strip()
-    )
+    normalized = normalize_oem_identifier(value)
     return normalized or None
 
 

@@ -25,6 +25,11 @@ void main() {
           .requireValue;
 
       expect(api.offsets, [0, 2]);
+      expect(
+        api.requestedRunIds,
+        [null, 'run-1'],
+        reason: 'the first page resolves the run, page two is bound to it',
+      );
       expect(state.page.items.map((item) => item.id), [
         'rec-1',
         'rec-2',
@@ -88,6 +93,7 @@ class _PagingPricingApi extends PricingApi {
 
   final bool failNextPage;
   final List<int> offsets = [];
+  final List<String?> requestedRunIds = [];
   final List<String> requestedRecommendationIds = [];
 
   @override
@@ -102,11 +108,13 @@ class _PagingPricingApi extends PricingApi {
   Future<RecommendationPage> listRecommendations({
     String queue = 'all',
     String? action,
+    String? runId,
     String sort = 'ABSOLUTE_RECOMMENDED_CHANGE',
     int limit = 50,
     int offset = 0,
   }) async {
     offsets.add(offset);
+    requestedRunIds.add(runId);
     if (offset == 0) {
       return RecommendationPage(
         items: [_recommendation('rec-1'), _recommendation('rec-2')],

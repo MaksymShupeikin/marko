@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 
-from metis.pricing.crosses import normalize_cross_oem
+from metis.identifiers import normalize_oem_identifier
 
 CATALOG_CHARACTERISTICS_SCHEMA_VERSION = "marko-catalog-characteristics-v1"
 
@@ -48,10 +48,11 @@ ANOMALY_PART_NUMBERS_TRUNCATED = "PART_NUMBERS_TRUNCATED"
 ANOMALY_APPLICABILITY_TRUNCATED = "APPLICABILITY_TRUNCATED"
 ANOMALY_VALUE_TOO_LONG = "CHARACTERISTIC_VALUE_TOO_LONG"
 
-# Cyrillic letters that share a glyph with a Latin one.  Applied after
-# upper-casing, which is why only the upper-case forms are listed.  Shared with
-# ``xlsx_catalog`` so identifiers and characteristic names fold identically:
-# the observed export contains both ``Модель`` and ``Мoдель`` with a Latin "o".
+# Cyrillic letters that share a glyph with a Latin one.  This broad translation
+# is safe for characteristic *names*; part numbers use the conservative shared
+# OEM normalizer so words such as ``плоск`` cannot leak ASCII fragments into an
+# identifier.  The observed export contains both ``Модель`` and ``Мoдель`` with
+# a Latin "o".
 HOMOGLYPH_FOLDING = str.maketrans(
     {
         "А": "A",
@@ -129,18 +130,10 @@ class CharacteristicsExtraction:
 
 
 def normalize_part_number(value: Any) -> str:
-    """Normalize a declared part number the same way ``oe_norm`` is normalized.
-
-    ``normalize_cross_oem`` keeps only ``[A-Z0-9]``, so a Cyrillic homoglyph is
-    deleted rather than folded: ``06А 115-105 B`` would become ``06115105B``
-    while the very same number in ``Код_товару`` becomes ``06A115105B`` via
-    ``normalize_identifier``.  Two keys for one number means the row's own code
-    is not recognized inside its own cross list, and the identity graph gains a
-    number that matches nothing.  Folding first removes that divergence.
-    """
+    """Normalize a declared part number through the shared OEM contract."""
 
     text = "" if value is None else str(value)
-    return normalize_cross_oem(text.upper().translate(HOMOGLYPH_FOLDING))
+    return normalize_oem_identifier(text)
 
 
 def normalize_characteristic_name(value: Any) -> str:

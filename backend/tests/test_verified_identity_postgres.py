@@ -51,7 +51,12 @@ from marko.services.offer_processing import (
     EvidenceAccountingError,
     OfferAccounting,
 )
-from marko.services.pricing_runs import create_pricing_run, policy_from_dict
+from marko.services.pricing_runs import (
+    CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
+    TrustedRunStart,
+    create_pricing_run,
+    policy_from_dict,
+)
 from marko.services.scrape_runtime import ScrapeExecutionTrace
 from marko.services.scraper_contract import (
     AttemptMeasurement,
@@ -113,6 +118,29 @@ async def _delete_disposable_workspace(workspace_id: UUID) -> None:
                         f"DISABLE TRIGGER trg_{table_name}_append_only"
                     )
                 )
+            # Членство прогона держит позиции каталога внешним ключом
+            # RESTRICT (миграция 0033): улику расчёта нельзя снести каскадом от
+            # воркспейса. Уборка снимает её явно и в обратном порядке — сама
+            # защита при этом не ослабляется.
+            await session.execute(
+                text(
+                    "ALTER TABLE pricing_run_items "
+                    "DISABLE TRIGGER trg_pricing_run_items_no_delete"
+                )
+            )
+            await session.execute(
+                text(
+                    "DELETE FROM pricing_run_items WHERE pricing_run_id IN "
+                    "(SELECT id FROM pricing_runs WHERE workspace_id=:workspace_id)"
+                ),
+                {"workspace_id": workspace_id},
+            )
+            await session.execute(
+                text(
+                    "ALTER TABLE pricing_run_items "
+                    "ENABLE TRIGGER trg_pricing_run_items_no_delete"
+                )
+            )
             await session.execute(delete(Workspace).where(Workspace.id == workspace_id))
             for table_name in reversed(APPEND_ONLY_TABLES):
                 await session.execute(
@@ -457,6 +485,10 @@ async def test_02_query_replay_materialization_and_redelivery_are_idempotent(
                 import_batch_id=batch_id,
                 celery_app=fake_celery,
                 source_mode="e2e_fixture_replay",
+                start=TrustedRunStart(
+                    confirmation_source=CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
+                    reason="isolated e2e stack replays seeded fixtures",
+                ),
             )
             targets = list(
                 (
@@ -800,6 +832,10 @@ async def test_03_observations_and_outcome_ledger_rollback_atomically(
                 import_batch_id=batch_id,
                 celery_app=fake_celery,
                 source_mode="e2e_fixture_replay",
+                start=TrustedRunStart(
+                    confirmation_source=CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
+                    reason="isolated e2e stack replays seeded fixtures",
+                ),
             )
             targets = list(
                 (

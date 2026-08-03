@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api_client.dart';
 import '../../core/app_language.dart';
 import '../../core/environment.dart';
+import '../../core/session_expiry.dart';
 import '../../core/widgets/marko_menu.dart';
 import 'pricing_api.dart';
 
@@ -18,6 +19,7 @@ class RecommendationExportButton extends ConsumerStatefulWidget {
     required this.queue,
     required this.sort,
     this.action,
+    this.runId,
     this.saveDownload,
     super.key,
   });
@@ -25,6 +27,10 @@ class RecommendationExportButton extends ConsumerStatefulWidget {
   final String queue;
   final String sort;
   final String? action;
+
+  /// The pricing run currently on screen. Without it the backend exports the
+  /// newest run, which is not necessarily the one being looked at.
+  final String? runId;
   final RecommendationDownloadSaver? saveDownload;
 
   @override
@@ -38,6 +44,11 @@ class _RecommendationExportButtonState
 
   @override
   Widget build(BuildContext context) {
+    // Мёртвый токен — состояние приложения: 401 мог прийти из списка, из
+    // расчёта или отсюда же. Предлагать выгрузку после него значит обещать
+    // файл, которого не будет, и прятать единственное действие, которое
+    // что-то меняет.
+    final sessionExpired = ref.watch(markoSessionExpiredProvider);
     final entries = <MarkoMenuEntry<String>>[
       MarkoMenuEntry(
         value: 'xlsx',
@@ -52,7 +63,7 @@ class _RecommendationExportButtonState
     ];
     return MarkoMenuButton<String>(
       key: const ValueKey('recommendations-export'),
-      enabled: !_busy,
+      enabled: !_busy && !sessionExpired,
       tooltip: context.localized(
         ru: 'Выгрузить активную выборку',
         uk: 'Вивантажити активну вибірку',
@@ -98,6 +109,7 @@ class _RecommendationExportButtonState
             queue: widget.queue,
             sort: widget.sort,
             action: widget.action,
+            runId: widget.runId,
           );
       final saver =
           widget.saveDownload ??
@@ -116,6 +128,10 @@ class _RecommendationExportButtonState
       );
     } catch (error) {
       if (!mounted) return;
+      // A snackbar carrying the backend's "Authentication required" would
+      // scroll away in four seconds and offer nothing. The page answers an
+      // expired session in place, with the sign-in that resolves it.
+      if (ref.classifySessionExpiry(error)) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(

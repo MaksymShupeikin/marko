@@ -233,6 +233,23 @@ class PriceComparison:
     #: read back knowing whether its basis was a text search or the
     #: marketplace's own part-code listing.
     source: str = "SEARCH"
+    #: The number whose market was actually taken.  Differs from our own code
+    #: when the listing came from its supersession chain.
+    via_oe_number: str | None = None
+    #: Whether that number is a related one rather than ours.  An offer from a
+    #: related number's market is a different sellable part until something
+    #: proves otherwise, so this has to survive as far as the grader.
+    is_widened: bool = False
+
+    @property
+    def acquisition(self) -> dict[str, Any]:
+        """Where this market came from, in one serializable block."""
+
+        return {
+            "source": self.source,
+            "via_oe_number": self.via_oe_number,
+            "is_widened": self.is_widened,
+        }
 
     @property
     def prices(self) -> list[Decimal]:
@@ -282,6 +299,11 @@ class PriceComparison:
                 "buybox_max_price": _decimal_text(self.seed.max_price),
             },
             "query": self.query,
+            # The origin travels with the comparison itself: whoever reads a
+            # recommendation back has to see whose market it rests on, not
+            # only the prices taken from it.
+            "source": self.source,
+            "acquisition": self.acquisition,
             "candidates_scanned": self.candidates_scanned,
             "stats": {
                 "sellers_compared": len(self.offers),
@@ -335,6 +357,10 @@ class ComparisonParams:
     #: The number the search was run by, accepted as retrieval evidence when a
     #: listing repeats it.
     search_number: str | None = None
+    #: The number whose market these candidates were taken from.
+    via_oe_number: str | None = None
+    #: Whether that number is a related one rather than our own.
+    is_widened: bool = False
     #: Every storefront of ours, not merely the one that owns the seed.  KEMP
     #: runs four on prom.ua and they upload identical cards, so they resemble our
     #: product better than any competitor does: measured 2026-07-31, 48 of 65
@@ -393,6 +419,8 @@ def build_comparison(
     offers = sorted(cheapest_by_seller.values(), key=lambda offer: offer.price)
     return PriceComparison(
         source=params.identity_source or "SEARCH",
+        via_oe_number=params.via_oe_number,
+        is_widened=params.is_widened,
         seed=seed,
         query=params.query,
         offers=offers[: params.max_sellers],

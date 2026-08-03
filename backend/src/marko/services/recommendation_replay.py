@@ -30,6 +30,7 @@ from metis.pricing import (
 from marko.services.market_collection import (
     _domain_offer,
     apply_comparability_activation_gate,
+    resolve_bound_execution_item,
 )
 from marko.services.llm_comparability import effective_review_from_snapshot
 from marko.services.cost_privacy import privacy_safe_mapping
@@ -39,10 +40,11 @@ from marko.services.decision_fingerprint import (
     canonical_sha256,
 )
 from marko.services.pricing_runs import (
+    PricingRunSnapshotError,
     get_pricing_run,
     get_recommendation,
+    load_run_execution_policy,
     load_target_tier_coefficients,
-    policy_from_dict,
 )
 from metis.pricing.observability import pricing_event
 
@@ -114,6 +116,18 @@ async def replay_recommendation(
         raise RecommendationReplayUnavailable(
             "Recommendation run-item snapshot is missing"
         )
+    # Повтор обязан подбирать коэффициенты по той же позиции, по которой их
+    # подбирал расчёт, то есть по ЗАМОРОЖЕННОЙ. ``item`` — живая строка
+    # каталога: она нужна только чтобы предъявить владельца и убедиться, что
+    # позиция ещё существует, и её категория/OE могли измениться после старта.
+    # Читать их отсюда значило бы «повторять» по другому товару и объявлять
+    # расхождение дефектом расчёта.
+    try:
+        frozen_item = resolve_bound_execution_item(run, run_item, item)
+    except PricingRunSnapshotError as exc:
+        raise RecommendationReplayUnavailable(
+            f"Recommendation run-item snapshot is not usable: {exc}"
+        ) from exc
 
     rows = list(
         (
@@ -144,12 +158,15 @@ async def replay_recommendation(
         latest.setdefault(observation.id, (observation, classification))
 
     context = context_from_snapshot(recommendation.context_snapshot)
-    policy = policy_from_dict(run.policy_config)
+    # Повтор рекомендации обязан читать политику ТОЛЬКО из снимка прогона:
+    # иначе изменённый файл развёртывания молча переопределяет историю, и
+    # «повтор» перестаёт быть повтором.
+    policy = load_run_execution_policy(run)
     coefficients = await load_target_tier_coefficients(
         session,
         run=run,
-        category=item.category,
-        oe_norm=item.oe_norm,
+        category=frozen_item.category,
+        oe_norm=frozen_item.oe_norm,
         policy=policy,
     )
     llm_trace = trace.get("llm_comparability")

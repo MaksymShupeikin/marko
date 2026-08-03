@@ -31,6 +31,8 @@ import unicodedata
 
 import yaml
 
+from metis.identifiers import normalize_oem_identifier
+
 from .tiering import classify_tier
 from .types import ProductTier
 
@@ -275,10 +277,9 @@ def norm_text(value: str | None) -> str:
 
 
 def norm_oem(value: str | None) -> str:
-    """Normalize OE/article identifiers to uppercase ASCII alphanumerics."""
+    """Normalize OE/article identifiers through the shared OEM contract."""
 
-    normalized = unicodedata.normalize("NFKC", value or "").upper()
-    return re.sub(r"[^A-Z0-9]", "", normalized)
+    return normalize_oem_identifier(value)
 
 
 def load_candidate_selection_config(

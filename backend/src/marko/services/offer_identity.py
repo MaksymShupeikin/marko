@@ -23,10 +23,22 @@ from metis.pricing import (
     evaluate_comparison_evidence,
     normalize_oe,
 )
+from marko.services.offer_processing import (
+    ACQUISITION_METHOD_OE_PAGE_LISTING,
+    ACQUISITION_SOURCE_OE_PAGE,
+    ASSERTING_RETRIEVAL_KINDS,
+    WIDENED_RETRIEVAL_KINDS,
+    AcquisitionLineage,
+)
 
 
 OE_EXTRACTOR_VERSION = "oe-extractor-v1"
 OE_VERIFICATION_THRESHOLD = Decimal("0.90")
+#: Уверенность заявления страницы кода детали. Не новая доменная величина:
+#: приравнена к порогу проверки, то есть «ровно настолько авторитетно, чтобы
+#: считаться подтверждением, и не более». Владелец может пересмотреть её
+#: отдельным решением.
+SOURCE_PAGE_ASSERTION_CONFIDENCE = OE_VERIFICATION_THRESHOLD
 _STRONG_THRESHOLD = Decimal("0.90")
 _MEDIUM_THRESHOLD = Decimal("0.70")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -307,15 +319,178 @@ def evidence_strength(
     return (Decimal("1") - complement).quantize(Decimal("0.0001"))
 
 
+#: Способы извлечения, при которых сама площадка утверждает идентичность.
+#: Обычный текстовый поиск сюда не входит намеренно: выдача поиска — это
+#: совпадение слов, а не заявление о том, что товар тот же самый.
+_ASSERTING_RETRIEVAL_KINDS = ASSERTING_RETRIEVAL_KINDS
+_WIDENED_RETRIEVAL_KINDS = WIDENED_RETRIEVAL_KINDS
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAssertion:
+    """Заявление площадки о том, под каким номером она подшила предложение.
+
+    Продавцы на странице кода детали номер в заголовке не повторяют: замер
+    2026-07-31 показал 1887 отброшенных предложений из 2181. Требовать номер в
+    тексте карточки — значит выбрасывать рынок, который площадка уже собрала за
+    нас. Но принять заявление можно только вместе с его происхождением, иначе
+    любой запрос превращается в подтверждённую идентичность.
+
+    Собирать его вручную нельзя: единственный поддерживаемый конструктор —
+    :meth:`from_lineage`, потому что заявление обязано происходить из
+    родословной приобретения, а не из наших собственных намерений.
+    """
+
+    #: Номер, по которому запрашивалась страница. Приходит ИЗ приобретения.
+    queried_oe_norm: str
+    #: Способ извлечения (``prom_oe_page`` / ``prom_oe_page_widened`` / поиск).
+    retrieval_kind: str
+    #: SHA-256 неизменяемого захвата, на который опирается заявление.
+    capture_sha256: str
+    confidence: Decimal
+    #: Номер, по которому фактически взят рынок. Обязателен для расширения:
+    #: кросс, не называющий, к чему он относится, — это не кросс.
+    via_oe_number: str | None = None
+    #: Откуда и как взят рынок. ``None`` — родословная не дошла, и тогда
+    #: заявление проверяется только по способу извлечения (retained-строки).
+    acquisition_source: str | None = None
+    acquisition_method: str | None = None
+    #: Подготовленный URL запроса, к которому привязан захват.
+    source_url: str | None = None
+
+    @property
+    def is_widened(self) -> bool:
+        return self.retrieval_kind.strip() in _WIDENED_RETRIEVAL_KINDS
+
+    @classmethod
+    def from_lineage(
+        cls,
+        lineage: AcquisitionLineage | None,
+        *,
+        capture_sha256: str,
+        confidence: Decimal,
+    ) -> SourceAssertion | None:
+        """Собрать заявление ТОЛЬКО из проверенной родословной приобретения.
+
+        Возвращает ``None``, когда приобретение ничего не утверждает: обычный
+        поиск, отсутствующая или противоречивая родословная. Ключевое отличие
+        от прежнего кода: запрошенный номер берётся из ``lineage``, а не из
+        ``CatalogItem.oe_norm``. Восстанавливать его из каталога — значит
+        превращать наше намерение в заявление площадки.
+        """
+
+        if lineage is None or not lineage.asserts_identity:
+            return None
+        queried = (lineage.queried_oe_norm or "").strip()
+        if not queried:
+            return None
+        return cls(
+            queried_oe_norm=queried,
+            retrieval_kind=lineage.retrieval_kind,
+            capture_sha256=capture_sha256,
+            confidence=confidence,
+            via_oe_number=lineage.via_oe_number,
+            acquisition_source=lineage.source,
+            acquisition_method=lineage.method,
+            source_url=lineage.source_url,
+        )
+
+    def authoritative_for(self, query: str | None) -> bool:
+        """Достаточно ли заявление авторитетно для этого запроса.
+
+        Условия обязательны все: способ извлечения — страница конкретного
+        номера, а не поиск; названный источник и способ приобретения не
+        противоречат ему; есть неизменяемый захват; страница именно нашего
+        номера; уверенность не нулевая.
+        """
+
+        if self.retrieval_kind.strip() not in _ASSERTING_RETRIEVAL_KINDS:
+            return False
+        # Родословная, если она названа, обязана согласовываться со способом
+        # извлечения. Именно эта пара — ``prom_oe_page`` с ``source=SEARCH`` —
+        # доезжала до ``VERIFIED_EXACT``.
+        if (
+            self.acquisition_source is not None
+            and self.acquisition_source != ACQUISITION_SOURCE_OE_PAGE
+        ):
+            return False
+        if (
+            self.acquisition_method is not None
+            and self.acquisition_method != ACQUISITION_METHOD_OE_PAGE_LISTING
+        ):
+            return False
+        if not self.capture_sha256.strip():
+            return False
+        if self.confidence <= 0:
+            return False
+        # Расширение обязано назвать номер, по которому взят рынок.
+        if self.is_widened and not normalize_oe(self.via_oe_number or ""):
+            return False
+        return query is not None and normalize_oe(self.queried_oe_norm) == query
+
+
 def verify_offer_identity(
     search_oe_norm: str,
     evidence_items: Iterable[OeEvidenceItem],
     confirmed_crosses: Iterable[ConfirmedCross] = (),
     *,
     legacy_without_reenrichment: bool = False,
+    source_assertion: SourceAssertion | None = None,
 ) -> OeVerification:
     query = normalize_oe(search_oe_norm)
     evidence = tuple(evidence_items)
+
+    def _asserted_by_source() -> OeVerification | None:
+        """Принять заявление источника, когда карточка молчит.
+
+        Только когда молчит: заявление подставляется вместо ОТСУТСТВИЯ улик, а
+        не вместо противоречия. Извлечённый из карточки чужой номер — факт о
+        самом товаре, и он остаётся решающим (см. ветки AMBIGUOUS/CONFLICT ниже).
+        """
+
+        if source_assertion is None or not source_assertion.authoritative_for(query):
+            return None
+        assert query is not None
+        if source_assertion.is_widened:
+            # Рынок родственного номера — это кросс, а не тот же номер, и он
+            # требует доказанного родства. Запрос по номеру доказательством не
+            # является: площадка могла подшить рынок под родственный код
+            # ошибочно. Без подтверждённого кросса target↔via это
+            # предположение, и оно остаётся UNKNOWN.
+            via = normalize_oe(source_assertion.via_oe_number or "")
+            proven = next(
+                (
+                    cross
+                    for cross in confirmed_crosses
+                    if normalize_oe(cross.search_oe_norm) == query
+                    and normalize_oe(cross.candidate_oe_norm) == via
+                ),
+                None,
+            )
+            if via is None or proven is None:
+                return None
+            # Честная идентичность: подтверждён тот номер, по которому взят
+            # рынок, а не наш собственный. Потолок грейда
+            # ``ACCEPTABLE_ANALOGUE`` держится отдельно, на персистентности.
+            return _verified_result(
+                OeVerificationStatus.VERIFIED_CROSS,
+                via,
+                proven.canonical_identity_key,
+                extracted,
+                min(source_assertion.confidence, proven.confidence),
+                evidence,
+                "OE_ASSERTED_BY_WIDENED_SOURCE_PAGE",
+            )
+        return _verified_result(
+            OeVerificationStatus.VERIFIED_EXACT,
+            query,
+            query,
+            extracted,
+            source_assertion.confidence,
+            evidence,
+            "OE_ASSERTED_BY_SOURCE_PAGE",
+        )
+
     extracted = tuple(sorted({item.normalized_value for item in evidence}))
     if legacy_without_reenrichment:
         strengths = {value: evidence_strength(value, evidence) for value in extracted}
@@ -329,6 +504,11 @@ def verify_offer_identity(
             reason_codes=("OE_LEGACY_NOT_REENRICHED",),
         )
     if query is None or not extracted:
+        # Карточка молчит — здесь и только здесь заявление источника имеет
+        # право заменить отсутствующую улику.
+        asserted = _asserted_by_source()
+        if asserted is not None:
+            return asserted
         return OeVerification(
             status=OeVerificationStatus.UNKNOWN,
             extracted_oe_norms=extracted,
@@ -347,6 +527,15 @@ def verify_offer_identity(
         and _has_independent_support(value, evidence)
     }
     if not eligible:
+        # Улики есть, но ни одна не дотянула до порога. Если среди них нет
+        # нашего номера, это молчание, а не противоречие: карточка просто не
+        # называет номер убедительно. Заявление источника допустимо только
+        # тогда, когда извлечённое не противоречит запросу.
+        contradicts = any(value != query for value in extracted)
+        if not contradicts:
+            asserted = _asserted_by_source()
+            if asserted is not None:
+                return asserted
         return OeVerification(
             status=OeVerificationStatus.UNKNOWN,
             extracted_oe_norms=extracted,

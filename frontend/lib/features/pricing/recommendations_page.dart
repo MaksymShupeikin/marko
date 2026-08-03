@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/api_client.dart';
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
+import '../../core/session_expiry.dart';
 import '../../core/widgets/marko_menu.dart';
 import '../fitment/fitment_candidates_panel.dart';
 import 'catalog_context_dialog.dart';
@@ -60,12 +62,23 @@ class RecommendationsPage extends ConsumerWidget {
         }
         return _RecommendationsContent(
           state: state,
+          // A 401 raised by the run panel, the export or the deep link is the
+          // same dead session the list would have met on its next request, and
+          // every one of them is recorded here — including the controller's
+          // own, which sets [RecommendationsState.sessionExpired] through the
+          // same classifier. Reading the coordinator instead of the local flag
+          // is what lets the notice come down again: only the coordinator sees
+          // the dead credential actually being dropped.
+          sessionExpired: ref.watch(markoSessionExpiredProvider),
           initialRecommendationId: recommendationId,
           canAdministerWorkspace: canAdministerWorkspace,
           onOpenRecommendationDeepLink: onOpenRecommendationDeepLink,
           onOpenCatalog: onOpenCatalog,
           onRefresh: () =>
               ref.read(recommendationsControllerProvider.notifier).refresh(),
+          onShowLatestRun: () => ref
+              .read(recommendationsControllerProvider.notifier)
+              .showLatestRun(),
           onQueue: (queue) => ref
               .read(recommendationsControllerProvider.notifier)
               .setQueue(queue),
@@ -83,22 +96,26 @@ class RecommendationsPage extends ConsumerWidget {
 class _RecommendationsContent extends StatelessWidget {
   const _RecommendationsContent({
     required this.state,
+    required this.sessionExpired,
     required this.initialRecommendationId,
     required this.canAdministerWorkspace,
     required this.onOpenRecommendationDeepLink,
     required this.onOpenCatalog,
     required this.onRefresh,
+    required this.onShowLatestRun,
     required this.onQueue,
     required this.onSort,
     required this.onLoadMore,
   });
 
   final RecommendationsState state;
+  final bool sessionExpired;
   final String? initialRecommendationId;
   final bool canAdministerWorkspace;
   final ValueChanged<String>? onOpenRecommendationDeepLink;
   final VoidCallback? onOpenCatalog;
   final VoidCallback onRefresh;
+  final VoidCallback onShowLatestRun;
   final ValueChanged<String> onQueue;
   final ValueChanged<String> onSort;
   final VoidCallback onLoadMore;
@@ -108,153 +125,208 @@ class _RecommendationsContent extends StatelessWidget {
     final colors = MarkoTheme.of(context);
     final recommendations = state.page.items;
     final actionCounts = state.page.actionCounts;
-    return RefreshIndicator(
-      onRefresh: () async => onRefresh(),
-      child: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-        children: [
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1120),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 16,
-                    runSpacing: 14,
-                    children: [
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 720),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              context.localized(
-                                ru: 'Сравнение цен',
-                                uk: 'Порівняння цін',
-                              ),
-                              style: Theme.of(context).textTheme.headlineMedium,
-                            ),
-                            const SizedBox(height: 7),
-                            Text(
-                              context.localized(
-                                ru: 'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
-                                uk: 'Спочатку показані найбільші рекомендовані зміни. Ціна на Prom.ua не змінюється автоматично.',
-                              ),
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(color: colors.muted),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+    return MarkoSessionExpiryAnswered(
+      child: RefreshIndicator(
+        onRefresh: () async => onRefresh(),
+        child: _body(context, colors, recommendations, actionCounts),
+      ),
+    );
+  }
+
+  Widget _body(
+    BuildContext context,
+    MarkoTheme colors,
+    List<PricingRecommendation> recommendations,
+    RecommendationActionCounts actionCounts,
+  ) {
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+      children: [
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1120),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 16,
+                  runSpacing: 14,
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          RecommendationExportButton(
-                            queue: state.queue,
-                            sort: state.sort,
-                            action: state.actionFilter,
-                          ),
-                          IconButton.outlined(
-                            tooltip: context.localized(
-                              ru: 'Обновить',
-                              uk: 'Оновити',
+                          Text(
+                            context.localized(
+                              ru: 'Сравнение цен',
+                              uk: 'Порівняння цін',
                             ),
-                            onPressed: onRefresh,
-                            icon: const Icon(Icons.refresh_rounded),
+                            style: Theme.of(context).textTheme.headlineMedium,
+                          ),
+                          const SizedBox(height: 7),
+                          Text(
+                            context.localized(
+                              ru: 'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
+                              uk: 'Спочатку показані найбільші рекомендовані зміни. Ціна на Prom.ua не змінюється автоматично.',
+                            ),
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: colors.muted),
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 22),
-                  PricingRunPanel(
-                    canAdministerWorkspace: canAdministerWorkspace,
-                    onRunFinished: onRefresh,
-                  ),
-                  const SizedBox(height: 18),
-                  const DiscoveryFunnelPanel(),
-                  const SizedBox(height: 18),
-                  if (state.error != null) ...[
-                    MarkoInlineMessage(
-                      message: state.error!,
-                      tone: MarkoMessageTone.error,
                     ),
-                    const SizedBox(height: 16),
-                  ],
-                  if (state.deepLinkUnavailable) ...[
-                    MarkoInlineMessage(
-                      message: context.localized(
-                        ru: 'Не удалось открыть рекомендацию по ссылке. Она недоступна в этой рабочей области или больше не существует.',
-                        uk: 'Не вдалося відкрити рекомендацію за посиланням. Вона недоступна в цій робочій області або більше не існує.',
-                      ),
-                      tone: MarkoMessageTone.warning,
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        RecommendationExportButton(
+                          queue: state.queue,
+                          sort: state.sort,
+                          action: state.actionFilter,
+                          // The file must be the calculation on screen, not
+                          // whichever run happens to be newest when the
+                          // download is requested.
+                          runId: state.runId,
+                        ),
+                        IconButton.outlined(
+                          tooltip: context.localized(
+                            ru: 'Обновить',
+                            uk: 'Оновити',
+                          ),
+                          // Repeating the request with a token the backend
+                          // already rejected can only fail again.
+                          onPressed: sessionExpired ? null : onRefresh,
+                          icon: const Icon(Icons.refresh_rounded),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
                   ],
-                  _SummaryRow(
-                    total: state.page.total,
-                    raiseCount: actionCounts.raise,
-                    lowerCount: actionCounts.lower,
-                    reviewCount: actionCounts.review,
-                  ),
-                  const SizedBox(height: 18),
-                  Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 16,
-                    runSpacing: 12,
-                    children: [
-                      _QueueFilters(selected: state.queue, onSelected: onQueue),
-                      _SortSelector(selected: state.sort, onSelected: onSort),
-                    ],
+                ),
+                const SizedBox(height: 22),
+                PricingRunPanel(
+                  canAdministerWorkspace: canAdministerWorkspace,
+                  // A finished run is a new calculation, so this is the one
+                  // place that deliberately leaves the pinned run behind.
+                  onRunFinished: onShowLatestRun,
+                ),
+                const SizedBox(height: 18),
+                const DiscoveryFunnelPanel(),
+                const SizedBox(height: 18),
+                // The same answer the full-page error view gives, for a
+                // session that died after the rows had already arrived.
+                if (sessionExpired) ...[
+                  const MarkoSessionExpiredMessage(
+                    key: ValueKey('recommendations-session-expired'),
                   ),
                   const SizedBox(height: 16),
-                  if (recommendations.isEmpty)
-                    _EmptyRecommendations(onOpenCatalog: onOpenCatalog)
-                  else
-                    ...recommendations.map(
-                      (recommendation) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: _RecommendationCard(
-                          recommendation: recommendation,
-                          canAdministerWorkspace: canAdministerWorkspace,
-                          initiallyExpanded:
-                              recommendation.id == initialRecommendationId,
-                          onOpenDeepLink: onOpenRecommendationDeepLink,
-                        ),
-                      ),
-                    ),
-                  if (recommendations.isNotEmpty && state.page.hasMore)
-                    Center(
-                      child: OutlinedButton.icon(
-                        onPressed: state.isLoadingMore ? null : onLoadMore,
-                        icon: state.isLoadingMore
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.expand_more_rounded),
-                        label: Text(
-                          context.localized(
-                            ru: 'Показать ещё (${recommendations.length} из ${state.page.total})',
-                            uk: 'Показати ще (${recommendations.length} із ${state.page.total})',
-                          ),
-                        ),
-                      ),
-                    ),
                 ],
-              ),
+                if (state.error != null) ...[
+                  MarkoInlineMessage(
+                    message: state.error!,
+                    tone: MarkoMessageTone.error,
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                if (state.newerRunAvailable) ...[
+                  MarkoInlineMessage(
+                    key: const ValueKey('recommendations-newer-run'),
+                    message: context.localized(
+                      ru: 'Появился более новый расчёт. Показанные позиции относятся к предыдущему — их нельзя смешивать в одном списке.',
+                      uk: 'З’явився новіший розрахунок. Показані позиції належать до попереднього — їх не можна змішувати в одному списку.',
+                    ),
+                    tone: MarkoMessageTone.warning,
+                    action: TextButton(
+                      onPressed: onShowLatestRun,
+                      child: Text(
+                        context.localized(
+                          ru: 'Открыть новый расчёт',
+                          uk: 'Відкрити новий розрахунок',
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                if (state.deepLinkUnavailable) ...[
+                  MarkoInlineMessage(
+                    message: context.localized(
+                      ru: 'Не удалось открыть рекомендацию по ссылке. Она недоступна в этой рабочей области или больше не существует.',
+                      uk: 'Не вдалося відкрити рекомендацію за посиланням. Вона недоступна в цій робочій області або більше не існує.',
+                    ),
+                    tone: MarkoMessageTone.warning,
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                _SummaryRow(
+                  // The run's population, not the active tab's: the tiles are
+                  // how the operator learns which tab holds the work.
+                  total: actionCounts.total,
+                  raiseCount: actionCounts.raise,
+                  lowerCount: actionCounts.lower,
+                  reviewCount: actionCounts.review,
+                ),
+                const SizedBox(height: 18),
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 16,
+                  runSpacing: 12,
+                  children: [
+                    _QueueFilters(selected: state.queue, onSelected: onQueue),
+                    _SortSelector(selected: state.sort, onSelected: onSort),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                if (recommendations.isEmpty)
+                  _EmptyRecommendations(
+                    onOpenCatalog: onOpenCatalog,
+                    counts: actionCounts,
+                    queue: state.queue,
+                    onShowEverything: () => onQueue('all'),
+                    onShowReview: () => onQueue('review'),
+                  )
+                else
+                  ...recommendations.map(
+                    (recommendation) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _RecommendationCard(
+                        recommendation: recommendation,
+                        canAdministerWorkspace: canAdministerWorkspace,
+                        initiallyExpanded:
+                            recommendation.id == initialRecommendationId,
+                        onOpenDeepLink: onOpenRecommendationDeepLink,
+                      ),
+                    ),
+                  ),
+                if (recommendations.isNotEmpty && state.page.hasMore)
+                  Center(
+                    child: OutlinedButton.icon(
+                      onPressed: state.isLoadingMore || sessionExpired
+                          ? null
+                          : onLoadMore,
+                      icon: state.isLoadingMore
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.expand_more_rounded),
+                      label: Text(
+                        context.localized(
+                          ru: 'Показать ещё (${recommendations.length} из ${state.page.total})',
+                          uk: 'Показати ще (${recommendations.length} із ${state.page.total})',
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -398,7 +470,10 @@ class _SummaryRow extends StatelessWidget {
             _SummaryMetric(
               width: width,
               value: '$total',
-              label: context.localized(ru: 'Всего', uk: 'Усього'),
+              label: context.localized(
+                ru: 'Позиций в расчёте',
+                uk: 'Позицій у розрахунку',
+              ),
             ),
             _SummaryMetric(
               width: width,
@@ -541,17 +616,17 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
   @override
   void initState() {
     super.initState();
-    if (widget.initiallyExpanded) {
-      _evidence = ref
-          .read(pricingApiProvider)
-          .getEvidence(widget.recommendation.id);
-    }
+    if (widget.initiallyExpanded) _evidence = _loadEvidence();
   }
 
   @override
   Widget build(BuildContext context) {
     final recommendation = widget.recommendation;
     final colors = MarkoTheme.of(context);
+    // Каждая кнопка ниже — аутентифицированный запрос. После признанной
+    // истёкшей сессии любая из них может только повторить тот же 401, поэтому
+    // предлагать их — значит предлагать ошибку вместо входа.
+    final sessionExpired = ref.watch(markoSessionExpiredProvider);
     final (foreground, background, icon) = recommendation.isRaise
         ? (colors.positive, colors.positiveSoft, Icons.trending_up_rounded)
         : recommendation.isLower
@@ -564,13 +639,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
       child: ExpansionTile(
         initiallyExpanded: widget.initiallyExpanded,
         onExpansionChanged: (expanded) {
-          if (expanded && _evidence == null) {
-            setState(() {
-              _evidence = ref
-                  .read(pricingApiProvider)
-                  .getEvidence(recommendation.id);
-            });
-          }
+          if (expanded && _evidence == null) _refreshEvidence();
         },
         tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
@@ -680,7 +749,9 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: widget.canAdministerWorkspace ? _editContext : null,
+                onPressed: widget.canAdministerWorkspace && !sessionExpired
+                    ? _editContext
+                    : null,
                 icon: const Icon(Icons.inventory_2_outlined, size: 18),
                 label: Text(
                   context.localized(
@@ -690,7 +761,9 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                 ),
               ),
               OutlinedButton.icon(
-                onPressed: _verifyingReplay ? null : _verifyReplay,
+                onPressed: _verifyingReplay || sessionExpired
+                    ? null
+                    : _verifyReplay,
                 icon: _verifyingReplay
                     ? const SizedBox.square(
                         dimension: 16,
@@ -707,7 +780,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
               if (recommendation.automaticEligible &&
                   recommendation.recommendedPrice != null) ...[
                 FilledButton.icon(
-                  onPressed: _savingDecision
+                  onPressed: _savingDecision || sessionExpired
                       ? null
                       : () => _recordDecision('accepted'),
                   icon: const Icon(Icons.check_rounded, size: 18),
@@ -715,7 +788,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                 ),
               ],
               OutlinedButton.icon(
-                onPressed: _savingDecision
+                onPressed: _savingDecision || sessionExpired
                     ? null
                     : () => _recordDecision('overridden'),
                 icon: const Icon(Icons.edit_outlined, size: 18),
@@ -729,7 +802,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
                 ),
               ),
               TextButton(
-                onPressed: _savingDecision
+                onPressed: _savingDecision || sessionExpired
                     ? null
                     : () => _recordDecision('rejected'),
                 child: Text(
@@ -760,11 +833,15 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             _MarketEvidenceList(
               future: _evidence!,
               normalizedOffers: recommendation.normalizedOffersById,
-              onOverride: widget.canAdministerWorkspace ? _overrideTier : null,
-              onComparabilityFeedback: widget.canAdministerWorkspace
+              onOverride: widget.canAdministerWorkspace && !sessionExpired
+                  ? _overrideTier
+                  : null,
+              onComparabilityFeedback:
+                  widget.canAdministerWorkspace && !sessionExpired
                   ? _recordComparabilityFeedback
                   : null,
-              onComparabilityReview: widget.canAdministerWorkspace
+              onComparabilityReview:
+                  widget.canAdministerWorkspace && !sessionExpired
                   ? _rerunComparabilityReview
                   : null,
             ),
@@ -887,6 +964,11 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _verifyingReplay = false);
+      // Истёкшая сессия — не «replay недоступен»: воспроизведение расчёта
+      // никуда не делось, доступа к нему нет. Страница отвечает на это одним
+      // предложением и одной кнопкой, а снекбар с английской строкой бэкенда
+      // уехал бы через четыре секунды, ничего не предложив.
+      if (ref.classifySessionExpiry(error)) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -915,11 +997,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             reason: override.reason,
           );
       if (!mounted) return;
-      setState(() {
-        _evidence = ref
-            .read(pricingApiProvider)
-            .getEvidence(widget.recommendation.id);
-      });
+      _refreshEvidence();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -932,6 +1010,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
       );
     } catch (error) {
       if (!mounted) return;
+      if (ref.classifySessionExpiry(error)) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -1011,14 +1090,27 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
   }
 
   void _refreshEvidence() {
-    setState(() {
-      _evidence = ref
+    setState(() => _evidence = _loadEvidence());
+  }
+
+  /// Доказательства грузятся через ту же классификацию, что и всё остальное.
+  ///
+  /// [FutureBuilder] не может поднять состояние приложения из `build`, поэтому
+  /// 401 признаётся здесь — там, где он приходит. Ошибка при этом не
+  /// проглатывается: список сам решает, что показать вместо строки бэкенда.
+  Future<List<RecommendationEvidence>> _loadEvidence() async {
+    try {
+      return await ref
           .read(pricingApiProvider)
           .getEvidence(widget.recommendation.id);
-    });
+    } catch (error) {
+      if (mounted) ref.classifySessionExpiry(error);
+      rethrow;
+    }
   }
 
   void _showEvidenceError(Object error) {
+    if (ref.classifySessionExpiry(error)) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -1103,6 +1195,22 @@ class _MarketEvidenceList extends StatelessWidget {
           return const LinearProgressIndicator();
         }
         if (snapshot.hasError) {
+          // Доказательства не «не загрузились» — их не отдали мёртвому токену.
+          // Единственный ответ на это уже есть на странице, и повторять его
+          // здесь означало бы рассказать про две разные беды.
+          final expired = markoIsSessionExpired(snapshot.error);
+          if (expired && MarkoSessionExpiryAnswered.above(context)) {
+            return Text(
+              context.localized(
+                ru: 'Доказательства откроются после повторного входа.',
+                uk: 'Докази відкриються після повторного входу.',
+              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: colors.muted),
+            );
+          }
+          if (expired) return const MarkoSessionExpiredMessage();
           return Text(
             context.localized(
               ru: 'Не удалось загрузить доказательства: ${snapshot.error}',
@@ -1757,38 +1865,101 @@ class _KeyValue extends StatelessWidget {
   }
 }
 
+/// Empty list, explained.
+///
+/// An empty list has two very different causes and the operator has to be able
+/// to tell them apart: the run produced nothing, or the selected tab happens to
+/// be empty while the work sits under another one. Telling the second case to
+/// "connect your stores" sends the operator to fix something that is not broken.
 class _EmptyRecommendations extends StatelessWidget {
-  const _EmptyRecommendations({required this.onOpenCatalog});
+  const _EmptyRecommendations({
+    required this.onOpenCatalog,
+    required this.counts,
+    required this.queue,
+    required this.onShowEverything,
+    required this.onShowReview,
+  });
 
   final VoidCallback? onOpenCatalog;
+  final RecommendationActionCounts counts;
+  final String queue;
+  final VoidCallback onShowEverything;
+  final VoidCallback onShowReview;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
+    final hiddenByFilter = counts.total > 0 && queue != 'all';
     return MarkoPanel(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
       child: Column(
         children: [
-          Icon(Icons.price_check_rounded, size: 38, color: colors.brand),
+          Icon(
+            hiddenByFilter
+                ? Icons.filter_alt_off_rounded
+                : Icons.price_check_rounded,
+            size: 38,
+            color: colors.brand,
+          ),
           const SizedBox(height: 14),
           Text(
-            context.localized(
-              ru: 'Пока нет рекомендаций',
-              uk: 'Рекомендацій поки немає',
-            ),
+            hiddenByFilter
+                ? context.localized(
+                    ru: 'В этой вкладке пусто',
+                    uk: 'У цій вкладці порожньо',
+                  )
+                : context.localized(
+                    ru: 'Пока нет рекомендаций',
+                    uk: 'Рекомендацій поки немає',
+                  ),
             style: Theme.of(context).textTheme.titleLarge,
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 7),
           Text(
-            context.localized(
-              ru: 'Подключите магазины и дождитесь заполнения каталога.',
-              uk: 'Підключіть магазини та дочекайтеся наповнення каталогу.',
-            ),
+            hiddenByFilter
+                ? context.localized(
+                    ru: 'В расчёте есть позиции (${counts.total}), но ни одна не попала в эту вкладку.',
+                    uk: 'У розрахунку є позиції (${counts.total}), але жодна не потрапила до цієї вкладки.',
+                  )
+                : context.localized(
+                    ru: 'Запустите расчёт по нужному импорту каталога в блоке выше.',
+                    uk: 'Запустіть розрахунок за потрібним імпортом каталогу в блоці вище.',
+                  ),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
-          if (onOpenCatalog != null) ...[
-            const SizedBox(height: 18),
+          const SizedBox(height: 18),
+          if (hiddenByFilter)
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              alignment: WrapAlignment.center,
+              children: [
+                FilledButton.icon(
+                  onPressed: onShowEverything,
+                  icon: const Icon(Icons.list_rounded, size: 18),
+                  label: Text(
+                    context.localized(
+                      ru: 'Показать все (${counts.total})',
+                      uk: 'Показати всі (${counts.total})',
+                    ),
+                  ),
+                ),
+                if (counts.review > 0 && queue != 'review')
+                  OutlinedButton.icon(
+                    onPressed: onShowReview,
+                    icon: const Icon(Icons.fact_check_outlined, size: 18),
+                    label: Text(
+                      context.localized(
+                        ru: 'Проверить вручную (${counts.review})',
+                        uk: 'Перевірити вручну (${counts.review})',
+                      ),
+                    ),
+                  ),
+              ],
+            )
+          else if (onOpenCatalog != null)
             FilledButton.icon(
               onPressed: onOpenCatalog,
               icon: const Icon(Icons.upload_file_rounded, size: 18),
@@ -1799,7 +1970,6 @@ class _EmptyRecommendations extends StatelessWidget {
                 ),
               ),
             ),
-          ],
         ],
       ),
     );

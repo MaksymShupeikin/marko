@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api_client.dart';
+import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/marko_ui.dart';
+import '../../core/session_expiry.dart';
 import 'fitment_candidate_tile.dart';
 import 'fitment_controller.dart';
 import 'fitment_recommendation_card.dart';
@@ -21,14 +25,12 @@ class FitmentCandidatesPanel extends ConsumerWidget {
     final colors = MarkoTheme.of(context);
     final provider = fitmentControllerProvider(catalogItemId);
     final asyncState = ref.watch(provider);
+    // Мёртвый токен здесь ничем не отличается от мёртвого токена в списке
+    // рекомендаций: ни одно действие панели после него не сработает.
+    final sessionExpired = ref.watch(markoSessionExpiredProvider);
     return asyncState.when(
       loading: () => const LinearProgressIndicator(),
-      error: (error, _) => Text(
-        'Fitment intelligence недоступен: $error',
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: colors.negative),
-      ),
+      error: (error, _) => _error(context, colors, error),
       data: (state) {
         final page = state.bundle.page;
         final recommendation = state.bundle.recommendation;
@@ -57,7 +59,7 @@ class FitmentCandidatesPanel extends ConsumerWidget {
                 ),
                 IconButton(
                   tooltip: 'Обновить fitment evidence',
-                  onPressed: state.isSubmitting
+                  onPressed: state.isSubmitting || sessionExpired
                       ? null
                       : () => ref.read(provider.notifier).reload(),
                   icon: const Icon(Icons.refresh_rounded, size: 18),
@@ -85,7 +87,7 @@ class FitmentCandidatesPanel extends ConsumerWidget {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: FilledButton.icon(
-                      onPressed: state.isSubmitting
+                      onPressed: state.isSubmitting || sessionExpired
                           ? null
                           : () => ref
                                 .read(provider.notifier)
@@ -104,7 +106,7 @@ class FitmentCandidatesPanel extends ConsumerWidget {
               else
                 FitmentRecommendationCard(
                   recommendation: recommendation,
-                  isSubmitting: state.isSubmitting,
+                  isSubmitting: state.isSubmitting || sessionExpired,
                   onReview:
                       ({
                         required operation,
@@ -129,7 +131,7 @@ class FitmentCandidatesPanel extends ConsumerWidget {
               ...page.items.map(
                 (candidate) => FitmentCandidateTile(
                   candidate: candidate,
-                  isSubmitting: state.isSubmitting,
+                  isSubmitting: state.isSubmitting || sessionExpired,
                   onReview:
                       ({
                         required decision,
@@ -160,6 +162,33 @@ class FitmentCandidatesPanel extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  /// Панель не может ответить за истёкшую сессию дважды: страница уже это
+  /// сделала, и вторая копия того же предложения читается как вторая беда.
+  Widget _error(BuildContext context, MarkoTheme colors, Object error) {
+    if (markoIsSessionExpired(error)) {
+      if (!MarkoSessionExpiryAnswered.above(context)) {
+        return const MarkoSessionExpiredMessage(
+          key: ValueKey('fitment-session-expired'),
+        );
+      }
+      return Text(
+        context.localized(
+          ru: 'Проверка применимости откроется после повторного входа.',
+          uk: 'Перевірка застосовності відкриється після повторного входу.',
+        ),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: colors.muted),
+      );
+    }
+    return Text(
+      'Fitment intelligence недоступен: $error',
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: colors.negative),
     );
   }
 }

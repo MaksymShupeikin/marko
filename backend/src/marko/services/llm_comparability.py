@@ -8,6 +8,7 @@ addressed, cacheable, and independently correctable by a workspace operator.
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
@@ -16,7 +17,7 @@ import ipaddress
 import json
 from time import monotonic
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Literal, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -36,6 +37,12 @@ from marko.infrastructure.db.models import (
 )
 from marko.infrastructure.db.session import async_session_factory
 from marko.services.decision_fingerprint import canonical_sha256
+from marko.services.llm_call_budget import (
+    PROVIDER_CALL_BUDGET_EXHAUSTED,
+    PositionCallBudget,
+    ProviderCallLedger,
+    default_provider_call_ledger,
+)
 from metis.pricing import (
     COMPARABILITY_DIMENSIONS,
     ComparisonEvidence,
@@ -222,6 +229,99 @@ class ComparabilityReviewNotFound(LookupError):
     pass
 
 
+#: Why an offer was declined without a provider call.  ``CONFIRMED_CEILING`` is
+#: the cheap, expected case: enough cheaper offers were already confirmed.
+#: ``PROVIDER_CALL_BUDGET`` is the cost bound biting, which is a weaker outcome
+#: and must not be mistaken for the first.
+DeclineReason = Literal["CONFIRMED_CEILING", "PROVIDER_CALL_BUDGET"]
+
+
+class _ProviderCallBudget:
+    """The single gate every provider call passes, whatever asked for it.
+
+    It wraps the provider rather than sitting beside the accounting, so the
+    bound is a property of the call site: the automatic walk, an operator's
+    ``force=true`` retry and anything added later all reach the provider through
+    this ``review`` and all pay the same durable reservation
+    (``PositionCallBudget``, keyed by pricing position + run).  That is what
+    F9 needed and what a per-call in-memory counter could not give: two HTTP
+    requests are two counters, a restart is a third, and the bill is the sum.
+
+    Where the slot is taken depends on how much of the provider is visible.
+
+    * A real ``OpenAIResponsesComparabilityProvider`` -- default-created here or
+      injected by the caller -- gets the reservation pushed down to its HTTP
+      attempt boundary (``bind_call_budget``) and is *not* charged again here.
+      That adapter posts twice for one ``review`` when it retries a 429/5xx or a
+      timeout, and the provider bills for each POST, so charging per ``review``
+      let a budget of N buy 2N requests.  Binding is what makes an injected
+      adapter obey the bound at all: it carries no hook of its own.
+    * Anything else is opaque -- a fake, a future adapter -- so the best
+      available bound is one slot per ``review``, taken *before* the call and
+      never on return: waves run concurrently, and counting on return would let
+      a whole wave pass a budget of one.
+
+    Either way the position is charged once per billable request and the first
+    request is charged exactly once; the two branches differ only in which layer
+    knows how many requests a ``review`` is worth.
+
+    A refusal is deterministic and fail-closed.  ``ComparabilityProviderError``
+    is what ``request_observation_comparability_review`` already turns into a
+    persisted ``FAILED`` / ``INSUFFICIENT_DATA`` row, so a refused offer still
+    carries a complete decision that ``engine.py`` refuses as evidence -- not a
+    missing review, and never silent eligibility.
+    """
+
+    __slots__ = ("_provider", "_budget", "_charges_per_review")
+
+    def __init__(
+        self,
+        provider: ComparabilityProvider,
+        *,
+        budget: PositionCallBudget,
+    ) -> None:
+        self._budget = budget
+        if isinstance(provider, OpenAIResponsesComparabilityProvider):
+            self._provider: ComparabilityProvider = provider.bind_call_budget(
+                budget.reserve
+            )
+            self._charges_per_review = False
+        else:
+            self._provider = provider
+            self._charges_per_review = True
+
+    @property
+    def budget(self) -> PositionCallBudget:
+        return self._budget
+
+    @property
+    def limit(self) -> int:
+        return self._budget.limit
+
+    async def calls(self) -> int:
+        return await self._budget.spent()
+
+    async def exhausted(self) -> bool:
+        return await self._budget.spent() >= self._budget.limit
+
+    async def review(
+        self,
+        *,
+        input_snapshot: Mapping[str, Any],
+        image_urls: Sequence[str],
+    ) -> ProviderReview:
+        if self._charges_per_review and not await self._budget.reserve():
+            raise ComparabilityProviderError(
+                PROVIDER_CALL_BUDGET_EXHAUSTED,
+                "provider-call budget of "
+                f"{self._budget.limit} for this catalogue position is spent",
+            )
+        return await self._provider.review(
+            input_snapshot=input_snapshot,
+            image_urls=image_urls,
+        )
+
+
 _SYSTEM_INSTRUCTIONS = """
 You are a conservative auto-parts comparability reviewer for price analysis.
 Determine whether the candidate can be used as a price comparator for OUR_PRODUCT.
@@ -269,16 +369,63 @@ def _strict_output_schema() -> dict[str, Any]:
 
 
 class OpenAIResponsesComparabilityProvider:
-    """Minimal OpenAI Responses API adapter with strict structured output."""
+    """Minimal OpenAI Responses API adapter with strict structured output.
+
+    ``reserve_attempt`` is how the per-position budget sees inside this adapter,
+    and it is asked before *every* POST rather than only before a retry.  One
+    ``review`` may post twice -- a timeout or a 429/5xx is retried once -- and
+    the provider bills for a request it processed even when the answer never
+    reached us, so the billable unit is the HTTP attempt, not the ``review``
+    call.  A bound placed one level up (F9) charged the first attempt and then
+    had no say in the second: an injected adapter built by a caller carried no
+    hook at all, so a configured budget of one bought two POSTs while the
+    durable ledger still read ``spent = 1``.  Charging here means a budget of N
+    buys N POSTs whoever constructed the adapter, and the first attempt is
+    charged exactly once because nothing above it charges at all
+    (``_ProviderCallBudget`` binds this hook instead of reserving itself).
+
+    A refusal is fail-closed in both positions.  Before the first attempt it is
+    a ``LLM_PROVIDER_CALL_BUDGET_EXHAUSTED`` error with no request made; before
+    a retry it abandons the retry and reports the same typed error, naming the
+    failure that would have been retried in its detail -- the budget, not the
+    429, is what turned a retryable failure into a final one, and an operator
+    reading the row has to see the bound that stopped the work.
+    """
 
     def __init__(
         self,
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
+        reserve_attempt: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         self._settings = settings
         self._client = client
+        self._reserve_attempt = reserve_attempt
+
+    def bind_call_budget(
+        self, reserve_attempt: Callable[[], Awaitable[bool]]
+    ) -> OpenAIResponsesComparabilityProvider:
+        """A copy of this adapter whose every HTTP attempt is reserved first.
+
+        A copy and not a mutation: one adapter instance is shared by a whole
+        concurrency wave, and each observation in that wave is charged against
+        its own position, so writing the hook onto the shared object would make
+        the bound depend on interleaving.  The ``httpx.AsyncClient`` is shared
+        deliberately -- it is safe to use concurrently and it is what holds the
+        connection pool (and, in tests, the ``MockTransport``).
+        """
+
+        return OpenAIResponsesComparabilityProvider(
+            self._settings,
+            client=self._client,
+            reserve_attempt=reserve_attempt,
+        )
+
+    async def _reserve(self) -> bool:
+        if self._reserve_attempt is None:
+            return True
+        return await self._reserve_attempt()
 
     async def review(
         self,
@@ -332,7 +479,27 @@ class OpenAIResponsesComparabilityProvider:
         started = monotonic()
         try:
             response: httpx.Response | None = None
+            transport_failure: Exception | None = None
+            unaffordable_retry_after: str | None = None
             for attempt in range(2):
+                # Every attempt buys its slot before it is made.  Never after:
+                # a wave runs concurrently, and a slot taken on return would let
+                # the whole wave past a budget of one.
+                if not await self._reserve():
+                    if attempt == 0:
+                        raise ComparabilityProviderError(
+                            PROVIDER_CALL_BUDGET_EXHAUSTED,
+                            "provider-call budget for this catalogue position "
+                            "is spent; no request was made",
+                        )
+                    unaffordable_retry_after = (
+                        type(transport_failure).__name__
+                        if response is None
+                        else f"HTTP {response.status_code}"
+                    )
+                    break
+                if attempt > 0:
+                    await asyncio.sleep(0.5)
                 try:
                     response = await client.post(
                         endpoint,
@@ -344,19 +511,27 @@ class OpenAIResponsesComparabilityProvider:
                         json=payload,
                     )
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
-                    if attempt == 0:
-                        await asyncio.sleep(0.5)
-                        continue
-                    raise ComparabilityProviderError(
-                        "LLM_TRANSPORT_ERROR",
-                        type(exc).__name__,
-                    ) from exc
+                    response = None
+                    transport_failure = exc
+                    continue
+                transport_failure = None
                 if response.status_code == 429 or response.status_code >= 500:
-                    if attempt == 0:
-                        await asyncio.sleep(0.5)
-                        continue
+                    continue
                 break
-            assert response is not None
+            if unaffordable_retry_after is not None:
+                # Fail-closed and typed: the retryable failure below is real,
+                # but what made it final is the bound, and that is what the
+                # persisted decision has to name.
+                raise ComparabilityProviderError(
+                    PROVIDER_CALL_BUDGET_EXHAUSTED,
+                    "provider-call budget for this catalogue position is spent; "
+                    f"the retry after {unaffordable_retry_after} was not made",
+                )
+            if response is None:
+                raise ComparabilityProviderError(
+                    "LLM_TRANSPORT_ERROR",
+                    type(transport_failure).__name__,
+                ) from transport_failure
             if not response.is_success:
                 raise ComparabilityProviderError(
                     "LLM_HTTP_ERROR",
@@ -494,6 +669,10 @@ class _PreparedReview:
     image_urls: tuple[str, ...]
     hard_stop_conflicts: tuple[dict[str, Any], ...]
     cache_source: EffectiveComparabilityReview | None = None
+    # Which pricing position + run pays for this call.  ``None`` is not
+    # "unbudgeted" -- it is "unattributable", and ``PositionCallBudget`` refuses
+    # it, because a call nothing can be charged to is a call nothing bounds.
+    pricing_run_item_id: UUID | None = None
 
 
 async def ensure_target_comparability_reviews(
@@ -506,21 +685,34 @@ async def ensure_target_comparability_reviews(
     if selected.pricing_llm_comparability_mode == "off":
         return 0
     async with async_session_factory() as session:
-        observation_ids = list(
-            (
-                await session.scalars(
-                    select(MarketObservation.id)
-                    .join(
-                        RawMarketCapture,
-                        RawMarketCapture.id == MarketObservation.raw_capture_id,
-                    )
-                    .where(RawMarketCapture.scrape_target_id == scrape_target_id)
-                    .order_by(MarketObservation.id)
+        rows = (
+            await session.execute(
+                select(
+                    MarketObservation.pricing_run_item_id,
+                    MarketObservation.id,
                 )
-            ).all()
-        )
-    return await _ensure_observation_ids(
-        observation_ids,
+                .join(
+                    RawMarketCapture,
+                    RawMarketCapture.id == MarketObservation.raw_capture_id,
+                )
+                .where(RawMarketCapture.scrape_target_id == scrape_target_id)
+                # Cheapest first so the ceiling in ``_ensure_observation_ids``
+                # keeps the offers a decision is actually taken against; the id
+                # breaks ties so the walk stays reproducible.
+                .order_by(
+                    MarketObservation.pricing_run_item_id,
+                    MarketObservation.price.asc(),
+                    MarketObservation.id,
+                )
+            )
+        ).all()
+    # One target can carry several positions.  The ceiling is per position, so
+    # grouping first stops a cheap position from consuming another one's budget.
+    groups: dict[UUID, list[UUID]] = defaultdict(list)
+    for run_item_id, observation_id in rows:
+        groups[run_item_id].append(observation_id)
+    return await _ensure_observation_groups(
+        groups,
         settings=selected,
         provider=provider,
     )
@@ -541,7 +733,12 @@ async def ensure_run_item_comparability_reviews(
                 await session.scalars(
                     select(MarketObservation.id)
                     .where(MarketObservation.pricing_run_item_id == run_item_id)
-                    .order_by(MarketObservation.id)
+                    # Cheapest first; the id only breaks price ties so the walk
+                    # is reproducible across runs.
+                    .order_by(
+                        MarketObservation.price.asc(),
+                        MarketObservation.id,
+                    )
                 )
             ).all()
         )
@@ -549,7 +746,44 @@ async def ensure_run_item_comparability_reviews(
         observation_ids,
         settings=selected,
         provider=provider,
+        position_id=run_item_id,
     )
+
+
+async def _ensure_observation_groups(
+    groups: Mapping[UUID, Sequence[UUID]],
+    *,
+    settings: Settings,
+    provider: ComparabilityProvider | None,
+    ledger: ProviderCallLedger | None = None,
+) -> int:
+    """Judge several positions at once, each with its own ceiling.
+
+    Keyed by ``pricing_run_items.id`` rather than an anonymous list of cohorts,
+    because that key is what the budget is charged against: a cohort nobody can
+    attribute to a position is a cohort nothing can bound.
+
+    Positions run concurrently but share one semaphore, so the provider still
+    sees at most ``pricing_llm_max_concurrency`` calls in flight.
+    """
+
+    if not groups:
+        return 0
+    semaphore = asyncio.Semaphore(settings.pricing_llm_max_concurrency)
+    counts = await asyncio.gather(
+        *(
+            _ensure_observation_ids(
+                group,
+                settings=settings,
+                provider=provider,
+                semaphore=semaphore,
+                position_id=position_id,
+                ledger=ledger,
+            )
+            for position_id, group in groups.items()
+        )
+    )
+    return sum(counts)
 
 
 async def _ensure_observation_ids(
@@ -557,21 +791,110 @@ async def _ensure_observation_ids(
     *,
     settings: Settings,
     provider: ComparabilityProvider | None,
+    semaphore: asyncio.Semaphore | None = None,
+    position_id: UUID | None = None,
+    ledger: ProviderCallLedger | None = None,
 ) -> int:
+    """Judge one position's cohort cheapest first, stopping once it is decided.
+
+    ``observation_ids`` is one catalogue position's offers in ascending price
+    order.  Two independent stops apply.
+
+    The confirmation ceiling stops the walk once
+    ``pricing_llm_max_confirmed_reviews`` offers are comparable, because a
+    decision taken against the cheapest comparable offer cannot be moved by a
+    dearer one.  It counts confirmations rather than calls, so it bounds nothing
+    when a cohort confirms nothing, and in ``required`` mode it is raised to the
+    cohort size on purpose: ``engine.py`` reads a missing review as
+    ``MANUAL_LLM_COMPARABILITY_MISSING``, so stopping early there would turn a
+    cost bound into a silent evidence bound.  It is checked between waves of
+    ``pricing_llm_max_concurrency``, so it overshoots by at most one wave rather
+    than cancelling work already in flight.
+
+    ``pricing_llm_max_provider_calls_per_position`` is therefore the only hard
+    bound on the bill, and it applies in every mode.  It never overshoots: a
+    wave is trimmed to the remaining budget before it is dispatched, and the
+    durable reservation in ``request_observation_comparability_review`` refuses
+    anything past it at the call site.  Both stops leave every declined offer
+    with an explicit decision on the record.
+
+    What this walk may still spend is what the *position* has left, not a fresh
+    allowance: an operator's earlier ``force=true`` retries are already on the
+    ledger, so the wave accounting starts from ``remaining()``.  Getting that
+    wrong would not overspend -- the reservation refuses the call either way --
+    but it would decline the tail as a provider ``FAILED`` row instead of the
+    labelled ``SKIPPED`` one an operator can read.
+    """
+
     if not observation_ids:
         return 0
-    semaphore = asyncio.Semaphore(settings.pricing_llm_max_concurrency)
+    gate = semaphore or asyncio.Semaphore(settings.pricing_llm_max_concurrency)
+    ceiling = (
+        len(observation_ids)
+        if settings.pricing_llm_comparability_mode == "required"
+        else settings.pricing_llm_max_confirmed_reviews
+    )
+    limit = settings.pricing_llm_max_provider_calls_per_position
+    budget = limit
+    if position_id is not None:
+        budget = await PositionCallBudget(
+            ledger=ledger or default_provider_call_ledger(),
+            position_id=position_id,
+            workspace_id=None,
+            limit=limit,
+        ).remaining()
+    wave_size = max(1, settings.pricing_llm_max_concurrency)
 
-    async def run_one(observation_id: UUID) -> None:
-        async with semaphore:
-            await request_observation_comparability_review(
+    # One review dispatch costs at most one provider call -- a cache hit or a
+    # deterministic hard stop costs none -- so capping dispatches caps calls.
+    # The reservation taken per call is what actually enforces the bound if this
+    # accounting is ever wrong.
+    async def run_one(observation_id: UUID) -> bool:
+        async with gate:
+            review = await request_observation_comparability_review(
                 observation_id,
                 settings=settings,
                 provider=provider,
+                ledger=ledger,
+            )
+        return bool(getattr(review, "comparable", False))
+
+    reviewed = 0
+    confirmed = 0
+    while reviewed < len(observation_ids) and confirmed < ceiling:
+        remaining_budget = budget - reviewed
+        if remaining_budget <= 0:
+            break
+        wave = observation_ids[reviewed : reviewed + min(wave_size, remaining_budget)]
+        outcomes = await asyncio.gather(*(run_one(value) for value in wave))
+        reviewed += len(wave)
+        confirmed += sum(1 for outcome in outcomes if outcome)
+
+    # Whatever was declined still needs a decision on the record, or the
+    # finalizer barrier never clears and the run hangs short of a terminal
+    # state.  These cost a row each, not a provider call.
+    #
+    # Which stop declined it is not cosmetic.  A confirmed ceiling means the
+    # decision was already taken against cheaper comparable offers; a spent
+    # budget means this offer was never asked about, and in ``required`` mode
+    # that is the difference between a bounded cost and a truncated evidence
+    # base an operator has to see.
+    tail = observation_ids[reviewed:]
+    reason: DeclineReason = (
+        "CONFIRMED_CEILING" if confirmed >= ceiling else "PROVIDER_CALL_BUDGET"
+    )
+
+    async def skip_one(observation_id: UUID) -> None:
+        async with gate:
+            await skip_observation_comparability_review(
+                observation_id,
+                settings=settings,
+                reason=reason,
             )
 
-    await asyncio.gather(*(run_one(value) for value in observation_ids))
-    return len(observation_ids)
+    if tail:
+        await asyncio.gather(*(skip_one(value) for value in tail))
+    return reviewed
 
 
 async def request_observation_comparability_review(
@@ -581,7 +904,28 @@ async def request_observation_comparability_review(
     force: bool = False,
     settings: Settings | None = None,
     provider: ComparabilityProvider | None = None,
+    ledger: ProviderCallLedger | None = None,
 ) -> EffectiveComparabilityReview:
+    """Judge one candidate, and pay for it out of its position's budget.
+
+    Every provider call in this service is made from here -- the automatic walk,
+    the admin route's ``force=true`` retry, anything added later -- so this is
+    where the budget is enforced, once, for all of them (F9).  ``force`` skips
+    the cached row on purpose and therefore *always* means a billable call, so
+    it is exactly the path that must not carry its own counter: the reservation
+    below is a durable row keyed by pricing position + run, and repeated
+    requests, simultaneous requests and a restarted process all contend for the
+    same one.
+
+    A refused reservation is not an error thrown at the caller.  It becomes the
+    same persisted ``INSUFFICIENT_DATA`` decision as any other provider failure,
+    stamped ``LLM_PROVIDER_CALL_BUDGET_EXHAUSTED``: fail-closed, never eligible
+    evidence, and a row, so the finalizer barrier still clears.
+
+    Cache hits and deterministic hard stops cost nothing and are settled before
+    the reservation -- the budget bounds calls, not judgements.
+    """
+
     selected = settings or get_settings()
     if selected.pricing_llm_comparability_mode == "off":
         raise ComparabilityReviewUnavailable("PRICING_LLM_COMPARABILITY_MODE is off")
@@ -629,7 +973,25 @@ async def request_observation_comparability_review(
             provider_review=None,
         )
 
-    active_provider = provider or OpenAIResponsesComparabilityProvider(selected)
+    budget = PositionCallBudget(
+        ledger=ledger or default_provider_call_ledger(),
+        position_id=prepared.pricing_run_item_id,
+        workspace_id=prepared.workspace_id,
+        limit=selected.pricing_llm_max_provider_calls_per_position,
+    )
+    active_provider: ComparabilityProvider
+    if isinstance(provider, _ProviderCallBudget):
+        # Already gated; wrapping again would charge two slots for one call.
+        active_provider = provider
+    else:
+        # The gate binds the reservation to the adapter's HTTP attempts when it
+        # can see them, so a caller-supplied real provider is bounded exactly
+        # like the one built here -- including the retry it makes on a timeout
+        # or a 429/5xx, which the provider bills for either way (F9).
+        active_provider = _ProviderCallBudget(
+            provider or OpenAIResponsesComparabilityProvider(selected),
+            budget=budget,
+        )
     try:
         provider_review = await active_provider.review(
             input_snapshot=prepared.input_snapshot,
@@ -656,6 +1018,87 @@ async def request_observation_comparability_review(
         decision_source="LLM",
         status="COMPLETED",
         provider_review=provider_review,
+    )
+
+
+async def skip_observation_comparability_review(
+    observation_id: UUID,
+    *,
+    settings: Settings | None = None,
+    reason: DeclineReason = "CONFIRMED_CEILING",
+) -> EffectiveComparabilityReview:
+    """Record that an offer was deliberately not judged, without calling out.
+
+    The finalizer barrier in ``claim_collection_finalization`` counts review
+    rows, not judgements: while any observation of a classified item has none,
+    the run cannot finalize and ``finalize_pricing_collection_task`` returns 0
+    without retrying.  An offer either stop declines must therefore still carry
+    a decision.
+
+    ``INSUFFICIENT_DATA`` keeps it fail-closed — ``engine.py`` refuses a
+    non-``COMPARABLE`` verdict rather than treating the offer as eligible — and
+    ``HARD_RULE`` names the stop honestly: this was a local deterministic
+    decision, not a provider answer.
+
+    ``reason`` separates the two stops.  A spent provider-call budget is also
+    stamped into ``error_code``, because it is the weaker outcome: nobody looked
+    at this offer, and in ``required`` mode an operator reading the run needs to
+    tell that from an offer that lost to cheaper confirmed ones.
+    """
+
+    selected = settings or get_settings()
+    prepared_or_existing = await _prepare_review(
+        observation_id,
+        workspace_id=None,
+        force=False,
+        settings=selected,
+    )
+    if isinstance(prepared_or_existing, EffectiveComparabilityReview):
+        return prepared_or_existing
+    if reason == "PROVIDER_CALL_BUDGET":
+        budget = selected.pricing_llm_max_provider_calls_per_position
+        rationale = (
+            "Offer beyond the per-position provider-call budget of "
+            f"{budget}; not judged and not eligible as evidence."
+        )
+        explanation = (
+            "The cheaper offers of this cohort spent the provider-call budget "
+            f"of {budget}, so this one was never sent for review."
+        )
+        error_code: str | None = PROVIDER_CALL_BUDGET_EXHAUSTED
+    else:
+        rationale = (
+            "Offer beyond the confirmed-review ceiling; not judged and not "
+            "eligible as evidence."
+        )
+        explanation = (
+            "The cheaper offers of this cohort already reached the "
+            "confirmed-review ceiling, so this one was not reviewed."
+        )
+        error_code = None
+    output = LLMComparabilityOutput(
+        verdict=ComparabilityVerdict.INSUFFICIENT_DATA,
+        match_level=ComparabilityMatchLevel.NOT_APPLICABLE,
+        confidence=Decimal("0"),
+        rationale=rationale,
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_type",
+                outcome=FindingOutcome.UNKNOWN,
+                explanation=explanation,
+                evidence=[],
+            )
+        ],
+        hard_stop_conflicts=[],
+    )
+    return await _persist_prepared_review(
+        prepared_or_existing,
+        output=output,
+        settings=selected,
+        decision_source="HARD_RULE",
+        status="SKIPPED",
+        provider_review=None,
+        error_code=error_code,
     )
 
 
@@ -784,6 +1227,7 @@ async def _prepare_review(
             image_urls=tuple(image_urls),
             hard_stop_conflicts=hard_stops,
             cache_source=cache_source,
+            pricing_run_item_id=observation.pricing_run_item_id,
         )
 
 
@@ -832,7 +1276,14 @@ async def _persist_prepared_review(
     error_code: str | None = None,
     error_detail: str | None = None,
 ) -> EffectiveComparabilityReview:
-    cache_source = prepared.cache_source
+    # ``cache_hit_review_id`` may only be set for a genuine cache decision.  A
+    # prepared review can carry a cross-observation ``cache_source`` while still
+    # being decided by a deterministic hard stop (which is checked first); in
+    # that case the hard-stop decision must not record a false cache hit or it
+    # violates ``ck_candidate_comparability_review_cache_source``.
+    cache_source = (
+        prepared.cache_source if decision_source in {"CACHE", "HUMAN_CACHE"} else None
+    )
     record = CandidateComparabilityReview(
         workspace_id=prepared.workspace_id,
         market_observation_id=prepared.observation_id,

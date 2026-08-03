@@ -56,6 +56,18 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// The session is gone or unrefreshable — the client already spent its one
+/// refresh attempt before letting a 401 out.
+///
+/// A 401 is the single API failure that a retry can never fix and that the
+/// operator can actually resolve, so it must never reach them as a message.
+/// It arrives from three directions — a notifier failing to build, a refresh,
+/// and a pagination request — and classifying it separately in each place is
+/// how two of the three ended up printing the backend's English
+/// "Authentication required". Every caller asks this one question instead.
+bool markoIsSessionExpired(Object? error) =>
+    error is ApiException && error.statusCode == 401;
+
 class BinaryDownload {
   const BinaryDownload({
     required this.bytes,

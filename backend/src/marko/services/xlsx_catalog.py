@@ -25,10 +25,11 @@ from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from metis.identifiers import normalize_oem_identifier
+
 from marko.core.config import Settings, backend_config_path, get_settings
 from marko.infrastructure.db.models import CatalogImportBatch, CatalogItem
 from marko.services.catalog_characteristics import (
-    HOMOGLYPH_FOLDING,
     CharacteristicsConfig,
     CharacteristicsExtraction,
     characteristic_column_pairs,
@@ -52,10 +53,6 @@ MAX_ERROR_LOG = 2_000
 
 _HEADER_CLEAN_RE = re.compile(r"[^a-zа-яёіїґєԁөү0-9]+", re.IGNORECASE)
 _IDENTIFIER_SPLIT_RE = re.compile(r"[,;|\n\r]+")
-_IDENTIFIER_CLEAN_RE = re.compile(r"[^A-Z0-9]+")
-# Single source of truth with the characteristics parser, so an identifier and
-# a characteristic name never fold differently.
-_HOMOGLYPHS = HOMOGLYPH_FOLDING
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "sku": (
@@ -282,9 +279,10 @@ class CatalogWorkbookPreview:
 
 def normalize_identifier(value: Any) -> str:
     """Normalize an OE/MPN without ever coercing it to a number."""
-    raw = _cell_text(value).upper().translate(_HOMOGLYPHS)
+
+    raw = _cell_text(value)
     primary = _IDENTIFIER_SPLIT_RE.split(raw, maxsplit=1)[0]
-    return _IDENTIFIER_CLEAN_RE.sub("", primary)
+    return normalize_oem_identifier(primary)
 
 
 def preview_catalog_xlsx(

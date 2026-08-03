@@ -1,0 +1,266 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-08-01T04:17:08+00:00",
+  "repository": {
+    "root": "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия",
+    "root_note": "после 'marko' стоит U+00A0; работа велась через ASCII-симлинк /tmp/marko_ascii",
+    "branch": "leonid/pricing-engine",
+    "commit": "f28a981e1b8efa23a2952e6ecccb7268ac26bb57",
+    "dirty": true,
+    "dirty_files_modified": 11,
+    "dirty_files_untracked": 3
+  },
+  "baseline_measured": {
+    "measured_at": "2026-08-01T03:40:01Z",
+    "backend": {
+      "passed": 1730,
+      "failed": 0,
+      "skipped": 15,
+      "errors": 1,
+      "exit_code": 1,
+      "error_cause": "test_recommendation_queue_counts_postgres.py — нет PostgreSQL на хосте, отказ окружения"
+    },
+    "frontend": {
+      "passed": 155,
+      "failed": 1,
+      "failure": "catalog_import_pricing_run_export_test.dart:347 — 0 виджетов с текстом «Воронка discovery и потолки гейтов»"
+    },
+    "dart_analyze": "No issues found"
+  },
+  "instructions_read": [
+    "AGENTS.md",
+    "frontend/AGENTS.md",
+    "README.md",
+    "docs/architecture.md",
+    "docs/CUSTOMER_PRICING_DECISION_2026-07-30.md",
+    "docs/LLM_COMPARABILITY_2026-07-31.md",
+    "docs/HANDOFF_CODEX_2026-07-31.md",
+    "docs/MARKO_METIS_SCIENTIFIC_RND_MASTER_PROMPT_2026-08-01.md",
+    "backend/config/raise_policy.yaml",
+    "backend/config/comparability.yaml"
+  ],
+  "datasets_inspected": [
+    {
+      "path": ".artifacts/improve-20260730/GOLD_SET.csv",
+      "rows": 120,
+      "labeled": 0,
+      "note": "119 REJECTED + 1 REFERENCE_ONLY — принятых пар нет, precision неизмерим"
+    },
+    {
+      "path": ".artifacts/prom_motors_source_20260731/AB_PART_CODE_PAGE.json",
+      "rows": 40,
+      "note": "62% позиций упираются в max_sellers=10; максимум scanned=90=3x30"
+    },
+    {
+      "path": ".artifacts/prom_motors_source_20260731/AB_SEARCH.json",
+      "rows": 28,
+      "note": "kept=41 против 223 у страницы кода на тех же позициях"
+    },
+    {
+      "path": ".artifacts/metis_live_parser_now_20260725/offers.json",
+      "rows": 29,
+      "note": "59% предложений на совпадающих ценах; 4 разных продавца по 400 UAH"
+    }
+  ],
+  "papers": {
+    "total": 122,
+    "core": 12,
+    "peer_reviewed": 95,
+    "preprints": 20,
+    "verified_links": 115,
+    "resolution_method": "Crossref REST API, при неудаче OpenAlex; поисковые snippet как доказательство не использовались",
+    "dropped_after_audit": 7
+  },
+  "research_tracks": [
+    "abstention",
+    "active_learning",
+    "anomaly",
+    "calibration",
+    "causal",
+    "clustering",
+    "conformal",
+    "decision_theory",
+    "dedup",
+    "drift",
+    "evaluation",
+    "extremes",
+    "graph",
+    "hierarchical",
+    "intervals",
+    "llm_matching",
+    "marketplace_fraud",
+    "metric_learning",
+    "mlops",
+    "multimodal",
+    "normalization",
+    "pricing",
+    "product_matching",
+    "record_linkage",
+    "retrieval",
+    "robust_stats",
+    "supervised_matching",
+    "weak_supervision"
+  ],
+  "experiments_proposed": [
+    "EXP-00",
+    "EXP-01",
+    "EXP-02",
+    "EXP-03",
+    "EXP-04",
+    "EXP-05",
+    "EXP-06",
+    "EXP-07",
+    "EXP-08",
+    "EXP-09",
+    "EXP-10",
+    "EXP-11",
+    "EXP-12",
+    "EXP-13"
+  ],
+  "experiments_runnable_now_without_labels": [
+    "EXP-05",
+    "EXP-06",
+    "EXP-08"
+  ],
+  "artifacts": [
+    "01_REPO_GROUND_TRUTH.md",
+    "02_CURRENT_ARCHITECTURE_AND_DATA_FLOW.md",
+    "03_FORMAL_PROBLEM_DEFINITION.md",
+    "04_DATA_READINESS_AND_LABELING.md",
+    "05_SYSTEMATIC_LITERATURE_REVIEW.md",
+    "06_METHOD_EVIDENCE_MATRIX.csv",
+    "07_EXPERIMENTAL_PROTOCOL.md",
+    "08_VARIATION_AND_ADVERSARIAL_MATRIX.md",
+    "09_SCIENTIFIC_ROADMAP.md",
+    "10_RISKS_STOP_GATES_AND_OPEN_QUESTIONS.md",
+    "papers.jsonl"
+  ],
+  "findings_production_code": [
+    {
+      "id": "F-R01",
+      "severity": "MAJOR",
+      "title": "идентичность источника не доходит до доказательств",
+      "authorization_required": true
+    },
+    {
+      "id": "F-R02",
+      "severity": "MAJOR",
+      "title": "ложное срабатывание латеральной проверки на префиксе",
+      "authorization_required": false
+    },
+    {
+      "id": "F-R03",
+      "severity": "MAJOR",
+      "title": "любое противоречие отвергает, включая необязательные поля",
+      "authorization_required": true
+    },
+    {
+      "id": "F-R04",
+      "severity": "MAJOR",
+      "title": "нулевой разброс читается как максимальная уверенность",
+      "authorization_required": true
+    },
+    {
+      "id": "F-R05",
+      "severity": "MAJOR",
+      "title": "словарь применимости: 7 марок, модель распознаётся у 2% товаров",
+      "authorization_required": false
+    },
+    {
+      "id": "F-R06",
+      "severity": "MINOR",
+      "title": "охват листинга не измеряется, page.total отбрасывается",
+      "authorization_required": false
+    },
+    {
+      "id": "F-R07",
+      "severity": "MINOR",
+      "title": "список собственных витрин статичен",
+      "authorization_required": false
+    },
+    {
+      "id": "F-R08",
+      "severity": "INFO",
+      "title": "дерево тестов красное — чужая незавершённая работа",
+      "authorization_required": true
+    }
+  ],
+  "stop_gates": [
+    {
+      "gate": "нет репрезентативных labels",
+      "status": "BLOCKED_LABELS"
+    },
+    {
+      "gate": "critical false accepts не измерены",
+      "status": "BLOCKED_LABELS"
+    },
+    {
+      "gate": "confidence не откалиброван",
+      "status": "BLOCKED_DATA"
+    },
+    {
+      "gate": "prompt injection не проверен",
+      "status": "BLOCKED_DATA"
+    },
+    {
+      "gate": "seller duplicates считаются независимыми",
+      "status": "REJECTED"
+    },
+    {
+      "gate": "minimum price не прошёл contamination tests",
+      "status": "BLOCKED_DATA"
+    },
+    {
+      "gate": "customer data во внешний сервис",
+      "status": "BLOCKED_POLICY"
+    },
+    {
+      "gate": "automatic pricing не одобрено",
+      "status": "PASS"
+    },
+    {
+      "gate": "модель умеет abstain",
+      "status": "PASS"
+    },
+    {
+      "gate": "DOI проверены",
+      "status": "PASS"
+    }
+  ],
+  "data_blockers": [
+    "DB-01 ноль размеченных пар",
+    "DB-02 в наборе нет принятых пар — precision неизмерим",
+    "DB-03 набор собран до смены источника кандидатов",
+    "DB-04 один разметчик, каппа неизмерима",
+    "DB-05 нет locked blind test set",
+    "DB-06 нет разрешения на передачу каталога внешнему LLM",
+    "DB-07 candidate_snapshot_hash не сохраняется",
+    "DB-08 eps неизвестна",
+    "DB-09 rho не измерена"
+  ],
+  "owner_questions": [
+    "Q-1 размечать новый набор принятых пар вместо 120 отклонённых",
+    "Q-2 включить floor_corroboration_sellers=2",
+    "Q-3 разрешить передачу каталога внешнему LLM",
+    "Q-4 активировать target_floor_ratio=0.35",
+    "Q-5 подтвердить lambda=3 после измерения",
+    "Q-6 границы коэффициента калибровки F2-0019",
+    "Q-7 принять F2-0118 как WONTFIX"
+  ],
+  "acceptance_not_met": [
+    "глубокий разбор 20-30 core papers: сделано 12",
+    "ablation plan выполнен частично"
+  ],
+  "self_audit": {
+    "passes_completed": 4,
+    "citations_checked": 32,
+    "citations_mismatched": 0,
+    "numeric_claims_reverified": 7,
+    "corrections_applied": 1,
+    "correction_note": "таблицы Уилсона подписаны p=0.8, фактически k=round(0.8n); при n=11 p=0.818, полуширина 21.3 вместо 21.8 п.п."
+  },
+  "production_code_changed": false,
+  "commit_created": false,
+  "push_performed": false,
+  "tasks_dispatched_to_other_agents": false
+}

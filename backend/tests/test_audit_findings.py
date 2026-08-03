@@ -199,13 +199,12 @@ def test_audit_var09_leading_zeros_are_not_stripped() -> None:
 # --- §4 вариация 10: кириллица, латиница, гомоглифы -----------------------
 
 
-def test_audit_var10_two_oe_normalizers_disagree_on_cyrillic() -> None:
-    """ФАКТ: norm_oem удаляет кириллицу, normalize_oe её сохраняет."""
+def test_audit_var10_oe_normalizers_converge_on_cyrillic_homoglyphs() -> None:
+    """Исправлено: все OE-пути сворачивают безопасные омоглифы одинаково."""
 
     cyrillic_oe = "АВС123"  # АВС123 кириллицей
-    assert norm_oem(cyrillic_oe) == "123"
-    assert normalize_oe(cyrillic_oe) == cyrillic_oe
-    assert norm_oem(cyrillic_oe) != normalize_oe(cyrillic_oe)
+    assert norm_oem(cyrillic_oe) == "ABC123"
+    assert normalize_oe(cyrillic_oe) == "ABC123"
 
 
 def test_audit_var10b_homoglyph_brand_abstains() -> None:

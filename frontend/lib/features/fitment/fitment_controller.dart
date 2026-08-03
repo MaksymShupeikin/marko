@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/session_expiry.dart';
 import 'fitment_api.dart';
 import 'fitment_models.dart';
 
@@ -43,7 +44,19 @@ class FitmentController extends AsyncNotifier<FitmentReviewState> {
 
   @override
   Future<FitmentReviewState> build() async {
-    return FitmentReviewState(bundle: await _loadBundle());
+    try {
+      final state = FitmentReviewState(bundle: await _loadBundle());
+      ref.observeLiveSession();
+      return state;
+    } catch (error) {
+      // Мёртвый токен — состояние приложения, а не свойство fitment. Пока эта
+      // ветка отдавала исключение как есть, панель печатала «Fitment
+      // intelligence недоступен: Authentication required» — техническую
+      // неправду про подсистему вместо единственного действия, которое
+      // что-то меняет.
+      ref.classifySessionExpiry(error);
+      rethrow;
+    }
   }
 
   Future<FitmentReviewBundle> _loadBundle() async {
@@ -65,14 +78,23 @@ class FitmentController extends AsyncNotifier<FitmentReviewState> {
       return;
     }
     try {
+      final bundle = await _loadBundle();
+      ref.observeLiveSession();
       state = AsyncData(
-        current.copyWith(
-          bundle: await _loadBundle(),
-          clearError: true,
-          clearMessage: true,
-        ),
+        current.copyWith(bundle: bundle, clearError: true, clearMessage: true),
       );
     } catch (error, stackTrace) {
+      // Строки уже на экране остаются: они были правдой, когда пришли.
+      if (ref.classifySessionExpiry(error)) {
+        state = AsyncData(
+          current.copyWith(
+            isSubmitting: false,
+            clearError: true,
+            clearMessage: true,
+          ),
+        );
+        return;
+      }
       state = AsyncError(error, stackTrace);
     }
   }
@@ -166,11 +188,22 @@ class FitmentController extends AsyncNotifier<FitmentReviewState> {
     try {
       await action();
       final bundle = await _loadBundle();
+      ref.observeLiveSession();
       state = AsyncData(
         FitmentReviewState(bundle: bundle, message: successMessage),
       );
       return true;
     } catch (error) {
+      if (ref.classifySessionExpiry(error)) {
+        state = AsyncData(
+          current.copyWith(
+            isSubmitting: false,
+            clearError: true,
+            clearMessage: true,
+          ),
+        );
+        return false;
+      }
       state = AsyncData(
         current.copyWith(
           isSubmitting: false,

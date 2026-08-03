@@ -12,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from marko.api.dependencies import WorkspaceAdmin, get_session
 from marko.api.schemas.pricing import PricingRunResponse
 from marko.services.pricing_runs import (
+    CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
     PricingRunError,
     PricingTaskDispatchError,
+    TrustedRunStart,
     create_pricing_run,
 )
 from marko.worker.celery_app import celery_app
@@ -45,6 +47,19 @@ async def start_fixture_replay_pricing_run(
             workspace_id=current.workspace_id,
             import_batch_id=payload.import_batch_id,
             celery_app=celery_app,
+            # Отдельный доверенный путь, а не «поля не передали»: подстановка
+            # фикстур называет себя и попадает в манифест прогона.  Ключ
+            # идемпотентности здесь свой: без него старт по этой полосе мог бы
+            # подобрать активный прогон оператора, потому что «нет ключа»
+            # раньше означало «ключ подходит любой».
+            start=TrustedRunStart(
+                confirmation_source=CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
+                reason="isolated e2e stack replays seeded fixtures",
+                idempotency_key=(
+                    f"e2e-fixture-replay:{current.workspace_id}:"
+                    f"{payload.import_batch_id}"
+                ),
+            ),
             policy_config=payload.policy,
             source_mode="e2e_fixture_replay",
         )

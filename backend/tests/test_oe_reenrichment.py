@@ -63,7 +63,14 @@ def _capture(product: dict[str, object]) -> SimpleNamespace:
     return SimpleNamespace(id=uuid4(), payload=payload)
 
 
-def _observation(*, listing_id: str = "42") -> SimpleNamespace:
+def _observation(
+    *,
+    listing_id: str = "42",
+    source_assertion_retrieval_kind: str | None = None,
+    source_assertion_capture_sha256: str | None = None,
+    source_assertion_confidence: Decimal | None = None,
+    via_oe_number: str | None = None,
+) -> SimpleNamespace:
     evidence = verified_comparison_evidence(
         stable_seller_id="seller-1",
         source_record_id=listing_id,
@@ -71,6 +78,10 @@ def _observation(*, listing_id: str = "42") -> SimpleNamespace:
     return SimpleNamespace(
         source_listing_id=listing_id,
         search_oe_norm=Q,
+        source_assertion_retrieval_kind=source_assertion_retrieval_kind,
+        source_assertion_capture_sha256=source_assertion_capture_sha256,
+        source_assertion_confidence=source_assertion_confidence,
+        via_oe_number=via_oe_number,
         comparison_evidence=comparison_evidence_to_dict(evidence),
         seller_id="seller-1",
         currency_raw="UAH",
@@ -98,7 +109,7 @@ def _product(**overrides: object) -> dict[str, object]:
 def _build(product: dict[str, object], *, crosses=()):
     return build_reenrichment_patch(
         observation=_observation(),
-        catalog_item=SimpleNamespace(category="water_pumps"),
+        frozen_item=SimpleNamespace(category="water_pumps", oe_norm=Q),
         capture=_capture(product),
         run=SimpleNamespace(policy_config={}),
         confirmed_crosses=crosses,
@@ -110,7 +121,7 @@ def test_reenrichment_exact_oe_is_deterministic_and_network_free() -> None:
     observation = _observation()
     inputs = {
         "observation": observation,
-        "catalog_item": SimpleNamespace(category="water_pumps"),
+        "frozen_item": SimpleNamespace(category="water_pumps", oe_norm=Q),
         "capture": capture,
         "run": SimpleNamespace(policy_config={}),
     }
@@ -159,7 +170,7 @@ def test_reenrichment_records_missing_source_record_as_typed_failure() -> None:
     ):
         build_reenrichment_patch(
             observation=_observation(listing_id="missing"),
-            catalog_item=SimpleNamespace(category="water_pumps"),
+            frozen_item=SimpleNamespace(category="water_pumps", oe_norm=Q),
             capture=_capture(_product()),
             run=SimpleNamespace(policy_config={}),
         )
@@ -178,7 +189,7 @@ def test_reenrichment_reads_target_output_through_capture_reference() -> None:
 
     patch = build_reenrichment_patch(
         observation=_observation(),
-        catalog_item=SimpleNamespace(category="water_pumps"),
+        frozen_item=SimpleNamespace(category="water_pumps", oe_norm=Q),
         capture=reference_capture,
         run=SimpleNamespace(policy_config={}),
         structured_payload=structured.payload,

@@ -14,6 +14,8 @@ import unicodedata
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
+from metis.identifiers import normalize_oem_identifier
+
 from .types import (
     ComparisonEvidence,
     DimensionEvidence,
@@ -577,12 +579,11 @@ def bind_persisted_provenance(
 
 
 def normalize_oe(value: str | None) -> str | None:
-    """Versioned exact OE normalization: NFKC, uppercase, non-alnum removal."""
+    """Versioned exact OE normalization using the shared identifier contract."""
 
     if value is None:
         return None
-    normalized = unicodedata.normalize("NFKC", value).upper()
-    normalized = "".join(character for character in normalized if character.isalnum())
+    normalized = normalize_oem_identifier(value)
     return normalized if len(normalized) >= 3 else None
 
 

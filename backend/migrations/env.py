@@ -35,7 +35,12 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        include_object=include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -49,6 +54,20 @@ async def run_async_migrations() -> None:
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
+
+
+#: Таблицы вне ``Base.metadata``, которыми autogenerate не управляет.
+#: ``llm_provider_call_budget`` — изменяемый счётчик вызовов провайдера, он
+#: сознательно живёт вне ORM-метаданных (не улика, обновляется на месте, вне
+#: append-only режима). Без этого фильтра ``alembic check`` вечно предлагает
+#: его удалить, и настоящий дрейф в шуме не виден.
+_UNMANAGED_TABLES = frozenset({"llm_provider_call_budget"})
+
+
+def include_object(object_, name, type_, reflected, compare_to):
+    if type_ == "table" and name in _UNMANAGED_TABLES:
+        return False
+    return True
 
 
 def run_migrations_online() -> None:

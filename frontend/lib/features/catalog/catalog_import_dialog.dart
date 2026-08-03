@@ -69,7 +69,16 @@ class CatalogImportDialog extends ConsumerStatefulWidget {
       _CatalogImportDialogState();
 }
 
-enum _ImportView { empty, loading, preview, uploading, success, partial, error }
+enum _ImportView {
+  empty,
+  loading,
+  preview,
+  uploading,
+  success,
+  partial,
+  failed,
+  error,
+}
 
 class _CatalogImportDialogState extends ConsumerState<CatalogImportDialog> {
   _ImportView _view = _ImportView.empty;
@@ -146,7 +155,9 @@ class _CatalogImportDialogState extends ConsumerState<CatalogImportDialog> {
         onUpload: _canUpload ? _upload : null,
         onChooseAnother: _pickAndPreview,
       ),
-      _ImportView.success || _ImportView.partial => _ImportResult(
+      _ImportView.success ||
+      _ImportView.partial ||
+      _ImportView.failed => _ImportResult(
         batch: _result!,
         onClose: () => Navigator.pop(context),
         onChooseAnother: _reset,
@@ -271,8 +282,16 @@ class _CatalogImportDialogState extends ConsumerState<CatalogImportDialog> {
       if (!mounted) return;
       setState(() {
         _result = result;
-        _view = result.isPartial ? _ImportView.partial : _ImportView.success;
+        // The backend reports `failed` when it could not accept a single row.
+        // Announcing that as a success sent every catalog screen off to reload
+        // data that had not changed.
+        _view = !result.isSuccess
+            ? _ImportView.failed
+            : result.isPartial
+            ? _ImportView.partial
+            : _ImportView.success;
       });
+      if (!result.isSuccess) return;
       widget.onImported();
     } catch (error) {
       if (mounted) _handleApiError(error);
@@ -674,14 +693,24 @@ class _ImportResult extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final failed = !batch.isSuccess;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _StatePanel(
-          icon: batch.isPartial
+          icon: failed
+              ? Icons.error_outline_rounded
+              : batch.isPartial
               ? Icons.warning_amber_rounded
               : Icons.check_circle_outline_rounded,
-          title: batch.isPartial
+          iconColor: failed ? colors.negative : colors.brand,
+          title: failed
+              ? context.localized(
+                  ru: 'Каталог не импортирован',
+                  uk: 'Каталог не імпортовано',
+                )
+              : batch.isPartial
               ? context.localized(
                   ru: 'Каталог импортирован частично',
                   uk: 'Каталог імпортовано частково',
@@ -690,29 +719,57 @@ class _ImportResult extends StatelessWidget {
                   ru: 'Каталог импортирован',
                   uk: 'Каталог імпортовано',
                 ),
-          message: context.localized(
-            ru: 'Записано ${batch.importedRows} из ${batch.totalRows}; отклонено ${batch.rejectedRows}.',
-            uk: 'Записано ${batch.importedRows} з ${batch.totalRows}; відхилено ${batch.rejectedRows}.',
-          ),
+          message: failed
+              ? context.localized(
+                  ru:
+                      'Записано ${batch.importedRows} из ${batch.totalRows}; отклонено ${batch.rejectedRows}. '
+                      'Ни одна строка не принята — проверьте выбранный лист и сопоставление колонок. Каталог не изменился.',
+                  uk:
+                      'Записано ${batch.importedRows} з ${batch.totalRows}; відхилено ${batch.rejectedRows}. '
+                      'Жоден рядок не прийнято — перевірте вибраний аркуш і зіставлення колонок. Каталог не змінився.',
+                )
+              : context.localized(
+                  ru: 'Записано ${batch.importedRows} из ${batch.totalRows}; отклонено ${batch.rejectedRows}.',
+                  uk: 'Записано ${batch.importedRows} з ${batch.totalRows}; відхилено ${batch.rejectedRows}.',
+                ),
           action: Wrap(
             alignment: WrapAlignment.center,
             spacing: 10,
             runSpacing: 8,
             children: [
-              FilledButton(
-                key: const ValueKey('catalog-import-close-success'),
-                onPressed: onClose,
-                child: Text(context.localized(ru: 'Готово', uk: 'Готово')),
-              ),
-              OutlinedButton(
-                onPressed: onChooseAnother,
-                child: Text(
-                  context.localized(
-                    ru: 'Импортировать другой',
-                    uk: 'Імпортувати інший',
+              if (failed)
+                FilledButton(
+                  key: const ValueKey('catalog-import-retry-failed'),
+                  onPressed: onChooseAnother,
+                  child: Text(
+                    context.localized(
+                      ru: 'Выбрать файл заново',
+                      uk: 'Обрати файл заново',
+                    ),
+                  ),
+                )
+              else ...[
+                FilledButton(
+                  key: const ValueKey('catalog-import-close-success'),
+                  onPressed: onClose,
+                  child: Text(context.localized(ru: 'Готово', uk: 'Готово')),
+                ),
+                OutlinedButton(
+                  onPressed: onChooseAnother,
+                  child: Text(
+                    context.localized(
+                      ru: 'Импортировать другой',
+                      uk: 'Імпортувати інший',
+                    ),
                   ),
                 ),
-              ),
+              ],
+              if (failed)
+                OutlinedButton(
+                  key: const ValueKey('catalog-import-close-failed'),
+                  onPressed: onClose,
+                  child: Text(context.localized(ru: 'Закрыть', uk: 'Закрити')),
+                ),
             ],
           ),
         ),
@@ -744,12 +801,14 @@ class _StatePanel extends StatelessWidget {
     required this.title,
     required this.message,
     required this.action,
+    this.iconColor,
   });
 
   final IconData icon;
   final String title;
   final String message;
   final Widget action;
+  final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
@@ -758,7 +817,7 @@ class _StatePanel extends StatelessWidget {
       padding: const EdgeInsets.all(28),
       child: Column(
         children: [
-          Icon(icon, size: 38, color: colors.brand),
+          Icon(icon, size: 38, color: iconColor ?? colors.brand),
           const SizedBox(height: 14),
           Text(
             title,

@@ -6,13 +6,11 @@ Prom export actually carry product identity (cross numbers, applicability), how
 much of it the importer currently drops, and how far the KEMP reference map
 closes the remaining gap.
 
-Normalization is reproduced literally from the repository so the measurement
-cannot drift from production behaviour:
+Identifier normalization imports the shared production contract so the
+measurement cannot drift from runtime behaviour:
 
-    _normalize_header / normalize_identifier
-        backend/src/marko/services/xlsx_catalog.py:42-44, 258-262
-    normalize_cross_oem
-        backend/src/metis/pricing/crosses.py:457-463
+    normalize_oem_identifier
+        backend/src/metis/identifiers.py
 
 Reading the ``.xls`` reference map requires ``xlrd``; the ``.xlsx`` export is
 read with ``openpyxl``, already a backend dependency.
@@ -23,31 +21,19 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+from pathlib import Path
 import re
+import sys
 from typing import Any
-import unicodedata
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend" / "src"))
 
 import openpyxl
 
+from metis.identifiers import normalize_oem_identifier
+
 _HEADER_CLEAN_RE = re.compile(r"[^a-zа-яёіїґєԁөү0-9]+", re.IGNORECASE)
 _IDENTIFIER_SPLIT_RE = re.compile(r"[,;|\n\r]+")
-_IDENTIFIER_CLEAN_RE = re.compile(r"[^A-Z0-9]+")
-_HOMOGLYPHS = str.maketrans(
-    {
-        "А": "A",
-        "В": "B",
-        "С": "C",
-        "Е": "E",
-        "Н": "H",
-        "К": "K",
-        "М": "M",
-        "О": "O",
-        "Р": "P",
-        "Т": "T",
-        "Х": "X",
-        "І": "I",
-    }
-)
 
 PROM_REQUIRED = {
     "sku": "унікальний ідентифікатор",
@@ -110,15 +96,13 @@ def normalize_header(value: str) -> str:
 
 
 def normalize_identifier(value: Any) -> str:
-    raw = cell_text(value).upper().translate(_HOMOGLYPHS)
+    raw = cell_text(value)
     primary = _IDENTIFIER_SPLIT_RE.split(raw, maxsplit=1)[0]
-    return _IDENTIFIER_CLEAN_RE.sub("", primary)
+    return normalize_oem_identifier(primary)
 
 
 def normalize_cross_oem(value: Any) -> str:
-    if not value:
-        return ""
-    return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKC", str(value)).upper())
+    return normalize_oem_identifier(None if not value else str(value))
 
 
 def load_prom(path: str) -> tuple[list[str], list[list[Any]]]:

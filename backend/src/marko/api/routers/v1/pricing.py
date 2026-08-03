@@ -13,10 +13,21 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
+from marko.services.auth import AuthContext
 from marko.core.config import get_settings
-from marko.infrastructure.db.models import OfferProcessingOutcome
+from marko.core.ai_model_identity import is_immutable_model_snapshot
+from marko.infrastructure.db.models import (
+    CatalogItem,
+    MarketObservation,
+    OfferProcessingOutcome,
+)
 from marko.services.catalog_costs import get_latest_cost_record
 from marko.api.schemas.pricing import (
+    AiEvidenceExtractionResponse,
+    AiEvidenceFieldResponse,
+    AiEvidenceSpendEstimateResponse,
+    AiEvidenceStatusResponse,
+    AiEvidenceUsageResponse,
     CalibrationRequest,
     CatalogItemOverrideRequest,
     CatalogItemOverrideResponse,
@@ -28,7 +39,11 @@ from marko.api.schemas.pricing import (
     PricingEvaluateResponse,
     PricingRunCreateRequest,
     PricingRunPageResponse,
+    PricingRunPreviewRequest,
+    PricingRunPreviewResponse,
     PricingRunResponse,
+    PricingRunScopeEstimateResponse,
+    PricingRunScopeExclusionResponse,
     ScraperMetricsResponse,
     ObservationTierOverrideRequest,
     ObservationTierOverrideResponse,
@@ -52,8 +67,18 @@ from metis.pricing import (
 )
 from marko.services.pricing_runs import (
     CatalogItemNotFoundError,
+    OperatorRunStart,
+    ACTOR_TYPE_USER,
+    PRICING_RUN_START_PERMISSION,
+    IssuedPreviewContract,
+    PreviewActor,
+    PricingRunActiveScopeConflictError,
     PricingRunError,
+    PricingRunIdempotencyConflictError,
     PricingRunNotFoundError,
+    PricingRunScope,
+    PricingRunScopeConflictError,
+    PricingRunStartContractError,
     PricingTaskDispatchError,
     RecommendationNotFoundError,
     add_catalog_item_override,
@@ -68,6 +93,7 @@ from marko.services.pricing_runs import (
     list_recommendations,
     list_tier_coefficients,
     policy_from_dict,
+    preview_pricing_run_for_operator,
     override_observation_tier,
 )
 from marko.services.cost_privacy import privacy_safe_mapping
@@ -89,8 +115,17 @@ from marko.services.recommendation_export import (
 )
 from marko.worker.celery_app import celery_app
 from marko.services.scraper_metrics import (
+    AiEvidenceExtractionView,
+    ai_evidence_spend_estimate,
+    ai_evidence_telemetry_snapshot,
+    assert_publishable,
     get_pricing_run_scraper_metrics,
     render_prometheus,
+)
+from marko.services.ai_cost_policy import (
+    AiCostPolicyError,
+    ESTIMATE_DISCLAIMER,
+    resolve_rate_card,
 )
 
 router = APIRouter()
@@ -115,6 +150,246 @@ async def get_llm_comparability_status(
         ),
         automatic_price_publication=False,
     )
+
+
+#: Contract defaults for the extractor settings owned by another agent.  Read
+#: through ``getattr`` so this read surface degrades to "off and unconfigured"
+#: instead of failing to import while those settings are still landing.
+_AI_EVIDENCE_DEFAULTS: dict[str, str] = {
+    "pricing_ai_evidence_mode": "off",
+    "pricing_ai_evidence_provider": "openai_responses",
+    "pricing_ai_evidence_model": "gpt-5.6-luna",
+    "pricing_ai_evidence_reasoning_effort": "medium",
+}
+
+
+class _AiEvidenceStorageUnavailable(RuntimeError):
+    """The extraction table is not provisioned in this deployment yet."""
+
+
+def _ai_evidence_config(settings: Any) -> dict[str, Any]:
+    """Public configuration only.  The API key is read for a boolean and dropped."""
+
+    values = {
+        name: str(getattr(settings, name, default) or default).strip() or default
+        for name, default in _AI_EVIDENCE_DEFAULTS.items()
+    }
+    key_text = ""
+    for name in ("pricing_ai_evidence_api_key", "pricing_llm_api_key"):
+        secret = getattr(settings, name, None)
+        if secret is None:
+            continue
+        getter = getattr(secret, "get_secret_value", None)
+        key_text = str(getter() if callable(getter) else secret).strip()
+        if key_text:
+            break
+    mode = values["pricing_ai_evidence_mode"]
+    if mode not in {"off", "shadow"}:
+        mode = "off"
+    if mode != "off" and not is_immutable_model_snapshot(
+        values["pricing_ai_evidence_model"]
+    ):
+        mode = "off"
+    return {
+        "mode": mode,
+        "provider": values["pricing_ai_evidence_provider"],
+        "model": values["pricing_ai_evidence_model"],
+        "reasoning_effort": values["pricing_ai_evidence_reasoning_effort"],
+        "configured": bool(
+            mode != "off" and key_text and values["pricing_ai_evidence_model"]
+        ),
+        "shadow_only": True,
+    }
+
+
+def _ai_evidence_rate_card(model_id: str | None):
+    """Resolve an exact model snapshot; an unknown explicit model has no price."""
+
+    try:
+        return resolve_rate_card(model_id=model_id) if model_id else resolve_rate_card()
+    except AiCostPolicyError:
+        return None
+
+
+def _ai_evidence_spend_response(
+    view: AiEvidenceExtractionView,
+) -> AiEvidenceSpendEstimateResponse:
+    if view.persisted_spend_estimate is not None:
+        try:
+            return AiEvidenceSpendEstimateResponse.model_validate(
+                {"available": True, **view.persisted_spend_estimate}
+            )
+        except (TypeError, ValueError):
+            # A malformed historical estimate must not break evidence reads;
+            # recompute from the separately persisted token counters instead.
+            pass
+    # ``provider_model`` is provider-controlled metadata.  Only the immutable
+    # deployment model id may select a rate card or cross the public boundary.
+    estimated_model = view.model_id
+    card = _ai_evidence_rate_card(estimated_model)
+    if card is None:
+        return AiEvidenceSpendEstimateResponse(
+            available=False,
+            reason="rate_card_unavailable",
+        )
+    estimate = ai_evidence_spend_estimate(view.usage, card=card)
+    return AiEvidenceSpendEstimateResponse.model_validate(estimate)
+
+
+def _ai_evidence_response(
+    view: AiEvidenceExtractionView,
+) -> AiEvidenceExtractionResponse:
+    """Serialize one extraction: evidence yes, hidden reasoning never.
+
+    The payload is built from the scrubbed projection rather than from the row,
+    so a provider field that nobody anticipated cannot ride along into the
+    response by being copied verbatim.
+    """
+
+    payload = assert_publishable(view.as_public_dict())
+    return AiEvidenceExtractionResponse(
+        extraction_id=payload["extraction_id"],
+        market_observation_id=payload["market_observation_id"],
+        status=payload["status"],
+        shadow_only=payload["shadow_only"],
+        provider=payload["provider"],
+        model_id=payload["model_id"],
+        reasoning_effort=payload["reasoning_effort"],
+        prompt_version=payload["prompt_version"],
+        schema_version=payload["schema_version"],
+        extractor_version=payload["extractor_version"],
+        latency_ms=payload["latency_ms"],
+        usage=(
+            AiEvidenceUsageResponse.model_validate(payload["usage"])
+            if payload["usage"]
+            else None
+        ),
+        usage_error=payload["usage_error"],
+        verification_result=payload["verification_result"],
+        verification_reasons=payload["verification_reasons"],
+        fields=[
+            AiEvidenceFieldResponse.model_validate(item) for item in payload["fields"]
+        ],
+        error_code=payload["error_code"],
+        created_at=payload["created_at"],
+        spend_estimate=_ai_evidence_spend_response(view),
+    )
+
+
+async def _observation_belongs_to_workspace(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    observation_id: UUID,
+) -> bool:
+    """Workspace ownership travels through the catalog item, as elsewhere."""
+
+    found = await session.scalar(
+        select(func.count(MarketObservation.id))
+        .join(CatalogItem, CatalogItem.id == MarketObservation.catalog_item_id)
+        .where(
+            MarketObservation.id == observation_id,
+            CatalogItem.workspace_id == workspace_id,
+        )
+    )
+    return bool(found)
+
+
+async def _load_observation_ai_evidence(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    observation_id: UUID,
+) -> list[Any]:
+    """Load extraction rows scoped to one workspace and one observation."""
+
+    from marko.infrastructure.db import models as db_models
+
+    model = getattr(db_models, "AiEvidenceExtraction", None)
+    if model is None:
+        raise _AiEvidenceStorageUnavailable(
+            "ai_evidence_extractions is not provisioned"
+        )
+    statement = select(model).where(model.market_observation_id == observation_id)
+    workspace_column = getattr(model, "workspace_id", None)
+    if workspace_column is None:
+        raise _AiEvidenceStorageUnavailable(
+            "ai_evidence_extractions has no workspace column to isolate on"
+        )
+    statement = statement.where(workspace_column == workspace_id)
+    created_at = getattr(model, "created_at", None)
+    if created_at is not None:
+        statement = statement.order_by(created_at.asc())
+    return list((await session.scalars(statement)).all())
+
+
+@router.get("/ai-evidence/status", response_model=AiEvidenceStatusResponse)
+async def get_ai_evidence_status(_current: CurrentUser) -> AiEvidenceStatusResponse:
+    """Extractor configuration and counters.  No secret ever crosses this line."""
+
+    config = _ai_evidence_config(get_settings())
+    card = _ai_evidence_rate_card(config["model"])
+    rate_available = card is not None
+    return AiEvidenceStatusResponse(
+        mode=config["mode"],
+        provider=config["provider"],
+        model=config["model"],
+        reasoning_effort=config["reasoning_effort"],
+        configured=config["configured"],
+        shadow_only=config["shadow_only"],
+        rate_card_available=rate_available,
+        rate_card_reason=None if rate_available else "rate_card_unavailable",
+        rate_version=card.rate_version if card is not None else None,
+        rates_effective_date=card.effective_date if card is not None else None,
+        rates_per_million=card.rates_per_million() if card is not None else {},
+        estimate_disclaimer=ESTIMATE_DISCLAIMER,
+        telemetry=ai_evidence_telemetry_snapshot(
+            card=card,
+            model_id=None if card is not None else config["model"],
+        ),
+    )
+
+
+@router.get(
+    "/observations/{observation_id}/ai-evidence",
+    response_model=list[AiEvidenceExtractionResponse],
+)
+async def get_observation_ai_evidence(
+    observation_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[AiEvidenceExtractionResponse]:
+    """Return persisted extraction evidence for one observation in this workspace."""
+
+    if not await _observation_belongs_to_workspace(
+        session,
+        workspace_id=current.workspace_id,
+        observation_id=observation_id,
+    ):
+        raise HTTPException(status_code=404, detail="Observation not found")
+    try:
+        rows = await _load_observation_ai_evidence(
+            session,
+            workspace_id=current.workspace_id,
+            observation_id=observation_id,
+        )
+    except _AiEvidenceStorageUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI evidence storage is not available",
+        ) from exc
+    views = [AiEvidenceExtractionView.from_row(row) for row in rows]
+    for view in views:
+        if view.workspace_id is not None and view.workspace_id != current.workspace_id:
+            # Defense in depth: a row that escaped the scoped query is treated
+            # as a missing resource, never as content to serialize.
+            raise HTTPException(status_code=404, detail="Observation not found")
+        if (
+            view.market_observation_id is not None
+            and view.market_observation_id != observation_id
+        ):
+            raise HTTPException(status_code=404, detail="Observation not found")
+    return [_ai_evidence_response(view) for view in views]
 
 
 @router.post("/evaluate", response_model=PricingEvaluateResponse)
@@ -203,6 +478,73 @@ def _normalized_offer_payload(item: object) -> dict[str, object]:
     return payload
 
 
+def _preview_response(
+    scope: PricingRunScope, contract: IssuedPreviewContract
+) -> PricingRunPreviewResponse:
+    return PricingRunPreviewResponse(
+        scope_contract_version=scope.contract_version,
+        import_batch_id=scope.import_batch_id,
+        scope_mode=scope.scope_mode,
+        policy_version=scope.policy_version,
+        catalog_snapshot_hash=scope.catalog_snapshot_hash,
+        scope_hash=scope.scope_hash,
+        policy_snapshot_hash=scope.policy_hash,
+        requires_full_catalog_confirmation=scope.requires_full_catalog_confirmation,
+        estimate=PricingRunScopeEstimateResponse.model_validate(scope.estimate),
+        exclusions=[
+            PricingRunScopeExclusionResponse.model_validate(exclusion)
+            for exclusion in scope.exclusions
+        ],
+        exclusions_truncated=scope.exclusions_truncated,
+        scope_manifest=scope.manifest,
+        preview_contract_version=contract.contract_version,
+        preview_token=contract.token,
+        preview_expires_at=contract.expires_at,
+        preview_request_hash=contract.request_hash,
+    )
+
+
+def _preview_actor(current: AuthContext) -> PreviewActor:
+    """Актор с ролью и правами на момент обращения — их и запоминает контракт."""
+
+    return PreviewActor(
+        actor_id=str(current.user.id),
+        actor_type=ACTOR_TYPE_USER,
+        workspace_role=current.workspace_role.value,
+        permissions=(PRICING_RUN_START_PERMISSION,),
+    )
+
+
+@router.post("/runs/preview", response_model=PricingRunPreviewResponse)
+async def preview_pricing_run_scope(
+    payload: PricingRunPreviewRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingRunPreviewResponse:
+    """Показать замороженную область прогона и выдать контракт на её запуск.
+
+    Прогон здесь не создаётся.  Единственная запись — строка контракта: без неё
+    старт нечем закрыть, потому что «ожидаемый хеш» сервер публикует сам и
+    клиент лишь возвращает его обратно.
+    """
+
+    try:
+        scope, contract = await preview_pricing_run_for_operator(
+            session,
+            workspace_id=current.workspace_id,
+            import_batch_id=payload.import_batch_id,
+            actor=_preview_actor(current),
+            scope_mode=payload.scope_mode,
+            catalog_item_ids=payload.catalog_item_ids,
+            policy_config=payload.policy,
+            confirm_full_catalog=payload.scope_mode == "FULL_CATALOG",
+        )
+    except PricingRunError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await session.commit()
+    return _preview_response(scope, contract)
+
+
 @router.post(
     "/runs", response_model=PricingRunResponse, status_code=status.HTTP_202_ACCEPTED
 )
@@ -213,16 +555,38 @@ async def start_pricing_run(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PricingRunResponse:
     try:
+        # Старт оператора идёт только через типизированный контракт предпросмотра:
+        # его нельзя собрать «без полей», и системным повтором он притвориться
+        # не может.
+        start = OperatorRunStart(
+            idempotency_key=payload.idempotency_key,
+            preview_token=payload.preview_token,
+            actor=_preview_actor(current),
+            confirm_full_catalog=payload.confirm_full_catalog,
+        )
         run = await create_pricing_run(
             session,
             workspace_id=current.workspace_id,
             import_batch_id=payload.import_batch_id,
             celery_app=celery_app,
+            start=start,
             policy_config=payload.policy,
             correlation_id=getattr(request.state, "correlation_id", None),
+            scope_mode=payload.scope_mode,
+            catalog_item_ids=payload.catalog_item_ids,
         )
     except PricingTaskDispatchError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (
+        PricingRunScopeConflictError,
+        PricingRunIdempotencyConflictError,
+        PricingRunActiveScopeConflictError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PricingRunStartContractError as exc:
+        # Отсутствующий, чужой, просроченный или не тот контракт — это отказ в
+        # праве стартовать, а не «неверно заполненная форма».
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PricingRunError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PricingRunResponse.model_validate(run)

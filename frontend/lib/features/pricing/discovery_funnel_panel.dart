@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
+import '../../core/session_expiry.dart';
 import 'discovery_funnel_models.dart';
 import 'operations_api.dart';
 
@@ -36,6 +37,13 @@ class _DiscoveryFunnelPanelState extends ConsumerState<DiscoveryFunnelPanel> {
       setState(() => _snapshot = snapshot);
     } catch (error) {
       if (!mounted) return;
+      // Воронка — такой же аутентифицированный запрос, как список. Пока она
+      // печатала строку бэкенда рядом с «Повторить», истёкшая сессия выглядела
+      // здесь как временный сбой аналитики, а повтор мог только не сработать.
+      if (ref.classifySessionExpiry(error)) {
+        setState(() => _error = null);
+        return;
+      }
       setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -44,36 +52,43 @@ class _DiscoveryFunnelPanelState extends ConsumerState<DiscoveryFunnelPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final sessionExpired = ref.watch(markoSessionExpiredProvider);
     return MarkoPanel(
       padding: EdgeInsets.zero,
       child: ExpansionTile(
         key: const ValueKey('discovery-funnel-panel'),
         onExpansionChanged: (expanded) {
-          if (expanded && _snapshot == null && !_loading) {
+          if (expanded && _snapshot == null && !_loading && !sessionExpired) {
             unawaited(_load());
           }
         },
         title: Text(
           context.localized(
-            ru: 'Воронка discovery и потолки гейтов',
-            uk: 'Воронка discovery та межі гейтів',
+            ru: 'Почему конкуренты не попали в расчёт',
+            uk: 'Чому конкуренти не потрапили в розрахунок',
           ),
         ),
         subtitle: Text(
           context.localized(
-            ru: 'Показывает, где кандидаты перестают быть ценовым доказательством.',
-            uk: 'Показує, де кандидати перестають бути ціновим доказом.',
+            ru: 'Сколько предложений нашли и на каком шаге каждое отсеялось.',
+            uk: 'Скільки пропозицій знайшли та на якому кроці кожну відсіяли.',
           ),
         ),
         childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
         children: [
           if (_loading) const LinearProgressIndicator(),
-          if (_error != null) ...[
+          // Страница, на которой панель живёт, отвечает за истёкшую сессию
+          // сама — и одного ответа достаточно.
+          if (sessionExpired && !MarkoSessionExpiryAnswered.above(context))
+            const MarkoSessionExpiredMessage(
+              key: ValueKey('discovery-funnel-session-expired'),
+            ),
+          if (_error != null && !sessionExpired) ...[
             MarkoInlineMessage(
               message: _error!,
               tone: MarkoMessageTone.error,
               action: TextButton(
-                onPressed: _load,
+                onPressed: _loading ? null : _load,
                 child: Text(
                   context.localized(ru: 'Повторить', uk: 'Повторити'),
                 ),
@@ -180,7 +195,10 @@ class _FunnelBody extends StatelessWidget {
         if (snapshot.correlationId case final correlationId?) ...[
           const SizedBox(height: 12),
           SelectableText(
-            'Correlation ID: $correlationId',
+            context.localized(
+              ru: 'Номер расчёта для поддержки: $correlationId',
+              uk: 'Номер розрахунку для підтримки: $correlationId',
+            ),
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: colors.muted),

@@ -329,12 +329,14 @@ class PricingRecommendation {
   static String reasonLabel(String code) => pricingReasonLabelRu(code);
 }
 
+/// Population of the whole pricing run, not of the queue tab being viewed.
 class RecommendationActionCounts {
   const RecommendationActionCounts({
     this.raise = 0,
     this.lower = 0,
     this.review = 0,
     this.hold = 0,
+    this.total = 0,
   });
 
   factory RecommendationActionCounts.fromJson(Map<String, dynamic> json) {
@@ -344,6 +346,7 @@ class RecommendationActionCounts {
       lower: count('lower'),
       review: count('review'),
       hold: count('hold'),
+      total: count('total'),
     );
   }
 
@@ -351,6 +354,7 @@ class RecommendationActionCounts {
   final int lower;
   final int review;
   final int hold;
+  final int total;
 }
 
 class RecommendationPage {
@@ -795,6 +799,7 @@ class PricingRunSummary {
     required this.completedItems,
     required this.failedItems,
     required this.manualReviewItems,
+    required this.cancelRequested,
     required this.error,
     required this.createdAt,
   });
@@ -815,6 +820,7 @@ class PricingRunSummary {
       completedItems: (json['completed_items'] as num).toInt(),
       failedItems: (json['failed_items'] as num).toInt(),
       manualReviewItems: (json['manual_review_items'] as num).toInt(),
+      cancelRequested: json['cancel_requested'] as bool? ?? false,
       error: json['error'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
     );
@@ -831,12 +837,81 @@ class PricingRunSummary {
   final int completedItems;
   final int failedItems;
   final int manualReviewItems;
+
+  /// The backend acknowledges a cancellation by raising this flag, not by
+  /// moving `status`: the run keeps its working status until a worker notices
+  /// and finalises it. Ignoring the flag makes a stopping run look untouched.
+  final bool cancelRequested;
   final String? error;
   final DateTime createdAt;
 
   bool get isFinished =>
       const {'completed', 'partial', 'failed', 'cancelled'}.contains(status);
 
+  /// True while the run is still working on a cancellation the operator has
+  /// already asked for.
+  bool get isStopping => cancelRequested && !isFinished;
+
+  bool get isCancellable => !isFinished && !cancelRequested;
+
   double? get progress =>
       totalItems > 0 ? (completedItems + failedItems) / totalItems : null;
+}
+
+/// Замороженная область прогона, показанная до его запуска.
+///
+/// Существует, чтобы владелец видел цену решения до того, как оно станет
+/// необратимым: сколько позиций попадёт в расчёт, сколько отброшено и почему.
+/// Хеши возвращаются серверу при запуске — если каталог изменился между
+/// предпросмотром и подтверждением, запуск отказывается стартовать, а не
+/// считает молча другую область.
+class PricingRunPreview {
+  const PricingRunPreview({
+    required this.scopeMode,
+    required this.scopeHash,
+    required this.catalogSnapshotHash,
+    required this.previewToken,
+    required this.requiresFullCatalogConfirmation,
+    required this.requestedItems,
+    required this.eligibleItems,
+    required this.excludedItems,
+    required this.worstCaseDurationSeconds,
+  });
+
+  factory PricingRunPreview.fromJson(Map<String, dynamic> json) {
+    final estimate =
+        (json['estimate'] as Map<String, dynamic>?) ??
+        const <String, dynamic>{};
+    return PricingRunPreview(
+      scopeMode: json['scope_mode'] as String? ?? 'FULL_CATALOG',
+      scopeHash: json['scope_hash'] as String? ?? '',
+      catalogSnapshotHash: json['catalog_snapshot_hash'] as String? ?? '',
+      previewToken: json['preview_token'] as String? ?? '',
+      requiresFullCatalogConfirmation:
+          json['requires_full_catalog_confirmation'] as bool? ?? false,
+      requestedItems: (estimate['requested_items'] as num?)?.toInt() ?? 0,
+      eligibleItems: (estimate['eligible_items'] as num?)?.toInt() ?? 0,
+      excludedItems: (estimate['excluded_items'] as num?)?.toInt() ?? 0,
+      worstCaseDurationSeconds:
+          (estimate['worst_case_duration_seconds'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final String scopeMode;
+  final String scopeHash;
+  final String catalogSnapshotHash;
+  /// Выдаётся сервером один раз вместе с предпросмотром; без него старт этой
+  /// области невозможен.
+  final String previewToken;
+  final bool requiresFullCatalogConfirmation;
+
+  /// Сколько позиций область запросила. Отличается от [eligibleItems], когда
+  /// импорт короче выбранной границы или часть позиций отсеяна.
+  final int requestedItems;
+  final int eligibleItems;
+  final int excludedItems;
+  final int worstCaseDurationSeconds;
+
+  /// Верхняя оценка, а не прогноз: столько прогон займёт в худшем случае.
+  int get worstCaseMinutes => (worstCaseDurationSeconds / 60).ceil();
 }

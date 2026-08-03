@@ -114,9 +114,10 @@ def test_frozen_adapter_uses_fresh_gateway_per_parallel_call() -> None:
     lock = Lock()
 
     class Gateway:
-        def compare(self, _url, query, *, strict):
+        def compare(self, _url, query, *, strict, excluded_seller_ids):
             assert query == "OE-1"
             assert strict is True
+            assert excluded_seller_ids == frozenset()
             return comparison
 
     def factory(_config):

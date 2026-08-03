@@ -20,6 +20,8 @@ import unicodedata
 
 import yaml
 
+from metis.identifiers import normalize_oem_identifier
+
 from .types import ProductTier
 
 
@@ -455,12 +457,9 @@ def load_cross_config(path: str | Path) -> CrossConfig:
 
 
 def normalize_cross_oem(value: str | None) -> str:
-    """NFKC + uppercase + ASCII alphanumeric normalization for Path 2."""
+    """Normalize a Path 2 identifier through the shared OEM contract."""
 
-    if value is None:
-        return ""
-    normalized = unicodedata.normalize("NFKC", value).upper()
-    return re.sub(r"[^A-Z0-9]", "", normalized)
+    return normalize_oem_identifier(value)
 
 
 def extract_cross_candidates(

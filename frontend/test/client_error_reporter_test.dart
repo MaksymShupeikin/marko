@@ -12,7 +12,7 @@ void main() {
           ClientErrorReporter(
               release: 'test-release',
               now: () => DateTime.utc(2026, 7, 30, 12),
-      initialTransport: (event) async => sent.add(event),
+              initialTransport: (event) async => sent.add(event),
             )
             ..updateRoute('/pricing/recommendations')
             ..updateCorrelationId('request-123');

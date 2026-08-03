@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import enum
+import hashlib
+import json
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -1339,6 +1341,11 @@ class PricingPolicyRecord(TimestampMixin, Base):
     )
 
 
+PRICING_RUN_ACTIVE_STATUS_SQL = (
+    "'queued', 'running', 'collecting', 'classifying', 'calibrating', 'calculating'"
+)
+
+
 class PricingRun(TimestampMixin, Base):
     __tablename__ = "pricing_runs"
     __table_args__ = (
@@ -1347,7 +1354,68 @@ class PricingRun(TimestampMixin, Base):
             "'calculating', 'completed', 'partial', 'failed', 'cancelled')",
             name="ck_pricing_run_status",
         ),
+        CheckConstraint(
+            "scope_mode IN ('FULL_CATALOG', 'EXPLICIT_ITEMS')",
+            name="ck_pricing_run_scope_mode",
+        ),
+        CheckConstraint(
+            "scope_confirmation_source IN "
+            "('OPERATOR', 'SYSTEM_REPLAY', 'E2E_FIXTURE_REPLAY', 'LEGACY_UNBOUNDED')",
+            name="ck_pricing_run_scope_confirmation_source",
+        ),
+        # Полный каталог, запущенный оператором, обязан нести явное подтверждение.
+        # Системные и унаследованные прогоны отмечены другим источником и не
+        # притворяются подтверждёнными.
+        CheckConstraint(
+            "scope_confirmation_source <> 'OPERATOR' "
+            "OR scope_mode <> 'FULL_CATALOG' "
+            "OR full_catalog_confirmed",
+            name="ck_pricing_run_full_catalog_confirmation",
+        ),
+        # Строка, объявившая версию контракта области, обязана нести и её отпечатки.
+        CheckConstraint(
+            "scope_contract_version IS NULL OR ("
+            "scope_hash IS NOT NULL AND catalog_snapshot_hash IS NOT NULL "
+            "AND scope_frozen_at IS NOT NULL)",
+            name="ck_pricing_run_scope_manifest_complete",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "idempotency_key",
+            name="uq_pricing_run_workspace_idempotency",
+        ),
+        # --- личность старта (миграция 0038) ---------------------------------
+        # NULL означает строку, созданную до этого контракта: у неё нет ни
+        # отпечатка запроса, ни актора, и притворяться иначе она не может.
+        CheckConstraint(
+            "canonical_start_request_hash IS NULL "
+            "OR char_length(canonical_start_request_hash) = 64",
+            name="ck_pricing_run_start_request_hash",
+        ),
+        CheckConstraint(
+            "start_lane IS NULL OR start_lane IN ('OPERATOR', 'TRUSTED')",
+            name="ck_pricing_run_start_lane",
+        ),
+        # Полоса названа — значит названы и актор, и отпечаток запроса: половина
+        # личности не является личностью и сравнивать её нельзя.
+        CheckConstraint(
+            "start_lane IS NULL OR ("
+            "canonical_start_request_hash IS NOT NULL "
+            "AND start_actor_id IS NOT NULL "
+            "AND start_actor_type IS NOT NULL)",
+            name="ck_pricing_run_start_identity_complete",
+        ),
         Index("ix_pricing_run_workspace_status", "workspace_id", "status"),
+        # Единственная настоящая защита от двух одновременных прогонов по одному
+        # импорту: частичный уникальный индекс. SELECT перед вставкой — только
+        # быстрый путь, он не выдерживает гонки.
+        Index(
+            "uq_pricing_run_active_import_batch",
+            "workspace_id",
+            "import_batch_id",
+            unique=True,
+            postgresql_where=text(f"status IN ({PRICING_RUN_ACTIVE_STATUS_SQL})"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -1361,7 +1429,12 @@ class PricingRun(TimestampMixin, Base):
         String(20), default="queued", server_default="queued"
     )
     policy_version: Mapped[str] = mapped_column(String(80))
+    # Полный канонический снимок политики исполнения, а не ярлык версии:
+    # исторический вход расчёта, который переживает правку файла развёртывания.
     policy_config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Отпечаток тех же канонических байт. NULL — прогон до контракта заморозки
+    # политики; такие досчитываются по прежнему пути и новым не притворяются.
+    policy_snapshot_hash: Mapped[str | None] = mapped_column(String(64))
     parser_version: Mapped[str] = mapped_column(String(80))
     classifier_version: Mapped[str] = mapped_column(
         String(80), default="brand-tier-v1", server_default="brand-tier-v1"
@@ -1393,6 +1466,40 @@ class PricingRun(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # --- неизменяемая область прогона ---------------------------------------
+    # NULL означает строку, созданную до контракта ограниченного прогона: у неё
+    # не было ни манифеста, ни подтверждения, и притворяться иначе нельзя.
+    scope_contract_version: Mapped[str | None] = mapped_column(String(40))
+    scope_mode: Mapped[str] = mapped_column(
+        String(20), default="FULL_CATALOG", server_default="FULL_CATALOG"
+    )
+    scope_confirmation_source: Mapped[str] = mapped_column(
+        String(24), default="LEGACY_UNBOUNDED", server_default="LEGACY_UNBOUNDED"
+    )
+    full_catalog_confirmed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    catalog_snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    scope_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    scope_manifest: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    scope_frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # --- неизменяемая личность старта ----------------------------------------
+    # Ключ идемпотентности сам по себе личностью не является: он лишь имя
+    # попытки.  Чтобы отличить повтор ТОЙ ЖЕ попытки от чужого запроса под тем
+    # же именем, строка обязана помнить, ЧТО именно просили (отпечаток
+    # канонического тела старта), КТО просил и ПО КАКОЙ полосе власти.  Без
+    # этих трёх колонок «идемпотентный победитель» опознавался по совпадению
+    # области, то есть второй актор со своим законным контрактом предпросмотра
+    # получал чужой прогон как свой.
+    canonical_start_request_hash: Mapped[str | None] = mapped_column(String(64))
+    start_lane: Mapped[str | None] = mapped_column(String(24))
+    start_actor_id: Mapped[str | None] = mapped_column(String(160))
+    start_actor_type: Mapped[str | None] = mapped_column(String(24))
 
 
 class ScrapeTarget(TimestampMixin, Base):
@@ -1577,14 +1684,31 @@ class PricingRunItem(TimestampMixin, Base):
             name="ck_pricing_run_item_status",
         ),
         Index("ix_pricing_run_item_run_status", "pricing_run_id", "status"),
+        # Заморозка состава (миграция 0035): позиция в замороженном списке и
+        # сама позиция каталога уникальны в пределах прогона. Объявлены здесь,
+        # иначе ``alembic check`` вечно предлагает их удалить.
+        Index(
+            "uq_pricing_run_item_membership_position",
+            "pricing_run_id",
+            "membership_position",
+            unique=True,
+        ),
+        Index(
+            "uq_pricing_run_item_membership_catalog_item",
+            "pricing_run_id",
+            "catalog_item_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     pricing_run_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("pricing_runs.id", ondelete="CASCADE"), index=True
     )
+    # RESTRICT, а не CASCADE: членство прогона — это улика расчёта. Удаление
+    # позиции каталога не должно уносить её задним числом (миграция 0033).
     catalog_item_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("catalog_items.id", ondelete="CASCADE"), index=True
+        ForeignKey("catalog_items.id", ondelete="RESTRICT"), index=True
     )
     scrape_target_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("scrape_targets.id", ondelete="SET NULL"), index=True
@@ -1599,6 +1723,100 @@ class PricingRunItem(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # --- входы на момент старта прогона (детерминированный повтор) ------------
+    # Расчёт обязан читать именно эти строки, а не «самую свежую» правку: иначе
+    # правка оператора во время сбора попадает в уже начатый прогон.
+    # Внешние ключи без ON DELETE намеренно: NO ACTION проверяется в конце
+    # оператора, поэтому каскадное удаление рабочей области проходит, а
+    # одиночное удаление ссылочной строки — нет.
+    catalog_item_override_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_item_overrides.id"), index=True
+    )
+    cost_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_item_cost_records.id"), index=True
+    )
+    start_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    # Отпечаток замороженного снимка. Расчёт пересчитывает его и отказывается
+    # считать при расхождении: снимок, который никто не проверяет, — это не
+    # заморозка, а ещё одна изменяемая копия каталога.
+    start_snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    # Позиция в замороженном упорядоченном членстве. Порядок — часть контракта
+    # (его отпечаток лежит в манифесте), и выводить его из живого каталога
+    # нельзя: каталог меняется, а членство прогона — нет.
+    membership_position: Mapped[int | None] = mapped_column(Integer)
+
+
+class PricingRunPreviewContract(Base):
+    """Выданный сервером контракт предпросмотра — основание старта оператора.
+
+    Токен операторy выдаётся один раз и в базе не хранится: хранится только его
+    sha256.  Чтение базы не даёт пригодного к предъявлению токена, а подобрать
+    32 случайных байта нельзя.  Строка несёт срок годности, рабочее
+    пространство, действующего актора с его ролью и правами, импорт, хеш
+    канонического запроса, хеш области, хеш снимка каталога и хеш снимка
+    политики: старт обязан совпасть с КАЖДЫМ из них, иначе это другой запрос.
+    """
+
+    __tablename__ = "pricing_run_preview_contracts"
+    __table_args__ = (
+        UniqueConstraint("token_sha256", name="uq_pricing_run_preview_token"),
+        CheckConstraint(
+            "char_length(token_sha256) = 64 AND char_length(request_hash) = 64 "
+            "AND char_length(scope_hash) = 64 "
+            "AND char_length(catalog_snapshot_hash) = 64 "
+            "AND char_length(policy_snapshot_hash) = 64",
+            name="ck_pricing_run_preview_digests",
+        ),
+        CheckConstraint(
+            "expires_at > issued_at",
+            name="ck_pricing_run_preview_expiry_after_issue",
+        ),
+        CheckConstraint(
+            "(consumed_at IS NULL AND consumed_idempotency_key IS NULL) OR "
+            "(consumed_at IS NOT NULL AND consumed_idempotency_key IS NOT NULL)",
+            name="ck_pricing_run_preview_consumption",
+        ),
+        Index(
+            "ix_pricing_run_preview_workspace_batch",
+            "workspace_id",
+            "import_batch_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    contract_version: Mapped[str] = mapped_column(String(64))
+    token_sha256: Mapped[str] = mapped_column(String(64))
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    import_batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_import_batches.id", ondelete="CASCADE"), index=True
+    )
+    # Актор, роль и права на момент выдачи. Старт под другим актором, другой
+    # ролью или с изменившимся набором прав — это другой запрос, а не повтор.
+    actor_id: Mapped[str] = mapped_column(String(160))
+    actor_type: Mapped[str] = mapped_column(String(24))
+    workspace_role: Mapped[str] = mapped_column(String(32))
+    permissions: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    scope_mode: Mapped[str] = mapped_column(String(20))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    scope_hash: Mapped[str] = mapped_column(String(64))
+    catalog_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    policy_version: Mapped[str] = mapped_column(String(80))
+    policy_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    requires_full_catalog_confirmation: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    consumed_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
 
 
 class ScrapeAttempt(Base):
@@ -1778,6 +1996,28 @@ class MarketObservation(Base):
             "(NOT via_cross AND cross_link_id IS NULL)",
             name="ck_market_observation_cross_provenance",
         ),
+        CheckConstraint(
+            "source_assertion_confidence IS NULL OR "
+            "(source_assertion_confidence >= 0 AND source_assertion_confidence <= 1)",
+            name="ck_market_observation_source_assertion_confidence",
+        ),
+        CheckConstraint(
+            "source_assertion_retrieval_kind IS NULL OR "
+            "source_assertion_capture_sha256 IS NOT NULL",
+            name="ck_market_observation_source_assertion_provenance",
+        ),
+        CheckConstraint(
+            "source_assertion_retrieval_kind IS NULL OR "
+            "(source_assertion_source IS NOT NULL "
+            "AND source_assertion_method IS NOT NULL "
+            "AND source_assertion_queried_oe_norm IS NOT NULL)",
+            name="ck_market_observation_source_assertion_lineage",
+        ),
+        CheckConstraint(
+            "source_assertion_source IS NULL OR "
+            "source_assertion_source = 'PROM_OE_PAGE'",
+            name="ck_market_observation_source_assertion_source",
+        ),
         Index("ix_market_observation_catalog_time", "catalog_item_id", "observed_at"),
         Index(
             "ix_market_observation_comparability_policy",
@@ -1897,6 +2137,26 @@ class MarketObservation(Base):
     automatic_eligible: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", index=True
     )
+    # Утверждение источника об идентичности, первым классом.
+    #
+    # Признак расширения раньше ехал только внутри ``comparison_evidence``, а
+    # кодек этого JSON молча выбрасывает незнакомые ключи при повторном
+    # обогащении: номер, по которому взят рынок, терялся. Здесь он хранится
+    # рядом с происхождением, на которое опирается, — иначе заявление нечем
+    # перепроверить после того, как оно однажды принято.
+    via_oe_number: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_assertion_retrieval_kind: Mapped[str | None] = mapped_column(String(48))
+    #: SHA-256 неизменяемого захвата, на который опирается заявление.
+    source_assertion_capture_sha256: Mapped[str | None] = mapped_column(String(64))
+    source_assertion_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    #: Родословная приобретения (миграция 0040). Заявление строится только из
+    #: неё: запрос никогда не берётся из ``CatalogItem.oe_norm``, иначе
+    #: «подтверждением» служит наш же собственный номер.
+    source_assertion_source: Mapped[str | None] = mapped_column(String(32))
+    source_assertion_method: Mapped[str | None] = mapped_column(String(48))
+    source_assertion_queried_oe_norm: Mapped[str | None] = mapped_column(String(255))
+    source_assertion_source_url: Mapped[str | None] = mapped_column(String(2048))
+    source_assertion_input_hash: Mapped[str | None] = mapped_column(String(64))
     via_cross: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", index=True
     )
@@ -2089,6 +2349,420 @@ class CandidateComparabilityFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+#: Statuses an extraction row may carry.  ``UNCONFIGURED`` is the typed outcome
+#: of "the feature is switched on but no credential is present": it is a row, so
+#: an operator sees the gap, and the check constraints below make it impossible
+#: for such a row to claim a provider response.
+AI_EVIDENCE_EXTRACTION_STATUSES = (
+    "COMPLETED",
+    "CACHED",
+    "FAILED",
+    "SKIPPED",
+    "UNCONFIGURED",
+)
+
+#: Statuses that never involve an HTTP request.  A row in one of these states
+#: carrying a provider response id would mean the request happened after all,
+#: which is exactly the failure the ``off``/missing-key contract forbids.
+AI_EVIDENCE_NO_REQUEST_STATUSES = ("SKIPPED", "UNCONFIGURED")
+
+AI_EVIDENCE_VERIFICATION_STATUSES = (
+    "VERIFIED",
+    "PARTIALLY_VERIFIED",
+    "REJECTED",
+    "NOT_RUN",
+)
+
+
+class AiEvidenceRequestEvent(Base):
+    """Immutable pre-transmission record for one logical provider request."""
+
+    __tablename__ = "ai_evidence_request_events"
+    __table_args__ = (
+        UniqueConstraint("request_key", name="uq_ai_evidence_request_event_key"),
+        UniqueConstraint(
+            "workspace_id",
+            "market_observation_id",
+            "input_hash",
+            "attempt_no",
+            name="uq_ai_evidence_request_event_attempt",
+        ),
+        CheckConstraint("attempt_no > 0", name="ck_ai_evidence_request_attempt"),
+        CheckConstraint(
+            "char_length(request_key) = 64 AND char_length(input_hash) = 64 AND "
+            "char_length(prepared_input_sha256) = 64 AND "
+            "char_length(capture_sha256) = 64 AND "
+            "char_length(candidate_snapshot_sha256) = 64 AND "
+            "char_length(source_offer_locator_sha256) = 64 AND "
+            "char_length(document_sha256) = 64 AND "
+            "char_length(model_settings_sha256) = 64",
+            name="ck_ai_evidence_request_digest_shape",
+        ),
+        CheckConstraint(
+            "max_output_tokens > 0 AND max_input_chars > 0",
+            name="ck_ai_evidence_request_bounds",
+        ),
+        Index(
+            "ix_ai_evidence_request_input",
+            "workspace_id",
+            "market_observation_id",
+            "input_hash",
+            "attempt_no",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    pricing_run_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_run_items.id", ondelete="RESTRICT"), index=True
+    )
+    market_observation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+    )
+    raw_capture_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("raw_market_captures.id", ondelete="RESTRICT"), index=True
+    )
+    request_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer)
+    source_listing_id: Mapped[str] = mapped_column(String(255))
+    capture_sha256: Mapped[str] = mapped_column(String(64))
+    candidate_snapshot_sha256: Mapped[str] = mapped_column(String(64))
+    source_offer_locator_sha256: Mapped[str] = mapped_column(String(64))
+    document_sha256: Mapped[str] = mapped_column(String(64))
+    prepared_input_sha256: Mapped[str] = mapped_column(String(64))
+    model_settings_sha256: Mapped[str] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(String(80))
+    schema_version: Mapped[str] = mapped_column(String(80))
+    extractor_version: Mapped[str] = mapped_column(String(80))
+    verifier_version: Mapped[str] = mapped_column(String(80))
+    oe_normalization_version: Mapped[str] = mapped_column(String(80))
+    provider: Mapped[str] = mapped_column(String(50))
+    model_id: Mapped[str] = mapped_column(String(160))
+    reasoning_effort: Mapped[str] = mapped_column(String(16))
+    max_output_tokens: Mapped[int] = mapped_column(Integer)
+    max_input_chars: Mapped[int] = mapped_column(Integer)
+    target_fields: Mapped[list[str]] = mapped_column(JSON)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AiEvidenceRequestClaim(Base):
+    """Append-only lease claim for sending or recovering one request event."""
+
+    __tablename__ = "ai_evidence_request_claims"
+    __table_args__ = (
+        UniqueConstraint("claim_token", name="uq_ai_evidence_request_claim_token"),
+        Index(
+            "ix_ai_evidence_request_claim_latest",
+            "request_event_id",
+            "claimed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    request_event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ai_evidence_request_events.id", ondelete="RESTRICT"), index=True
+    )
+    claim_token: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True)
+    recovery: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    claimed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class AiEvidenceExtraction(Base):
+    """Append-only record of one AI-assisted evidence extraction attempt.
+
+    Deliberately a separate table from ``candidate_comparability_reviews`` and
+    not a widening of it.  The two answer different questions -- "is this offer
+    the same product" versus "what does this capture literally say" -- they
+    version independently, and a shared table would have made every column of
+    each nullable for the other, which is how a check constraint stops being
+    able to say anything.
+
+    Identity is built by :meth:`build_input_hash` and :meth:`build_request_key`
+    rather than by the caller assembling a dict, because the whole cache
+    contract rests on *which* facts are inside the digest.  A capture hash left
+    out of it (the classic version of this bug) makes a re-scraped page with new
+    prices reuse the answer computed for the old one -- a stale extraction that
+    looks like a cache hit and is indistinguishable from a fresh one in the
+    record.
+    """
+
+    __tablename__ = "ai_evidence_extractions"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_key",
+            name="uq_ai_evidence_extraction_request_key",
+        ),
+        CheckConstraint(
+            "status IN ('COMPLETED', 'CACHED', 'FAILED', 'SKIPPED', 'UNCONFIGURED')",
+            name="ck_ai_evidence_extraction_status",
+        ),
+        CheckConstraint(
+            "verification_status IN "
+            "('VERIFIED', 'PARTIALLY_VERIFIED', 'REJECTED', 'NOT_RUN')",
+            name="ck_ai_evidence_extraction_verification_status",
+        ),
+        # A cache hit must name the row it reused, and a row that is not a cache
+        # hit must not pretend to be one.  Without both directions "CACHED" is
+        # an unfalsifiable label.
+        CheckConstraint(
+            "(status = 'CACHED' AND cache_hit_extraction_id IS NOT NULL) OR "
+            "(status <> 'CACHED' AND cache_hit_extraction_id IS NULL)",
+            name="ck_ai_evidence_extraction_cache_binding",
+        ),
+        # The persisted half of the "missing key performs no request" contract.
+        # A service that regressed into calling the provider anyway could not
+        # store the evidence of it under these statuses.
+        CheckConstraint(
+            "status NOT IN ('SKIPPED', 'UNCONFIGURED') OR "
+            "(provider_response_id IS NULL AND provider_model IS NULL AND "
+            "raw_output IS NULL AND latency_ms = 0 AND "
+            "usage::jsonb = '{}'::jsonb)",
+            name="ck_ai_evidence_extraction_no_request_states",
+        ),
+        CheckConstraint(
+            "(status = 'FAILED' AND error_code IS NOT NULL) OR (status <> 'FAILED')",
+            name="ck_ai_evidence_extraction_failure_code",
+        ),
+        CheckConstraint(
+            "status <> 'COMPLETED' OR error_code IS NULL",
+            name="ck_ai_evidence_extraction_completed_clean",
+        ),
+        CheckConstraint(
+            "char_length(request_key) = 64 AND char_length(input_hash) = 64 AND "
+            "char_length(candidate_snapshot_hash) = 64 AND "
+            "char_length(capture_sha256) = 64 AND "
+            "char_length(source_offer_locator_sha256) = 64 AND "
+            "char_length(document_sha256) = 64 AND "
+            "char_length(prepared_input_sha256) = 64 AND "
+            "char_length(model_settings_sha256) = 64",
+            name="ck_ai_evidence_extraction_digest_shape",
+        ),
+        CheckConstraint("attempt_no > 0", name="ck_ai_evidence_extraction_attempt"),
+        CheckConstraint("latency_ms >= 0", name="ck_ai_evidence_extraction_latency"),
+        CheckConstraint(
+            "reasoning_effort IN ('none', 'low', 'medium', 'high', 'xhigh', 'max')",
+            name="ck_ai_evidence_extraction_reasoning_effort",
+        ),
+        CheckConstraint(
+            "mode IN ('off', 'shadow')",
+            name="ck_ai_evidence_extraction_mode",
+        ),
+        CheckConstraint(
+            "max_output_tokens > 0 AND max_input_chars > 0",
+            name="ck_ai_evidence_extraction_bounds",
+        ),
+        Index(
+            "ix_ai_evidence_extraction_cache",
+            "workspace_id",
+            "input_hash",
+            "status",
+        ),
+        Index(
+            "ix_ai_evidence_extraction_observation_time",
+            "market_observation_id",
+            "extracted_at",
+        ),
+        Index(
+            "ix_ai_evidence_extraction_position_time",
+            "pricing_run_item_id",
+            "extracted_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    pricing_run_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_run_items.id", ondelete="RESTRICT"), index=True
+    )
+    market_observation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("market_observations.id", ondelete="RESTRICT"), index=True
+    )
+    raw_capture_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("raw_market_captures.id", ondelete="RESTRICT"), index=True
+    )
+    request_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_evidence_request_events.id", ondelete="RESTRICT"),
+        unique=True,
+        index=True,
+    )
+    request_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    candidate_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    capture_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    source_listing_id: Mapped[str] = mapped_column(String(255))
+    source_offer_locator_sha256: Mapped[str] = mapped_column(String(64))
+    document_sha256: Mapped[str] = mapped_column(String(64))
+    prepared_input_sha256: Mapped[str] = mapped_column(String(64))
+    model_settings_sha256: Mapped[str] = mapped_column(String(64))
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    prompt_version: Mapped[str] = mapped_column(String(80))
+    schema_version: Mapped[str] = mapped_column(String(80))
+    extractor_version: Mapped[str] = mapped_column(String(80))
+    provider: Mapped[str] = mapped_column(String(50))
+    model_id: Mapped[str] = mapped_column(String(160))
+    reasoning_effort: Mapped[str] = mapped_column(String(16))
+    max_output_tokens: Mapped[int] = mapped_column(Integer)
+    max_input_chars: Mapped[int] = mapped_column(Integer)
+    target_fields: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    verifier_version: Mapped[str] = mapped_column(String(80))
+    oe_normalization_version: Mapped[str] = mapped_column(String(80))
+    mode: Mapped[str] = mapped_column(String(16))
+    outcome: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    #: The provider's strict-schema payload exactly as parsed, kept whole so a
+    #: later schema version can be re-derived without another paid call.
+    #:
+    #: ``none_as_null`` is load-bearing, not tidiness.  A plain ``JSON`` column
+    #: stores Python ``None`` as the JSON scalar ``null``, which is a *value*:
+    #: ``raw_output IS NULL`` is then false, and the check constraint asserting
+    #: that a no-request row carries no provider payload silently stops holding.
+    #: "Absent" and "the provider answered null" must not be the same state.
+    raw_output: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
+    #: The typed per-field findings the extractor produced from ``raw_output``.
+    findings: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    #: What the *deterministic* verifier concluded about those findings.  The
+    #: model's own confidence is not evidence; this column is what downstream
+    #: code is allowed to trust.
+    verification_status: Mapped[str] = mapped_column(
+        String(24), default="NOT_RUN", server_default="NOT_RUN"
+    )
+    verification_reasons: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    verification_report: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    verified_field_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    rejected_field_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    cache_hit_extraction_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_evidence_extractions.id", ondelete="RESTRICT"), index=True
+    )
+    provider_response_id: Mapped[str | None] = mapped_column(String(255))
+    provider_model: Mapped[str | None] = mapped_column(String(160))
+    usage: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    @staticmethod
+    def build_input_hash(
+        *,
+        capture_sha256: str,
+        candidate_snapshot_hash: str,
+        prompt_version: str,
+        schema_version: str,
+        extractor_version: str,
+        provider: str,
+        model_id: str,
+        reasoning_effort: str,
+        verifier_version: str,
+        oe_normalization_version: str,
+    ) -> str:
+        """The digest that decides whether two extractions are the same work.
+
+        Every argument is load-bearing and none of them is optional, which is
+        the point: an omitted one cannot be spotted at the call site, and the
+        symptom -- a reused answer for changed evidence -- surfaces as a cache
+        hit rather than as an error.
+
+        ``capture_sha256`` and ``candidate_snapshot_hash`` are the evidence;
+        the versions and the model/effort triple are the interpretation of it.
+        Changing any one of the eight yields a different identity, so a re-scrape
+        or a model/effort/prompt bump is a cache *miss* by construction rather
+        than by remembering to invalidate something.
+        """
+
+        return _canonical_identity_digest(
+            {
+                "kind": "ai_evidence_extraction_input",
+                "capture_sha256": capture_sha256,
+                "candidate_snapshot_hash": candidate_snapshot_hash,
+                "prompt_version": prompt_version,
+                "schema_version": schema_version,
+                "extractor_version": extractor_version,
+                "provider": provider,
+                "model_id": model_id,
+                "reasoning_effort": reasoning_effort,
+                "verifier_version": verifier_version,
+                "oe_normalization_version": oe_normalization_version,
+            }
+        )
+
+    @staticmethod
+    def build_request_key(
+        *,
+        market_observation_id: uuid.UUID | str,
+        input_hash: str,
+        attempt_no: int,
+    ) -> str:
+        """Idempotency identity for one physical extraction attempt.
+
+        ``input_hash`` already carries the evidence and the interpretation, so
+        this adds only what distinguishes two rows that legitimately share it:
+        the observation the answer is filed against, and the attempt number.
+        The unique index on the column is therefore what makes a concurrent
+        double-write of the *same* attempt lose loudly instead of billing twice.
+        """
+
+        return _canonical_identity_digest(
+            {
+                "kind": "ai_evidence_extraction_request",
+                "market_observation_id": str(market_observation_id),
+                "input_hash": input_hash,
+                "attempt_no": int(attempt_no),
+            }
+        )
+
+
+def _canonical_identity_digest(payload: dict[str, Any]) -> str:
+    """SHA-256 over a canonical JSON encoding of scalar identity facts.
+
+    Local rather than imported from ``services.decision_fingerprint``: a
+    persistence model must not depend on the service layer, and the inputs here
+    are plain strings and ints, so the general canonicalizer's Decimal/datetime
+    handling would buy nothing.
+    """
+
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class OfferProcessingOutcome(Base):

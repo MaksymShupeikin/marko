@@ -74,6 +74,18 @@ def test_query_adapter_calls_search_strictly_and_not_compare() -> None:
     assert calls == [("1K0121251", "ua", True)]
     assert output.payload["output"] == {
         "acquisition_outcome": "EMPTY_SEARCH_RESULT",
+        # Пустая выдача всё равно называет, чем она была: текстовый поиск без
+        # подготовленного URL и без запрошенного номера. Отсутствие блока и
+        # пустой рынок — разные утверждения (F6).
+        "acquisition": {
+            "source": "SEARCH",
+            "method": "TEXT_SEARCH",
+            "queried_oe_norm": None,
+            "via_oe_number": None,
+            "is_widened": False,
+            "source_url": None,
+            "input_hash": QueryInput.build("1K0121251", language="ua").input_hash,
+        },
         "candidates_scanned": 0,
         "records": [],
     }
