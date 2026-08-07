@@ -399,6 +399,10 @@ class _ProductSummary extends StatelessWidget {
                 const SizedBox(height: 4),
                 _IdentityRow(label: 'OE/OEM', value: product.oe!),
               ],
+              if (product.mpn != null) ...[
+                const SizedBox(height: 4),
+                _IdentityRow(label: 'MPN', value: product.mpn!),
+              ],
               if (ownPrice != null && ownCurrency != null) ...[
                 const SizedBox(height: 4),
                 _IdentityRow(

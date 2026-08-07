@@ -32,6 +32,7 @@ from marko.api.schemas.pricing import (
     CatalogItemOverrideRequest,
     CatalogItemOverrideResponse,
     ComparabilityFeedbackRequest,
+    ComparabilityRunReportResponse,
     ComparabilityReviewRequest,
     ComparabilityReviewResponse,
     ComparabilityStatusResponse,
@@ -81,6 +82,7 @@ from marko.services.pricing_runs import (
     PricingRunStartContractError,
     PricingTaskDispatchError,
     RecommendationNotFoundError,
+    IDENTITY_BLOCKED_RECOMMENDATION_ACTION,
     add_catalog_item_override,
     add_recommendation_decision,
     calibrate_tier_coefficients,
@@ -94,10 +96,12 @@ from marko.services.pricing_runs import (
     list_tier_coefficients,
     policy_from_dict,
     preview_pricing_run_for_operator,
+    recommendation_price_identity_allowed,
     override_observation_tier,
 )
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.market_collection import _validated_listing_url
+from marko.services.market_price import effective_observation_price
 from marko.services.llm_comparability import (
     ComparabilityReviewNotFound,
     ComparabilityReviewUnavailable,
@@ -105,12 +109,14 @@ from marko.services.llm_comparability import (
     load_effective_review_map,
     request_observation_comparability_review,
 )
+from marko.services.comparability_reporting import build_comparability_run_report
 from marko.services.recommendation_replay import (
     RecommendationReplayUnavailable,
     replay_recommendation,
 )
 from marko.services.recommendation_export import (
     RecommendationExportError,
+    _export_identity_fields,
     export_recommendations,
 )
 from marko.worker.celery_app import celery_app
@@ -143,6 +149,8 @@ async def get_llm_comparability_status(
         mode=settings.pricing_llm_comparability_mode,
         provider=settings.pricing_llm_provider,
         model=settings.pricing_llm_model,
+        reasoning_effort=settings.pricing_llm_reasoning_effort,
+        rate_card_version=settings.pricing_llm_rate_version,
         configured=bool(
             settings.pricing_llm_comparability_mode != "off"
             and settings.pricing_llm_api_key.get_secret_value().strip()
@@ -626,6 +634,29 @@ async def get_pricing_run_details(
 
 
 @router.get(
+    "/runs/{run_id}/comparability-report",
+    response_model=ComparabilityRunReportResponse,
+)
+async def get_pricing_run_comparability_report(
+    run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ComparabilityRunReportResponse:
+    """Return coverage, safety, reliability and labelled accuracy separately."""
+
+    try:
+        run = await get_pricing_run(
+            session,
+            workspace_id=current.workspace_id,
+            run_id=run_id,
+        )
+    except PricingRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    report = await build_comparability_run_report(session, run=run)
+    return ComparabilityRunReportResponse.model_validate(report)
+
+
+@router.get(
     "/runs/{run_id}/collection-metrics",
     response_model=ScraperMetricsResponse,
 )
@@ -1085,7 +1116,7 @@ async def get_recommendation_market_evidence(
                 oe_reenrichment_error_code=(observation.oe_reenrichment_error_code),
                 url=safe_url,
                 url_absence_reason=url_absence_reason,
-                price=observation.price,
+                price=effective_observation_price(observation),
                 currency=observation.currency,
                 currency_raw=observation.currency_raw,
                 currency_inferred=observation.currency_inferred,
@@ -1221,6 +1252,9 @@ async def create_comparability_feedback(
             decision=payload.decision,
             corrected_verdict=payload.corrected_verdict,
             corrected_match_level=payload.corrected_match_level,
+            corrected_identity_verdict=payload.corrected_identity_verdict,
+            corrected_identity_match_level=payload.corrected_identity_match_level,
+            corrected_pricing_admission=payload.corrected_pricing_admission,
             confidence=payload.confidence,
             reason=payload.reason,
             evidence_corrections=[
@@ -1375,13 +1409,45 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
     robust_trace = recommendation.calculation_trace.get("robust_dispersion", {})
     if not isinstance(robust_trace, dict):
         robust_trace = {}
+    identity = _export_identity_fields(item)
+    identity_blocked = not recommendation_price_identity_allowed(
+        item, recommendation.action
+    )
+    response_action = (
+        "MANUAL_REVIEW" if identity_blocked else recommendation.action
+    )
+    response_reason_codes = list(recommendation.reason_codes or [])
+    if identity_blocked and IDENTITY_BLOCKED_RECOMMENDATION_ACTION not in response_reason_codes:
+        response_reason_codes.append(IDENTITY_BLOCKED_RECOMMENDATION_ACTION)
+    # ``PricingRecommendation`` is append-only.  Do not mutate the historical
+    # row just because a later identity reparse proved it was MPN_ONLY; instead
+    # downgrade the read boundary and remove every derived market-price field.
+    response_fair_price = None if identity_blocked else recommendation.fair_price
+    response_recommended_price = (
+        None if identity_blocked else recommendation.recommended_price
+    )
+    response_lower_bound = None if identity_blocked else recommendation.lower_bound
+    response_upper_bound = None if identity_blocked else recommendation.upper_bound
+    response_absolute_change = (
+        None
+        if identity_blocked
+        else recommendation.absolute_recommended_change
+    )
+    response_percentage_change = (
+        None
+        if identity_blocked
+        else recommendation.percentage_recommended_change
+    )
     return RecommendationResponse(
         id=recommendation.id,
         pricing_run_id=recommendation.pricing_run_id,
         catalog_snapshot_id=recommendation.catalog_snapshot_id,
         catalog_item_id=item.id,
         sku=item.sku,
-        oe_norm=item.oe_norm,
+        oe_norm=identity["oe"],
+        mpn_norm=identity["mpn"] or None,
+        search_identity=identity["search_identity"] or None,
+        identity_status=identity["identity_status"],
         name=item.name,
         category=item.category,
         stock_status=recommendation.context_snapshot.get(
@@ -1389,12 +1455,12 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         ),
         context_snapshot=privacy_safe_mapping(recommendation.context_snapshot),
         calculation_trace=privacy_safe_mapping(recommendation.calculation_trace),
-        action=recommendation.action,
+        action=response_action,
         current_price=recommendation.current_price,
-        fair_price=recommendation.fair_price,
-        recommended_price=recommendation.recommended_price,
-        lower_bound=recommendation.lower_bound,
-        upper_bound=recommendation.upper_bound,
+        fair_price=response_fair_price,
+        recommended_price=response_recommended_price,
+        lower_bound=response_lower_bound,
+        upper_bound=response_upper_bound,
         confidence=recommendation.confidence,
         confidence_grade=recommendation.confidence_grade,
         weakest_factor=recommendation.weakest_factor,
@@ -1418,8 +1484,12 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         outlier_method=recommendation.outlier_method,
         outlier_count=recommendation.outlier_count,
         sensitivity=recommendation.sensitivity,
-        action_gates_passed=recommendation.action_gates_passed,
-        automatic_eligible=recommendation.automatic_eligible,
+        action_gates_passed=(
+            False if identity_blocked else recommendation.action_gates_passed
+        ),
+        automatic_eligible=(
+            False if identity_blocked else recommendation.automatic_eligible
+        ),
         verified_seller_count=recommendation.verified_seller_count,
         comparability_policy_id=recommendation.comparability_policy_id,
         comparability_policy_hash=recommendation.comparability_policy_hash,
@@ -1429,9 +1499,9 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         priority_score=recommendation.priority_score,
         priority_score_type=recommendation.priority_score_type,
         review_priority=recommendation.review_priority,
-        absolute_recommended_change=recommendation.absolute_recommended_change,
-        percentage_recommended_change=recommendation.percentage_recommended_change,
-        reason_codes=recommendation.reason_codes,
+        absolute_recommended_change=response_absolute_change,
+        percentage_recommended_change=response_percentage_change,
+        reason_codes=response_reason_codes,
         evidence_observation_ids=recommendation.evidence_observation_ids,
         kemp_reference_observation_ids=(recommendation.kemp_reference_observation_ids),
         excluded_observations=recommendation.excluded_observations,

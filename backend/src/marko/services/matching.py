@@ -9,7 +9,12 @@ from statistics import median
 from types import MappingProxyType
 from typing import Any, Iterable
 
-from marko.services.parser_models import Product, SeedInfo
+from marko.services.parser_models import (
+    Product,
+    SeedInfo,
+    extract_labelled_original_oe_numbers,
+)
+from marko.services.catalog_identity_safety import is_internal_catalog_code
 from metis.pricing import (
     COMPARABILITY_DIMENSIONS,
     COMPARABILITY_POLICY_HASH,
@@ -20,9 +25,9 @@ from metis.pricing import (
     HardGateResult,
     SellerIdentityEvidence,
     SourceProvenance,
-    categorical_dimension,
     comparison_evidence_to_dict,
     evaluate_comparison_evidence,
+    normalized_categorical_dimension,
     normalize_oe,
 )
 
@@ -53,6 +58,14 @@ _STOPWORDS: frozenset[str] = frozenset(
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _MIN_TOKEN_LENGTH = 2  # drop single-character noise tokens
 _MAX_QUERY_TOKENS = 8  # longest search phrase, in tokens, built from a product name
+_SHORT_NUMERIC_SEARCH_NUMBER_MAX_DIGITS = 6
+_IDENTIFIER_LABEL_RE = re.compile(
+    r"(?:\b(?:oe|oem|art|article|артикул|арт)\b|"
+    r"\bpart\s+(?:no|number)\b|"
+    r"\bкод\s+(?:запчасти|запчастини|виробника|производителя)\b|[#№])",
+    re.IGNORECASE,
+)
+_IDENTIFIER_BOUNDARY_CHARS = r"A-Za-zА-Яа-яЇїІіЄєҐґ0-9"
 
 
 def normalize_tokens(name: str | None) -> list[str]:
@@ -103,6 +116,67 @@ def laterality_conflict(a_tokens: list[str], b_tokens: list[str]) -> bool:
     return False
 
 
+def _explicit_semantic_identity_conflict(seed: Product, candidate: Product) -> bool:
+    """Reject a retrieval hit with an explicit semantic identity conflict.
+
+    Prom's text endpoint is intentionally broad: a query for an absorber can
+    return a tail lamp because both cards mention the same vehicle and rear
+    position.  It can also return a rigid brake line for a flexible brake hose.
+    Those are useful raw discovery outputs, but must not enter the
+    comparative-offer list.  Reuse the closed semantic extractor and remove
+    only explicit hard-stop conflicts.  Missing or ambiguous values stay
+    visible for the downstream manual gate.
+    """
+
+    from marko.services.semantic_candidate_features import (
+        build_semantic_feature_matrix,
+    )
+    from marko.services.semantic_candidate_gate import (
+        category_required_semantic_conflicts,
+    )
+
+    def payload(product: Product) -> dict[str, Any]:
+        return {
+            "name": product.name,
+            "title": product.name,
+            "description": product.description,
+            "category": product.category,
+            "brand": product.brand,
+            # Structured card fields are evidence, not positive identity
+            # proof. They must nevertheless reach the contradiction detector:
+            # a listing whose title looks right but whose card says "used",
+            # "left", or a different connector/package must not survive the
+            # broad search adapter as a competitor candidate.
+            "sku": product.sku,
+            "mpn": product.mpn,
+            "oe_raw": product.oe_raw,
+            "part_numbers": list(product.part_numbers),
+            "fitment": product.fitment,
+            "vehicle_generation": product.vehicle_generation,
+            "year_from": product.year_from,
+            "year_to": product.year_to,
+            "engine": product.engine,
+            "body_variant": product.body_variant,
+            "side": product.side,
+            "position": product.position,
+            "condition": product.condition,
+            "package_quantity": product.package_quantity,
+            "measure_unit": product.measure_unit,
+            "characteristics": product.characteristics,
+        }
+
+    matrix = build_semantic_feature_matrix(payload(seed), payload(candidate))
+    conflicts = matrix.get("hard_stop_conflicts")
+    if isinstance(conflicts, (list, tuple)) and conflicts:
+        return True
+    # The generic extractor intentionally keeps noisy dimensions such as
+    # ports/mounting soft.  For a typed category those dimensions are part of
+    # the product identity (e.g. a radiator's inlet/outlet), so an explicit
+    # contradiction must be removed from the comparison list as well.  UNKNOWN
+    # remains visible and is handled by the manual comparability gate.
+    return bool(category_required_semantic_conflicts(matrix))
+
+
 def _norm_brand(brand: str | None) -> str:
     return (brand or "").strip().lower()
 
@@ -113,10 +187,85 @@ def brands_compatible(seed: str | None, cand: str | None) -> bool:
     return bool(a and b and a == b)
 
 
+def _search_number_matches_field(
+    value: str | None,
+    wanted: str,
+    *,
+    structured: bool = False,
+) -> bool:
+    """Match a search number as a token, never as an arbitrary substring.
+
+    The marketplace search endpoint can return a seller SKU that merely
+    contains the query digits.  Such a row is retrieval output, not proof that
+    the part identifier is present.  Structured SKU/MPN equality remains accepted;
+    free-text title matching requires identifier boundaries and an explicit
+    label for short all-numeric values.
+    """
+
+    if not value or not wanted:
+        return False
+    if structured:
+        return normalize_oe(value) == wanted
+
+    pieces = r"[\s./_-]*".join(re.escape(character) for character in wanted)
+    pattern = re.compile(
+        rf"(?<![{_IDENTIFIER_BOUNDARY_CHARS}]){pieces}"
+        rf"(?![{_IDENTIFIER_BOUNDARY_CHARS}])",
+        re.IGNORECASE,
+    )
+    if wanted.isdigit() and len(wanted) <= _SHORT_NUMERIC_SEARCH_NUMBER_MAX_DIGITS:
+        for match in pattern.finditer(value):
+            prefix = value[max(0, match.start() - 48) : match.start()]
+            if _IDENTIFIER_LABEL_RE.search(prefix):
+                return True
+        return False
+    return pattern.search(value) is not None
+
+
+def _public_identity_norm(value: str | None) -> str | None:
+    """Normalize a public identity value, excluding private KEMP shelf codes."""
+
+    normalized = normalize_oe(value)
+    if normalized is None or is_internal_catalog_code(normalized):
+        return None
+    return normalized
+
+
 def build_search_query(product: Product) -> str:
-    """Use exact OE first; only fall back to a focused name/brand phrase."""
-    if normalize_oe(product.oe_raw):
-        return str(product.oe_raw).strip()
+    """Use exact OE/MPN first; only fall back to a focused name/brand phrase.
+
+    An MPN-only catalog row is still a deterministic identity.  Falling back
+    directly to a title for that row turns a precise lookup into a noisy text
+    search and silently loses recall.
+    """
+    def public_identifier(value: str | None) -> str | None:
+        normalized = normalize_oe(value)
+        if not normalized or is_internal_catalog_code(normalized):
+            return None
+        return str(value).strip()
+
+    if (identifier := public_identifier(product.oe_raw)) is not None:
+        return identifier
+    # A catalogue/export row may carry a private KEMP shelf code in ``oe_raw``
+    # while the same Prom card explicitly labels the vehicle manufacturer's
+    # number as OE/OEM. Prefer that public, source-labelled identity over a
+    # supplier MPN or an unlabelled part number. Generic ``Артикул`` fields
+    # intentionally remain below MPN because they are not an OE assertion.
+    for value in extract_labelled_original_oe_numbers(product.characteristics):
+        if (identifier := public_identifier(value)) is not None:
+            return identifier
+    if (identifier := public_identifier(product.mpn)) is not None:
+        return identifier
+    if product.part_numbers:
+        for value in product.part_numbers:
+            if (identifier := public_identifier(value)) is not None:
+                return identifier
+    # ``sku`` is deliberately not a public market identity.  On Prom it is
+    # commonly a seller-local code (and in our own catalog it may be the
+    # marketplace product id), so using it as a fallback sends an arbitrary
+    # number to the public search and can create a false cohort.  When no
+    # public OE/MPN/labelled part number exists, the only honest fallback is a
+    # title discovery query, which remains review-only downstream.
     tokens = normalize_tokens(product.name)[:_MAX_QUERY_TOKENS]
     query = " ".join(tokens) if tokens else (product.name or "")
     brand = _norm_brand(product.brand)
@@ -129,7 +278,7 @@ def build_search_query(product: Product) -> str:
 class Match:
     """Why a candidate is considered the same/similar product, with a score."""
 
-    kind: str  # "oe" | "model" | "sku" | "fuzzy"
+    kind: str  # "oe" | "mpn" | "number" | "model" | "sku" | "fuzzy"
     score: float
 
 
@@ -170,27 +319,111 @@ def match_offer(
     if laterality_conflict(seed_tokens, cand_tokens):
         return None
     if identity_source:
+        # A marketplace grouping is authoritative only when the number that
+        # produced it is public.  Do not let a direct/replay caller smuggle a
+        # private KEMP shelf code through this strategy-only fast path.
+        if search_number and _public_identity_norm(search_number) is None:
+            return None
         return Match(identity_source, 1.0)
     if search_number:
-        wanted = normalize_oe(search_number)
-        if wanted and any(
-            wanted in normalize_oe(field)
-            for field in (cand.name, cand.sku)
-            if field
+        wanted = _public_identity_norm(search_number)
+        # A private or malformed query is not a retrieval identity.  Returning
+        # here is important: otherwise the generic fuzzy branch below can
+        # resurrect a legacy private-code request as a name-only match.
+        if wanted is None:
+            return None
+        # A candidate-native MPN/OE is a conflict-bearing fact.  Do this
+        # before looking at the title: sellers sometimes copy a searched code
+        # into a marketing title while the structured manufacturer number says
+        # it is another part.  A seller SKU alone is intentionally ignored —
+        # it is commonly a private namespace and may differ from our MPN.
+        structured_identity_values = tuple(
+            normalized
+            for value in (cand.mpn, cand.oe_raw)
+            if (normalized := _public_identity_norm(value))
+        )
+        labelled_part_values = tuple(
+            normalized
+            for value in cand.part_numbers
+            if (normalized := _public_identity_norm(value))
+        )
+        # A candidate may expose both namespaces: an exact OE alongside a
+        # different supplier MPN is a normal cross-level representation.  The
+        # conflict exists only when *none* of the native namespaces matches
+        # the searched identifier.  Rejecting on ``any(value != wanted)``
+        # caused a false negative for that common shape.
+        if (
+            wanted
+            and structured_identity_values
+            and wanted not in structured_identity_values
+        ):
+            return None
+        if wanted and not structured_identity_values and labelled_part_values:
+            if wanted not in labelled_part_values:
+                return None
+        if wanted and (
+            _search_number_matches_field(cand.name, wanted)
+            # A public, exact SKU can be the marketplace's representation of
+            # the requested OE.  The private namespace is already removed
+            # from ``wanted`` above, so an internal KEMP code can never pass
+            # through this branch.
+            or _search_number_matches_field(cand.sku, wanted, structured=True)
+            or _search_number_matches_field(cand.mpn, wanted, structured=True)
+            or _search_number_matches_field(cand.oe_raw, wanted, structured=True)
+            or any(
+                _search_number_matches_field(value, wanted, structured=True)
+                for value in cand.part_numbers
+            )
         ):
             return Match("number", 1.0)
-    seed_oe = normalize_oe(seed.oe_raw)
-    candidate_oe = normalize_oe(cand.oe_raw)
+        # A card with no native/labelled identifier can still be useful as
+        # *raw discovery* when the caller explicitly requested a broad search.
+        # Its comparison evidence remains UNKNOWN/MANUAL_REVIEW downstream;
+        # it must never be treated as automatic identity proof.  The
+        # marketplace grouping path is handled above by ``identity_source``
+        # and may intentionally admit cards that do not repeat the number.
+    seed_oe = _public_identity_norm(seed.oe_raw)
+    candidate_oe = _public_identity_norm(cand.oe_raw)
     if seed_oe is not None and candidate_oe is not None:
         if seed_oe != candidate_oe:
             return None
         return Match("oe", 1.0)
-    # Exact IDs strengthen retrieval only. All hard fields are evaluated by
-    # build_product_comparison_evidence before Metis pricing eligibility.
+    # Exact marketplace model IDs strengthen retrieval only. All hard fields
+    # are evaluated by build_product_comparison_evidence before Metis pricing
+    # eligibility.
     if seed.model_id and cand.model_id and seed.model_id == cand.model_id:
         return Match("model", 1.0)
-    if seed.sku and cand.sku and seed.sku == cand.sku:
+    # A seller SKU is permitted as a retrieval identity only when it is a
+    # public, exact token.  Private KEMP shelf codes are never allowed to
+    # create this match, even if two owned storefronts reuse the same SKU.
+    seed_sku = _public_identity_norm(seed.sku)
+    candidate_sku = _public_identity_norm(cand.sku)
+    if seed_sku is not None and seed_sku == candidate_sku:
         return Match("sku", 1.0)
+    # MPN is a separate manufacturer namespace. Non-equal MPNs are not
+    # rejected here because an approved cross may legitimately use another
+    # number; downstream identity and comparability gates remain authoritative.
+    seed_mpn = _public_identity_norm(seed.mpn)
+    candidate_mpn = _public_identity_norm(cand.mpn)
+    if seed_mpn is not None and candidate_mpn is not None:
+        if seed_mpn == candidate_mpn:
+            return Match("mpn", 1.0)
+    seed_numbers = {
+        normalized
+        for value in seed.part_numbers
+        if (normalized := _public_identity_norm(value))
+    }
+    candidate_numbers = {
+        normalized
+        for value in cand.part_numbers
+        if (normalized := _public_identity_norm(value))
+    }
+    if seed_numbers and candidate_numbers and seed_numbers & candidate_numbers:
+        return Match("number", 1.0)
+    if seed_numbers and candidate_mpn in seed_numbers:
+        return Match("mpn", 1.0)
+    if candidate_numbers and seed_mpn in candidate_numbers:
+        return Match("number", 1.0)
     score = _token_similarity(set(seed_tokens), set(cand_tokens))
     if score >= threshold:
         return Match("fuzzy", score)
@@ -198,13 +431,54 @@ def match_offer(
 
 
 def _price_value(product: Product) -> Decimal | None:
-    """Best-effort numeric price for comparison, or None if unusable."""
-    raw = product.price or product.price_original
-    try:
-        parsed = Decimal(str(raw)) if raw is not None else None
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-    return parsed if parsed is not None and parsed.is_finite() else None
+    """Return the active sale price, never a crossed-out reference price."""
+
+    # Prom's card payload commonly carries ``price=412`` and
+    # ``discountedPrice=330``.  The legacy matcher used ``price`` first and
+    # therefore inflated the market by the crossed-out amount.  Keep the
+    # boundary deterministic here as well as in offer_processing, because the
+    # Prom gateway still builds its comparison through this module.
+    def parse(raw: object) -> Decimal | None:
+        if raw in (None, ""):
+            return None
+        try:
+            parsed = Decimal(str(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return parsed if parsed.is_finite() and parsed > 0 else None
+
+    current = parse(product.price)
+    discounted = parse(product.discounted_price)
+    original = parse(product.price_original)
+    if discounted is not None:
+        if current is not None and discounted > current:
+            return current
+        if current is None and original is not None and discounted > original:
+            return original
+        return discounted
+    if current is not None:
+        return current
+    return original
+
+
+def _reference_price(product: Product, sale_price: Decimal) -> Decimal | None:
+    """Return a higher crossed-out/original price as reference evidence only."""
+
+    candidates: list[Decimal] = []
+    for raw in (
+        product.price,
+        product.price_original,
+        product.discounted_price,
+    ):
+        if raw in (None, ""):
+            continue
+        try:
+            parsed = Decimal(str(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if parsed.is_finite() and parsed > sale_price:
+            candidates.append(parsed)
+    return max(candidates) if candidates else None
 
 
 def _decimal_text(value: Decimal | None) -> str | None:
@@ -317,10 +591,22 @@ class PriceComparison:
                 {
                     "product_id": offer.product.id,
                     "sku": offer.product.sku,
+                    "mpn": offer.product.mpn,
+                    "part_numbers": list(offer.product.part_numbers),
                     "model_id": offer.product.model_id,
                     "seller_name": offer.product.seller_name,
                     "seller_id": offer.product.seller_id,
                     "price": _decimal_text(offer.price),
+                    # ``price`` remains the compatibility key and is always
+                    # the active sale price.  Keep the two roles explicit so a
+                    # downstream replay cannot mistake a crossed-out value
+                    # for the market observation.
+                    "sale_price": _decimal_text(offer.price),
+                    "reference_price": _decimal_text(
+                        _reference_price(offer.product, offer.price)
+                    ),
+                    "price_original": offer.product.price_original,
+                    "discounted_price": offer.product.discounted_price,
                     "currency": offer.product.currency,
                     "presence": offer.product.presence,
                     "match_kind": offer.match.kind,
@@ -328,12 +614,42 @@ class PriceComparison:
                     "name": offer.product.name,
                     "description": offer.product.description,
                     "condition": offer.product.condition,
+                    "package_quantity": offer.product.package_quantity,
+                    "measure_unit": offer.product.measure_unit,
                     "oe_raw": offer.product.oe_raw,
                     "brand": offer.product.brand,
+                    "category": offer.product.category,
+                    "category_id": offer.product.category_id,
+                    "category_ids": offer.product.category_ids,
+                    "characteristics": offer.product.characteristics,
+                    "fitment": offer.product.fitment,
+                    "vehicle_generation": offer.product.vehicle_generation,
+                    "year_from": offer.product.year_from,
+                    "year_to": offer.product.year_to,
+                    "engine": offer.product.engine,
+                    "body_variant": offer.product.body_variant,
+                    "side": offer.product.side,
+                    "position": offer.product.position,
+                    "detail_evidence": offer.product.detail_evidence,
                     "url": offer.product.url,
-                    "automatic_eligible": (
+                    # A raw gateway comparison has not yet passed the
+                    # persisted-market admission boundary.  The comparability
+                    # hard gate only evaluates the fields present on this
+                    # in-memory candidate; it does not prove retained detail
+                    # provenance, OE namespace, seller verification, cohort
+                    # role, or the current semantic gate.  Exposing that
+                    # partial result as ``automatic_eligible=true`` made the
+                    # diagnostic/CLI payload look price-ready even though the
+                    # persistence layer (correctly) would reject it.  Keep the
+                    # compatibility key fail-closed and expose the narrower
+                    # fact under an explicit name.
+                    "comparability_hard_gate_pass": (
                         offer.comparison_evidence.hard_gate_result
                         == HardGateResult.PASS
+                    ),
+                    "automatic_eligible": False,
+                    "automatic_eligibility_reason": (
+                        "PERSISTED_ADMISSION_NOT_EVALUATED"
                     ),
                     "comparison_evidence": comparison_evidence_to_dict(
                         offer.comparison_evidence
@@ -395,6 +711,14 @@ def build_comparison(
             params.search_number,
         )
         if match is None:
+            continue
+        # Keep a broad search useful for discovery, but do not surface an
+        # explicit semantic hard-stop as a competitor offer.  For example,
+        # Camry's rear shock absorber and rear tail lamp share vehicle/side
+        # tokens, while a brake line can share the same vehicle with a brake
+        # hose. Unknown families and missing dimensions remain visible as
+        # manual evidence and are held by the downstream gates.
+        if _explicit_semantic_identity_conflict(seed_product, cand):
             continue
         price = _price_value(cand)
         if price is None:
@@ -464,30 +788,36 @@ def build_product_comparison_evidence(
             state=EvidenceState.UNKNOWN,
             evidence_refs=refs,
         ),
-        "brand_manufacturer": categorical_dimension(
-            seed.brand, candidate.brand, evidence_refs=refs
+        "brand_manufacturer": normalized_categorical_dimension(
+            "brand_manufacturer", seed.brand, candidate.brand, evidence_refs=refs
         ),
-        "fitment": categorical_dimension(
-            seed.fitment, candidate.fitment, evidence_refs=refs
+        "fitment": normalized_categorical_dimension(
+            "fitment", seed.fitment, candidate.fitment, evidence_refs=refs
         ),
-        "vehicle_generation": categorical_dimension(
+        "vehicle_generation": normalized_categorical_dimension(
+            "vehicle_generation",
             seed.vehicle_generation,
             candidate.vehicle_generation,
             evidence_refs=refs,
         ),
         "year_interval": _year_dimension(seed, candidate, refs),
-        "engine": categorical_dimension(
-            seed.engine, candidate.engine, evidence_refs=refs
+        "engine": normalized_categorical_dimension(
+            "engine", seed.engine, candidate.engine, evidence_refs=refs
         ),
-        "body_variant": categorical_dimension(
-            seed.body_variant, candidate.body_variant, evidence_refs=refs
+        "body_variant": normalized_categorical_dimension(
+            "body_variant",
+            seed.body_variant,
+            candidate.body_variant,
+            evidence_refs=refs,
         ),
-        "side": categorical_dimension(seed.side, candidate.side, evidence_refs=refs),
-        "position": categorical_dimension(
-            seed.position, candidate.position, evidence_refs=refs
+        "side": normalized_categorical_dimension(
+            "side", seed.side, candidate.side, evidence_refs=refs
         ),
-        "condition": categorical_dimension(
-            seed.condition, candidate.condition, evidence_refs=refs
+        "position": normalized_categorical_dimension(
+            "position", seed.position, candidate.position, evidence_refs=refs
+        ),
+        "condition": normalized_categorical_dimension(
+            "condition", seed.condition, candidate.condition, evidence_refs=refs
         ),
         "package_quantity": _quantity_dimension(seed, candidate, refs),
         "currency_presence": DimensionEvidence(
@@ -540,6 +870,23 @@ def build_product_comparison_evidence(
         currency_normalized=_normalized_currency(candidate.currency),
         required_currency="UAH",
     )
+    hard_gate_result = decision.hard_gate_result
+    reason_codes = decision.reason_codes
+    detail_evidence = candidate.detail_evidence
+    if isinstance(detail_evidence, dict):
+        conflicts = detail_evidence.get("conflicts")
+        if isinstance(conflicts, dict) and any(
+            str(field).strip().casefold() in {"mpn", "oe_raw", "part_numbers"}
+            for field in conflicts
+        ):
+            # The listing/detail identity disagreement is stronger than the
+            # compatibility payload assembled from the listing alone.  Keep
+            # the observation visible, but never expose it as automatically
+            # eligible through the public comparison serializer.
+            hard_gate_result = HardGateResult.MANUAL_REVIEW
+            reason_codes = tuple(
+                dict.fromkeys((*reason_codes, "DETAIL_IDENTITY_CONFLICT"))
+            )
     return ComparisonEvidence(
         dimensions=initial.dimensions,
         provenance=initial.provenance,
@@ -549,8 +896,8 @@ def build_product_comparison_evidence(
         retrieval_kind=initial.retrieval_kind,
         seed_product_id=initial.seed_product_id,
         candidate_product_id=initial.candidate_product_id,
-        hard_gate_result=decision.hard_gate_result,
-        reason_codes=decision.reason_codes,
+        hard_gate_result=hard_gate_result,
+        reason_codes=reason_codes,
     )
 
 

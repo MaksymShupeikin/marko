@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+import hashlib
 from unittest.mock import Mock
 
 import pytest
@@ -74,6 +75,25 @@ def test_http_trace_separates_logical_request_and_physical_attempts() -> None:
         "retryable_failure",
         "success",
     ]
+
+
+def test_get_document_hash_is_the_exact_journaled_response_body() -> None:
+    body = "<html>деталь</html>".encode()
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=1),
+        live_request_gate=_gate_stub,
+    )
+    client._session.get = Mock(return_value=_response(200, body))  # noqa: SLF001
+    trace = ScrapeExecutionTrace(item_kind="comparison_job", execution_no=1)
+
+    with scrape_execution(trace):
+        document = client.get_document("https://prom.ua/ua/p1-product.html")
+
+    request = trace.drain_completed_requests()[0]
+    expected = hashlib.sha256(body).hexdigest()
+    assert document.content_sha256 == expected
+    assert request.content_sha256 == expected
+    assert document.text == body.decode()
 
 
 def test_max_attempts_is_total_physical_attempts_not_extra_retries() -> None:

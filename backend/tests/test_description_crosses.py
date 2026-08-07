@@ -183,8 +183,16 @@ def test_stage_b_reciprocity_confirms_unmarked_candidate(cross_config) -> None:
 def test_stage_b_deduplicates_pair_and_aggregates_sources(cross_config) -> None:
     result = run_cross_stages_ab(
         [
-            listing("OE ABC12345", listing_id="explicit"),
-            listing("Деталь ABC12345", listing_id="unmarked"),
+            listing(
+                "OE ABC12345",
+                listing_id="explicit",
+                seller_id="seller-explicit",
+            ),
+            listing(
+                "Деталь ABC12345",
+                listing_id="unmarked",
+                seller_id="seller-unmarked",
+            ),
         ],
         cross_config,
     )
@@ -195,18 +203,58 @@ def test_stage_b_deduplicates_pair_and_aggregates_sources(cross_config) -> None:
     assert len(decision.source_evidence) == 2
     assert decision.validation_details["source_count"] == 2
     assert decision.validation_details["independent_seller_count"] == 2
+    assert decision.validation_details["automatic_eligible"] is True
+    assert decision.validation_details["confidence"] == "0.85"
     assert decision.automatic_eligible is True
 
 
 def test_confirmed_single_seller_cross_is_not_automatic(cross_config) -> None:
     result = run_cross_stages_ab(
-        [listing("OE ABC12345", listing_id="only-source")],
+        [
+            listing(
+                "OE ABC12345",
+                listing_id="only-source",
+                seller_id="seller-only",
+            )
+        ],
         cross_config,
     )
 
     decision = result.pair_decisions[0]
     assert decision.validation_status is CrossValidationStatus.CONFIRMED
     assert decision.validation_details["independent_seller_count"] == 1
+    assert decision.validation_details["automatic_eligible"] is False
+    assert decision.validation_details["confidence"] == "0"
+    assert decision.automatic_eligible is False
+
+
+def test_display_name_variants_without_stable_ids_are_not_independent(
+    cross_config,
+) -> None:
+    result = run_cross_stages_ab(
+        [
+            listing(
+                "OE ABC12345",
+                listing_id="name-a",
+                seller_name="Store A",
+                seller_id=None,
+            ),
+            listing(
+                "Деталь ABC12345",
+                listing_id="name-b",
+                seller_name="Store B",
+                seller_id=None,
+            ),
+        ],
+        cross_config,
+    )
+
+    decision = result.pair_decisions[0]
+    assert decision.validation_status is CrossValidationStatus.CONFIRMED
+    assert decision.validation_details["display_seller_count"] == 2
+    assert decision.validation_details["stable_seller_id_count"] == 0
+    assert decision.validation_details["independent_seller_count"] == 0
+    assert decision.validation_details["automatic_eligible"] is False
     assert decision.automatic_eligible is False
 
 

@@ -8,6 +8,39 @@ import 'package:marko_client/core/presentation_formatters.dart';
 import 'package:marko_client/features/catalog/catalog_api.dart';
 
 void main() {
+  test('enriches one legacy catalog listing with OE and MPN', () async {
+    final api = CatalogApi(
+      ApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'POST');
+          expect(request.url.path, '/api/v1/catalog/products/identifiers');
+          expect(jsonDecode(request.body), {
+            'store_id': 'store-a',
+            'external_id': '123',
+          });
+          return http.Response(
+            jsonEncode({
+              'oe': '7E5 827 505 A',
+              'mpn': '7E5827505A',
+              'status': 'IDENTIFIERS_FOUND',
+            }),
+            200,
+          );
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+
+    final enrichment = await api.enrichIdentifiers(
+      storeId: 'store-a',
+      externalId: '123',
+    );
+
+    expect(enrichment.oe, '7E5 827 505 A');
+    expect(enrichment.mpn, '7E5827505A');
+    expect(enrichment.status, 'IDENTIFIERS_FOUND');
+  });
+
   test('loads one stable catalog product by its deep-link id', () async {
     final api = CatalogApi(
       ApiClient(

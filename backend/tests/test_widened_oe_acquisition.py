@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from factories import product
 
 from marko.infrastructure.db.models import MarketObservation, OfferProcessingOutcome
 from marko.parsers.prom.gateway import MOTORS_IDENTITY_SOURCE, PromGateway
@@ -26,6 +27,7 @@ from marko.services.decision_fingerprint import canonical_sha256
 from marko.services.market_collection import (
     _domain_offer,
     _persist_payload_observations,
+    _semantic_review_required_for_observation,
 )
 from marko.services.matching import ComparisonParams, build_comparison
 from marko.services.parser_models import MotorsContext, SeedInfo
@@ -37,14 +39,14 @@ from marko.services.scraper_contract import (
     ScrapeInput,
     ScrapeOutput,
 )
+from marko.services.semantic_candidate_features import SEMANTIC_FEATURE_EXTRACTOR_VERSION
+from marko.services.semantic_candidate_gate import SEMANTIC_PRICING_GATE_VERSION
 from metis.pricing import (
     CohortRole,
     ProductTier,
     comparison_evidence_from_dict,
     comparison_evidence_to_dict,
 )
-
-from factories import product
 
 SEED_URL = "https://prom.ua/ua/p1153738393-radiator-folksvagen-tuareg.html"
 
@@ -295,7 +297,12 @@ async def _persist(records) -> _FakeSession:
         ),
         run_item=SimpleNamespace(id=uuid4()),
         catalog_item=SimpleNamespace(
-            id=uuid4(), category="cooling", oe_norm="7L6121253"
+            id=uuid4(),
+            category="cooling",
+            oe_norm="7L6121253",
+            mpn_norm="",
+            identity_status="OE_CONFIRMED",
+            part_numbers_norm=(),
         ),
         capture=SimpleNamespace(
             id=uuid4(),
@@ -312,6 +319,7 @@ async def _persist(records) -> _FakeSession:
         brand_confidence={},
         observed_at=datetime(2026, 7, 31, tzinfo=UTC),
         source_type="prom_public",
+        acquisition_query="7L6121253",
     )
     return session
 
@@ -391,8 +399,7 @@ async def test_an_ordinary_acquisition_is_not_marked_as_widened() -> None:
         value for value in session.added if isinstance(value, MarketObservation)
     )
     assert (
-        observation.comparison_evidence["retrieval_kind"]
-        == RETRIEVAL_KIND_PROM_OE_PAGE
+        observation.comparison_evidence["retrieval_kind"] == RETRIEVAL_KIND_PROM_OE_PAGE
     )
     outcome = next(
         value
@@ -573,3 +580,115 @@ def test_our_own_part_codes_market_still_reaches_exact() -> None:
     )
 
     assert offer.semantic_review_match_level == "EXACT"
+
+
+def test_persisted_domain_offer_rejects_stale_semantic_snapshot() -> None:
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE)
+    observation.candidate_snapshot = {
+        "semantic_gate": {
+            "status": "PRICING_EVIDENCE",
+            "reason": "OK",
+            "gate_version": "semantic-pricing-gate-v9-category-required-conflicts",
+            "extractor_version": "semantic-features-v39",
+        }
+    }
+
+    offer = _domain_offer(
+        observation,
+        _classification(),
+        datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    assert offer.semantic_gate_current is False
+
+
+def test_domain_offer_without_admission_field_fails_closed() -> None:
+    """A legacy/replay adapter must not manufacture price eligibility."""
+
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE)
+    del observation.automatic_eligible
+
+    offer = _domain_offer(
+        observation,
+        _classification(),
+        datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    assert offer.automatic_eligible is False
+
+
+def test_domain_offer_does_not_trust_scalar_admission_without_identity_projection() -> None:
+    """A stale/manual ``true`` flag cannot revive an unverified row."""
+
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE)
+    observation.automatic_eligible = True
+
+    offer = _domain_offer(
+        observation,
+        _classification(),
+        datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    assert offer.automatic_eligible is False
+
+
+def test_domain_offer_rechecks_all_persisted_admission_columns() -> None:
+    """A copied scalar flag cannot bypass hard-gate or provenance columns."""
+
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE)
+    observation.automatic_eligible = True
+    observation.oe_verification_status = "VERIFIED_EXACT"
+    observation.search_oe_norm = "93818439"
+    observation.extracted_oe_norms = ["93818439"]
+    observation.verified_matched_oe_norm = "93818439"
+    observation.comparison_identity_key = "93818439"
+    observation.comparability_hard_gate_result = "MANUAL_REVIEW"
+    observation.candidate_snapshot = {
+        "identity_admission": {"automatic_evidence_sufficient": True},
+        "semantic_gate": {
+            "status": "PRICING_EVIDENCE",
+            "reason": "OK",
+            "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+            "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+        },
+    }
+
+    offer = _domain_offer(
+        observation,
+        _classification(),
+        datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    assert offer.automatic_eligible is False
+
+
+def test_verified_cross_requires_semantic_admission_even_in_optional_mode() -> None:
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED)
+    observation.oe_verification_status = "VERIFIED_CROSS"
+
+    assert _semantic_review_required_for_observation(
+        observation,
+        global_required=False,
+    )
+
+
+def test_legacy_replay_trace_preserves_global_only_review_authority() -> None:
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED)
+    observation.oe_verification_status = "VERIFIED_CROSS"
+
+    assert not _semantic_review_required_for_observation(
+        observation,
+        global_required=False,
+        traced_required_observation_ids=frozenset(),
+    )
+
+
+def test_new_replay_trace_restores_per_observation_review_authority() -> None:
+    observation = _observation(RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED)
+    observation.oe_verification_status = "VERIFIED_CROSS"
+
+    assert _semantic_review_required_for_observation(
+        observation,
+        global_required=False,
+        traced_required_observation_ids=frozenset({str(observation.id)}),
+    )

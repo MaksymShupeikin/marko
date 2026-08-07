@@ -21,12 +21,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
 from factories import product
-from metis.pricing import (
-    comparison_evidence_to_dict,
-    verified_comparison_evidence,
-)
+
 from marko.infrastructure.db.models import MarketObservation, OfferProcessingOutcome
 from marko.parsers.prom.gateway import MOTORS_IDENTITY_SOURCE
 from marko.services.decision_fingerprint import canonical_sha256
@@ -41,9 +37,9 @@ from marko.services.oe_reenrichment import (
     build_reenrichment_patch,
 )
 from marko.services.offer_identity import (
+    ConfirmedCross,
     OeVerificationStatus,
     SourceAssertion,
-    ConfirmedCross,
     canonical_cross_identity_key,
 )
 from marko.services.offer_processing import (
@@ -54,6 +50,7 @@ from marko.services.offer_processing import (
     AcceptedCandidate,
     AcquisitionContractError,
     AcquisitionLineage,
+    EvidenceAccountingError,
     process_offer_candidate,
 )
 from marko.services.parser_models import SeedInfo
@@ -68,11 +65,24 @@ from marko.services.scraper_contract import (
     ScraperBoundaryError,
     ScraperErrorCode,
 )
-
+from metis.pricing import (
+    comparison_evidence_to_dict,
+    verified_comparison_evidence,
+)
 
 OUR_OE = "1K0615301"
 VIA_OE = "1K0615302"
 SEED_URL = "https://prom.ua/ua/p1153738393-radiator-folksvagen-tuareg.html"
+
+
+def _frozen_item(oe: str = OUR_OE):
+    return SimpleNamespace(
+        category="cooling",
+        oe_norm=oe,
+        mpn_norm="",
+        identity_status="OE_CONFIRMED",
+        part_numbers_norm=(),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -269,6 +279,17 @@ def test_a_record_cannot_disagree_with_the_payloads_own_acquisition() -> None:
         ScrapeOutput.from_payload(payload)
 
     assert excinfo.value.code is ScraperErrorCode.ACQUISITION_CONTRACT
+
+
+def test_the_input_query_cannot_change_without_changing_its_input_hash() -> None:
+    payload = _payload()
+    payload["input"]["query"] = "DIFFERENT-PART"
+
+    with pytest.raises(ScraperBoundaryError) as excinfo:
+        ScrapeOutput.from_payload(payload)
+
+    assert excinfo.value.code is ScraperErrorCode.ACQUISITION_CONTRACT
+    assert "input_hash" in str(excinfo.value)
 
 
 def test_a_part_code_page_without_an_acquisition_block_is_refused() -> None:
@@ -492,7 +513,14 @@ class _FakeSession:
                 value.id = uuid4()
 
 
-async def _persist(payload: dict, *, catalog_oe: str = OUR_OE, crosses=()):
+async def _persist(
+    payload: dict,
+    *,
+    catalog_oe: str = OUR_OE,
+    catalog_mpn: str = "",
+    identity_status: str = "OE_CONFIRMED",
+    crosses=(),
+):
     output = ScrapeOutput.from_payload(payload)
     raw_evidence = [
         {"logical_request_id": str(uuid4()), "raw_content_sha256": "a" * 64}
@@ -507,7 +535,12 @@ async def _persist(payload: dict, *, catalog_oe: str = OUR_OE, crosses=()):
         ),
         run_item=SimpleNamespace(id=uuid4()),
         catalog_item=SimpleNamespace(
-            id=uuid4(), category="cooling", oe_norm=catalog_oe
+            id=uuid4(),
+            category="cooling",
+            oe_norm=catalog_oe,
+            mpn_norm=catalog_mpn,
+            identity_status=identity_status,
+            part_numbers_norm=(),
         ),
         capture=SimpleNamespace(
             id=uuid4(),
@@ -551,6 +584,32 @@ async def test_an_oe_page_offer_is_verified_and_stores_its_whole_lineage() -> No
 
 
 @pytest.mark.asyncio
+async def test_public_identity_never_falls_back_to_private_catalog_code() -> None:
+    observation, _ = await _persist(
+        _payload(query=OUR_OE),
+        catalog_oe="77641257",
+        catalog_mpn=OUR_OE,
+        identity_status="MPN_ONLY",
+    )
+
+    assert observation.search_oe_norm == OUR_OE
+    assert (
+        observation.oe_verification_status
+        == OeVerificationStatus.VERIFIED_EXACT.value
+    )
+    assert observation.verified_matched_oe_norm == OUR_OE
+
+
+@pytest.mark.asyncio
+async def test_persistence_refuses_query_not_bound_to_frozen_identity() -> None:
+    with pytest.raises(
+        EvidenceAccountingError,
+        match="ACQUISITION_QUERY_BINDING_ERROR",
+    ):
+        await _persist(_payload(query=OUR_OE), catalog_oe="DIFFERENT-PART")
+
+
+@pytest.mark.asyncio
 async def test_the_asserted_query_is_never_taken_from_the_catalog() -> None:
     """Ключевой дефект F6: площадка спрашивалась про ДРУГОЙ номер.
 
@@ -558,14 +617,11 @@ async def test_the_asserted_query_is_never_taken_from_the_catalog() -> None:
     поэтому страница чужого кода объявляла нашу идентичность подтверждённой.
     """
 
-    observation, _ = await _persist(_payload(query="9Z9999999"), catalog_oe=OUR_OE)
-
-    assert (
-        observation.oe_verification_status != OeVerificationStatus.VERIFIED_EXACT.value
-    )
-    assert observation.source_assertion_retrieval_kind is None
-    assert observation.source_assertion_queried_oe_norm is None
-    assert observation.via_oe_number is None
+    with pytest.raises(
+        EvidenceAccountingError,
+        match="ACQUISITION_QUERY_BINDING_ERROR",
+    ):
+        await _persist(_payload(query="9Z9999999"), catalog_oe=OUR_OE)
 
 
 @pytest.mark.asyncio
@@ -654,7 +710,14 @@ async def _persist_mutated(payload: dict):
             policy_config=policy_to_dict(policy_from_dict(None)),
         ),
         run_item=SimpleNamespace(id=uuid4()),
-        catalog_item=SimpleNamespace(id=uuid4(), category="cooling", oe_norm=OUR_OE),
+        catalog_item=SimpleNamespace(
+            id=uuid4(),
+            category="cooling",
+            oe_norm=OUR_OE,
+            mpn_norm="",
+            identity_status="OE_CONFIRMED",
+            part_numbers_norm=(),
+        ),
         capture=SimpleNamespace(
             id=uuid4(),
             parser_version=PROM_ADAPTER_VERSION,
@@ -736,7 +799,7 @@ def test_re_enrichment_preserves_an_exact_identity_it_can_revalidate() -> None:
 
     patch = build_reenrichment_patch(
         observation=observation,
-        frozen_item=SimpleNamespace(category="cooling", oe_norm=OUR_OE),
+        frozen_item=_frozen_item(),
         capture=capture,
         run=SimpleNamespace(policy_config={}),
         structured_payload=structured,
@@ -753,7 +816,7 @@ def test_re_enrichment_preserves_a_widened_identity_with_its_proven_relation() -
 
     patch = build_reenrichment_patch(
         observation=observation,
-        frozen_item=SimpleNamespace(category="cooling", oe_norm=OUR_OE),
+        frozen_item=_frozen_item(),
         capture=capture,
         run=SimpleNamespace(policy_config={}),
         structured_payload=structured,
@@ -786,7 +849,7 @@ def test_re_enrichment_never_promotes_a_row_that_carried_no_assertion() -> None:
 
     patch = build_reenrichment_patch(
         observation=observation,
-        frozen_item=SimpleNamespace(category="cooling", oe_norm=OUR_OE),
+        frozen_item=_frozen_item(),
         capture=capture,
         run=SimpleNamespace(policy_config={}),
         structured_payload=structured,
@@ -820,7 +883,7 @@ def test_re_enrichment_fails_closed_on_a_conflicting_assertion(override, code) -
     with pytest.raises(OeReenrichmentDataError, match=code):
         build_reenrichment_patch(
             observation=observation,
-            frozen_item=SimpleNamespace(category="cooling", oe_norm=OUR_OE),
+            frozen_item=_frozen_item(),
             capture=capture,
             run=SimpleNamespace(policy_config={}),
             structured_payload=structured,
@@ -837,7 +900,7 @@ def test_re_enrichment_refuses_a_frozen_position_naming_another_number() -> None
     ):
         build_reenrichment_patch(
             observation=observation,
-            frozen_item=SimpleNamespace(category="cooling", oe_norm="9Z9999999"),
+            frozen_item=_frozen_item("9Z9999999"),
             capture=capture,
             run=SimpleNamespace(policy_config={}),
             structured_payload=structured,

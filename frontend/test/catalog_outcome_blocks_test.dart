@@ -12,6 +12,8 @@ CatalogDiscoveredOffer _offer({
   required double price,
   required String status,
   required String reason,
+  String? mpn,
+  String? oeRaw,
 }) {
   return CatalogDiscoveredOffer(
     discoveryOfferId: id,
@@ -21,6 +23,8 @@ CatalogDiscoveredOffer _offer({
     title: title,
     url: 'https://prom.ua/ua/p$id-item.html',
     sku: null,
+    mpn: mpn,
+    oeRaw: oeRaw,
     brand: 'Polcar',
     salePrice: price,
     referencePrice: null,
@@ -126,7 +130,10 @@ void main() {
       find.byKey(const ValueKey('catalog-pricing-evidence-block')),
       findsOneWidget,
     );
-    expect(find.text('Учитываются в расчёте · 1'), findsOneWidget);
+    expect(
+      find.text('Предварительно прошли ворота · пока не в расчёте · 1'),
+      findsOneWidget,
+    );
     expect(
       find.text('Показаны справочно · в расчёт не входят · 1'),
       findsOneWidget,
@@ -159,6 +166,27 @@ void main() {
       'https://prom.ua/ua/p1-item.html',
       'https://prom.ua/ua/p2-item.html',
     ]);
+  });
+
+  testWidgets('parsed native MPN/OE evidence is visible on the card', (
+    tester,
+  ) async {
+    final offer = _offer(
+      id: 'native-identity',
+      title: 'Амортизатор Mercedes',
+      price: 950,
+      status: 'REFERENCE_ONLY',
+      reason: 'SEMANTIC_UNCONFIRMED',
+      mpn: 'MA-00290',
+      oeRaw: '170450',
+    );
+    await tester.pumpWidget(
+      _app(_comparison(discovery: [offer], reference: [offer])),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('MPN MA-00290'), findsOneWidget);
+    expect(find.textContaining('OE 170450'), findsOneWidget);
   });
 
   testWidgets('parsed candidates remain visible even when rejected', (
@@ -196,7 +224,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.textContaining('ни одно объявление не допущено к расчёту цены'),
+      find.textContaining('Discovery-кандидаты не допускаются к расчёту цены'),
       findsOneWidget,
     );
     expect(

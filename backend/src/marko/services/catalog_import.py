@@ -110,20 +110,34 @@ class ProductPersistenceStats:
 
 
 def parse_product_price(product: Product) -> Decimal | None:
-    # Discounted price is the active payable price. ``price``/``priceOriginal``
-    # may be the crossed-out reference price in Prom payloads.
-    raw = product.discounted_price or product.price or product.price_original
-    if raw is None:
-        return None
-    normalized = str(raw).replace("\u00a0", "").replace(" ", "").replace(",", ".")
-    match = _PRICE_NUMBER_RE.search(normalized)
-    if match is None:
-        return None
-    try:
-        parsed = Decimal(match.group()).quantize(Decimal("0.01"))
-    except InvalidOperation:
-        return None
-    return parsed if parsed > 0 else None
+    # Discounted price is the active payable price only when it is not higher
+    # than the current/base price. A stale or inverted Prom field must not
+    # inflate the own catalogue price either.
+    def parse(raw: object) -> Decimal | None:
+        if raw is None:
+            return None
+        normalized = (
+            str(raw).replace("\u00a0", "").replace(" ", "").replace(",", ".")
+        )
+        match = _PRICE_NUMBER_RE.search(normalized)
+        if match is None:
+            return None
+        try:
+            parsed = Decimal(match.group()).quantize(Decimal("0.01"))
+        except InvalidOperation:
+            return None
+        return parsed if parsed > 0 else None
+
+    current = parse(product.price)
+    discounted = parse(product.discounted_price)
+    original = parse(product.price_original)
+    if discounted is not None:
+        if current is not None and discounted > current:
+            return current
+        if current is None and original is not None and discounted > original:
+            return original
+        return discounted
+    return current or original
 
 
 async def import_store_catalog(

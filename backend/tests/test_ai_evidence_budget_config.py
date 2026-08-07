@@ -256,7 +256,7 @@ _IDENTITY = {
     "model_id": "gpt-5.6-luna",
     "reasoning_effort": "medium",
     "verifier_version": "marko-ai-evidence-verifier-v1",
-    "oe_normalization_version": "oe-extractor-v1",
+    "oe_normalization_version": "oe-extractor-v2",
 }
 
 

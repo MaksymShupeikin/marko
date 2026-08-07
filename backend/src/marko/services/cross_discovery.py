@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from marko.services.parser_models import Product
+from marko.services.catalog_identity_safety import is_internal_catalog_code
 from metis.pricing import (
     ConditionState,
     ProductTier,
@@ -25,10 +26,28 @@ def evaluate_cross_discovery_product(
 ) -> dict[str, Any]:
     """Classify a search result as discovery evidence, never pricing evidence."""
 
-    exact = cross_oe in {
-        normalize_cross_oem(product.sku),
-        normalize_cross_oem(product.oe_raw),
-    }
+    target_cross = normalize_cross_oem(cross_oe)
+    # A private KEMP shelf code is a catalog join key, not a public cross
+    # identity. Refuse it as the target as well as filtering it from native
+    # candidate identifiers below; otherwise a caller could publish a
+    # warehouse-code search as a cross discovery result.
+    if target_cross and is_internal_catalog_code(target_cross):
+        target_cross = ""
+    native_identifiers = (
+        product.sku,
+        product.mpn,
+        product.oe_raw,
+        *product.part_numbers,
+    )
+    exact = bool(
+        target_cross
+        and any(
+            (normalized := normalize_cross_oem(value))
+            and not is_internal_catalog_code(normalized)
+            and normalized == target_cross
+            for value in native_identifiers
+        )
+    )
     seller_id = str(product.seller_id or "")
     is_owned = bool(seller_id and seller_id in owned_seller_ids)
     condition = classify_condition(

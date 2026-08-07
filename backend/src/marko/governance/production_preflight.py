@@ -17,6 +17,9 @@ from urllib.parse import unquote, urlsplit
 import yaml
 
 from marko.core.config import Settings
+from marko.services.comparability_activation import (
+    comparability_activation_artifact_verified,
+)
 
 
 PREFLIGHT_SCHEMA_VERSION = "1.0.0"
@@ -340,7 +343,7 @@ def _validate_static(values: Mapping[str, str], collector: _Collector) -> None:
     matching_enabled = _truthy(
         values.get("PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED", "false")
     )
-    matching_activation_ok = _valid_activation_artifact(
+    matching_activation_ok = comparability_activation_artifact_verified(
         values.get("PRICING_COMPARABILITY_ACTIVATION_ARTIFACT"),
         values.get("PRICING_COMPARABILITY_ACTIVATION_SHA256"),
     )

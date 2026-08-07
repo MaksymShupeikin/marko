@@ -27,7 +27,9 @@ import math
 
 from marko.parsers.prom.client import HttpClient
 from marko.parsers.prom.parser import parse_motors_context, parse_oe_listing
+from marko.services.catalog_identity_safety import is_internal_catalog_code
 from marko.services.parser_models import MotorsContext, Product
+from marko.services.semantic_candidate_gate import apply_semantic_pricing_gate
 from metis.pricing.candidate_selection import (
     CandidateItem,
     CandidateSelectionConfig,
@@ -108,16 +110,25 @@ class MotorsHarvest:
 
 
 def _price_of(product: Product) -> Decimal | None:
-    for raw in (product.price, product.price_original):
+    def parse(raw: object) -> Decimal | None:
         if raw in (None, ""):
-            continue
+            return None
         try:
             value = Decimal(str(raw))
         except (InvalidOperation, TypeError, ValueError):
-            continue
-        if value.is_finite() and value > 0:
-            return value
-    return None
+            return None
+        return value if value.is_finite() and value > 0 else None
+
+    current = parse(product.price)
+    discounted = parse(product.discounted_price)
+    original = parse(product.price_original)
+    if discounted is not None:
+        if current is not None and discounted > current:
+            return current
+        if current is None and original is not None and discounted > original:
+            return original
+        return discounted
+    return current or original
 
 
 def as_candidate_item(product: Product) -> CandidateItem:
@@ -129,18 +140,61 @@ def as_candidate_item(product: Product) -> CandidateItem:
     means something else.
     """
 
+    article_fields: list[tuple[str, str]] = []
+    for label, value in (("MPN", product.mpn), ("OE", product.oe_raw)):
+        text = str(value or "").strip()
+        if text:
+            article_fields.append((label, text))
+    article_fields.extend(
+        ("PART_NUMBER", str(value).strip())
+        for value in product.part_numbers
+        if str(value or "").strip()
+    )
     return CandidateItem(
         seller_id=str(product.seller_id or ""),
         seller_name=str(product.seller_name or ""),
         title=str(product.name or ""),
         description=product.description,
         article_field=product.sku,
+        article_fields=tuple(article_fields),
         brand=product.brand,
         price=_price_of(product) or Decimal("0"),
         condition=product.condition,
         category_id=product.category_id,
         category_path=tuple(product.category_ids or ()),
     )
+
+
+def _semantic_product_payload(product: Product) -> dict[str, object]:
+    """Expose only non-monetary product-card fields to the semantic gate."""
+
+    return {
+        "name": product.name,
+        "title": product.name,
+        "description": product.description,
+        "brand": product.brand,
+        # Keep native identity namespaces and typed card fields in the
+        # semantic boundary. The Motors page asserts the grouping, but a
+        # detail card can still explicitly contradict it; dropping these
+        # fields would make that contradiction invisible until human review.
+        "sku": product.sku,
+        "mpn": product.mpn,
+        "oe_raw": product.oe_raw,
+        "part_numbers": list(product.part_numbers),
+        "category": product.category,
+        "fitment": product.fitment,
+        "vehicle_generation": product.vehicle_generation,
+        "year_from": product.year_from,
+        "year_to": product.year_to,
+        "engine": product.engine,
+        "body_variant": product.body_variant,
+        "side": product.side,
+        "position": product.position,
+        "condition": product.condition,
+        "package_quantity": product.package_quantity,
+        "measure_unit": product.measure_unit,
+        "characteristics": product.characteristics,
+    }
 
 
 def collect_offers(
@@ -156,6 +210,13 @@ def collect_offers(
     Offers without a usable price are dropped before the gates rather than
     priced at zero: a zero would sort to the front and become the market floor.
     """
+
+    # This helper is also used by offline/replay callers, so do not rely on the
+    # gateway boundary to have filtered the reference.  A private KEMP shelf
+    # code is never a public motors grouping and must not authorize a candidate
+    # merely because the source page was fetched successfully.
+    if is_internal_catalog_code(reference.oem):
+        return (), {"PRIVATE_CATALOG_CODE_NOT_PUBLIC": 0}, 0, 0
 
     seen: dict[int, Product] = {}
     total = 0
@@ -180,6 +241,12 @@ def collect_offers(
             owned_seller_ids=owned_seller_ids,
             tier_agnostic=True,
             identity_source=MOTORS_IDENTITY_SOURCE,
+        )
+        verdict = apply_semantic_pricing_gate(
+            verdict,
+            reference=reference,
+            candidate=_semantic_product_payload(product),
+            authoritative_identity=True,
         )
         if verdict.status is CandidateStatus.REJECTED:
             rejected[verdict.reason] = rejected.get(verdict.reason, 0) + 1
@@ -212,6 +279,15 @@ def harvest(
     context = parse_motors_context(client.get_html(product_url), lang)
     if context is None or not context.has_oe_page:
         return MotorsHarvest(context=context, oe_page_url=None)
+    if any(
+        value and is_internal_catalog_code(value)
+        for value in (context.normalized_part_code, context.via_oe_number)
+    ):
+        return MotorsHarvest(
+            context=context,
+            oe_page_url=None,
+            rejected={"PRIVATE_CATALOG_CODE_NOT_PUBLIC": 1},
+        )
 
     base = context.oe_page_url(lang)
     assert base is not None  # has_oe_page

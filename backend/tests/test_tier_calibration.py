@@ -1,5 +1,7 @@
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -11,6 +13,7 @@ from metis.pricing import (
     fit_shrinkage_coefficients,
     fit_simple_coefficients,
 )
+from marko.services import pricing_runs
 
 
 def pair(
@@ -29,6 +32,47 @@ def pair(
         reference_price=Decimal(reference_price),
         quality_weight=Decimal(quality_weight),
     )
+
+
+@pytest.mark.asyncio
+async def test_target_leakage_excludes_exact_and_cross_identity_keys(
+    monkeypatch,
+) -> None:
+    calibration_pairs = [
+        pair("PUBLIC-QUERY", "brakes", "200"),
+        pair("XREF:PUBLIC-QUERY|RELATED", "brakes", "210"),
+        pair("UNRELATED", "brakes", "220"),
+    ]
+    captured: list[CalibrationPair] = []
+
+    async def _frozen(*_args, **_kwargs):
+        return {("brakes", ProductTier.OEM): object()}
+
+    async def _pairs(*_args, **_kwargs):
+        return calibration_pairs
+
+    def _fit(values, **_kwargs):
+        captured.extend(values)
+        return {}
+
+    monkeypatch.setattr(pricing_runs, "load_tier_coefficients", _frozen)
+    monkeypatch.setattr(pricing_runs, "load_run_calibration_pairs", _pairs)
+    monkeypatch.setattr(pricing_runs, "fit_simple_coefficients", _fit)
+    monkeypatch.setattr(pricing_runs, "fit_shrinkage_coefficients", _fit)
+
+    policy = pricing_runs.policy_from_dict(None)
+    assert policy.require_target_leakage_protection is True
+    result = await pricing_runs.load_target_tier_coefficients(
+        object(),
+        run=SimpleNamespace(id=uuid4(), workspace_id=uuid4()),
+        category="brakes",
+        oe_norm="PUBLIC-QUERY",
+        policy=policy,
+        comparison_identity_keys={"XREF:PUBLIC-QUERY|RELATED"},
+    )
+
+    assert result == {}
+    assert [value.oe_norm for value in captured] == ["UNRELATED"]
 
 
 def test_simple_coefficient_uses_category_level_unique_oe_pairs() -> None:

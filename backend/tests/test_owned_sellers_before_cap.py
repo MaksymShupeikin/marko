@@ -26,7 +26,11 @@ from marko.parsers.prom.gateway import PromGateway
 from marko.services import market_collection
 from marko.services.matching import ComparisonParams, PriceComparison, build_comparison
 from marko.services.parser_models import SeedInfo
-from marko.services.scraper_contract import FrozenPromScraperAdapter, ScrapeInput
+from marko.services.scraper_contract import (
+    PROM_ADAPTER_VERSION,
+    FrozenPromScraperAdapter,
+    ScrapeInput,
+)
 
 from factories import product
 
@@ -54,6 +58,7 @@ def _offer(index: int, price: str, seller_id: int):
     return product(
         id=100 + index,
         name="Радіатор VW Touareg 2.5 TDI 710*549",
+        identifiers={"mpn": "7L6121253"},
         price=price,
         urlText="radiator",
         company={"id": seller_id, "name": f"Магазин {seller_id}"},
@@ -225,8 +230,15 @@ def test_the_collection_worker_hands_owned_sellers_to_the_adapter(
     seen: dict[str, object] = {}
 
     class Adapter:
-        def __init__(self, _config, *, excluded_seller_ids=frozenset()) -> None:
+        def __init__(
+            self,
+            _config,
+            *,
+            excluded_seller_ids=frozenset(),
+            min_independent_sellers=0,
+        ) -> None:
             seen["excluded_seller_ids"] = excluded_seller_ids
+            seen["min_independent_sellers"] = min_independent_sellers
 
         def extract(self, _scrape_input):
             return SimpleNamespace(payload={})
@@ -301,7 +313,7 @@ def _claim_fixtures():
         input_kind="product_seed",
         original_url=SEED_URL,
         query="7L6121253",
-        adapter_version="prom-parser-adapter-v3",
+        adapter_version=PROM_ADAPTER_VERSION,
         network_attempts=0,
         max_task_executions=3,
         delivery_count=0,

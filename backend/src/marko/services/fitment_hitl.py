@@ -33,6 +33,7 @@ from metis.fitment import (
     RecommendationDecision,
     WeightedMarketOffer,
     build_robust_market_statistics,
+    normalize_part_number,
     recommend_market_price,
 )
 
@@ -41,6 +42,7 @@ from .fitment_intelligence import (
     FitmentIntelligenceError,
     FitmentNotFoundError,
 )
+from marko.services.market_price import effective_observation_price
 
 
 HITL_FEEDBACK_LABEL_VERSION = "fitment-hitl-feedback-v1"
@@ -83,6 +85,27 @@ async def generate_fitment_recommendation(
     item = await session.get(CatalogItem, analysis.catalog_item_id)
     if item is None or item.workspace_id != workspace_id:
         raise FitmentNotFoundError("catalog item not found")
+    # Fitment recommendations are a price-bearing boundary too.  A legacy
+    # analysis whose target was a supplier article must not produce a market
+    # price for the catalog item: the authoritative target is the original
+    # vehicle OE persisted by the catalog identity graph.
+    identity_status = str(
+        getattr(item, "identity_status", "UNRESOLVED") or "UNRESOLVED"
+    ).strip().upper()
+    if identity_status != "OE_CONFIRMED":
+        raise FitmentIntelligenceError(
+            "fitment recommendation requires a confirmed original OE"
+        )
+    catalog_oe = normalize_part_number(str(getattr(item, "oe_norm", "") or ""))
+    target_oes = {
+        normalized
+        for raw in analysis.target_identity.get("oe_numbers", [])
+        if (normalized := normalize_part_number(str(raw))) is not None
+    }
+    if catalog_oe is None or catalog_oe not in target_oes:
+        raise FitmentIntelligenceError(
+            "fitment recommendation target does not contain the catalog OE"
+        )
 
     existing = await session.scalar(
         select(FitmentMarketRecommendation).where(
@@ -122,7 +145,7 @@ async def generate_fitment_recommendation(
             "assessment_id": str(assessment.id),
             "observation_id": str(observation.id),
             "seller_id": observation.seller_id,
-            "sale_price": str(observation.sale_price or observation.price),
+            "sale_price": str(effective_observation_price(observation)),
             "reference_price": (
                 str(observation.reference_price)
                 if observation.reference_price is not None

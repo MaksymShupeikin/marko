@@ -694,11 +694,27 @@ def resolve_offer_price_boundary(
     )
     original = parse(product.get("price_original", product.get("priceOriginal")))
     active_discount = explicit_sale or discounted
+    # A malformed/stale payload can place the crossed-out value in
+    # ``discounted_price``. Never let a value higher than the current price
+    # inflate the market; retain it as reference evidence instead.
+    if active_discount is not None:
+        lower_base = current
+        if lower_base is None:
+            lower_base = min(
+                (
+                    value
+                    for value in (original, explicit_reference)
+                    if value is not None
+                ),
+                default=None,
+            )
+        if lower_base is not None and active_discount > lower_base:
+            active_discount = lower_base
     if active_discount is not None:
         sale = active_discount
         reference_candidates = [
             value
-            for value in (explicit_reference, current, original)
+            for value in (explicit_reference, current, original, discounted)
             if value is not None and value > sale
         ]
         return sale, max(reference_candidates) if reference_candidates else None

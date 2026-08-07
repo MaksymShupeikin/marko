@@ -26,6 +26,9 @@ class PricingRecommendation {
     required this.catalogItemId,
     required this.sku,
     required this.oe,
+    this.mpn,
+    this.searchIdentity,
+    this.identityStatus = 'UNRESOLVED',
     required this.name,
     required this.category,
     required this.stockStatus,
@@ -103,6 +106,9 @@ class PricingRecommendation {
       catalogItemId: json['catalog_item_id'] as String,
       sku: json['sku'] as String,
       oe: json['oe_norm'] as String,
+      mpn: json['mpn_norm'] as String?,
+      searchIdentity: json['search_identity'] as String?,
+      identityStatus: json['identity_status']?.toString() ?? 'UNRESOLVED',
       name: json['name'] as String,
       category: json['category'] as String,
       stockStatus: json['stock_status'] as String,
@@ -187,6 +193,9 @@ class PricingRecommendation {
   final String catalogItemId;
   final String sku;
   final String oe;
+  final String? mpn;
+  final String? searchIdentity;
+  final String identityStatus;
   final String name;
   final String category;
   final String stockStatus;
@@ -437,9 +446,18 @@ class ComparabilityReview {
     required this.reviewId,
     required this.marketObservationId,
     required this.inputHash,
+    required this.contractVersion,
     required this.verdict,
     required this.matchLevel,
     required this.confidence,
+    required this.identityVerdict,
+    required this.identityMatchLevel,
+    required this.identityMatchScore,
+    required this.decisionConfidence,
+    required this.imageConsistency,
+    required this.reasonCodes,
+    required this.pricingAdmission,
+    required this.pricingReasonCodes,
     required this.rationale,
     required this.dimensionFindings,
     required this.hardStopConflicts,
@@ -448,10 +466,19 @@ class ComparabilityReview {
     required this.provider,
     required this.modelId,
     required this.promptVersion,
+    required this.reasoningEffort,
+    required this.modelSettingsHash,
     required this.reviewedAt,
     required this.cacheHitReviewId,
     required this.imageUrls,
     required this.providerResponseId,
+    required this.usage,
+    required this.latencyMs,
+    required this.estimatedCost,
+    required this.rateCardVersion,
+    required this.verifiedCrossEdge,
+    required this.ourProduct,
+    required this.candidate,
     required this.errorCode,
     required this.errorDetail,
     required this.feedbackCount,
@@ -462,13 +489,45 @@ class ComparabilityReview {
   });
 
   factory ComparabilityReview.fromJson(Map<String, dynamic> json) {
+    final verdict = json['verdict']?.toString() ?? 'INSUFFICIENT_DATA';
+    final matchLevel = json['match_level']?.toString() ?? 'SUSPICIOUS';
+    final confidence = _decimal(json['confidence']) ?? 0;
+    final pricingEligible = json['pricing_eligible'] as bool? ?? false;
     return ComparabilityReview(
       reviewId: json['review_id']?.toString() ?? '',
       marketObservationId: json['market_observation_id']?.toString() ?? '',
       inputHash: json['input_hash']?.toString() ?? '',
-      verdict: json['verdict']?.toString() ?? 'INSUFFICIENT_DATA',
-      matchLevel: json['match_level']?.toString() ?? 'SUSPICIOUS',
-      confidence: _decimal(json['confidence']) ?? 0,
+      contractVersion:
+          json['contract_version']?.toString() ?? 'comparability-v1',
+      verdict: verdict,
+      matchLevel: matchLevel,
+      confidence: confidence,
+      identityVerdict:
+          json['identity_verdict']?.toString() ??
+          switch (verdict) {
+            'COMPARABLE' => 'MATCH',
+            'NOT_COMPARABLE' => 'NOT_MATCH',
+            _ => 'MANUAL_REVIEW',
+          },
+      identityMatchLevel:
+          json['identity_match_level']?.toString() ?? matchLevel,
+      identityMatchScore: _decimal(json['identity_match_score']) ?? confidence,
+      decisionConfidence: _decimal(json['decision_confidence']) ?? confidence,
+      imageConsistency: json['image_consistency']?.toString() ?? 'UNAVAILABLE',
+      reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
+      pricingAdmission:
+          json['pricing_admission']?.toString() ??
+          (pricingEligible
+              ? 'ADMITTED'
+              : verdict == 'NOT_COMPARABLE'
+              ? 'EXCLUDED'
+              : 'MANUAL_REVIEW'),
+      pricingReasonCodes:
+          (json['pricing_reason_codes'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString())
+              .toList(growable: false),
       rationale: json['rationale']?.toString() ?? '',
       dimensionFindings:
           (json['dimension_findings'] as List<dynamic>? ?? const [])
@@ -485,6 +544,8 @@ class ComparabilityReview {
       provider: json['provider']?.toString() ?? '',
       modelId: json['model_id']?.toString() ?? '',
       promptVersion: json['prompt_version']?.toString() ?? '',
+      reasoningEffort: json['reasoning_effort']?.toString(),
+      modelSettingsHash: json['model_settings_hash']?.toString(),
       reviewedAt:
           DateTime.tryParse(json['reviewed_at']?.toString() ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
@@ -493,22 +554,40 @@ class ComparabilityReview {
           .map((item) => item.toString())
           .toList(growable: false),
       providerResponseId: json['provider_response_id']?.toString(),
+      usage: _stringMap(json['usage']),
+      latencyMs: (json['latency_ms'] as num?)?.toInt() ?? 0,
+      estimatedCost: _stringMap(json['estimated_cost']),
+      rateCardVersion: json['rate_card_version']?.toString(),
+      verifiedCrossEdge: _stringMap(json['verified_cross_edge']),
+      ourProduct: _stringMap(json['our_product']),
+      candidate: _stringMap(json['candidate']),
       errorCode: json['error_code']?.toString(),
       errorDetail: json['error_detail']?.toString(),
       feedbackCount: (json['feedback_count'] as num?)?.toInt() ?? 0,
       latestFeedbackId: json['latest_feedback_id']?.toString(),
       latestFeedbackDecision: json['latest_feedback_decision']?.toString(),
       latestFeedbackReason: json['latest_feedback_reason']?.toString(),
-      pricingEligible: json['pricing_eligible'] as bool? ?? false,
+      pricingEligible: pricingEligible,
     );
   }
 
   final String reviewId;
   final String marketObservationId;
   final String inputHash;
+  final String contractVersion;
   final String verdict;
   final String matchLevel;
   final double confidence;
+  final String identityVerdict;
+  final String identityMatchLevel;
+
+  /// Model score from comparability-v2. It is not a calibrated probability.
+  final double identityMatchScore;
+  final double decisionConfidence;
+  final String imageConsistency;
+  final List<String> reasonCodes;
+  final String pricingAdmission;
+  final List<String> pricingReasonCodes;
   final String rationale;
   final List<Map<String, dynamic>> dimensionFindings;
   final List<Map<String, dynamic>> hardStopConflicts;
@@ -517,10 +596,19 @@ class ComparabilityReview {
   final String provider;
   final String modelId;
   final String promptVersion;
+  final String? reasoningEffort;
+  final String? modelSettingsHash;
   final DateTime reviewedAt;
   final String? cacheHitReviewId;
   final List<String> imageUrls;
   final String? providerResponseId;
+  final Map<String, dynamic> usage;
+  final int latencyMs;
+  final Map<String, dynamic> estimatedCost;
+  final String? rateCardVersion;
+  final Map<String, dynamic> verifiedCrossEdge;
+  final Map<String, dynamic> ourProduct;
+  final Map<String, dynamic> candidate;
   final String? errorCode;
   final String? errorDetail;
   final int feedbackCount;
@@ -528,6 +616,13 @@ class ComparabilityReview {
   final String? latestFeedbackDecision;
   final String? latestFeedbackReason;
   final bool pricingEligible;
+
+  String? get estimatedCostUsd => estimatedCost['total_usd']?.toString();
+}
+
+Map<String, dynamic> _stringMap(Object? value) {
+  if (value is! Map) return const <String, dynamic>{};
+  return value.map((key, value) => MapEntry(key.toString(), value));
 }
 
 class RecommendationEvidence {
@@ -858,6 +953,79 @@ class PricingRunSummary {
       totalItems > 0 ? (completedItems + failedItems) / totalItems : null;
 }
 
+class ComparabilityRunReport {
+  const ComparabilityRunReport({
+    required this.runId,
+    required this.generatedAt,
+    required this.runStatus,
+    required this.contractVersion,
+    required this.totals,
+    required this.identityVerdictCounts,
+    required this.pricingAdmissionCounts,
+    required this.automaticDecisionCoverage,
+    required this.abstentionRate,
+    required this.provider,
+    required this.parser,
+    required this.sellerIntegrity,
+    required this.performance,
+    required this.cost,
+    required this.accuracy,
+  });
+
+  factory ComparabilityRunReport.fromJson(Map<String, dynamic> json) {
+    return ComparabilityRunReport(
+      runId: json['run_id']?.toString() ?? '',
+      generatedAt:
+          DateTime.tryParse(json['generated_at']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      runStatus: json['run_status']?.toString() ?? 'unknown',
+      contractVersion:
+          json['contract_version']?.toString() ?? 'comparability-v2',
+      totals: _intMap(json['totals']),
+      identityVerdictCounts: _intMap(json['identity_verdict_counts']),
+      pricingAdmissionCounts: _intMap(json['pricing_admission_counts']),
+      automaticDecisionCoverage:
+          _decimal(json['automatic_decision_coverage']) ?? 0,
+      abstentionRate: _decimal(json['abstention_rate']) ?? 0,
+      provider: _stringMap(json['provider']),
+      parser: _stringMap(json['parser']),
+      sellerIntegrity: _stringMap(json['seller_integrity']),
+      performance: _stringMap(json['performance']),
+      cost: _stringMap(json['cost']),
+      accuracy: _stringMap(json['accuracy']),
+    );
+  }
+
+  final String runId;
+  final DateTime generatedAt;
+  final String runStatus;
+  final String contractVersion;
+  final Map<String, int> totals;
+  final Map<String, int> identityVerdictCounts;
+  final Map<String, int> pricingAdmissionCounts;
+  final double automaticDecisionCoverage;
+  final double abstentionRate;
+  final Map<String, dynamic> provider;
+  final Map<String, dynamic> parser;
+  final Map<String, dynamic> sellerIntegrity;
+  final Map<String, dynamic> performance;
+  final Map<String, dynamic> cost;
+  final Map<String, dynamic> accuracy;
+
+  String get accuracyStatus =>
+      accuracy['status']?.toString() ?? 'NOT_EVALUATED';
+}
+
+Map<String, int> _intMap(Object? value) {
+  if (value is! Map) return const <String, int>{};
+  return value.map(
+    (key, value) => MapEntry(
+      key.toString(),
+      value is num ? value.toInt() : int.tryParse(value.toString()) ?? 0,
+    ),
+  );
+}
+
 /// Замороженная область прогона, показанная до его запуска.
 ///
 /// Существует, чтобы владелец видел цену решения до того, как оно станет
@@ -875,6 +1043,8 @@ class PricingRunPreview {
     required this.requestedItems,
     required this.eligibleItems,
     required this.excludedItems,
+    required this.networkEligibleItems,
+    required this.identityBlockedItems,
     required this.worstCaseDurationSeconds,
   });
 
@@ -892,6 +1062,12 @@ class PricingRunPreview {
       requestedItems: (estimate['requested_items'] as num?)?.toInt() ?? 0,
       eligibleItems: (estimate['eligible_items'] as num?)?.toInt() ?? 0,
       excludedItems: (estimate['excluded_items'] as num?)?.toInt() ?? 0,
+      networkEligibleItems:
+          (estimate['network_eligible_items'] as num?)?.toInt() ??
+          (estimate['eligible_items'] as num?)?.toInt() ??
+          0,
+      identityBlockedItems:
+          (estimate['identity_blocked_items'] as num?)?.toInt() ?? 0,
       worstCaseDurationSeconds:
           (estimate['worst_case_duration_seconds'] as num?)?.toInt() ?? 0,
     );
@@ -900,6 +1076,7 @@ class PricingRunPreview {
   final String scopeMode;
   final String scopeHash;
   final String catalogSnapshotHash;
+
   /// Выдаётся сервером один раз вместе с предпросмотром; без него старт этой
   /// области невозможен.
   final String previewToken;
@@ -910,6 +1087,8 @@ class PricingRunPreview {
   final int requestedItems;
   final int eligibleItems;
   final int excludedItems;
+  final int networkEligibleItems;
+  final int identityBlockedItems;
   final int worstCaseDurationSeconds;
 
   /// Верхняя оценка, а не прогноз: столько прогон займёт в худшем случае.

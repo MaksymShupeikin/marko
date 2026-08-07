@@ -19,7 +19,7 @@ Revises: 20260801_0036
 
 from __future__ import annotations
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -33,13 +33,36 @@ _TABLE = "candidate_comparability_reviews"
 
 
 def upgrade() -> None:
-    connection = op.get_bind()
-    duplicates = connection.execute(
-        sa.text(
-            f"SELECT request_key, count(*) AS n FROM {_TABLE} "
-            "GROUP BY request_key HAVING count(*) > 1 ORDER BY n DESC LIMIT 20"
+    if context.is_offline_mode():
+        op.execute(
+            sa.text(
+                f"""
+                DO $marko_review_key_guard$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM {_TABLE}
+                        GROUP BY request_key
+                        HAVING count(*) > 1
+                    ) THEN
+                        RAISE EXCEPTION
+                            'BLOCKED_MIGRATION_20260801_0037: duplicate review '
+                            'request_key values require owner resolution';
+                    END IF;
+                END
+                $marko_review_key_guard$
+                """
+            )
         )
-    ).all()
+        duplicates = []
+    else:
+        connection = op.get_bind()
+        duplicates = connection.execute(
+            sa.text(
+                f"SELECT request_key, count(*) AS n FROM {_TABLE} "
+                "GROUP BY request_key HAVING count(*) > 1 ORDER BY n DESC LIMIT 20"
+            )
+        ).all()
     if duplicates:
         listed = ", ".join(f"{row[0]}×{row[1]}" for row in duplicates)
         raise RuntimeError(

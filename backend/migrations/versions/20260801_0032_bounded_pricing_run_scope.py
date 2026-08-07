@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 
 revision: str = "20260801_0032"
@@ -50,6 +50,32 @@ ITEM_IMMUTABLE_COLUMNS = (
 
 
 def _reject_duplicate_active_runs() -> None:
+    if context.is_offline_mode():
+        # Offline generation has no connection and therefore cannot fetch the
+        # diagnostic rows below.  Keep the safety gate in the generated SQL
+        # itself instead of silently skipping it or crashing on ``None.all``.
+        op.execute(
+            sa.text(
+                f"""
+                DO $marko_scope_guard$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pricing_runs
+                        WHERE status IN ({ACTIVE_STATUS_SQL})
+                        GROUP BY workspace_id, import_batch_id
+                        HAVING count(*) > 1
+                    ) THEN
+                        RAISE EXCEPTION
+                            'BLOCKED_MIGRATION_20260801_0032: duplicate active '
+                            'pricing runs must be cancelled before migration';
+                    END IF;
+                END
+                $marko_scope_guard$
+                """
+            )
+        )
+        return
     duplicates = (
         op.get_bind()
         .execute(

@@ -22,6 +22,7 @@ from marko.api.dependencies import CurrentUser, WorkspaceAdmin, get_session
 from marko.api.schemas.catalog import (
     CatalogCompetitorComparisonResponse,
     CatalogDiscoveryRequest,
+    CatalogIdentifierEnrichmentResponse,
     CatalogImportPageResponse,
     CatalogImportPreviewResponse,
     CatalogImportResponse,
@@ -29,6 +30,7 @@ from marko.api.schemas.catalog import (
     CatalogItemResponse,
     CatalogOeEnrichmentRequest,
     CatalogOeEnrichmentResponse,
+    CatalogTerminalManifestResponse,
     OwnedCatalogPageResponse,
     OwnedCatalogProductResponse,
     OwnedCatalogStoreOptionResponse,
@@ -39,6 +41,7 @@ from marko.services.catalog_competitors import (
     list_catalog_competitors,
     list_catalog_recommendation_summaries,
 )
+from marko.services.recommendation_export import _export_identity_fields
 from marko.services.catalog_discovery import (
     CatalogDiscoveryError,
     collect_catalog_discovery,
@@ -46,6 +49,7 @@ from marko.services.catalog_discovery import (
 from marko.services.catalog_costs import cost_configuration_map
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.owned_catalog import (
+    enrich_listing_identifiers,
     enrich_listing_oe,
     get_owned_catalog_product,
     list_owned_catalog,
@@ -54,6 +58,7 @@ from marko.services.source_access import SourceAccessBlocked
 from marko.services.xlsx_catalog import (
     MAX_XLSX_BYTES,
     CatalogImportError,
+    build_catalog_terminal_manifest,
     get_import_batch,
     import_catalog_xlsx,
     list_catalog_items,
@@ -71,6 +76,7 @@ async def get_catalog_product_competitors(
     session: Annotated[AsyncSession, Depends(get_session)],
     sku: Annotated[str | None, Query(max_length=255)] = None,
     oe: Annotated[str | None, Query(max_length=255)] = None,
+    mpn: Annotated[str | None, Query(max_length=255)] = None,
     brand: Annotated[str | None, Query(max_length=255)] = None,
 ) -> CatalogCompetitorComparisonResponse:
     comparison = await list_catalog_competitors(
@@ -78,6 +84,7 @@ async def get_catalog_product_competitors(
         workspace_id=current.workspace_id,
         sku=sku,
         oe=oe,
+        mpn=mpn,
         brand=brand,
     )
     return CatalogCompetitorComparisonResponse.model_validate(comparison)
@@ -99,6 +106,7 @@ async def discover_catalog_product_competitors(
             workspace_id=current.workspace_id,
             sku=payload.sku,
             oe=payload.oe,
+            mpn=payload.mpn,
             brand=payload.brand,
             title=payload.title,
             current_price=payload.current_price,
@@ -110,7 +118,12 @@ async def discover_catalog_product_competitors(
     except CatalogDiscoveryError as exc:
         status_code = (
             status.HTTP_422_UNPROCESSABLE_ENTITY
-            if exc.code == "CATALOG_DISCOVERY_IDENTIFIER_REQUIRED"
+            if exc.code
+            in {
+                "CATALOG_DISCOVERY_IDENTIFIER_REQUIRED",
+                "CATALOG_DISCOVERY_IDENTITY_UNRESOLVED",
+                "CATALOG_DISCOVERY_IDENTITY_AMBIGUOUS",
+            }
             else status.HTTP_502_BAD_GATEWAY
         )
         raise HTTPException(
@@ -122,6 +135,7 @@ async def discover_catalog_product_competitors(
         workspace_id=current.workspace_id,
         sku=payload.sku,
         oe=payload.oe,
+        mpn=payload.mpn,
         brand=payload.brand,
     )
     return CatalogCompetitorComparisonResponse.model_validate(comparison)
@@ -145,6 +159,44 @@ async def enrich_catalog_product_oe(
     except (RequestFailed, ParseError):
         oe = None
     return CatalogOeEnrichmentResponse(oe=oe)
+
+
+@router.post(
+    "/products/identifiers",
+    response_model=CatalogIdentifierEnrichmentResponse,
+)
+async def enrich_catalog_product_identifiers(
+    payload: CatalogOeEnrichmentRequest,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogIdentifierEnrichmentResponse:
+    try:
+        identifiers = await enrich_listing_identifiers(
+            session,
+            workspace_id=current.workspace_id,
+            store_id=payload.store_id,
+            external_id=payload.external_id,
+        )
+    except SourceAccessBlocked as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (RequestFailed, ParseError):
+        # Do not convert a failed detail fetch into an invented identifier.
+        # The caller may keep using its already persisted fallback fields.
+        return CatalogIdentifierEnrichmentResponse(
+            oe=None,
+            mpn=None,
+            status="FETCH_FAILED",
+        )
+    if identifiers is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog listing not found",
+        )
+    return CatalogIdentifierEnrichmentResponse(
+        oe=identifiers.oe,
+        mpn=identifiers.mpn,
+        status=identifiers.status,
+    )
 
 
 @router.get("/products", response_model=OwnedCatalogPageResponse)
@@ -351,6 +403,30 @@ async def get_catalog_import(
     return CatalogImportResponse.model_validate(batch)
 
 
+@router.get(
+    "/imports/{batch_id}/terminal-manifest",
+    response_model=CatalogTerminalManifestResponse,
+)
+async def get_catalog_import_terminal_manifest(
+    batch_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    run_id: Annotated[UUID | None, Query()] = None,
+) -> CatalogTerminalManifestResponse:
+    manifest = await build_catalog_terminal_manifest(
+        session,
+        workspace_id=current.workspace_id,
+        batch_id=batch_id,
+        run_id=run_id,
+    )
+    if manifest is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Import not found",
+        )
+    return CatalogTerminalManifestResponse.model_validate(manifest)
+
+
 @router.get("/items", response_model=CatalogItemPageResponse)
 async def get_catalog_items(
     current: CurrentUser,
@@ -398,13 +474,27 @@ async def get_catalog_items(
 def _catalog_item_response(
     item: Any, *, cost_configured: bool = False
 ) -> CatalogItemResponse:
+    identity = _export_identity_fields(item)
     public_fields = {
         field: getattr(item, field)
         for field in CatalogItemResponse.model_fields
-        if field not in {"cost_configured", "cost_privacy_mode", "raw_row"}
+        if field
+        not in {
+            "cost_configured",
+            "cost_privacy_mode",
+            "raw_row",
+            "oe_norm",
+            "mpn_norm",
+            "search_identity",
+            "identity_status",
+        }
     }
     return CatalogItemResponse(
         **public_fields,
+        oe_norm=identity["oe"],
+        mpn_norm=identity["mpn"],
+        search_identity=identity["search_identity"] or None,
+        identity_status=identity["identity_status"],
         cost_configured=cost_configured,
         cost_privacy_mode=get_settings().cost_privacy_mode,
         raw_row=privacy_safe_mapping(item.raw_row),

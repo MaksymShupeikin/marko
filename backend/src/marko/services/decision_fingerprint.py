@@ -16,6 +16,7 @@ from metis.pricing.numeric import (
     TRANSCENDENTAL_PROFILE_VERSION,
     TRANSCENDENTAL_RELATIVE_TOLERANCE,
 )
+from marko.services.market_price import effective_observation_price
 
 
 DECISION_FINGERPRINT_V1 = "recommendation-decision-fingerprint-v1"
@@ -77,7 +78,7 @@ def build_decision_fingerprint_payload(
                 observation, "oe_extractor_version", "legacy-unverified-v0"
             ),
             "seller_id": observation.seller_id,
-            "price": observation.price,
+            "price": effective_observation_price(observation),
             "currency": observation.currency,
             "currency_raw": observation.currency_raw,
             "currency_inferred": observation.currency_inferred,

@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
 import json
 from types import SimpleNamespace
 import uuid
 from uuid import uuid4
+import zlib
 
 import httpx
 from pydantic import ValidationError
@@ -16,15 +18,25 @@ from marko.core.config import Settings
 from marko.services import llm_comparability
 from marko.services.llm_comparability import (
     ComparabilityMatchLevel,
+    ComparabilityProviderError,
     ComparabilityVerdict,
     EffectiveComparabilityReview,
     FindingOutcome,
+    IdentityVerdict,
+    ImageConsistency,
     LLMComparabilityOutput,
     OpenAIResponsesComparabilityProvider,
+    PricingAdmission,
     ReviewDimensionFinding,
+    ReviewEvidenceReference,
     ReviewHardStopConflict,
+    _PreparedReview,
+    _image_cache_identities,
+    _model_settings_hash,
+    _responses_output_text,
     apply_effective_review_to_evidence,
     build_review_input_snapshot,
+    derive_pricing_admission,
     deterministic_hard_stop_conflicts,
 )
 from metis.pricing import (
@@ -39,6 +51,7 @@ from metis.pricing import (
     recommend_price,
     verified_comparison_evidence,
 )
+from marko.services.semantic_candidate_features import build_semantic_feature_matrix
 
 
 def _positive_output() -> LLMComparabilityOutput:
@@ -138,6 +151,649 @@ def test_positive_output_cannot_contain_hard_stop_conflict() -> None:
         )
 
 
+def test_identity_match_can_retain_a_commercial_conflict_for_admission() -> None:
+    output = LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.MATCH,
+        match_level=ComparabilityMatchLevel.EXACT,
+        identity_match_score=Decimal("0.95"),
+        decision_confidence=Decimal("0.94"),
+        image_consistency=ImageConsistency.NON_DIAGNOSTIC,
+        rationale="The part identity matches, but the candidate is used.",
+        reason_codes=["IDENTITY_MATCH", "CONDITION_CONFLICT"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_type",
+                outcome=FindingOutcome.MATCH,
+                explanation="Both records describe the same part type.",
+            ),
+            ReviewDimensionFinding(
+                dimension="condition",
+                outcome=FindingOutcome.CONFLICT,
+                our_value="NEW",
+                candidate_value="USED",
+                explanation="Condition is not price-comparable.",
+            ),
+        ],
+        hard_stop_conflicts=[
+            ReviewHardStopConflict(
+                dimension="condition",
+                our_value="NEW",
+                candidate_value="USED",
+                explanation="Condition is not price-comparable.",
+            )
+        ],
+    )
+
+    assert output.identity_verdict is IdentityVerdict.MATCH
+
+
+def _prepared_for_admission(
+    *,
+    dimensions: dict[str, str],
+    is_owned: bool = False,
+    semantic_feature_matrix: dict | None = None,
+) -> _PreparedReview:
+    deterministic_context = {
+        "comparability_hard_gate_result": "PASS",
+        "automatic_eligible": True,
+        "seller_identity_verified": True,
+        "source_provenance_verified": True,
+    }
+    if semantic_feature_matrix is not None:
+        deterministic_context["semantic_feature_matrix"] = semantic_feature_matrix
+    return _PreparedReview(
+        workspace_id=uuid4(),
+        observation_id=uuid4(),
+        catalog_item_id=uuid4(),
+        request_key="a" * 64,
+        input_hash="b" * 64,
+        attempt_no=1,
+        input_snapshot={
+            "our_product": {"category": "brakes"},
+            "candidate": {
+                "is_available": True,
+                "oe_verification_status": "VERIFIED_EXACT",
+            },
+            "deterministic_context": deterministic_context,
+            "verified_cross_edge": None,
+            "deterministic_evidence": {
+                "dimensions": {
+                    name: {"state": state} for name, state in dimensions.items()
+                }
+            },
+        },
+        image_urls=(),
+        hard_stop_conflicts=(),
+        is_owned=is_owned,
+        is_used=False,
+        cohort_role="TARGET_MARKET",
+    )
+
+
+def test_pricing_admission_requires_complete_commercial_evidence() -> None:
+    complete = {
+        "oe_reference": "MATCH",
+        "part_type": "MATCH",
+        "position": "MATCH",
+        "condition": "MATCH",
+        "package_quantity": "MATCH",
+        "unit_basis": "MATCH",
+    }
+    admitted = derive_pricing_admission(
+        _prepared_for_admission(dimensions=complete),
+        _positive_output(),
+    )
+    missing = derive_pricing_admission(
+        _prepared_for_admission(
+            dimensions={key: value for key, value in complete.items() if key != "unit_basis"}
+        ),
+        _positive_output(),
+    )
+    conflicted = derive_pricing_admission(
+        _prepared_for_admission(
+            dimensions={**complete, "package_quantity": "CONFLICT"}
+        ),
+        _positive_output(),
+    )
+    owned = derive_pricing_admission(
+        _prepared_for_admission(dimensions=complete, is_owned=True),
+        _positive_output(),
+    )
+
+    assert admitted.status is PricingAdmission.ADMITTED
+    assert missing.status is PricingAdmission.MANUAL_REVIEW
+    assert missing.reason_codes == ("PRICING_EVIDENCE_MISSING_UNIT_BASIS",)
+    assert conflicted.status is PricingAdmission.EXCLUDED
+    assert conflicted.reason_codes == ("COMMERCIAL_CONFLICT_PACKAGE_QUANTITY",)
+    assert owned.status is PricingAdmission.EXCLUDED
+    assert owned.reason_codes == ("OWNED_STORE_EXCLUDED",)
+
+
+def test_candidate_only_optional_component_evidence_blocks_automatic_pricing() -> None:
+    matrix = build_semantic_feature_matrix(
+        {"name": "Колодки тормозные VW Golf"},
+        {"title": "Колодки тормозные VW Golf с датчиком износа"},
+    )
+    complete = {
+        "oe_reference": "MATCH",
+        "part_type": "MATCH",
+        "position": "MATCH",
+        "condition": "MATCH",
+        "package_quantity": "MATCH",
+        "unit_basis": "MATCH",
+    }
+
+    decision = derive_pricing_admission(
+        _prepared_for_admission(
+            dimensions=complete,
+            semantic_feature_matrix=matrix,
+        ),
+        _positive_output(),
+    )
+
+    assert decision.status is PricingAdmission.MANUAL_REVIEW
+    assert decision.reason_codes == ("PRICING_EVIDENCE_MISSING_INCLUDED_COMPONENTS",)
+
+
+@pytest.mark.parametrize(
+    ("hard_gate", "automatic_eligible", "status", "reason_code"),
+    [
+        (
+            "MANUAL_REVIEW",
+            True,
+            PricingAdmission.MANUAL_REVIEW,
+            "DETERMINISTIC_HARD_GATE_MANUAL_REVIEW",
+        ),
+        (
+            "PASS",
+            False,
+            PricingAdmission.MANUAL_REVIEW,
+            "DETERMINISTIC_AUTOMATIC_ELIGIBILITY_REQUIRED",
+        ),
+        (
+            "REJECT",
+            True,
+            PricingAdmission.EXCLUDED,
+            "DETERMINISTIC_HARD_GATE_REJECT",
+        ),
+    ],
+)
+def test_llm_match_cannot_promote_an_unproven_deterministic_candidate(
+    hard_gate: str,
+    automatic_eligible: bool,
+    status: PricingAdmission,
+    reason_code: str,
+) -> None:
+    complete = {
+        "oe_reference": "MATCH",
+        "part_type": "MATCH",
+        "position": "MATCH",
+        "condition": "MATCH",
+        "package_quantity": "MATCH",
+        "unit_basis": "MATCH",
+    }
+    prepared = _prepared_for_admission(dimensions=complete)
+    prepared = replace(
+        prepared,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "deterministic_context": {
+                **prepared.input_snapshot["deterministic_context"],
+                "comparability_hard_gate_result": hard_gate,
+                "automatic_eligible": automatic_eligible,
+            },
+        },
+    )
+
+    decision = derive_pricing_admission(prepared, _positive_output())
+
+    assert decision.status is status
+    assert decision.reason_codes == (reason_code,)
+
+
+def test_llm_match_cannot_fill_missing_automatic_pricing_evidence() -> None:
+    complete_without_unit_basis = {
+        "oe_reference": "MATCH",
+        "part_type": "MATCH",
+        "position": "MATCH",
+        "condition": "MATCH",
+        "package_quantity": "MATCH",
+    }
+    output = LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.MATCH,
+        match_level=ComparabilityMatchLevel.EXACT,
+        identity_match_score=Decimal("0.99"),
+        decision_confidence=Decimal("0.99"),
+        image_consistency=ImageConsistency.UNAVAILABLE,
+        rationale="The model claims that every visible field matches.",
+        reason_codes=["IDENTITY_MATCH", "UNIT_BASIS_MATCH"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_type",
+                outcome=FindingOutcome.MATCH,
+                explanation="Both records describe the same part type.",
+            ),
+            ReviewDimensionFinding(
+                dimension="unit_basis",
+                outcome=FindingOutcome.MATCH,
+                our_value="piece",
+                candidate_value="piece",
+                explanation="The model interpreted both offers as one piece.",
+            ),
+        ],
+    )
+
+    decision = derive_pricing_admission(
+        _prepared_for_admission(dimensions=complete_without_unit_basis),
+        output,
+    )
+
+    assert decision.status is PricingAdmission.MANUAL_REVIEW
+    assert decision.reason_codes == ("PRICING_EVIDENCE_MISSING_UNIT_BASIS",)
+
+
+def test_diagnostic_image_verdict_requires_auditable_image_evidence() -> None:
+    with pytest.raises(ValidationError, match="requires IMAGE evidence"):
+        LLMComparabilityOutput(
+            identity_verdict=IdentityVerdict.MATCH,
+            match_level=ComparabilityMatchLevel.EXACT,
+            identity_match_score=Decimal("0.95"),
+            decision_confidence=Decimal("0.95"),
+            image_consistency=ImageConsistency.SUPPORTS,
+            rationale="The text and image appear consistent.",
+            reason_codes=["IDENTITY_MATCH"],
+            dimension_findings=[
+                ReviewDimensionFinding(
+                    dimension="part_type",
+                    outcome=FindingOutcome.MATCH,
+                    explanation="Both records describe a brake disc.",
+                    evidence=[],
+                )
+            ],
+        )
+
+
+def _diagnostic_image_output(image_url: str) -> LLMComparabilityOutput:
+    return LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.MATCH,
+        match_level=ComparabilityMatchLevel.EXACT,
+        identity_match_score=Decimal("0.95"),
+        decision_confidence=Decimal("0.95"),
+        image_consistency=ImageConsistency.SUPPORTS,
+        rationale="The bound image supports the textual part-type evidence.",
+        reason_codes=["IDENTITY_MATCH", "IMAGE_SUPPORTS"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_type",
+                outcome=FindingOutcome.MATCH,
+                explanation="Both records describe a brake disc.",
+                evidence=[
+                    ReviewEvidenceReference(
+                        source="IMAGE",
+                        field="candidate.primary_image",
+                        value=image_url,
+                        excerpt="The same diagnostic mounting geometry is visible.",
+                    )
+                ],
+            )
+        ],
+    )
+
+
+def _grounded_negative_output(
+    *,
+    our_field: str = "our_product.name",
+    our_value: str = "Корпус замка зажигания VW Golf",
+    our_excerpt: str = "Корпус замка зажигания",
+    candidate_field: str = "candidate.title",
+    candidate_value: str = "контактна група Vw Golf 3",
+    candidate_excerpt: str = "контактна група",
+    hard_stop_evidence: bool = True,
+) -> LLMComparabilityOutput:
+    references = [
+        ReviewEvidenceReference(
+            source="OUR_PRODUCT",
+            field=our_field,
+            value=our_value,
+            excerpt=our_excerpt,
+        ),
+        ReviewEvidenceReference(
+            source="CANDIDATE",
+            field=candidate_field,
+            value=candidate_value,
+            excerpt=candidate_excerpt,
+        ),
+    ]
+    return LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.NOT_MATCH,
+        match_level=ComparabilityMatchLevel.NOT_APPLICABLE,
+        identity_match_score=Decimal("0.02"),
+        decision_confidence=Decimal("0.99"),
+        image_consistency=ImageConsistency.UNAVAILABLE,
+        rationale="A lock housing and a contact group are different components.",
+        reason_codes=["PART_SUBTYPE_CONFLICT"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_subtype",
+                outcome=FindingOutcome.CONFLICT,
+                our_value="lock housing",
+                candidate_value="contact group",
+                explanation="The sellable components conflict.",
+                evidence=references,
+            )
+        ],
+        hard_stop_conflicts=[
+            ReviewHardStopConflict(
+                dimension="part_subtype",
+                our_value="lock housing",
+                candidate_value="contact group",
+                explanation="The sellable components conflict.",
+                evidence=references if hard_stop_evidence else [],
+            )
+        ],
+    )
+
+
+def _prepared_for_grounding() -> _PreparedReview:
+    prepared = _prepared_for_admission(dimensions={})
+    return replace(
+        prepared,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "our_product": {
+                **prepared.input_snapshot["our_product"],
+                "name": "Корпус замка зажигания VW Golf",
+            },
+            "candidate": {
+                **prepared.input_snapshot["candidate"],
+                "title": "357905851D контактна група Vw Golf 3",
+            },
+        },
+    )
+
+
+def test_grounded_text_conflict_accepts_exact_snapshot_paths_and_values() -> None:
+    llm_comparability._validate_provider_text_evidence(
+        _prepared_for_grounding(),
+        _grounded_negative_output(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("output", "error_code"),
+    [
+        (
+            _grounded_negative_output(candidate_field="candidate.missing_field"),
+            "LLM_EVIDENCE_FIELD_UNBOUND",
+        ),
+        (
+            _grounded_negative_output(candidate_value="complete ignition lock"),
+            "LLM_EVIDENCE_VALUE_UNBOUND",
+        ),
+        (
+            _grounded_negative_output(candidate_excerpt="invented excerpt"),
+            "LLM_EVIDENCE_EXCERPT_UNBOUND",
+        ),
+        (
+            _grounded_negative_output(hard_stop_evidence=False),
+            "LLM_HARD_STOP_EVIDENCE_MISSING",
+        ),
+    ],
+)
+def test_text_conflict_rejects_ungrounded_model_evidence(
+    output: LLMComparabilityOutput,
+    error_code: str,
+) -> None:
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_for_grounding(),
+            output,
+        )
+
+    assert exc_info.value.code == error_code
+
+
+def test_not_match_requires_an_evidenced_hard_stop() -> None:
+    output = LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.NOT_MATCH,
+        match_level=ComparabilityMatchLevel.SUSPICIOUS,
+        identity_match_score=Decimal("0.1"),
+        decision_confidence=Decimal("0.99"),
+        image_consistency=ImageConsistency.UNAVAILABLE,
+        rationale="The model rejected the pair without a concrete conflict.",
+        reason_codes=["UNSUPPORTED_REJECTION"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_type",
+                outcome=FindingOutcome.UNKNOWN,
+                explanation="No grounded conflict was supplied.",
+            )
+        ],
+    )
+
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_for_grounding(),
+            output,
+        )
+
+    assert exc_info.value.code == "LLM_NOT_MATCH_HARD_STOP_MISSING"
+
+
+def test_hard_stop_requires_both_product_sides_or_authoritative_evidence() -> None:
+    output = _grounded_negative_output()
+    candidate_only = [
+        reference
+        for reference in output.hard_stop_conflicts[0].evidence
+        if reference.source == "CANDIDATE"
+    ]
+    output = output.model_copy(
+        update={
+            "hard_stop_conflicts": [
+                output.hard_stop_conflicts[0].model_copy(
+                    update={"evidence": candidate_only}
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_for_grounding(),
+            output,
+        )
+
+    assert exc_info.value.code == "LLM_HARD_STOP_EVIDENCE_INCOMPLETE"
+
+
+def test_deterministic_gate_reference_can_authorize_a_hard_stop() -> None:
+    reference = ReviewEvidenceReference(
+        source="DETERMINISTIC_GATE",
+        field="deterministic_context.comparability_hard_gate_result",
+        value="REJECT",
+        excerpt="REJECT",
+    )
+    output = _grounded_negative_output()
+    output = output.model_copy(
+        update={
+            "dimension_findings": [
+                output.dimension_findings[0].model_copy(
+                    update={"evidence": [reference]}
+                )
+            ],
+            "hard_stop_conflicts": [
+                output.hard_stop_conflicts[0].model_copy(
+                    update={"evidence": [reference]}
+                )
+            ],
+        }
+    )
+    prepared = _prepared_for_grounding()
+    prepared = replace(
+        prepared,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "deterministic_context": {
+                **prepared.input_snapshot["deterministic_context"],
+                "comparability_hard_gate_result": "REJECT",
+            },
+        },
+    )
+
+    llm_comparability._validate_provider_text_evidence(prepared, output)
+
+
+@pytest.mark.parametrize(
+    ("input_url", "cited_url", "content_sha256", "error_code"),
+    [
+        (
+            None,
+            "https://cdn.example.test/candidate.jpg",
+            None,
+            "LLM_IMAGE_EVIDENCE_WITHOUT_INPUT",
+        ),
+        (
+            "https://cdn.example.test/input.jpg",
+            "https://cdn.example.test/foreign.jpg",
+            "a" * 64,
+            "LLM_IMAGE_EVIDENCE_URL_UNBOUND",
+        ),
+        (
+            "https://cdn.example.test/input.jpg",
+            "https://cdn.example.test/input.jpg",
+            None,
+            "LLM_IMAGE_EVIDENCE_CONTENT_UNBOUND",
+        ),
+    ],
+)
+def test_diagnostic_image_output_must_bind_to_frozen_input_bytes(
+    input_url: str | None,
+    cited_url: str,
+    content_sha256: str | None,
+    error_code: str,
+) -> None:
+    prepared = _prepared_for_admission(dimensions={})
+    image_hashes = (
+        {input_url: content_sha256}
+        if input_url is not None and content_sha256 is not None
+        else {}
+    )
+    prepared = replace(
+        prepared,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "candidate": {
+                **prepared.input_snapshot["candidate"],
+                "images": [input_url] if input_url is not None else [],
+                "image_hashes": image_hashes,
+            },
+            "verified_image_evidence": (
+                [
+                    {
+                        "image_url": input_url,
+                        "content_sha256": content_sha256,
+                    }
+                ]
+                if input_url is not None and content_sha256 is not None
+                else []
+            ),
+        },
+        image_urls=(input_url,) if input_url is not None else (),
+    )
+
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_image_evidence(
+            prepared,
+            _diagnostic_image_output(cited_url),
+        )
+
+    assert exc_info.value.code == error_code
+
+
+def test_diagnostic_image_output_accepts_exact_content_hash_binding() -> None:
+    image_url = "https://cdn.example.test/input.jpg"
+    prepared = _prepared_for_admission(dimensions={})
+    prepared = replace(
+        prepared,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "candidate": {
+                **prepared.input_snapshot["candidate"],
+                "images": [image_url],
+                "image_hashes": {image_url: "a" * 64},
+            },
+            "verified_image_evidence": [
+                {
+                    "image_url": image_url,
+                    "content_sha256": "a" * 64,
+                }
+            ],
+        },
+        image_urls=(image_url,),
+    )
+
+    llm_comparability._validate_provider_image_evidence(
+        prepared,
+        _diagnostic_image_output(image_url),
+    )
+
+
+def test_missing_customer_identity_is_excluded_before_llm_admission() -> None:
+    prepared = _prepared_for_admission(dimensions={})
+    prepared = replace(
+        prepared,
+        customer_identity_missing=True,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "our_product": {
+                "identity_status": "UNRESOLVED",
+                "mpn_norm": "",
+                "part_numbers": [],
+                "customer_identity_available": False,
+            },
+        },
+    )
+
+    decision = derive_pricing_admission(prepared, _positive_output())
+
+    assert decision.status is PricingAdmission.EXCLUDED
+    assert decision.reason_codes == ("CUSTOMER_IDENTITY_MISSING",)
+
+
+@pytest.mark.asyncio
+async def test_missing_customer_identity_skips_provider_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = replace(
+        _prepared_for_admission(dimensions={}),
+        customer_identity_missing=True,
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_persist(prepared_arg, **kwargs):
+        captured.update(kwargs)
+        return "terminal-review"
+
+    monkeypatch.setattr(
+        llm_comparability,
+        "_persist_prepared_review",
+        fake_persist,
+    )
+
+    result = await llm_comparability._resolve_without_provider(
+        prepared,
+        settings=Settings(pricing_llm_comparability_mode="off"),
+    )
+
+    assert result == "terminal-review"
+    assert captured["status"] == "SKIPPED"
+    assert captured["decision_source"] == "HARD_RULE"
+    assert captured["provider_review"] is None
+    output = captured["output"]
+    assert isinstance(output, LLMComparabilityOutput)
+    assert output.reason_codes == ["CUSTOMER_IDENTITY_MISSING"]
+
+
 def test_deterministic_conflict_remains_authoritative() -> None:
     evidence = verified_comparison_evidence(
         stable_seller_id="seller-1",
@@ -172,6 +828,38 @@ def test_deterministic_conflict_remains_authoritative() -> None:
     assert reviewed.dimensions["side"].state is EvidenceState.CONFLICT
 
 
+def test_review_seed_binding_distinguishes_frozen_and_live_catalog_inputs() -> None:
+    frozen_run = SimpleNamespace(
+        scope_contract_version="pricing-run-scope-v3",
+        catalog_snapshot_hash="b" * 64,
+        scope_hash="c" * 64,
+    )
+    run_item = SimpleNamespace(start_snapshot_hash="a" * 64)
+
+    assert llm_comparability._seed_binding_for_review(
+        frozen_run,
+        run_item,
+    ) == {
+        "source": "FROZEN_RUN_ITEM_START_SNAPSHOT",
+        "scope_contract_version": "pricing-run-scope-v3",
+        "start_snapshot_sha256": "a" * 64,
+        "catalog_snapshot_sha256": "b" * 64,
+        "scope_sha256": "c" * 64,
+        "verified": True,
+    }
+    assert llm_comparability._seed_binding_for_review(
+        SimpleNamespace(scope_contract_version="LEGACY_UNBOUNDED"),
+        run_item,
+    ) == {
+        "source": "LEGACY_LIVE_CATALOG",
+        "scope_contract_version": "LEGACY_UNBOUNDED",
+        "start_snapshot_sha256": None,
+        "catalog_snapshot_sha256": None,
+        "scope_sha256": None,
+        "verified": False,
+    }
+
+
 def test_review_snapshot_keeps_parser_fields_and_only_extracts_image_urls() -> None:
     item = SimpleNamespace(
         id=uuid4(),
@@ -188,6 +876,8 @@ def test_review_snapshot_keeps_parser_fields_and_only_extracts_image_urls() -> N
         applicability_brands=["VW"],
         applicability_models=["Golf"],
         characteristics_raw={"diameter_mm": 280},
+        identity_status="MPN_ONLY",
+        identity_reason="CUSTOMER_PART_NUMBER_LIST",
         current_price=Decimal("1000"),
         currency="UAH",
         product_url="https://example.test/our-product",
@@ -201,6 +891,9 @@ def test_review_snapshot_keeps_parser_fields_and_only_extracts_image_urls() -> N
                 "https://cdn.example.test/two.webp",
             ],
             "characteristics": {"diameter_mm": "280", "side": "front"},
+            "image_hashes": {
+                "https://cdn.example.test/one.jpg": "c" * 64,
+            },
             "url": "https://example.test/not-an-image",
         },
         source_listing_id="prom-1",
@@ -226,6 +919,30 @@ def test_review_snapshot_keeps_parser_fields_and_only_extracts_image_urls() -> N
         item,
         observation,
         max_images=4,
+        seed_binding={
+            "source": "FROZEN_RUN_ITEM_START_SNAPSHOT",
+            "scope_contract_version": "pricing-run-scope-v3",
+            "start_snapshot_sha256": "a" * 64,
+            "catalog_snapshot_sha256": "b" * 64,
+            "scope_sha256": "c" * 64,
+            "verified": True,
+        },
+        supplemental_images=[
+            {
+                "image_url": "https://cdn.example.test/supplemental.png",
+                "provenance": "listing_same_workspace_source_listing_id",
+                "identity_authority": True,
+                "price": "1.00",
+            }
+        ],
+        verified_images=[
+            {
+                "image_url": "https://cdn.example.test/one.jpg",
+                "content_sha256": "c" * 64,
+                "evidence_blob_id": uuid4(),
+                "logical_request_id": uuid4(),
+            }
+        ],
     )
 
     assert snapshot["candidate"]["parser_snapshot"]["characteristics"] == {
@@ -236,8 +953,453 @@ def test_review_snapshot_keeps_parser_fields_and_only_extracts_image_urls() -> N
     assert image_urls == [
         "https://cdn.example.test/one.jpg",
         "https://cdn.example.test/two.webp",
+        "https://cdn.example.test/supplemental.png",
+    ]
+    assert snapshot["candidate"]["supplemental_images"] == [
+        {
+            "image_url": "https://cdn.example.test/supplemental.png",
+            "provenance": "listing_same_workspace_source_listing_id",
+            "identity_authority": False,
+        }
+    ]
+    assert snapshot["image_evidence_manifest"] == [
+        {
+            "image_url": "https://cdn.example.test/one.jpg",
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": "https://cdn.example.test/one.jpg"}
+            ),
+            "content_sha256": "c" * 64,
+            "diagnostic_authority": True,
+        },
+        {
+            "image_url": "https://cdn.example.test/two.webp",
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": "https://cdn.example.test/two.webp"}
+            ),
+            "content_sha256": None,
+            "diagnostic_authority": False,
+        },
+        {
+            "image_url": "https://cdn.example.test/supplemental.png",
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": "https://cdn.example.test/supplemental.png"}
+            ),
+            "content_sha256": None,
+            "diagnostic_authority": False,
+        },
     ]
     assert snapshot["contract"]["automatic_price_publication"] is False
+    assert snapshot["verified_image_evidence"][0]["provenance"] == (
+        "scrape_http_journal_verified_bytes"
+    )
+    assert snapshot["our_product"]["customer_identity_available"] is True
+    assert snapshot["our_product"]["identity_status"] == "MPN_ONLY"
+    assert snapshot["seed_binding"] == {
+        "source": "FROZEN_RUN_ITEM_START_SNAPSHOT",
+        "scope_contract_version": "pricing-run-scope-v3",
+        "start_snapshot_sha256": "a" * 64,
+        "catalog_snapshot_sha256": "b" * 64,
+        "scope_sha256": "c" * 64,
+        "verified": True,
+    }
+    changed_binding = {
+        **snapshot,
+        "seed_binding": {
+            **snapshot["seed_binding"],
+            "start_snapshot_sha256": "d" * 64,
+        },
+    }
+    assert llm_comparability.canonical_sha256(
+        llm_comparability._review_content_for_hash(snapshot)
+    ) != llm_comparability.canonical_sha256(
+        llm_comparability._review_content_for_hash(changed_binding)
+    )
+    assert "current_price" not in snapshot["our_product"]
+    assert "price" not in snapshot["candidate"]
+    assert "price" not in snapshot["candidate"]["parser_snapshot"]
+    assert _image_cache_identities(snapshot, image_urls) == [
+        {
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": "https://cdn.example.test/one.jpg"}
+            ),
+            "content_sha256": "c" * 64,
+        },
+        {
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": "https://cdn.example.test/two.webp"}
+            ),
+            "content_sha256": None,
+        },
+        {
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": "https://cdn.example.test/supplemental.png"}
+            ),
+            "content_sha256": None,
+        },
+    ]
+
+
+def test_review_snapshot_hides_private_kemp_code_from_identity_namespace() -> None:
+    item = SimpleNamespace(
+        id=uuid4(),
+        sku="776414",
+        oe_raw="776414",
+        oe_norm="776414",
+        mpn_raw="776414",
+        mpn_norm="776414",
+        name="Brake disc",
+        category="brakes",
+        brand="KEMP",
+        description=None,
+        part_numbers_norm=[],
+        applicability_brands=[],
+        applicability_models=[],
+        characteristics_raw={},
+        identity_status="MPN_ONLY",
+        identity_reason="ONLY_CROSS_LIST_NUMBERS",
+        currency="UAH",
+        product_url=None,
+    )
+    observation = SimpleNamespace(
+        id=uuid4(),
+        candidate_snapshot={},
+        source_listing_id="prom-1",
+        seller_id="seller-1",
+        seller_name="Competitor",
+        title="Brake disc",
+        description=None,
+        brand_raw="Budget",
+        url="https://example.test/listing",
+        currency="UAH",
+        is_available=True,
+        condition_raw="new",
+        condition_state="NEW",
+        search_oe_norm="",
+        extracted_oe_norms=[],
+        verified_matched_oe_norm=None,
+        oe_verification_status="UNKNOWN",
+        comparison_evidence={},
+        automatic_eligible=True,
+    )
+
+    snapshot, _ = build_review_input_snapshot(item, observation, max_images=0)
+
+    assert snapshot["our_product"]["oe_raw"] is None
+    assert snapshot["our_product"]["oe_norm"] is None
+    assert snapshot["our_product"]["sku"] is None
+    assert snapshot["our_product"]["mpn_raw"] is None
+    assert snapshot["our_product"]["mpn_norm"] is None
+    assert snapshot["our_product"]["customer_identity_available"] is False
+    assert snapshot["deterministic_context"]["automatic_eligible"] is False
+
+
+def test_marketplace_supplied_image_hash_does_not_gain_diagnostic_authority() -> None:
+    image_url = "https://cdn.example.test/untrusted.jpg"
+    snapshot = {
+        "candidate": {
+            "images": [image_url],
+            "image_hashes": {image_url: "f" * 64},
+            "content_sha256": "e" * 64,
+        }
+    }
+
+    assert _image_cache_identities(snapshot, [image_url]) == [
+        {
+            "url_reference_sha256": llm_comparability.canonical_sha256(
+                {"image_url": image_url}
+            ),
+            "content_sha256": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_verified_image_journal_rehashes_retained_bytes() -> None:
+    image_url = "https://cdn.example.test/verified.png"
+    body = b"\x89PNG\r\n\x1a\nverified-image-bytes"
+    digest = hashlib.sha256(body).hexdigest()
+    request = SimpleNamespace(
+        prepared_url=image_url,
+        id=uuid4(),
+    )
+    blob = SimpleNamespace(
+        id=uuid4(),
+        content_type="image/png",
+        content_zlib=zlib.compress(body),
+        content_sha256=digest,
+        raw_size_bytes=len(body),
+    )
+
+    class FakeResult:
+        def all(self):
+            return [(request, blob)]
+
+    class FakeSession:
+        async def execute(self, _statement):
+            return FakeResult()
+
+    evidence = await llm_comparability._verified_image_evidence_from_journal(
+        FakeSession(),  # type: ignore[arg-type]
+        scrape_target_id=uuid4(),
+        image_urls=[image_url],
+    )
+
+    assert evidence == [
+        {
+            "image_url": image_url,
+            "content_sha256": digest,
+            "evidence_blob_id": blob.id,
+            "logical_request_id": request.id,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_verified_image_journal_rejects_corrupted_or_non_image_bytes() -> None:
+    image_url = "https://cdn.example.test/not-trusted.png"
+    request = SimpleNamespace(prepared_url=image_url, id=uuid4())
+    corrupted = SimpleNamespace(
+        id=uuid4(),
+        content_type="image/png",
+        content_zlib=zlib.compress(b"different bytes"),
+        content_sha256="a" * 64,
+        raw_size_bytes=len(b"different bytes"),
+    )
+    html = SimpleNamespace(
+        id=uuid4(),
+        content_type="text/html",
+        content_zlib=zlib.compress(b"<html></html>"),
+        content_sha256=hashlib.sha256(b"<html></html>").hexdigest(),
+        raw_size_bytes=len(b"<html></html>"),
+    )
+
+    class FakeResult:
+        def all(self):
+            return [(request, corrupted), (request, html)]
+
+    class FakeSession:
+        async def execute(self, _statement):
+            return FakeResult()
+
+    evidence = await llm_comparability._verified_image_evidence_from_journal(
+        FakeSession(),  # type: ignore[arg-type]
+        scrape_target_id=uuid4(),
+        image_urls=[image_url],
+    )
+
+    assert evidence == []
+
+
+def test_effort_and_image_settings_change_the_model_cache_identity() -> None:
+    base = Settings(
+        pricing_llm_reasoning_effort="xhigh",
+        pricing_llm_image_detail="auto",
+    )
+
+    assert _model_settings_hash(base) != _model_settings_hash(
+        base.model_copy(update={"pricing_llm_reasoning_effort": "medium"})
+    )
+    assert _model_settings_hash(base) != _model_settings_hash(
+        base.model_copy(update={"pricing_llm_image_detail": "high"})
+    )
+
+
+@pytest.mark.parametrize(
+    "stale_field",
+    [
+        "contract_version",
+        "schema_version",
+        "prompt_version",
+        "provider",
+        "model_id",
+        "model_settings_hash",
+    ],
+)
+def test_only_current_runtime_review_identity_is_reusable(stale_field: str) -> None:
+    settings = Settings(
+        pricing_llm_model="gpt-current",
+        pricing_llm_reasoning_effort="xhigh",
+    )
+    identity = llm_comparability.current_review_runtime_identity(settings)
+    current = SimpleNamespace(**identity)
+    stale = SimpleNamespace(**{**identity, stale_field: "stale-value"})
+
+    assert llm_comparability._review_matches_current_runtime(current, settings)
+    assert not llm_comparability._review_matches_current_runtime(stale, settings)
+
+
+def test_reasoning_effort_invalidates_current_runtime_review() -> None:
+    high = Settings(
+        pricing_llm_model="gpt-current",
+        pricing_llm_reasoning_effort="high",
+    )
+    xhigh = high.model_copy(update={"pricing_llm_reasoning_effort": "xhigh"})
+    record = SimpleNamespace(
+        **llm_comparability.current_review_runtime_identity(high)
+    )
+
+    assert llm_comparability._review_matches_current_runtime(record, high)
+    assert not llm_comparability._review_matches_current_runtime(record, xhigh)
+
+
+@pytest.mark.asyncio
+async def test_current_runtime_loader_ignores_newer_stale_prompt_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(pricing_llm_model="gpt-current")
+    identity = llm_comparability.current_review_runtime_identity(settings)
+    observation_id = uuid4()
+    current = SimpleNamespace(
+        id=uuid4(),
+        market_observation_id=observation_id,
+        reviewed_at=datetime(2026, 8, 1, tzinfo=UTC),
+        **identity,
+    )
+    stale = SimpleNamespace(
+        id=uuid4(),
+        market_observation_id=observation_id,
+        reviewed_at=datetime(2026, 8, 2, tzinfo=UTC),
+        **{**identity, "prompt_version": "obsolete-prompt"},
+    )
+
+    class FakeScalars:
+        def all(self):
+            # SQL orders newest first; the stale row must be filtered before
+            # choosing one effective review per observation.
+            return [stale, current]
+
+    class FakeSession:
+        async def scalars(self, _statement):
+            return FakeScalars()
+
+    selected_review = object()
+
+    async def fake_effective(_session, records, **_kwargs):
+        assert records == [current]
+        return {current.id: selected_review}
+
+    monkeypatch.setattr(
+        llm_comparability,
+        "_effective_reviews_for_records",
+        fake_effective,
+    )
+
+    result = await llm_comparability.load_effective_review_map(
+        FakeSession(),  # type: ignore[arg-type]
+        [observation_id],
+        current_runtime_only=True,
+        settings=settings,
+    )
+
+    assert result == {observation_id: selected_review}
+
+
+def test_only_confirmed_cross_link_enters_provider_evidence() -> None:
+    cross_id = uuid4()
+    observation = SimpleNamespace(
+        id=uuid4(),
+        candidate_snapshot={},
+        source_listing_id="prom-1",
+        seller_id="seller-1",
+        seller_name="Competitor",
+        title="Brake disc",
+        description=None,
+        brand_raw=None,
+        url="https://example.test/listing",
+        currency="UAH",
+        is_available=True,
+        condition_raw="new",
+        condition_state="NEW",
+        search_oe_norm="SEED1",
+        extracted_oe_norms=["CANDIDATE1"],
+        verified_matched_oe_norm="CANDIDATE1",
+        oe_verification_status="VERIFIED_CROSS",
+        comparison_evidence={},
+        comparability_hard_gate_result="PASS",
+        automatic_eligible=True,
+        seller_identity_verified=True,
+        source_provenance_verified=True,
+        via_cross=True,
+        cross_link_id=cross_id,
+    )
+    item = SimpleNamespace(
+        id=uuid4(),
+        sku="SKU-1",
+        oe_raw="SEED1",
+        oe_norm="SEED1",
+        mpn_raw="",
+        mpn_norm="",
+        name="Brake disc",
+        category="brakes",
+        brand="KEMP",
+        description=None,
+        part_numbers_norm=[],
+        applicability_brands=[],
+        applicability_models=[],
+        characteristics_raw={},
+        currency="UAH",
+        product_url=None,
+    )
+    cross = SimpleNamespace(
+        id=cross_id,
+        validation_status="CONFIRMED",
+        our_oem_norm="SEED1",
+        extracted_oem_norm="CANDIDATE1",
+        validation_details={
+            "source_count": 3,
+            "independent_seller_count": 2,
+            "stable_seller_id_count": 2,
+            "automatic_eligible": True,
+        },
+        source_evidence=[
+            {
+                "listing_id": "listing-1",
+                "source_seller_id": "seller-1",
+                "source_listing_url": "https://example.test/source",
+            },
+            {
+                "listing_id": "listing-2",
+                "source_seller_id": "seller-2",
+                "source_listing_url": "https://example.test/source-2",
+            },
+        ],
+        method_version="cross-v1",
+        config_sha256="d" * 64,
+    )
+
+    confirmed, _ = build_review_input_snapshot(
+        item,
+        observation,
+        max_images=0,
+        cross_link=cross,
+    )
+    unconfirmed, _ = build_review_input_snapshot(
+        item,
+        observation,
+        max_images=0,
+        cross_link=SimpleNamespace(**{**cross.__dict__, "validation_status": "REVIEW"}),
+    )
+    one_stable_source, _ = build_review_input_snapshot(
+        item,
+        observation,
+        max_images=0,
+        cross_link=SimpleNamespace(
+            **{
+                **cross.__dict__,
+                "source_evidence": [cross.source_evidence[0]],
+            }
+        ),
+    )
+
+    assert confirmed["verified_cross_edge"]["validation_status"] == "CONFIRMED"
+    assert confirmed["verified_cross_edge"]["source_count"] == 3
+    assert confirmed["verified_cross_edge"]["independent_seller_count"] == 2
+    assert confirmed["verified_cross_edge"]["stable_seller_id_count"] == 2
+    assert confirmed["verified_cross_edge"]["automatic_eligible"] is True
+    assert one_stable_source["verified_cross_edge"]["stable_seller_id_count"] == 1
+    assert one_stable_source["verified_cross_edge"]["automatic_eligible"] is False
+    assert "source_url" not in confirmed["verified_cross_edge"]["provenance_refs"][0]
+    assert unconfirmed["verified_cross_edge"] is None
 
 
 @pytest.mark.asyncio
@@ -284,7 +1446,10 @@ async def test_openai_responses_provider_uses_strict_schema_and_images() -> None
             settings,
             client=client,
         ).review(
-            input_snapshot={"our_product": {}, "candidate": {}},
+            input_snapshot={
+                "our_product": {"current_price": "1000", "name": "Disc"},
+                "candidate": {"price": "1100", "title": "Disc"},
+            },
             image_urls=["https://cdn.example.test/product.jpg"],
         )
 
@@ -293,16 +1458,58 @@ async def test_openai_responses_provider_uses_strict_schema_and_images() -> None
     assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["authorization"] == "Bearer sk-test"
     assert payload["store"] is False
+    assert payload["reasoning"] == {"effort": "xhigh"}
     assert payload["text"]["format"]["strict"] is True
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
+    schema_properties = payload["text"]["format"]["schema"]["properties"]
+    assert "identity_verdict" in schema_properties
+    assert "pricing_admission" not in schema_properties
     assert payload["input"][0]["content"][1] == {
         "type": "input_image",
         "image_url": "https://cdn.example.test/product.jpg",
         "detail": "auto",
     }
+    provider_text = payload["input"][0]["content"][0]["text"]
+    assert "current_price" not in provider_text
+    assert '"price"' not in provider_text
     assert result.output.verdict is ComparabilityVerdict.COMPARABLE
     assert result.response_id == "resp_test"
     assert result.usage["total_tokens"] == 168
+
+
+@pytest.mark.parametrize(
+    ("payload", "error_code"),
+    [
+        (
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            "LLM_RESPONSE_INCOMPLETE",
+        ),
+        (
+            {
+                "output": [
+                    {
+                        "content": [
+                            {"type": "refusal", "refusal": "Cannot process."}
+                        ]
+                    }
+                ]
+            },
+            "LLM_REFUSAL",
+        ),
+        ({"output": []}, "LLM_OUTPUT_TEXT_MISSING"),
+    ],
+)
+def test_responses_terminal_errors_are_typed_and_fail_closed(
+    payload: dict[str, object],
+    error_code: str,
+) -> None:
+    with pytest.raises(ComparabilityProviderError) as raised:
+        _responses_output_text(payload)
+
+    assert raised.value.code == error_code
 
 
 def _offer(
@@ -324,6 +1531,8 @@ def _offer(
         tier=ProductTier.BUDGET,
         tier_confidence=Decimal("0.99"),
         source_confidence=Decimal("1"),
+        semantic_gate_current=True,
+        automatic_eligible=True,
         comparison_evidence=verified_comparison_evidence(
             stable_seller_id=f"seller-{index}",
             source_record_id=f"obs-{index}",
@@ -500,20 +1709,17 @@ def _patch_review_calls(
 
 
 @pytest.mark.asyncio
-async def test_review_stops_once_enough_offers_are_confirmed(
+async def test_v2_reviews_every_captured_offer_even_after_many_matches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A part-code page keeps a median 81 offers past the gates.
-
-    Judging all of them costs one provider call each.  The cohort is ordered
-    cheapest first, so once ``pricing_llm_max_confirmed_reviews`` offers are
-    confirmed the rest cannot change a decision taken against the cheapest
-    comparable offer, and the walk must stop instead of paying for the tail.
-    """
+    """A positive-result ceiling may not silently remove captured candidates."""
 
     observation_ids = [uuid4() for _ in range(30)]
     reviewed, _skipped = _patch_review_calls(monkeypatch)
-    settings = Settings(pricing_llm_comparability_mode="off")
+    settings = Settings(
+        pricing_llm_comparability_mode="off",
+        pricing_llm_max_provider_calls_per_position=len(observation_ids),
+    )
 
     await llm_comparability._ensure_observation_ids(
         observation_ids,
@@ -521,24 +1727,14 @@ async def test_review_stops_once_enough_offers_are_confirmed(
         provider=None,
     )
 
-    assert len(reviewed) < len(observation_ids)
-    ceiling = settings.pricing_llm_max_confirmed_reviews
-    # Bounded overshoot: a wave of ``pricing_llm_max_concurrency`` is in flight
-    # when the ceiling is reached, so at most one full wave beyond it.
-    assert len(reviewed) <= ceiling + settings.pricing_llm_max_concurrency
-    # Cheapest first: the walk consumes the cohort in the order it was given.
-    assert reviewed == observation_ids[: len(reviewed)]
+    assert reviewed == observation_ids
 
 
 @pytest.mark.asyncio
-async def test_ceiling_stops_exactly_on_the_boundary(
+async def test_legacy_confirmed_ceiling_setting_does_not_truncate_v2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reaching the ceiling is enough; exceeding it is not required.
-
-    The wave divides the ceiling evenly here, so an off-by-one in the stop
-    condition costs a whole extra wave of provider calls.
-    """
+    """The retained deployment setting is compatibility-only in v2."""
 
     observation_ids = [uuid4() for _ in range(30)]
     reviewed, _skipped = _patch_review_calls(monkeypatch)
@@ -549,26 +1745,73 @@ async def test_ceiling_stops_exactly_on_the_boundary(
             pricing_llm_comparability_mode="off",
             pricing_llm_max_concurrency=5,
             pricing_llm_max_confirmed_reviews=10,
+            pricing_llm_max_provider_calls_per_position=len(observation_ids),
         ),
         provider=None,
     )
 
-    assert len(reviewed) == 10
+    assert reviewed == observation_ids
 
 
 @pytest.mark.asyncio
-async def test_ceiling_records_a_skip_for_every_offer_it_does_not_judge(
+async def test_hard_rule_and_cache_results_do_not_consume_provider_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The finalizer barrier counts reviews, not judgements.
+    observation_ids = [uuid4() for _ in range(5)]
+    provider_ids = set(observation_ids[-2:])
+    seen: list[uuid.UUID] = []
+    skipped: list[uuid.UUID] = []
 
-    ``claim_collection_finalization`` refuses to finalize while any observation
-    of a classified item lacks a review row.  An early stop that simply walks
-    away leaves that barrier permanently unmet, the finalizer task returns 0
-    without retrying, and the run never reaches a terminal state.  So every
-    offer the ceiling declines to judge must still get an explicit SKIPPED row:
-    no provider call, but a decision on the record.
-    """
+    async def fake_review(
+        observation_id: uuid.UUID,
+        **_: object,
+    ) -> EffectiveComparabilityReview:
+        seen.append(observation_id)
+        review = _confirmed_review(observation_id)
+        if observation_id in provider_ids:
+            return review
+        return replace(
+            review,
+            decision_source=(
+                "HARD_RULE" if observation_id == observation_ids[0] else "CACHE"
+            ),
+            status=("HARD_STOP" if observation_id == observation_ids[0] else "CACHED"),
+        )
+
+    async def fake_skip(observation_id: uuid.UUID, **_: object) -> None:
+        skipped.append(observation_id)
+
+    monkeypatch.setattr(
+        llm_comparability,
+        "request_observation_comparability_review",
+        fake_review,
+    )
+    monkeypatch.setattr(
+        llm_comparability,
+        "skip_observation_comparability_review",
+        fake_skip,
+    )
+
+    provider_decisions = await llm_comparability._ensure_observation_ids(
+        observation_ids,
+        settings=Settings(
+            pricing_llm_comparability_mode="off",
+            pricing_llm_max_provider_calls_per_position=2,
+            pricing_llm_max_concurrency=2,
+        ),
+        provider=None,
+    )
+
+    assert seen == observation_ids
+    assert skipped == []
+    assert provider_decisions == 2
+
+
+@pytest.mark.asyncio
+async def test_shadow_v2_returns_a_terminal_review_for_every_offer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shadow evaluates the complete capture; budget errors are explicit rows."""
 
     observation_ids = [uuid4() for _ in range(30)]
     judged, skipped = _patch_review_calls(monkeypatch)
@@ -579,17 +1822,13 @@ async def test_ceiling_records_a_skip_for_every_offer_it_does_not_judge(
             pricing_llm_comparability_mode="shadow",
             pricing_llm_api_key="sk-test",
             pricing_llm_model="gpt-test",
+            pricing_llm_max_provider_calls_per_position=len(observation_ids),
         ),
         provider=None,
     )
 
-    # The barrier's invariant: every observation carries a decision.
-    assert sorted(judged + skipped, key=str) == sorted(observation_ids, key=str)
-    assert judged, "the ceiling must still judge the cheapest offers"
-    assert skipped, "a 30-offer cohort must exceed the default ceiling of 10"
-    # Judged offers are the cheapest ones; the skipped tail is what follows.
-    assert judged == observation_ids[: len(judged)]
-    assert skipped == observation_ids[len(judged) :]
+    assert judged == observation_ids
+    assert skipped == []
 
 
 @pytest.mark.asyncio

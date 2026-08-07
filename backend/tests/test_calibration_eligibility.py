@@ -1,13 +1,18 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from marko.services.calibration_eligibility import (
     evaluate_calibration_eligibility,
 )
-from metis.pricing import PricingPolicy, ProductTier
+from marko.services.semantic_candidate_features import (
+    SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+)
+from marko.services.semantic_candidate_gate import SEMANTIC_PRICING_GATE_VERSION
+from metis.pricing import CohortRole, PricingPolicy, ProductTier
 
 
 NOW = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
@@ -32,6 +37,17 @@ def _observation(**overrides):
         "observed_at": NOW - timedelta(hours=1),
         "match_confidence": Decimal("0.95"),
         "source_confidence": Decimal("0.90"),
+        "candidate_snapshot": {
+            "semantic_gate": {
+                "status": "PRICING_EVIDENCE",
+                "reason": "OK",
+                "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+                "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+            },
+            "identity_admission": {
+                "automatic_evidence_sufficient": True,
+            },
+        },
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -44,6 +60,9 @@ def _classification(**overrides):
         "is_used": False,
         "is_owned": False,
         "exclusion_reason": None,
+        "is_kemp": False,
+        "is_dumping": False,
+        "cohort_role": CohortRole.TARGET_MARKET.value,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -56,6 +75,210 @@ def test_fully_verified_observation_is_calibration_eligible() -> None:
 
     assert decision.eligible is True
     assert decision.exclusion_codes == ()
+
+
+def test_pre_shock_position_semantic_snapshot_is_not_current() -> None:
+    stale_snapshot = {
+        "semantic_gate": {
+            "status": "PRICING_EVIDENCE",
+            "reason": "OK",
+            "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+            "extractor_version": "semantic-features-v40-damaged-condition",
+        },
+        "identity_admission": {
+            "automatic_evidence_sufficient": True,
+        },
+    }
+
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(candidate_snapshot=stale_snapshot),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_SEMANTIC_GATE_NOT_PASS" in decision.exclusion_codes
+
+
+def test_dumping_target_observation_cannot_calibrate() -> None:
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(),
+        _classification(is_dumping=True),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_DUMPING" in decision.exclusion_codes
+
+
+def test_persisted_observation_without_namespace_proof_is_manual() -> None:
+    """Real ORM rows cannot reuse a namespace-less legacy semantic snapshot."""
+
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(catalog_item_id=uuid4()),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_SEMANTIC_GATE_NOT_PASS" in decision.exclusion_codes
+
+
+def test_mpn_namespace_proof_cannot_enter_calibration_without_confirmed_oe() -> None:
+    """A native KEMP/article match remains review-only at calibration."""
+
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(
+            catalog_item_id=uuid4(),
+            search_oe_norm="313452",
+            extracted_oe_norms=["313452"],
+            verified_matched_oe_norm="313452",
+            comparison_identity_key="MPN:313452",
+            candidate_snapshot={
+                "semantic_gate": {
+                    "status": "PRICING_EVIDENCE",
+                    "reason": "OK",
+                    "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+                    "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+                },
+                "identity_admission": {
+                    "automatic_evidence_sufficient": True,
+                    "namespace_version": "identity-namespace-v1",
+                    "seed_identity_namespace": "MPN",
+                    "verified_identity_namespace": "MPN",
+                    "comparison_identity_key": "MPN:313452",
+                },
+            },
+        ),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_SEMANTIC_GATE_NOT_PASS" in decision.exclusion_codes
+
+
+def test_legacy_mpn_only_catalog_row_cannot_revive_calibration() -> None:
+    """The catalog namespace remains a hard boundary for old observations."""
+
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(
+            identity_status="MPN_ONLY",
+            oe_norm="77648791",
+            mpn_norm="313452",
+            part_numbers_norm=(),
+        ),
+        _observation(),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_CUSTOMER_OE_MISSING" in decision.exclusion_codes
+
+
+def test_verified_kemp_reference_is_calibration_eligible_but_not_target_market() -> None:
+    """KEMP is a calibration anchor, not a competitor in the target cohort."""
+
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(automatic_eligible=False),
+        _observation(automatic_eligible=False),
+        _classification(
+            tier=ProductTier.KEMP.value,
+            is_kemp=True,
+            cohort_role=CohortRole.KEMP_REFERENCE.value,
+        ),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is True
+    assert decision.exclusion_codes == ()
+
+
+def test_non_target_non_kemp_observation_cannot_use_reference_exception() -> None:
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(automatic_eligible=False),
+        _observation(automatic_eligible=False),
+        _classification(cohort_role=CohortRole.MANUAL_REVIEW.value),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_NOT_AUTOMATIC_ELIGIBLE" in decision.exclusion_codes
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {},
+        {"semantic_gate": {"status": "REFERENCE_ONLY", "reason": "SEMANTIC_CONFLICT"}},
+    ],
+)
+def test_missing_or_failed_semantic_gate_cannot_calibrate(snapshot) -> None:
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(candidate_snapshot=snapshot),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_SEMANTIC_GATE_NOT_PASS" in decision.exclusion_codes
+
+
+def test_stale_semantic_gate_version_cannot_calibrate() -> None:
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(
+            candidate_snapshot={
+                "semantic_gate": {
+                    "status": "PRICING_EVIDENCE",
+                    "reason": "OK",
+                    "gate_version": "semantic-pricing-gate-v8-ambiguous-sellable-values",
+                }
+            }
+        ),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_SEMANTIC_GATE_NOT_PASS" in decision.exclusion_codes
+
+
+def test_stale_semantic_extractor_cannot_calibrate() -> None:
+    decision = evaluate_calibration_eligibility(
+        SimpleNamespace(),
+        _observation(
+            candidate_snapshot={
+                "semantic_gate": {
+                    "status": "PRICING_EVIDENCE",
+                    "reason": "OK",
+                    "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+                    "extractor_version": "semantic-features-v37-commercial-unit-labels",
+                }
+            }
+        ),
+        _classification(),
+        PricingPolicy(),
+        NOW,
+    )
+
+    assert decision.eligible is False
+    assert "CAL_SEMANTIC_GATE_NOT_PASS" in decision.exclusion_codes
 
 
 @pytest.mark.parametrize(

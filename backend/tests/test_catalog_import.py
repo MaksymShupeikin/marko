@@ -20,6 +20,24 @@ def test_parse_product_price_accepts_spaces_and_comma():
     assert parse_product_price(product(price="1 234,56 грн")) == Decimal("1234.56")
 
 
+def test_parse_product_price_rejects_inverted_discount_against_current_price():
+    assert (
+        parse_product_price(
+            product(price="330", discountedPrice="412", priceOriginal="412")
+        )
+        == Decimal("330.00")
+    )
+
+
+def test_parse_product_price_uses_original_when_current_is_missing():
+    assert (
+        parse_product_price(
+            product(price=None, discountedPrice="412", priceOriginal="330")
+        )
+        == Decimal("330.00")
+    )
+
+
 def test_parse_product_price_returns_none_for_missing_value():
     assert (
         parse_product_price(

@@ -140,6 +140,52 @@ def test_trusted_query_admission_is_tenant_scoped_and_url_free() -> None:
     )
 
 
+def test_query_context_is_part_of_acquisition_idempotency_without_relabeling_query() -> (
+    None
+):
+    plain_item = ScrapeRequestItem(
+        item_id="query-item",
+        input_kind=InputKind.QUERY,
+        input_value="25307",
+        priority=0,
+        metadata={"language": "ua"},
+    )
+    focused_item = plain_item.model_copy(
+        update={
+            "metadata": {
+                "language": "ua",
+                "search_context": "Шрус GKN-Spidan VW Polo",
+            }
+        }
+    )
+    request = _request(
+        acquisition_mode=AcquisitionMode.QUERY_BATCH,
+        items=[plain_item],
+    )
+
+    plain, plain_input = admit_prom_public_item(
+        request,
+        plain_item,
+        settings=_settings(permitted=True),
+    )
+    focused, focused_input = admit_prom_public_item(
+        request.model_copy(update={"items": [focused_item]}),
+        focused_item,
+        settings=_settings(permitted=True),
+    )
+
+    assert isinstance(plain_input, QueryInput)
+    assert isinstance(focused_input, QueryInput)
+    assert plain_input.query == focused_input.query == "25307"
+    assert plain_input.search_context is None
+    assert focused_input.search_context == "ШРУС GKN-SPIDAN VW POLO"
+    assert plain_input.query_key != focused_input.query_key
+    assert plain_input.input_hash != focused_input.input_hash
+    assert plain.server_idempotency_keys.acquisition_key != (
+        focused.server_idempotency_keys.acquisition_key
+    )
+
+
 def test_idempotency_namespaces_do_not_collapse_parse_and_observation() -> None:
     parse_key = build_parse_key(
         raw_content_sha256="a" * 64,

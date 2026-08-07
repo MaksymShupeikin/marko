@@ -252,6 +252,45 @@ def test_offers_come_back_cheapest_first() -> None:
     assert [str(candidate.price) for candidate in accepted] == ["1100", "2500", "5000"]
 
 
+def test_private_kemp_reference_cannot_authorize_a_motors_cohort() -> None:
+    private_reference = ReferenceItem(
+        oem="776414",
+        title=RADIATOR.title,
+        price=RADIATOR.price,
+        brand=RADIATOR.brand,
+        category=RADIATOR.category,
+        tier=RADIATOR.tier,
+    )
+
+    accepted, rejected, fetched, total = collect_offers(
+        [_listing_html([_offer(id=1, price="100")])],
+        reference=private_reference,
+        config=CONFIG,
+        owned_seller_ids=OWNED,
+    )
+
+    assert accepted == ()
+    assert rejected == {"PRIVATE_CATALOG_CODE_NOT_PUBLIC": 0}
+    assert fetched == 0
+    assert total == 0
+
+
+def test_oe_listing_uses_active_discount_price_for_market_floor() -> None:
+    accepted, _, _, _ = _collect(
+        [
+            _offer(
+                id=1,
+                price="412",
+                discountedPrice="330",
+                priceOriginal="412",
+                company={"id": 11, "name": "A"},
+            )
+        ]
+    )
+
+    assert [str(candidate.price) for candidate in accepted] == ["330"]
+
+
 def test_the_identity_is_taken_from_the_source_not_the_title() -> None:
     """The correction the measurement forced: 1887 of 2181 offers were rejected
     as ``OEM_NOT_FOUND`` for not repeating a number the source had already used
@@ -479,6 +518,28 @@ def test_a_candidate_item_carries_the_seller_and_the_category_path() -> None:
     assert item.seller_id == "77"
     assert item.category_id == 120218
     assert item.category_path == (0, 55, 120218)
+
+
+def test_a_candidate_item_preserves_native_identity_namespaces() -> None:
+    product = Product.from_raw(
+        _offer(
+            id=1,
+            identifiers={"mpn": "AF-MPN-1"},
+            comparisonEvidence={"oeRaw": "OE-1"},
+            characteristics=[
+                {"name": "Код запчастини", "value": "ALT-1"},
+            ],
+        ),
+        "ua",
+    )
+
+    item = as_candidate_item(product)
+
+    assert item.article_fields == (
+        ("MPN", "AF-MPN-1"),
+        ("OE", "OE-1"),
+        ("PART_NUMBER", "ALT-1"),
+    )
 
 
 def test_the_context_is_json_safe_for_a_review_payload() -> None:

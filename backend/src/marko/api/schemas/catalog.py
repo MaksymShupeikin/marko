@@ -55,6 +55,49 @@ class CatalogImportPageResponse(BaseModel):
     offset: int
 
 
+class CatalogTerminalRowResponse(BaseModel):
+    source_ordinal: int
+    source_row: int
+    terminal_status: str
+    catalog_item_id: UUID | None = None
+    sku: str | None = None
+    oe_norm: str | None = None
+    reason_codes: list[str]
+    details: list[str]
+    pricing_run_item_id: UUID | None = None
+    pricing_terminal_status: str | None = None
+    pricing_terminal: bool | None = None
+    pricing_terminal_reason: str | None = None
+    pricing_error: str | None = None
+    recommendation_id: UUID | None = None
+    recommendation_action: str | None = None
+
+
+class CatalogTerminalManifestResponse(BaseModel):
+    manifest_version: str
+    batch_id: UUID
+    pricing_run_id: UUID | None = None
+    pricing_run_status: str | None = None
+    catalog_content_sha256: str
+    row_outcomes_contract_version: str | None
+    source: str
+    expected_rows: int
+    manifest_rows: int
+    import_manifest_complete: bool
+    pricing_replay_complete: bool | None = None
+    pricing_terminal_rows: int | None = None
+    pricing_nonterminal_rows: int | None = None
+    pricing_missing_run_items: int | None = None
+    complete: bool
+    verification_status: str
+    row_outcomes_sha256: str | None
+    recomputed_sha256: str
+    hash_verified: bool
+    silent_loss_count: int
+    replay_manifest_sha256: str | None = None
+    rows: list[CatalogTerminalRowResponse]
+
+
 class CatalogItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -66,6 +109,8 @@ class CatalogItemResponse(BaseModel):
     oe_norm: str
     mpn_raw: str
     mpn_norm: str
+    search_identity: str | None = None
+    identity_status: str = "UNRESOLVED"
     name: str
     category: str
     brand: str | None
@@ -123,6 +168,7 @@ class OwnedCatalogProductResponse(BaseModel):
     name: str
     sku: str | None
     oe: str | None
+    mpn: str | None = None
     model_id: str | None
     brand: str | None
     image_url: str | None
@@ -176,6 +222,9 @@ class CatalogDiscoveredOfferResponse(BaseModel):
     title: str
     url: str
     sku: str | None
+    mpn: str | None = None
+    oe_raw: str | None = None
+    part_numbers: list[str] = Field(default_factory=list)
     brand: str | None
     sale_price: Decimal
     reference_price: Decimal | None
@@ -198,6 +247,7 @@ class CatalogDiscoveredOfferResponse(BaseModel):
 class CatalogDiscoveryRequest(BaseModel):
     sku: str | None = Field(default=None, max_length=255)
     oe: str | None = Field(default=None, max_length=255)
+    mpn: str | None = Field(default=None, max_length=255)
     brand: str | None = Field(default=None, max_length=255)
     title: str | None = Field(default=None, max_length=2000)
     current_price: Decimal | None = Field(default=None, gt=0)
@@ -206,8 +256,10 @@ class CatalogDiscoveryRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_identifier(self) -> CatalogDiscoveryRequest:
-        if not (self.sku or "").strip() and not (self.oe or "").strip():
-            raise ValueError("sku or oe is required")
+        if not any(
+            (value or "").strip() for value in (self.sku, self.oe, self.mpn)
+        ):
+            raise ValueError("sku, oe or mpn is required")
         return self
 
 
@@ -218,6 +270,12 @@ class CatalogOeEnrichmentRequest(BaseModel):
 
 class CatalogOeEnrichmentResponse(BaseModel):
     oe: str | None
+
+
+class CatalogIdentifierEnrichmentResponse(BaseModel):
+    oe: str | None
+    mpn: str | None
+    status: str
 
 
 class CatalogCompetitorComparisonResponse(BaseModel):
@@ -258,7 +316,8 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     selection_config_sha256: str | None
     brand_rules_dataset_id: str | None
     discovery_items: list[CatalogDiscoveredOfferResponse]
-    # Counts towards the fair price.
+    # Discovery rows are never admitted to a fair-price calculation. Actual
+    # price evidence is the recommendation's persisted ``items`` set.
     pricing_evidence: list[CatalogDiscoveredOfferResponse]
     # Same part, level unknown or unconvertible: shown with a link, never
     # priced against.

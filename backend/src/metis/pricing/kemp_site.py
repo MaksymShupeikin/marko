@@ -230,7 +230,11 @@ def classify_token(
         return made(TokenClass.NOISE, "TOO_SHORT")
     if len(normalized) > config.max_length:
         return made(TokenClass.NOISE, "TOO_LONG")
-    if config.internal_code_pattern.match(text):
+    # Private shelf codes are an identity namespace, so formatting is not
+    # semantic.  The customer files contain values such as ``7764 1257``;
+    # checking the raw text lets that exact code escape as a public OE.  Keep
+    # supplier-shape rules below on raw text, where hyphens do carry meaning.
+    if config.internal_code_pattern.fullmatch(normalized):
         return made(TokenClass.INTERNAL_CODE, "INTERNAL_CODE_PATTERN")
     if normalized in known:
         return made(TokenClass.KNOWN_ARTICLE, "ALREADY_KNOWN")

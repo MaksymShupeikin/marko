@@ -5,9 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 import os
+from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
@@ -61,6 +64,7 @@ from metis.pricing.types import ProductTier
 
 
 pytestmark = pytest.mark.postgres
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _enabled() -> bool:
@@ -81,7 +85,17 @@ async def test_fitment_schema_and_append_only_guards_hold() -> None:
     source_id = uuid4()
     async with async_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260721_0020"
+        # The shared PostgreSQL fixture upgrades to the repository head.  An
+        # exact 0020 assertion became false as soon as 0021 was added and could
+        # never prove the fitment migration remained in the chain.  Verify both
+        # the current head and the ancestry we actually depend on.
+        scripts = ScriptDirectory.from_config(Config(str(BACKEND_ROOT / "alembic.ini")))
+        head = scripts.get_current_head()
+        assert revision == head
+        ancestors = {
+            item.revision for item in scripts.walk_revisions(base="base", head=head)
+        }
+        assert "20260721_0020" in ancestors
         table_count = await session.scalar(
             text(
                 "SELECT count(*) FROM information_schema.tables "
@@ -269,6 +283,7 @@ async def test_fitment_queue_is_idempotent_and_worker_persists_assessment() -> N
                 current_price=Decimal("850"),
                 currency="UAH",
                 is_available=True,
+                identity_status="OE_CONFIRMED",
                 raw_row={},
             )
         )
@@ -423,17 +438,23 @@ async def test_fitment_queue_is_idempotent_and_worker_persists_assessment() -> N
         assert first.status == "queued"
         assert first.dispatch_task_id is not None
         assert fake_celery.send_task.call_count == 1
-        assert await session.scalar(
-            select(func.count(FitmentAnalysis.id)).where(
-                FitmentAnalysis.workspace_id == workspace_id
+        assert (
+            await session.scalar(
+                select(func.count(FitmentAnalysis.id)).where(
+                    FitmentAnalysis.workspace_id == workspace_id
+                )
             )
-        ) == 1
+            == 1
+        )
 
-        assert await session.scalar(
-            select(func.count(ScrapeDispatchOutbox.id)).where(
-                ScrapeDispatchOutbox.aggregate_id == first.id
+        assert (
+            await session.scalar(
+                select(func.count(ScrapeDispatchOutbox.id)).where(
+                    ScrapeDispatchOutbox.aggregate_id == first.id
+                )
             )
-        ) == 1
+            == 1
+        )
 
         completed = await process_fitment_analysis_job(
             session,
@@ -460,11 +481,14 @@ async def test_fitment_queue_is_idempotent_and_worker_persists_assessment() -> N
         )
         assert replayed is not None
         assert replayed.status == "completed"
-        assert await session.scalar(
-            select(func.count(FitmentCandidateAssessment.id)).where(
-                FitmentCandidateAssessment.analysis_id == first.id
+        assert (
+            await session.scalar(
+                select(func.count(FitmentCandidateAssessment.id)).where(
+                    FitmentCandidateAssessment.analysis_id == first.id
+                )
             )
-        ) == 1
+            == 1
+        )
 
         recommendation = await generate_fitment_recommendation(
             session,
@@ -506,16 +530,22 @@ async def test_fitment_queue_is_idempotent_and_worker_persists_assessment() -> N
         assert recommendation.action == "insufficient_evidence"
         assert recommendation.recommended_price is None
         assert recommendation.automatic_price_change_allowed is False
-        assert await session.scalar(
-            select(func.count(FitmentMarketRecommendation.id)).where(
-                FitmentMarketRecommendation.analysis_id == first.id
+        assert (
+            await session.scalar(
+                select(func.count(FitmentMarketRecommendation.id)).where(
+                    FitmentMarketRecommendation.analysis_id == first.id
+                )
             )
-        ) == 1
-        assert await session.scalar(
-            select(func.count(FitmentNotification.id)).where(
-                FitmentNotification.recommendation_id == recommendation.id
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count(FitmentNotification.id)).where(
+                    FitmentNotification.recommendation_id == recommendation.id
+                )
             )
-        ) == 1
+            == 1
+        )
 
         review = await review_fitment_recommendation(
             session,
@@ -532,13 +562,19 @@ async def test_fitment_queue_is_idempotent_and_worker_persists_assessment() -> N
         )
         assert review.decision == "research_requested"
         assert review.approved_price is None
-        assert await session.scalar(
-            select(func.count(FitmentRecommendationReview.id)).where(
-                FitmentRecommendationReview.recommendation_id == recommendation.id
+        assert (
+            await session.scalar(
+                select(func.count(FitmentRecommendationReview.id)).where(
+                    FitmentRecommendationReview.recommendation_id == recommendation.id
+                )
             )
-        ) == 1
-        assert await session.scalar(
-            select(func.count(FitmentFeedbackEvent.id)).where(
-                FitmentFeedbackEvent.entity_id == str(recommendation.id)
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count(FitmentFeedbackEvent.id)).where(
+                    FitmentFeedbackEvent.entity_id == str(recommendation.id)
+                )
             )
-        ) == 1
+            == 1
+        )

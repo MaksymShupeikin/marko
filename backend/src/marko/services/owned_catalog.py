@@ -46,6 +46,9 @@ class OwnedCatalogListing:
     image_url: str | None
     oe_raw: str | None
     description: str | None
+    # Candidate-native manufacturer part number from the immutable Prom
+    # snapshot.  It remains distinct from the seller SKU and from OE.
+    mpn: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,7 @@ class OwnedCatalogProduct:
     name: str
     sku: str | None
     oe: str | None
+    mpn: str | None
     model_id: str | None
     brand: str | None
     image_url: str | None
@@ -97,6 +101,20 @@ class OwnedCatalogPage:
     stores: tuple[OwnedCatalogStoreOption, ...]
     limit: int
     offset: int
+
+
+@dataclass(frozen=True)
+class ListingIdentifierEnrichment:
+    """Identifiers and typed fields read from one owned Prom detail page.
+
+    This is deliberately a small, source-bound result.  It is used to repair
+    legacy listings that were imported before MPN was persisted; it never
+    claims that a missing field is an OE or invents a cross-reference.
+    """
+
+    oe: str | None
+    mpn: str | None
+    status: str
 
 
 async def list_owned_catalog(
@@ -124,6 +142,7 @@ async def list_owned_catalog(
         for raw_token in re.split(r"\s+", (query or "").strip())
         if (token := normalize_catalog_code(raw_token))
     ]
+    identity_query = _is_identity_query(text_query, normalized_query)
     parameters = {
         "workspace_id": workspace_id,
         "filter_stores": bool(store_ids),
@@ -131,6 +150,17 @@ async def list_owned_catalog(
         "normalized_query": normalized_query,
         "text_query": text_query,
         "normalized_tokens": normalized_tokens,
+        "identity_query": identity_query,
+        "identity_title_pattern": (
+            _identity_title_pattern(normalized_query)
+            if identity_query
+            else "$^"
+        ),
+        "identity_title_label_pattern": (
+            _identity_title_label_pattern(normalized_query)
+            if identity_query
+            else "$^"
+        ),
         "has_query": bool(normalized_query or text_query),
         "limit": limit,
         "offset": offset,
@@ -293,7 +323,9 @@ WITH base AS MATERIALIZED (
     l.catalog_model_norm AS normalized_model,
     l.catalog_brand_norm AS normalized_brand,
     l.catalog_name_norm AS normalized_name,
-    l.catalog_description_norm AS normalized_description
+    l.catalog_description_norm AS normalized_description,
+    public.marko_catalog_normalize(l.raw_data ->> 'mpn') AS normalized_mpn,
+    l.raw_data ->> 'description' AS description
   FROM listings AS l
   JOIN marketplace_stores AS ms
     ON ms.id = l.store_id
@@ -330,14 +362,41 @@ grouped AS MATERIALIZED (
       AND (
         strpos(normalized_sku, CAST(:normalized_query AS text)) > 0
         OR strpos(normalized_oe, CAST(:normalized_query AS text)) > 0
+        OR strpos(normalized_mpn, CAST(:normalized_query AS text)) > 0
         OR strpos(normalized_model, CAST(:normalized_query AS text)) > 0
         OR strpos(normalized_brand, CAST(:normalized_query AS text)) > 0
         OR strpos(normalized_name, CAST(:normalized_query AS text)) > 0
         OR strpos(normalized_description, CAST(:normalized_query AS text)) > 0
       )
     ) AS normalized_match,
+    bool_or(
+      CAST(:identity_query AS boolean)
+      AND (
+        normalized_sku = CAST(:normalized_query AS text)
+        OR normalized_oe = CAST(:normalized_query AS text)
+        OR normalized_mpn = CAST(:normalized_query AS text)
+        OR normalized_model = CAST(:normalized_query AS text)
+        OR (
+          NOT (
+            CAST(:normalized_query AS text) ~ '^[0-9]{1,6}$'
+          )
+          AND (
+            name ~* CAST(:identity_title_pattern AS text)
+            OR coalesce(description, '') ~* CAST(:identity_title_pattern AS text)
+          )
+        )
+        OR (
+          CAST(:normalized_query AS text) ~ '^[0-9]{1,6}$'
+          AND (
+            name ~* CAST(:identity_title_label_pattern AS text)
+            OR coalesce(description, '') ~* CAST(:identity_title_label_pattern AS text)
+          )
+        )
+      )
+    ) AS identity_match,
     array_agg(normalized_sku)
       || array_agg(normalized_oe)
+      || array_agg(normalized_mpn)
       || array_agg(normalized_model)
       || array_agg(normalized_brand)
       || array_agg(normalized_name)
@@ -353,9 +412,16 @@ filtered AS MATERIALIZED (
   FROM grouped
   WHERE
     NOT CAST(:has_query AS boolean)
-    OR text_match
-    OR normalized_match
     OR (
+      CAST(:identity_query AS boolean)
+      AND identity_match
+    )
+    OR (
+      NOT CAST(:identity_query AS boolean)
+      AND (
+        text_match
+        OR normalized_match
+        OR (
       cardinality(CAST(:normalized_tokens AS text[])) > 0
       AND NOT EXISTS (
         SELECT 1
@@ -366,8 +432,9 @@ filtered AS MATERIALIZED (
           WHERE strpos(candidate.value, requested.token) > 0
         )
       )
+      )
     )
-),
+)),
 stats AS (
   SELECT
     (SELECT count(*) FROM base) AS listing_total,
@@ -554,7 +621,8 @@ SELECT
   l.is_available,
   l.raw_data ->> 'image' AS image_url,
   l.raw_data ->> 'oe_raw' AS oe_raw,
-  l.raw_data ->> 'description' AS description
+  l.raw_data ->> 'description' AS description,
+  l.raw_data ->> 'mpn' AS mpn
 FROM selected
 JOIN listings AS l
   ON l.catalog_identity_kind = selected.identity_kind
@@ -665,6 +733,86 @@ async def enrich_listing_oe(
     return oe
 
 
+async def enrich_listing_identifiers(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    store_id: UUID,
+    external_id: str,
+    settings: Settings | None = None,
+) -> ListingIdentifierEnrichment | None:
+    """Read and cache OE/MPN evidence for one owned listing.
+
+    Store-sync snapshots created before the MPN field existed are common in
+    the local database.  Fetching one exact detail page on the operator's
+    explicit discovery action repairs that card without a full 30k-listing
+    resync.  A successful absence is cached as ``NO_IDENTIFIER``; network or
+    parser failures are not cached so a later retry can recover.
+    """
+
+    listing = await _owned_listing(
+        session,
+        workspace_id=workspace_id,
+        store_id=store_id,
+        external_id=external_id,
+    )
+    if listing is None:
+        return None
+
+    raw_data = dict(listing.raw_data or {})
+    checked_at = raw_data.get("identifier_enrichment_checked_at")
+    if checked_at is not None:
+        oe = normalize_oe_value(raw_data.get("oe_raw"))
+        mpn = _normalize_optional_text(raw_data.get("mpn"))
+        return ListingIdentifierEnrichment(
+            oe=oe,
+            mpn=mpn,
+            status=str(raw_data.get("identifier_enrichment_status") or "CACHED"),
+        )
+
+    require_live_prom_marketplace_collection(settings)
+    resolved_settings = settings or get_settings()
+    product = await asyncio.to_thread(
+        _fetch_listing_product,
+        listing.url,
+        resolved_settings,
+    )
+    fetched_oe = normalize_oe_value(product.oe_raw) or extract_labeled_oe(
+        product.name
+    )
+    fetched_mpn = _normalize_optional_text(product.mpn)
+    # A detail page can omit a field that an earlier enrichment already
+    # established.  Preserve that evidence instead of turning a partial
+    # response into a destructive null overwrite.
+    oe = fetched_oe or normalize_oe_value(raw_data.get("oe_raw"))
+    mpn = fetched_mpn or _normalize_optional_text(raw_data.get("mpn"))
+    status = "IDENTIFIERS_FOUND" if oe or mpn else "NO_IDENTIFIER"
+    detail_fields = {
+        "condition": product.condition,
+        "package_quantity": product.package_quantity,
+        "measure_unit": product.measure_unit,
+        "characteristics": product.characteristics,
+        "description": product.description,
+    }
+    enriched = {
+        **raw_data,
+        "oe_raw": oe,
+        "mpn": mpn,
+        **{
+            key: value
+            for key, value in detail_fields.items()
+            if value is not None or key not in raw_data
+        },
+        "identifier_enrichment_checked_at": datetime.now(UTC).isoformat(),
+        "identifier_enrichment_status": status,
+        "identifier_enrichment_source": "PROM_PRODUCT_DETAIL",
+        "identifier_enrichment_url": listing.url,
+    }
+    listing.raw_data = enriched
+    await session.commit()
+    return ListingIdentifierEnrichment(oe=oe, mpn=mpn, status=status)
+
+
 async def _owned_listing(
     session: AsyncSession,
     *,
@@ -700,6 +848,23 @@ def _fetch_listing_oe(url: str, settings: Settings) -> str | None:
     )
 
 
+def _fetch_listing_product(url: str, settings: Settings):
+    config = ScrapeConfig(
+        delay=settings.pricing_scraper_request_delay_seconds,
+        delay_jitter=settings.pricing_scraper_request_jitter_seconds,
+        timeout=settings.pricing_scraper_http_timeout_seconds,
+        max_attempts=max(1, settings.pricing_scraper_http_max_attempts),
+    )
+    with HttpClient(config) as client:
+        html = client.get_html(url)
+    return parse_product_page(html).product
+
+
+def _normalize_optional_text(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
 def _owned_catalog_statement(workspace_id: UUID):
     return (
         select(
@@ -722,6 +887,7 @@ def _owned_catalog_statement(workspace_id: UUID):
             Listing.raw_data["image"].as_string().label("image_url"),
             Listing.raw_data["oe_raw"].as_string().label("oe_raw"),
             Listing.raw_data["description"].as_string().label("description"),
+            Listing.raw_data["mpn"].as_string().label("mpn"),
         )
         .join(MarketplaceStore, MarketplaceStore.id == Listing.store_id)
         .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
@@ -883,6 +1049,15 @@ def _catalog_product(
         key=lambda value: (len(normalize_catalog_code(value)), len(value), value),
         default=None,
     )
+    display_mpn = min(
+        (
+            value.strip()
+            for value in (row.mpn for row in rows)
+            if value and value.strip()
+        ),
+        key=lambda value: (len(normalize_catalog_code(value)), len(value), value),
+        default=None,
+    )
     oe = next(
         (
             normalized
@@ -905,6 +1080,7 @@ def _catalog_product(
         name=representative.name,
         sku=display_sku,
         oe=oe,
+        mpn=display_mpn,
         model_id=representative.model_id,
         brand=representative.brand,
         image_url=_safe_image_url(representative.image_url),
@@ -969,6 +1145,10 @@ _LABELED_OE_RE = re.compile(
     r"[A-Z0-9]+(?:[ ._/-]+[A-Z0-9]+){0,5})",
     re.IGNORECASE,
 )
+_IDENTITY_TOKEN_RE = re.compile(
+    r"[A-ZА-ЯЇІЄҐґ0-9]+",
+    re.IGNORECASE,
+)
 
 
 def normalize_oe_value(value: str | None) -> str | None:
@@ -991,6 +1171,39 @@ def _matches_query(
     normalized_tokens: tuple[str, ...],
     text_query: str,
 ) -> bool:
+    # A compact number-bearing query is an identity lookup, not a wording
+    # search.  Substring matching here makes ``123456`` select ``1234567`` and
+    # can make the operator open a different catalog part before the market
+    # comparison even starts.  Keep descriptive queries (for example
+    # ``Mercedes 124``) on the wording lane, but require exact normalized
+    # structured identity or an exact token span for OE-like queries.
+    if _is_identity_query(text_query, normalized_query):
+        structured_values = (
+            product.sku,
+            product.oe,
+            product.mpn,
+            product.model_id,
+            *(row.sku for row in rows),
+            *(row.oe_raw for row in rows),
+            *(row.mpn for row in rows),
+            *(row.model_id for row in rows),
+        )
+        if any(
+            normalized_query == normalize_catalog_code(value)
+            for value in structured_values
+            if value
+        ):
+            return True
+        text_values = (
+            product.name,
+            *(row.name for row in rows),
+            *(row.description for row in rows),
+        )
+        return any(
+            _identity_token_span_contains(value, normalized_query)
+            for value in text_values
+            if value
+        )
     if text_query and any(text_query in row.name.casefold() for row in rows):
         return True
     if not normalized_query:
@@ -998,11 +1211,13 @@ def _matches_query(
     values = (
         product.sku,
         product.oe,
+        product.mpn,
         product.model_id,
         product.brand,
         product.name,
         *(row.sku for row in rows),
         *(row.oe_raw for row in rows),
+        *(row.mpn for row in rows),
         *(row.name for row in rows),
         *(row.description for row in rows),
     )
@@ -1015,7 +1230,78 @@ def _matches_query(
     )
 
 
+def _is_identity_query(query: str | None, normalized_query: str) -> bool:
+    """Recognize an OE/article-shaped query without rejecting normal wording."""
+
+    if not normalized_query or not any(character.isdigit() for character in normalized_query):
+        return False
+    raw_tokens = _IDENTITY_TOKEN_RE.findall(query or "")
+    if not raw_tokens:
+        return False
+    # A formatted number may be split into several digit-bearing tokens.  A
+    # descriptive phrase with a model year (``Mercedes 124``) keeps at least
+    # one lexical token and remains on the ordinary wording lane.
+    if all(any(character.isdigit() for character in token) for token in raw_tokens):
+        return True
+    # OE titles frequently put a one/two-letter manufacturer suffix in its own
+    # token (``7E5 827 505 A``) or prefix the number with a short make code
+    # (``VW 7E5 827 505 A``).  Treat those as identity lookups too; a natural
+    # language query such as ``Mercedes 124`` remains on the wording lane
+    # because its lexical token is longer than two characters.
+    lexical_tokens = [
+        token for token in raw_tokens if not any(character.isdigit() for character in token)
+    ]
+    digit_tokens = [
+        token for token in raw_tokens if any(character.isdigit() for character in token)
+    ]
+    return bool(digit_tokens) and bool(lexical_tokens) and all(
+        len(token) <= 2 for token in lexical_tokens
+    )
+
+
+def _identity_token_span_contains(value: str, wanted: str) -> bool:
+    """Match grouped identifiers as a whole token span, never a suffix."""
+
+    tokens = _IDENTITY_TOKEN_RE.findall(value)
+    for start in range(len(tokens)):
+        joined = ""
+        for token in tokens[start : start + 8]:
+            joined += normalize_catalog_code(token)
+            if len(joined) >= len(wanted):
+                if joined == wanted:
+                    return True
+                break
+    return False
+
+
+def _identity_title_pattern(wanted: str) -> str:
+    """Build a PostgreSQL regex for a whole identifier token span.
+
+    The stored catalog normalization removes punctuation, so SQL substring
+    matching cannot distinguish ``123456`` from ``1234567``.  Matching the
+    original title with explicit non-alphanumeric boundaries preserves grouped
+    forms while rejecting suffix/prefix collisions.
+    """
+
+    pieces = r"[^[:alnum:]]*".join(re.escape(character) for character in wanted)
+    return rf"(^|[^[:alnum:]]){pieces}($|[^[:alnum:]])"
+
+
+def _identity_title_label_pattern(wanted: str) -> str:
+    """Build a labelled PostgreSQL regex for short all-numeric identities."""
+
+    pieces = r"[^[:alnum:]]*".join(re.escape(character) for character in wanted)
+    label = (
+        r"(?:^|[^[:alnum:]])"
+        r"(?:oe|oem|art(?:icle)?|артикул|арт|№|"
+        r"код(?:[^[:alnum:]]+(?:запчасти|запчастини|виробника|производителя))?)"
+        r"[^[:alnum:]]+"
+    )
+    return rf"{label}{pieces}($|[^[:alnum:]])"
+
+
 __all__ = [
+    "ListingIdentifierEnrichment",
     "OwnedCatalogListing",
     "OwnedCatalogPage",
     "OwnedCatalogProduct",
@@ -1024,6 +1310,7 @@ __all__ = [
     "canonical_catalog_sku",
     "catalog_identity",
     "extract_labeled_oe",
+    "enrich_listing_identifiers",
     "list_owned_catalog",
     "normalize_catalog_code",
     "normalize_oe_value",

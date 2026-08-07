@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,30 @@ def _write(
 
 def _reason_codes(result) -> set[str]:
     return {reason for check in result.checks for reason in check.reason_codes}
+
+
+def test_comparability_preflight_rejects_hash_only_activation_artifact(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "fake-comparability-activation.json"
+    artifact.write_text('{"approved":false}', encoding="utf-8")
+    values = _base()
+    values.update(
+        {
+            "PRICING_COMPARABILITY_V1_AUTOMATIC_ENABLED": "true",
+            "PRICING_COMPARABILITY_ACTIVATION_ARTIFACT": str(artifact),
+            "PRICING_COMPARABILITY_ACTIVATION_SHA256": hashlib.sha256(
+                artifact.read_bytes()
+            ).hexdigest(),
+        }
+    )
+    path = _write(tmp_path / "hash-only.env", values)
+
+    result = run_preflight(path, mode="static")
+
+    assert "PREFLIGHT_COMPARABILITY_ACTIVATION_ARTIFACT_MISSING" in _reason_codes(
+        result
+    )
 
 
 def _static_variation(case_id: str, values: dict[str, str]):

@@ -12,8 +12,12 @@ from marko.services import owned_catalog
 from marko.services.owned_catalog import (
     OwnedCatalogListing,
     _owned_catalog_statement,
+    _identity_title_label_pattern,
+    _identity_title_pattern,
+    _is_identity_query,
     build_owned_catalog_page,
     canonical_catalog_sku,
+    enrich_listing_identifiers,
     enrich_listing_oe,
     extract_labeled_oe,
     get_owned_catalog_product,
@@ -34,6 +38,7 @@ def _listing(
     name: str = "Втягивающее реле стартера Mercedes",
     brand: str | None = "KEMP",
     oe_raw: str | None = None,
+    mpn: str | None = None,
     description: str | None = None,
     store_name: str | None = None,
 ) -> OwnedCatalogListing:
@@ -54,6 +59,7 @@ def _listing(
         image_url="https://images.prom.ua/product.jpg",
         oe_raw=oe_raw,
         description=description,
+        mpn=mpn,
     )
 
 
@@ -117,6 +123,105 @@ def test_owned_catalog_search_normalizes_oe_formatting() -> None:
     assert page.total == 1
     assert page.items[0].sku == "0331402053"
     assert page.catalog_total == 2
+
+
+def test_owned_catalog_exposes_and_searches_native_mpn_without_calling_it_oe() -> None:
+    rows = [
+        _listing(
+            store_id=STORE_A,
+            external_id="3912822",
+            sku="SELLER-LOCAL-1",
+            mpn="TH 652 688 J",
+        ),
+        _listing(
+            store_id=STORE_B,
+            external_id="3325174",
+            sku="OTHER-LOCAL-1",
+            mpn="OTHER-MPN",
+            name="Другой термостат Ford",
+        ),
+    ]
+
+    page = build_owned_catalog_page(
+        rows,
+        query="TH652688J",
+        limit=50,
+        offset=0,
+    )
+
+    assert page.total == 1
+    assert page.items[0].mpn == "TH 652 688 J"
+    assert page.items[0].oe is None
+
+
+def test_owned_catalog_identity_search_does_not_accept_numeric_suffixes() -> None:
+    rows = [
+        _listing(
+            store_id=STORE_A,
+            external_id="3912822",
+            sku="1234567",
+            name="Деталь з артикулом 1234567",
+        ),
+        _listing(
+            store_id=STORE_B,
+            external_id="3325174",
+            sku="123456",
+            name="Деталь з артикулом 123456",
+        ),
+    ]
+
+    page = build_owned_catalog_page(rows, query="123456", limit=50, offset=0)
+
+    assert page.total == 1
+    assert page.items[0].sku == "123456"
+
+
+def test_owned_catalog_identity_search_accepts_grouped_number_in_title() -> None:
+    rows = [
+        _listing(
+            store_id=STORE_A,
+            external_id="3912822",
+            sku="INTERNAL-ROW",
+            name="Кришка OEM 6 1131 36 9611",
+        ),
+    ]
+
+    page = build_owned_catalog_page(
+        rows,
+        query="6-1131-36-9611",
+        limit=50,
+        offset=0,
+    )
+
+    assert page.total == 1
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("7E5 827 505 A", True),
+        ("VW 7E5 827 505 A", True),
+        ("123456", True),
+        ("Mercedes 124", False),
+        ("радиатор 2006", False),
+    ],
+)
+def test_owned_catalog_identity_query_lane_recognizes_grouped_oe_without_catching_words(
+    query: str,
+    expected: bool,
+) -> None:
+    assert _is_identity_query(query.casefold(), owned_catalog.normalize_catalog_code(query)) is expected
+
+
+def test_owned_catalog_sql_identity_lane_uses_boundaries_and_short_number_labels() -> None:
+    long_pattern = _identity_title_pattern("7E5827505A")
+    short_pattern = _identity_title_label_pattern("123456")
+
+    assert "[:alnum:]" in long_pattern
+    assert "[:alnum:]" in short_pattern
+    assert "1[^[:alnum:]]*2" in short_pattern
+    assert "5[^[:alnum:]]*6" in short_pattern
+    assert "1234567" not in short_pattern
 
 
 @pytest.mark.parametrize(
@@ -529,6 +634,94 @@ async def test_enrich_listing_oe_returns_cached_result_without_a_network_call(
     )
 
     assert oe == "4A1422893AA"
+
+
+@pytest.mark.asyncio
+async def test_identifier_enrichment_caches_mpn_and_typed_detail_fields(
+    monkeypatch,
+) -> None:
+    listing = _FakeListing(
+        url="https://prom.ua/ua/p1-product.html",
+        raw_data={},
+    )
+    session = _FakeSession()
+
+    async def fake_owned_listing(*_args, **_kwargs):
+        return listing
+
+    class _Product:
+        oe_raw = None
+        mpn = "TH 652 688 J"
+        name = "Термостат Ford"
+        condition = "Новий"
+        package_quantity = 1
+        measure_unit = "шт."
+        characteristics = [{"name": "Температура", "value": "88"}]
+        description = "Деталь для Ford"
+
+    def fake_fetch(url: str, _settings):
+        assert url == listing.url
+        return _Product()
+
+    monkeypatch.setattr(owned_catalog, "_owned_listing", fake_owned_listing)
+    monkeypatch.setattr(owned_catalog, "_fetch_listing_product", fake_fetch)
+    monkeypatch.setattr(
+        owned_catalog,
+        "require_live_prom_marketplace_collection",
+        lambda *_a, **_k: None,
+    )
+
+    result = await enrich_listing_identifiers(
+        session,
+        workspace_id=uuid4(),
+        store_id=uuid4(),
+        external_id="1",
+    )
+
+    assert result is not None
+    assert result.mpn == "TH 652 688 J"
+    assert result.oe is None
+    assert result.status == "IDENTIFIERS_FOUND"
+    assert listing.raw_data["mpn"] == "TH 652 688 J"
+    assert listing.raw_data["condition"] == "Новий"
+    assert listing.raw_data["identifier_enrichment_source"] == (
+        "PROM_PRODUCT_DETAIL"
+    )
+    assert session.committed
+
+
+@pytest.mark.asyncio
+async def test_identifier_enrichment_does_not_refetch_cached_absence(monkeypatch) -> None:
+    listing = _FakeListing(
+        url="https://prom.ua/ua/p1-product.html",
+        raw_data={
+            "oe_raw": None,
+            "mpn": None,
+            "identifier_enrichment_checked_at": "2026-08-06T00:00:00Z",
+            "identifier_enrichment_status": "NO_IDENTIFIER",
+        },
+    )
+
+    async def fake_owned_listing(*_args, **_kwargs):
+        return listing
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("cached absence must not trigger another fetch")
+
+    monkeypatch.setattr(owned_catalog, "_owned_listing", fake_owned_listing)
+    monkeypatch.setattr(owned_catalog, "_fetch_listing_product", fail_if_called)
+
+    result = await enrich_listing_identifiers(
+        _FakeSession(),
+        workspace_id=uuid4(),
+        store_id=uuid4(),
+        external_id="1",
+    )
+
+    assert result is not None
+    assert result.oe is None
+    assert result.mpn is None
+    assert result.status == "NO_IDENTIFIER"
 
 
 @pytest.mark.asyncio

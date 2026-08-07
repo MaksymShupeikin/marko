@@ -38,6 +38,11 @@ KNOWN_FIELDS = frozenset(
         FIELD_APPLICABILITY_MODEL,
         "condition",
         "part_kind",
+        # Commercial evidence needed by the pricing admission boundary.  The
+        # values remain raw/provenance-bound; this list only prevents a known
+        # field from being reported as an unexplained characteristic.
+        "package_quantity",
+        "unit_basis",
     }
 )
 

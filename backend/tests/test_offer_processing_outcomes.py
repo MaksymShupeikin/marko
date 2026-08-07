@@ -1,5 +1,5 @@
-from decimal import Decimal
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -112,6 +112,18 @@ def test_valid_query_candidate_does_not_invent_retrieval_score() -> None:
         ),
         ({"price": "330", "price_original": "412"}, Decimal("330.00"), Decimal("412.00")),
         ({"price": "330", "reference_price": "300"}, Decimal("330.00"), None),
+        (
+            # A malformed discounted field must not inflate the active market
+            # price; the higher value remains reference evidence.
+            {"price": "330", "discounted_price": "412"},
+            Decimal("330.00"),
+            Decimal("412.00"),
+        ),
+        (
+            {"discounted_price": "412", "price_original": "330"},
+            Decimal("330.00"),
+            Decimal("412.00"),
+        ),
     ],
 )
 def test_price_boundary_never_uses_crossed_out_price_as_sale(
@@ -160,10 +172,10 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
     )
     original_extract = market_collection.extract_oe_evidence
 
-    def fail_one_extractor(raw_offer, raw_capture_manifest):
+    def fail_one_extractor(raw_offer, raw_capture_manifest, **kwargs):
         if raw_offer.get("name") == "EXTRACTOR-BOOM":
             raise RuntimeError("intentional extractor variation")
-        return original_extract(raw_offer, raw_capture_manifest)
+        return original_extract(raw_offer, raw_capture_manifest, **kwargs)
 
     monkeypatch.setattr(
         market_collection,
@@ -179,7 +191,12 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
         ),
         run_item=SimpleNamespace(id=uuid4()),
         catalog_item=SimpleNamespace(
-            id=uuid4(), category="brakes", oe_norm="1K0121251"
+            id=uuid4(),
+            category="brakes",
+            oe_norm="1K0121251",
+            mpn_norm="",
+            identity_status="OE_CONFIRMED",
+            part_numbers_norm=(),
         ),
             capture=SimpleNamespace(
                 id=uuid4(),
@@ -251,6 +268,7 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
         brand_confidence={},
         observed_at=datetime(2026, 7, 19, tzinfo=UTC),
         source_type="persisted_replay",
+        acquisition_query="1K0121251",
     )
 
     assert accounting.as_dict() == {

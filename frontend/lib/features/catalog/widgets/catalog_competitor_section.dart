@@ -192,24 +192,24 @@ class _DiscoverySection extends StatelessWidget {
         _OutcomeBlock(
           key: const ValueKey('catalog-pricing-evidence-block'),
           title: context.localized(
-            ru: 'Учитываются в расчёте',
-            uk: 'Враховуються в розрахунку',
+            ru: 'Предварительно прошли ворота · пока не в расчёте',
+            uk: 'Попередньо пройшли ворота · поки не в розрахунку',
           ),
           subtitle: context.localized(
             ru:
-                'Та же деталь, уровень известен и приводится к вашему. '
-                'Эти цены формируют справедливую цену.',
+                'Даже успешный discovery-отбор не является рыночным '
+                'наблюдением. Для цены нужна отдельная frozen evidence-запись.',
             uk:
-                'Та сама деталь, рівень відомий і приводиться до вашого. '
-                'Ці ціни формують справедливу ціну.',
+                'Навіть успішний discovery-відбір не є ринковим '
+                'спостереженням. Для ціни потрібен окремий frozen evidence-запис.',
           ),
           emptyLabel: context.localized(
             ru:
-                'Пока ни одно объявление не допущено к расчёту цены. '
-                'Причины перечислены выше.',
+                'Discovery-кандидаты не допускаются к расчёту цены. '
+                'Они показаны для проверки; причины перечислены выше.',
             uk:
-                'Поки жодне оголошення не допущене до розрахунку ціни. '
-                'Причини перелічені вище.',
+                'Discovery-кандидати не допускаються до розрахунку ціни. '
+                'Вони показані для перевірки; причини наведені вище.',
           ),
           offers: comparison.pricingEvidence,
           onOpenListing: onOpenListing,
@@ -388,6 +388,10 @@ class _DiscoveredListingCard extends StatelessWidget {
                         offer.sellerName,
                         if ((offer.brand ?? '').isNotEmpty) offer.brand!,
                         if ((offer.sku ?? '').isNotEmpty) 'Арт. ${offer.sku}',
+                        if ((offer.mpn ?? '').isNotEmpty) 'MPN ${offer.mpn}',
+                        if ((offer.oeRaw ?? '').isNotEmpty) 'OE ${offer.oeRaw}',
+                        if (offer.partNumbers.isNotEmpty)
+                          'Код ${offer.partNumbers.join(', ')}',
                       ].join(' · '),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,

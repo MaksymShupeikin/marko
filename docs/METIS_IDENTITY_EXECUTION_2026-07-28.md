@@ -237,6 +237,121 @@ pytest tests/test_kemp_site_harvest.py   10 passed
 повторный прогон сбора из кеша           dataset_sha256 совпал байт в байт
 ```
 
+### 1B.7. Обновление карточного provenance-контракта (2026-08-06)
+
+После подключения четырёх собственных Prom-витрин к source map был повторно
+прогнан только локальный кеш KEMP (`requests_made=0`). Это не новый market
+snapshot и не ценовой источник.
+
+| метрика | v2 результат |
+|---|---:|
+| строк CSV | 2372 |
+| карточек прочитано | 2271 |
+| `source_title` заполнен | 2372 / 2372 |
+| `source_image_url` заполнен | 1657 / 2372 |
+| `OE_CANDIDATE` строк | 561 |
+| внутренних `776*` строк | 603 |
+| позиций с кандидатом | 539 |
+| ошибок / неразобранных карточек | 0 / 0 |
+| сетевых запросов при replay | 0 |
+
+Исправлен важный precision-дефект: заголовок и основное изображение теперь
+хранятся вместе с тем URL карточки, из которой извлечён номер. Раньше при
+нескольких результатах поиска loop-scoped title мог попасть к чужому номеру
+последней карточки; это давало ложные `PUBLIC_NUMBER_SEMANTIC_FANOUT`
+quarantine. В v2 добавлены `source_title` и `source_image_url`, причём
+изображение принимается только с HTTPS `kemp.ua`/`www.kemp.ua` и никогда не
+влияет на цену или автоматический identity verdict.
+
+Legacy manifest до structured binding: dataset SHA `8d291557a4b521e5…`, token-config SHA
+`36947f32714f177b…`, method version `kemp-site-tokens-v2-card-evidence`.
+Старые snapshots с v1 считаются stale и не должны использоваться runtime
+reader'ом до нового reparse.
+
+Четыре Prom URL (`2847093` KEMP, `4015921` АвтоБуст, `3325174` PROFParts,
+`3912822` Parts Avto) остаются owned evidence: они помогают объединять
+дубли и подтверждать seed-side title/brand/MPN, но не являются независимыми
+конкурентами и не входят в market price cohort.
+
+### 1B.8. Исправление OE-admission после проверки KEMP_SITE (2026-08-06)
+
+Обнаружен false-positive в границе идентичности: `_asserted_numbers()` ранее
+считал любой второй источник достаточным для подтверждения OE. Поэтому связка
+`KEMP_SITE + KEMP_REFERENCE_ARTICLE` могла превратить неразмеченный SKU
+карточки сайта в `OE_CONFIRMED`, хотя `KEMP_REFERENCE_ARTICLE` утверждает
+только cross/артикул и не утверждает, что номер является OE.
+
+Теперь второе подтверждение OE учитывается только если оба независимых
+источника имеют `asserts_oe=true`. Cross-list по-прежнему подтверждает связь
+детали и расширяет ретривал, но не заполняет `CatalogItem.oe_norm`.
+
+На Camry V40 (`77648791`) результат теперь такой:
+
+- `313452 -> 4853089025` остаётся подтверждённым cross для поиска;
+- KEMP title, URL и image provenance сохраняются;
+- `identity_status = MPN_ONLY`, а не ложный `OE_CONFIRMED`;
+- `fill_oe_norm` не выполняется без независимого OE-источника.
+
+Пересчитанный source-only plan: `OE_CONFIRMED=5219`, `MPN_ONLY=1954`,
+`UNRESOLVED=20`, `links=3435`. Снижение `OE_CONFIRMED` — намеренная коррекция
+ложного доверия; cross-поиск не удалён.
+
+### 1B.9. Structured Product binding KEMP_SITE (2026-08-06)
+
+В карточке KEMP найден второй, структурированный слой идентичности:
+`schema.org/Product` JSON-LD. Харвест сохраняет из него только `name`, `brand`,
+`model`, `sku`, `mpn` и основное изображение. `offers.price`, валюта и
+availability исключены из identity-пайплайна.
+
+Для карточки с JSON-LD точный binding теперь определяется так:
+
+```text
+normalize(Product.mpn) == normalize(searched_internal_code)
+    -> PRODUCT_MATCH
+normalize(Product.mpn) != normalize(searched_internal_code)
+    -> MPN_MISMATCH (fail closed)
+Product object отсутствует
+    -> MISSING / legacy review evidence
+```
+
+Повторный прогон сохранённого cache без сети дал 2 370 строк
+`PRODUCT_MATCH` из 2 372 строк и 2 строки `MISSING`; это именно row-level
+счётчик CSV. В manifest `counters.structured_*` остаются card-level (1 114
+точных карточек, 1 154 отклонённых JSON-LD-привязки и 3 карточки без JSON-LD),
+а новый `record_counts` явно фиксирует row-level denominator. Plan identity graph не
+изменился (`links=3435`, `OE_CONFIRMED=5219`, `MPN_ONLY=1954`), потому что
+структурированный слой повышает качество привязки карточки, но один и тот же
+сайт не объявляется независимым вторым голосом и не меняет OE-admission.
+Новый replay dataset SHA: `7996acb83c2cfec5…`; `requests_made=0`.
+
+### 1B.10. Re-enrichment не может переиспользовать неполный gate snapshot (2026-08-06)
+
+`oe_reenrichment` раньше проверял свежесть semantic gate собственной локальной
+копией условия. Она сверяла версии extractor/gate и статус `PRICING_EVIDENCE`,
+но не требовала блока `identity_admission.automatic_evidence_sufficient`.
+Поэтому старый snapshot с теми же версиями, но без доказательства допуска
+идентичности, мог пройти именно через replay-ветку. Это особенно опасно для
+retained Prom part-code assertion: identity replay не должен добавлять новый
+pricing authority.
+
+Теперь re-enrichment вызывает тот же fail-closed predicate
+`semantic_gate_snapshot_is_current`, что и pricing/calibration boundary. Для
+допуска одновременно обязательны:
+
+```text
+semantic_gate.status == PRICING_EVIDENCE
+semantic_gate.reason == OK
+gate_version == current
+extractor_version == current
+identity_admission.automatic_evidence_sufficient == true
+```
+
+Добавлен regression-тест: snapshot без `identity_admission` отвергается, тот же
+snapshot с явным `true` принимается. Targeted verification: `7 passed`, Ruff
+`All checks passed`. Это не является измерением production precision; это
+устраняет конкретный replay-bypass и сохраняет ручной review для неполных
+исторических строк.
+
 ---
 
 ## WP-2. Бренд артикула и разведение OE/MPN — ЗАКРЫТ (2026-07-29)

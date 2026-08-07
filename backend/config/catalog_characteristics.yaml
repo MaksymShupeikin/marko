@@ -1,5 +1,5 @@
 schema_version: marko-catalog-characteristics-v1
-method_version: catalog-characteristics-v1
+method_version: catalog-characteristics-v2-commercial-unit-fields
 
 # Prom экспортирует характеристики товара повторяющимися тройками колонок
 # "Назва_Характеристики / Одиниця_виміру_Характеристики / Значення_Характеристики".
@@ -83,4 +83,20 @@ characteristics:
     names:
       - "тип запчастини"
       - "тип запчасти"
+    separators: []
+
+  - field: package_quantity
+    names:
+      - "кількість в упаковці"
+      - "количество в упаковке"
+      - "кількість штук"
+      - "количество штук"
+    separators: []
+
+  - field: unit_basis
+    names:
+      - "одиниця виміру"
+      - "единица измерения"
+      - "одиниця ціни"
+      - "единица цены"
     separators: []

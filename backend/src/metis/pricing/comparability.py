@@ -28,6 +28,7 @@ from .types import (
 
 COMPARABILITY_CONTRACT_VERSION = "comparison-evidence-v3"
 COMPARABILITY_POLICY_ID = "yuri-v1-comparability-v3"
+CATEGORICAL_NORMALIZATION_VERSION = "comparability-categorical-v2-stem-phrases"
 COMPARABILITY_DIMENSIONS = (
     "oe_reference",
     "part_type",
@@ -49,6 +50,143 @@ RECOGNIZED_SOURCE_TYPES = frozenset(
     {"prom", "prom_public", "persisted_replay", "official_feed", "test_fixture"}
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+#: Word stems for the closed side/position vocabularies, applied when the exact
+#: alias table below cannot answer for a compound phrase.
+#:
+#: These deliberately mirror ``_SIDE_PATTERNS`` and ``_POSITION_PATTERNS`` in
+#: ``marko.services.semantic_candidate_features``. They cannot import them:
+#: ``metis`` does not depend on ``marko``, and inverting that is a far larger
+#: change than one shared vocabulary is worth. ``tests`` sees both packages and
+#: holds them in sync. The one intended difference is ``пер``: the extractor
+#: matches ``пер.`` on raw text, while values reaching here have already had
+#: their punctuation folded away.
+_CATEGORICAL_STEMS: Mapping[str, tuple[tuple[re.Pattern[str], str], ...]] = (
+    MappingProxyType(
+        {
+            "side": (
+                (re.compile(r"\bлев\w*\b"), "left"),
+                (re.compile(r"\bлів\w*\b"), "left"),
+                (re.compile(r"\bleft\b"), "left"),
+                (re.compile(r"\blh\b"), "left"),
+                (re.compile(r"\bправ\w*\b"), "right"),
+                (re.compile(r"\bright\b"), "right"),
+                (re.compile(r"\brh\b"), "right"),
+            ),
+            "position": (
+                (re.compile(r"\bпередн\w*\b"), "front"),
+                (re.compile(r"\bпер\b"), "front"),
+                (re.compile(r"\bfront\b"), "front"),
+                (re.compile(r"\bзадн\w*\b"), "rear"),
+                (re.compile(r"\brear\b"), "rear"),
+            ),
+        }
+    )
+)
+
+_CATEGORICAL_ALIASES: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "side": MappingProxyType(
+            {
+                "left": "left",
+                "left hand": "left",
+                "lh": "left",
+                "лівий": "left",
+                "ліва": "left",
+                "ліве": "left",
+                "левый": "left",
+                "левая": "left",
+                "левое": "left",
+                "right": "right",
+                "right hand": "right",
+                "rh": "right",
+                "правий": "right",
+                "права": "right",
+                "праве": "right",
+                "правый": "right",
+                "правая": "right",
+                "правое": "right",
+            }
+        ),
+        "position": MappingProxyType(
+            {
+                "front": "front",
+                "front axle": "front",
+                "передній": "front",
+                "передня": "front",
+                "переднє": "front",
+                "передний": "front",
+                "передняя": "front",
+                "переднее": "front",
+                "передня вісь": "front",
+                "передняя ось": "front",
+                "rear": "rear",
+                "rear axle": "rear",
+                "задній": "rear",
+                "задня": "rear",
+                "заднє": "rear",
+                "задний": "rear",
+                "задняя": "rear",
+                "заднее": "rear",
+                "задня вісь": "rear",
+                "задняя ось": "rear",
+            }
+        ),
+        "condition": MappingProxyType(
+            {
+                "new": "new",
+                "новий": "new",
+                "нова": "new",
+                "нове": "new",
+                "новый": "new",
+                "новая": "new",
+                "новое": "new",
+                "used": "used",
+                "б у": "used",
+                "б/у": "used",
+                "вживаний": "used",
+                "вживана": "used",
+                "вживане": "used",
+                "refurbished": "refurbished",
+                "відновлений": "refurbished",
+                "восстановленный": "refurbished",
+            }
+        ),
+        "body_variant": MappingProxyType(
+            {
+                "sedan": "sedan",
+                "седан": "sedan",
+                "hatchback": "hatchback",
+                "хетчбек": "hatchback",
+                "хэтчбек": "hatchback",
+                "wagon": "wagon",
+                "estate": "wagon",
+                "station wagon": "wagon",
+                "універсал": "wagon",
+                "универсал": "wagon",
+                "coupe": "coupe",
+                "coupé": "coupe",
+                "купе": "coupe",
+                "cabriolet": "cabriolet",
+                "convertible": "cabriolet",
+                "кабріолет": "cabriolet",
+                "кабриолет": "cabriolet",
+                "van": "van",
+                "фургон": "van",
+                "minivan": "minivan",
+                "мінівен": "minivan",
+                "минивэн": "minivan",
+                "pickup": "pickup",
+                "pick up": "pickup",
+                "пікап": "pickup",
+                "пикап": "pickup",
+                "bus": "bus",
+                "автобус": "bus",
+            }
+        ),
+    }
+)
+_CONSERVATIVE_TEXT_DIMENSIONS = frozenset({"fitment", "vehicle_generation", "engine"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +299,7 @@ def _policy_payload() -> dict[str, Any]:
         "source_provenance_required": True,
         "unknown_semantics": "MANUAL_REVIEW",
         "conflict_semantics": "REJECT",
+        "categorical_normalization_version": CATEGORICAL_NORMALIZATION_VERSION,
     }
 
 
@@ -609,6 +748,89 @@ def categorical_dimension(
     )
 
 
+def normalized_categorical_dimension(
+    dimension: str,
+    left: str | None,
+    right: str | None,
+    *,
+    evidence_refs: Iterable[str] = (),
+) -> DimensionEvidence:
+    """Compare structured category values without converting wording drift to fact.
+
+    Exact normalized text remains supporting evidence.  For mutually exclusive
+    closed vocabularies (side, axle position, condition and body type), two
+    recognized different canonical values are a real conflict.  Opaque
+    fitment/generation/engine strings are not: differing wording is UNKNOWN
+    unless a separate deterministic parser proves the contradiction.
+    """
+
+    raw_left = _optional_string(left)
+    raw_right = _optional_string(right)
+    if raw_left is None or raw_right is None:
+        state = EvidenceState.UNKNOWN
+        normalized_right = None if raw_right is None else _comparison_text(raw_right)
+    else:
+        folded_left = _comparison_text(raw_left)
+        folded_right = _comparison_text(raw_right)
+        normalized_right = folded_right
+        if folded_left == folded_right:
+            state = EvidenceState.MATCH
+        else:
+            aliases = _CATEGORICAL_ALIASES.get(dimension)
+            canonical_left = _canonical_categorical_value(dimension, folded_left)
+            canonical_right = _canonical_categorical_value(dimension, folded_right)
+            if canonical_left is not None and canonical_right is not None:
+                normalized_right = canonical_right
+                state = (
+                    EvidenceState.MATCH
+                    if canonical_left == canonical_right
+                    else EvidenceState.CONFLICT
+                )
+            elif dimension in _CONSERVATIVE_TEXT_DIMENSIONS or aliases is not None:
+                state = EvidenceState.UNKNOWN
+            else:
+                state = EvidenceState.CONFLICT
+    return DimensionEvidence(
+        state=state,
+        raw_value=raw_right,
+        normalized_value=normalized_right,
+        evidence_refs=tuple(evidence_refs),
+        reason_code=f"{CATEGORICAL_NORMALIZATION_VERSION}:{dimension}",
+    )
+
+
+def _canonical_categorical_value(dimension: str, folded: str) -> str | None:
+    """Read a closed-vocabulary value out of a phrase, or admit it cannot.
+
+    Prom characteristics carry ``Передній лівий`` as one string. The exact
+    alias table could only answer for a value that was already a single token,
+    so a compound phrase came back as missing evidence and held the candidate
+    for review. Word stems answer it, and a phrase naming two values of the
+    same dimension stays unknown rather than becoming a guess about which was
+    meant.
+    """
+
+    aliases = _CATEGORICAL_ALIASES.get(dimension)
+    if aliases is not None:
+        exact = aliases.get(folded)
+        if exact is not None:
+            return exact
+    stems = _CATEGORICAL_STEMS.get(dimension)
+    if stems is None:
+        return None
+    found = {
+        canonical for pattern, canonical in stems if pattern.search(folded)
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+def _comparison_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    normalized = re.sub(r"[_-]+", " ", normalized)
+    normalized = re.sub(r"[^\w\s/]+", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
 def _optional_string(value: Any) -> str | None:
     if value is None:
         return None
@@ -623,7 +845,9 @@ __all__ = [
     "COMPARABILITY_POLICY_ID",
     "ComparabilityDecision",
     "CategoryComparabilityRule",
+    "CATEGORICAL_NORMALIZATION_VERSION",
     "categorical_dimension",
+    "normalized_categorical_dimension",
     "bind_persisted_provenance",
     "comparison_evidence_from_dict",
     "comparison_evidence_to_dict",

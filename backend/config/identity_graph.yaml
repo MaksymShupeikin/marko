@@ -9,7 +9,7 @@
 # есть опровержение. Максимум — REVIEW, и тогда на цену она не влияет.
 
 schema_version: metis-identity-graph-v1
-method_version: identity-graph-v1
+method_version: identity-graph-v4
 
 # Источники по убыванию доверия. Порядок не декоративный: он решает, чей номер
 # станет каноническим, и он же задаёт статус связи.
@@ -157,10 +157,22 @@ canonical:
 #       выбрасывается — за год номер могли заменить, и старый остаётся настоящим
 #       номером детали, по которому у конкурента может лежать предложение. Но
 #       цену он не двигает, пока человек не подтвердит.
+#   SOURCE_SEMANTIC_CONFLICT — две строки одной ревизии или две ревизии,
+#       склеенные одним внутренним
+#       кодом, явно расходятся по физическому признаку (например,
+#       left/right или front/rear). Свежесть файла не доказывает, что это
+#       та же деталь, поэтом все рёбра такого ключа остаются REVIEW.
+#   PUBLIC_NUMBER_SEMANTIC_FANOUT — один публичный номер приписан двум
+#       структурно разным товарам. Это работает и без ребра: поиск по
+#       одному canonical всё равно смешал бы эти детали.
 anomalies:
   - name: OE_SOURCE_CONFLICT
     review_required: true
   - name: SHARED_ARTICLE_FANOUT
     review_required: true
   - name: OE_SUPERSEDED_BY_NEWER_REFERENCE
+    review_required: true
+  - name: SOURCE_SEMANTIC_CONFLICT
+    review_required: true
+  - name: PUBLIC_NUMBER_SEMANTIC_FANOUT
     review_required: true

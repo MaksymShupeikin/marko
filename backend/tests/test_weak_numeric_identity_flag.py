@@ -1,4 +1,4 @@
-"""A short all-numeric OE found only in free text is flagged, never rejected.
+"""A short all-numeric OE found only in unlabelled free text is held back.
 
 This is the failure that put 115 meat-grinder augers into the observation set.
 KEMP position 77646363 is a cylinder-head gasket whose OE is ``863130`` — Elring
@@ -6,12 +6,11 @@ prints it ``863.130``.  Zelmer prints an auger ``86.3130``.  Both normalize to
 ``863130``, so the auger listings matched on an exact string and passed the
 identity gate on a title substring.
 
-The category blocklist now rejects those two Prom branches by path, which is
-correct and was measured, but it is retrospective: the next collision lands in a
-branch nobody has listed yet.  The flag here marks the shape that produces them
-so the class stays countable, and it deliberately stops at marking.  Rejecting a
-candidate on the length of a number would need the golden set to show what the
-rule costs in real candidates, and that set does not exist.
+The category blocklist used to reject those two Prom branches by path, but that
+was retrospective: the next collision could land in a branch nobody had
+listed. The generic gate now keeps an unlabelled free-text hit visible as
+``REFERENCE_ONLY``. Structured article fields and explicitly labelled
+``арт./OE/код`` title evidence remain eligible for the downstream gates.
 """
 
 from __future__ import annotations
@@ -79,16 +78,31 @@ def test_the_real_collision_is_flagged() -> None:
     assert "WEAK_NUMERIC_IDENTITY" in verdict.flags
 
 
-def test_the_flag_does_not_reject_the_candidate() -> None:
-    """Marking is the whole claim: the number really is there, in the title."""
+def test_an_unlabelled_free_text_hit_is_not_priceable() -> None:
+    """A title substring is evidence to review, not automatic identity."""
 
     verdict = _check(_gasket(), _auger())
 
-    assert verdict.status is CandidateStatus.PRICING_EVIDENCE
-    assert verdict.reason == "OK"
+    assert verdict.status is CandidateStatus.REFERENCE_ONLY
+    assert verdict.reason == "WEAK_NUMERIC_IDENTITY"
     identity = verdict.details["gates"]["oem_identity"]
     assert identity["evidence"] == "TITLE"
     assert identity["weak_numeric_identity"] is True
+
+
+def test_a_labelled_numeric_title_hit_remains_eligible_for_later_gates() -> None:
+    verdict = _check(
+        _gasket(),
+        _auger(
+            title="Прокладка ГБЦ 1,5мм арт. 863130 Zelmer-compatible",
+            brand="Zelmer",
+        ),
+    )
+
+    identity = verdict.details["gates"]["oem_identity"]
+    assert identity["evidence"] == "TITLE"
+    assert identity["identifier_context"] == "LABELLED_TITLE"
+    assert "WEAK_NUMERIC_IDENTITY" not in verdict.flags
 
 
 def test_an_exact_article_field_match_is_not_weak() -> None:

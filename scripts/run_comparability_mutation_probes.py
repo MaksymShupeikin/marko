@@ -90,8 +90,10 @@ MUTATIONS = (
         "metis/pricing/engine.py",
         (
             (
-                "if not comparability.automatic_eligible:",
-                "if False and not comparability.automatic_eligible:",
+                "        if not comparability.automatic_eligible:\n"
+                "            return comparability.reason_codes[0], comparability",
+                "        if False and not comparability.automatic_eligible:\n"
+                "            return comparability.reason_codes[0], comparability",
             ),
         ),
         "tests/test_comparability_contract.py::test_m025_original_raise_920_payload_is_killed",

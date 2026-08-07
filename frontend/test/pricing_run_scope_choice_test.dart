@@ -57,13 +57,19 @@ void main() {
       reason: 'the operator confirms a named scope, not "a calculation"',
     );
     expect(
-      find.textContaining('позиций: 288'),
+      find.textContaining('Строк в контуре: 288'),
       findsOneWidget,
       reason: 'the estimate must be the bounded preview’s own answer',
     );
+    expect(find.textContaining('допущено: 285'), findsOneWidget);
+    expect(
+      find.textContaining('Без подтверждённого OE/MPN/кросса: 3'),
+      findsOneWidget,
+      reason: 'unidentified rows must be disclosed as retained but not matched',
+    );
     expect(find.textContaining('около 15 мин'), findsOneWidget);
     expect(
-      find.textContaining('позиций: 7000'),
+      find.textContaining('Строк в контуре: 7000'),
       findsNothing,
       reason: 'the full-catalogue estimate does not describe this run',
     );
@@ -109,7 +115,12 @@ void main() {
           'a full-catalogue run does not enumerate the catalogue client-side',
     );
     expect(find.textContaining('весь каталог'), findsOneWidget);
-    expect(find.textContaining('позиций: 7000'), findsOneWidget);
+    expect(find.textContaining('Строк в контуре: 7000'), findsOneWidget);
+    expect(find.textContaining('допущено: 6960'), findsOneWidget);
+    expect(
+      find.textContaining('Без подтверждённого OE/MPN/кросса: 40'),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('Запустить').last);
     await _flush(tester);
@@ -201,6 +212,8 @@ class _ScopeBackend {
                 scopeMode: 'EXPLICIT_ITEMS',
                 requested: (body['catalog_item_ids'] as List).length,
                 eligible: 288,
+                networkEligible: 285,
+                identityBlocked: 3,
                 excluded: 12,
                 worstCaseSeconds: 900,
                 requiresConfirmation: false,
@@ -209,6 +222,8 @@ class _ScopeBackend {
                 scopeMode: 'FULL_CATALOG',
                 requested: 7000,
                 eligible: 7000,
+                networkEligible: 6960,
+                identityBlocked: 40,
                 excluded: 0,
                 worstCaseSeconds: 7200,
                 requiresConfirmation: true,
@@ -300,6 +315,8 @@ Map<String, dynamic> _previewJson({
   required String scopeMode,
   required int requested,
   required int eligible,
+  required int networkEligible,
+  required int identityBlocked,
   required int excluded,
   required int worstCaseSeconds,
   required bool requiresConfirmation,
@@ -315,8 +332,10 @@ Map<String, dynamic> _previewJson({
   'estimate': {
     'requested_items': requested,
     'eligible_items': eligible,
+    'network_eligible_items': networkEligible,
+    'identity_blocked_items': identityBlocked,
     'excluded_items': excluded,
-    'unique_scrape_inputs': eligible,
+    'unique_scrape_inputs': networkEligible,
     'duplicate_items': 0,
     'worst_case_duration_seconds': worstCaseSeconds,
   },

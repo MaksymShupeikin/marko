@@ -2,18 +2,27 @@ import 'package:flutter/material.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/presentation_formatters.dart';
 import '../../core/widgets/marko_cached_image.dart';
 import 'pricing_models.dart';
 
 class ComparabilityReviewPanel extends StatelessWidget {
   const ComparabilityReviewPanel({
     required this.evidence,
+    this.normalizedPrice,
+    this.marketMinimum,
+    this.targetBandLow,
+    this.targetBandHigh,
     this.onFeedback,
     this.onReview,
     super.key,
   });
 
   final RecommendationEvidence evidence;
+  final DecimalValue? normalizedPrice;
+  final DecimalValue? marketMinimum;
+  final DecimalValue? targetBandLow;
+  final DecimalValue? targetBandHigh;
   final Future<void> Function(RecommendationEvidence)? onFeedback;
   final Future<void> Function(RecommendationEvidence)? onReview;
 
@@ -25,10 +34,10 @@ class ComparabilityReviewPanel extends StatelessWidget {
     }
 
     final colors = MarkoTheme.of(context);
-    final eligible = evidence.llmPricingEligible;
+    final eligible = review.pricingAdmission == 'ADMITTED';
     final foreground = eligible
         ? colors.positive
-        : review.verdict == 'NOT_COMPARABLE'
+        : review.pricingAdmission == 'EXCLUDED'
         ? colors.negative
         : colors.warning;
     final background = eligible
@@ -47,6 +56,8 @@ class ComparabilityReviewPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _ProductPair(evidence: evidence, review: review),
+          const SizedBox(height: 9),
           Wrap(
             spacing: 8,
             runSpacing: 6,
@@ -60,9 +71,10 @@ class ComparabilityReviewPanel extends StatelessWidget {
                 color: foreground,
               ),
               Text(
-                '${_verdictLabel(context, review.verdict)} · '
-                '${_levelLabel(context, review.matchLevel)} · '
-                '${(review.confidence * 100).round()}%',
+                '${_identityVerdictLabel(context, review.identityVerdict)} · '
+                '${_levelLabel(context, review.identityMatchLevel)} · '
+                'score ${(review.identityMatchScore * 100).round()}% '
+                '(${context.localized(ru: 'некалиброванный', uk: 'некалібрований')})',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: foreground,
                   fontWeight: FontWeight.w700,
@@ -71,6 +83,8 @@ class ComparabilityReviewPanel extends StatelessWidget {
               _SourceChip(review: review),
             ],
           ),
+          const SizedBox(height: 7),
+          _DecisionSummary(evidence: evidence, review: review),
           const SizedBox(height: 7),
           Text(review.rationale),
           if (review.dimensionFindings.isNotEmpty) ...[
@@ -94,6 +108,19 @@ class ComparabilityReviewPanel extends StatelessWidget {
               (conflict) =>
                   _HardStopLine(conflict: conflict, color: colors.negative),
             ),
+          ],
+          const SizedBox(height: 8),
+          _PricingAdmissionDetails(
+            evidence: evidence,
+            review: review,
+            normalizedPrice: normalizedPrice ?? evidence.normalizedPrice,
+            marketMinimum: marketMinimum,
+            targetBandLow: targetBandLow,
+            targetBandHigh: targetBandHigh,
+          ),
+          if (review.verifiedCrossEdge.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _VerifiedCrossLine(edge: review.verifiedCrossEdge),
           ],
           if (review.imageUrls.isNotEmpty) ...[
             const SizedBox(height: 9),
@@ -131,14 +158,18 @@ class ComparabilityReviewPanel extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 8),
+          _RuntimeDetails(review: review),
+          const SizedBox(height: 5),
           Text(
             context.localized(
               ru:
-                  'Проверка ${review.promptVersion} · ${review.modelId} · '
+                  'Проверка ${review.contractVersion} / ${review.promptVersion} · '
+                  '${review.modelId} · effort=${review.reasoningEffort ?? '—'} · '
                   '${review.feedbackCount} отметок заказчика. '
                   'Цена на Prom.ua не публикуется автоматически.',
               uk:
-                  'Перевірка ${review.promptVersion} · ${review.modelId} · '
+                  'Перевірка ${review.contractVersion} / ${review.promptVersion} · '
+                  '${review.modelId} · effort=${review.reasoningEffort ?? '—'} · '
                   '${review.feedbackCount} позначок замовника. '
                   'Ціна на Prom.ua не публікується автоматично.',
             ),
@@ -177,6 +208,228 @@ class ComparabilityReviewPanel extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _ProductPair extends StatelessWidget {
+  const _ProductPair({required this.evidence, required this.review});
+
+  final RecommendationEvidence evidence;
+  final ComparabilityReview review;
+
+  @override
+  Widget build(BuildContext context) {
+    final our = review.ourProduct;
+    final candidate = review.candidate;
+    final ourTitle = our['name']?.toString().trim();
+    final ourOe = our['oe_norm']?.toString().trim();
+    final candidateTitle = candidate['title']?.toString().trim();
+    Widget card({
+      required String title,
+      required String body,
+      required String meta,
+    }) {
+      return Container(
+        width: 270,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(height: 2),
+            Text(body.isEmpty ? '—' : body, maxLines: 2),
+            Text(meta, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        card(
+          title: context.localized(ru: 'Наш товар', uk: 'Наш товар'),
+          body: ourTitle?.isNotEmpty == true
+              ? ourTitle!
+              : 'SKU ${our['sku'] ?? '—'}',
+          meta: 'OE ${ourOe?.isNotEmpty == true ? ourOe : '—'}',
+        ),
+        card(
+          title: evidence.isOwned
+              ? context.localized(ru: 'Свой магазин', uk: 'Власний магазин')
+              : context.localized(ru: 'Конкурент', uk: 'Конкурент'),
+          body: candidateTitle?.isNotEmpty == true
+              ? candidateTitle!
+              : evidence.title,
+          meta:
+              '${evidence.sellerName} · seller key ${evidence.sellerId.isEmpty ? '—' : evidence.sellerId}',
+        ),
+      ],
+    );
+  }
+}
+
+class _DecisionSummary extends StatelessWidget {
+  const _DecisionSummary({required this.evidence, required this.review});
+
+  final RecommendationEvidence evidence;
+  final ComparabilityReview review;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        _DecisionChip(
+          label: 'Deterministic: ${evidence.comparabilityHardGateResult}',
+          color: evidence.comparabilityHardGateResult == 'PASS'
+              ? colors.positive
+              : evidence.comparabilityHardGateResult == 'REJECT'
+              ? colors.negative
+              : colors.warning,
+        ),
+        _DecisionChip(
+          label: 'Luna identity: ${review.identityVerdict}',
+          color: review.identityVerdict == 'MATCH'
+              ? colors.positive
+              : review.identityVerdict == 'NOT_MATCH'
+              ? colors.negative
+              : colors.warning,
+        ),
+        _DecisionChip(
+          label: 'Pricing: ${review.pricingAdmission}',
+          color: review.pricingAdmission == 'ADMITTED'
+              ? colors.positive
+              : review.pricingAdmission == 'EXCLUDED'
+              ? colors.negative
+              : colors.warning,
+        ),
+      ],
+    );
+  }
+}
+
+class _DecisionChip extends StatelessWidget {
+  const _DecisionChip({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.11),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+      ),
+    );
+  }
+}
+
+class _PricingAdmissionDetails extends StatelessWidget {
+  const _PricingAdmissionDetails({
+    required this.evidence,
+    required this.review,
+    required this.normalizedPrice,
+    required this.marketMinimum,
+    required this.targetBandLow,
+    required this.targetBandHigh,
+  });
+
+  final RecommendationEvidence evidence;
+  final ComparabilityReview review;
+  final DecimalValue? normalizedPrice;
+  final DecimalValue? marketMinimum;
+  final DecimalValue? targetBandLow;
+  final DecimalValue? targetBandHigh;
+
+  @override
+  Widget build(BuildContext context) {
+    final admitted = review.pricingAdmission == 'ADMITTED';
+    final reasons = review.pricingReasonCodes.isEmpty
+        ? '—'
+        : review.pricingReasonCodes.join(', ');
+    if (!admitted) {
+      return Text(
+        context.localized(
+          ru: 'Цена скрыта до ADMITTED. Причина: $reasons. Кандидат не входит в ценовую когорту.',
+          uk: 'Ціну приховано до ADMITTED. Причина: $reasons. Кандидат не входить до цінової когорти.',
+        ),
+        style: Theme.of(context).textTheme.bodySmall,
+      );
+    }
+    final values = <String>[
+      context.localized(
+        ru: 'Цена кандидата: ${formatMoney(evidence.price, currency: evidence.currency)}',
+        uk: 'Ціна кандидата: ${formatMoney(evidence.price, currency: evidence.currency)}',
+      ),
+      if (normalizedPrice != null)
+        context.localized(
+          ru: 'Нормализованная: ${formatMoney(normalizedPrice!, currency: evidence.currency)}',
+          uk: 'Нормалізована: ${formatMoney(normalizedPrice!, currency: evidence.currency)}',
+        ),
+      if (marketMinimum != null)
+        'p_min: ${formatMoney(marketMinimum!, currency: evidence.currency)}',
+      if (targetBandLow != null && targetBandHigh != null)
+        context.localized(
+          ru: 'Полоса 2–5%: ${formatMoney(targetBandLow!, currency: evidence.currency)} — ${formatMoney(targetBandHigh!, currency: evidence.currency)}',
+          uk: 'Смуга 2–5%: ${formatMoney(targetBandLow!, currency: evidence.currency)} — ${formatMoney(targetBandHigh!, currency: evidence.currency)}',
+        ),
+    ];
+    return Text(
+      values.join(' · '),
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+    );
+  }
+}
+
+class _VerifiedCrossLine extends StatelessWidget {
+  const _VerifiedCrossLine({required this.edge});
+
+  final Map<String, dynamic> edge;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      'Cross CONFIRMED: ${edge['seed_code'] ?? '—'} ↔ '
+      '${edge['candidate_code'] ?? '—'} · sources=${edge['source_count'] ?? 0} · '
+      'independent sellers=${edge['independent_seller_count'] ?? 0}',
+      style: Theme.of(context).textTheme.bodySmall,
+    );
+  }
+}
+
+class _RuntimeDetails extends StatelessWidget {
+  const _RuntimeDetails({required this.review});
+
+  final ComparabilityReview review;
+
+  @override
+  Widget build(BuildContext context) {
+    final inputTokens = review.usage['input_tokens'] ?? '—';
+    final outputTokens = review.usage['output_tokens'] ?? '—';
+    final cost = review.estimatedCostUsd ?? 'NOT_EVALUATED';
+    return Text(
+      'latency=${review.latencyMs} ms · tokens=$inputTokens/$outputTokens · '
+      'estimated cost=$cost USD · rate=${review.rateCardVersion ?? '—'} · '
+      'image=${review.imageConsistency}',
+      style: Theme.of(context).textTheme.bodySmall,
     );
   }
 }
@@ -388,14 +641,21 @@ class _SourceChip extends StatelessWidget {
   }
 }
 
-String _verdictLabel(BuildContext context, String value) => switch (value) {
-  'COMPARABLE' => context.localized(ru: 'Сопоставим', uk: 'Зіставний'),
-  'NOT_COMPARABLE' => context.localized(
-    ru: 'Не сопоставим',
-    uk: 'Не зіставний',
-  ),
-  _ => context.localized(ru: 'Недостаточно данных', uk: 'Недостатньо даних'),
-};
+String _identityVerdictLabel(BuildContext context, String value) =>
+    switch (value) {
+      'MATCH' => context.localized(
+        ru: 'Identity совпадает',
+        uk: 'Identity збігається',
+      ),
+      'NOT_MATCH' => context.localized(
+        ru: 'Identity не совпадает',
+        uk: 'Identity не збігається',
+      ),
+      _ => context.localized(
+        ru: 'Identity: ручная проверка',
+        uk: 'Identity: ручна перевірка',
+      ),
+    };
 
 String _levelLabel(BuildContext context, String value) => switch (value) {
   'EXACT' => context.localized(ru: 'полное совпадение', uk: 'повний збіг'),
@@ -426,6 +686,7 @@ String _dimensionLabel(BuildContext context, Object? value) {
       ru: 'Комплектация',
       uk: 'Комплектація',
     ),
+    'unit_basis' => context.localized(ru: 'Единица цены', uk: 'Одиниця ціни'),
     'brand_manufacturer' => context.localized(ru: 'Бренд', uk: 'Бренд'),
     'currency_presence' => context.localized(ru: 'Валюта', uk: 'Валюта'),
     final String value when value.isNotEmpty => value,
@@ -445,6 +706,7 @@ String _evidenceSourceLabel(BuildContext context, Object? value) {
       ru: 'Жёсткое правило',
       uk: 'Жорстке правило',
     ),
+    'VERIFIED_CROSS' => 'CrossLink CONFIRMED',
     final String value when value.isNotEmpty => value,
     _ => context.localized(ru: 'Источник', uk: 'Джерело'),
   };

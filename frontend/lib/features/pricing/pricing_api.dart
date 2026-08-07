@@ -82,7 +82,8 @@ class PricingApi {
         'scope_mode': scopeMode,
         if (catalogItemIds.isNotEmpty) 'catalog_item_ids': catalogItemIds,
         // Полный каталог — самый дорогой режим, сервер требует явного согласия.
-        if (scopeMode == 'FULL_CATALOG') 'confirm_full_catalog': confirmFullCatalog,
+        if (scopeMode == 'FULL_CATALOG')
+          'confirm_full_catalog': confirmFullCatalog,
         'idempotency_key': ?idempotencyKey,
         'preview_token': previewToken,
       },
@@ -93,6 +94,13 @@ class PricingApi {
   Future<PricingRunSummary> getRun(String id) async {
     final payload = await _client.getJson('/api/v1/pricing/runs/$id');
     return PricingRunSummary.fromJson(payload as Map<String, dynamic>);
+  }
+
+  Future<ComparabilityRunReport> getComparabilityReport(String runId) async {
+    final payload = await _client.getJson(
+      '/api/v1/pricing/runs/$runId/comparability-report',
+    );
+    return ComparabilityRunReport.fromJson(payload as Map<String, dynamic>);
   }
 
   Future<List<PricingRunSummary>> listRuns({int limit = 25}) async {

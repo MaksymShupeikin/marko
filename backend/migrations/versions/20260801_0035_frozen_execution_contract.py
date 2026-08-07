@@ -41,7 +41,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 
 revision: str = "20260801_0035"
@@ -96,6 +96,30 @@ def _reject_in_flight_bounded_runs() -> None:
     снимка честно отвергнет такой прогон, а миграция обязана предупредить об
     этом ДО того, как это случится на работающей системе.
     """
+
+    if context.is_offline_mode():
+        op.execute(
+            sa.text(
+                f"""
+                DO $marko_frozen_guard$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pricing_runs
+                        WHERE status IN ({ACTIVE_STATUS_SQL})
+                          AND scope_contract_version IS NOT NULL
+                          AND scope_contract_version <> 'LEGACY_UNBOUNDED'
+                    ) THEN
+                        RAISE EXCEPTION
+                            'BLOCKED_MIGRATION_20260801_0035: bounded pricing '
+                            'runs must finish or be cancelled before migration';
+                    END IF;
+                END
+                $marko_frozen_guard$
+                """
+            )
+        )
+        return
 
     in_flight = (
         op.get_bind()
@@ -187,7 +211,10 @@ def upgrade() -> None:
         sa.Column("actor_type", sa.String(length=24), nullable=False),
         sa.Column("workspace_role", sa.String(length=32), nullable=False),
         sa.Column(
-            "permissions", sa.JSON(), server_default=sa.text("'[]'::json"), nullable=False
+            "permissions",
+            sa.JSON(),
+            server_default=sa.text("'[]'::json"),
+            nullable=False,
         ),
         sa.Column("scope_mode", sa.String(length=20), nullable=False),
         sa.Column("request_hash", sa.String(length=64), nullable=False),
@@ -204,9 +231,7 @@ def upgrade() -> None:
         sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "consumed_idempotency_key", sa.String(length=160), nullable=True
-        ),
+        sa.Column("consumed_idempotency_key", sa.String(length=160), nullable=True),
         sa.Column("consumed_run_id", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(
             ["workspace_id"], ["workspaces.id"], ondelete="CASCADE"
@@ -427,8 +452,7 @@ def downgrade() -> None:
         "scope_frozen_at",
     )
     run_changed = " OR ".join(
-        f"NEW.{column} IS DISTINCT FROM OLD.{column}"
-        for column in legacy_run_columns
+        f"NEW.{column} IS DISTINCT FROM OLD.{column}" for column in legacy_run_columns
     )
     op.execute(
         f"""
@@ -452,8 +476,7 @@ def downgrade() -> None:
         "cost_record_id",
     )
     item_changed = " OR ".join(
-        f"NEW.{column} IS DISTINCT FROM OLD.{column}"
-        for column in legacy_item_columns
+        f"NEW.{column} IS DISTINCT FROM OLD.{column}" for column in legacy_item_columns
     )
     op.execute(
         f"""

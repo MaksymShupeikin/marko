@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+import secrets
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-import hashlib
-import json
-import math
 from pathlib import Path
-import secrets
 from typing import Any, Literal, Mapping
 from uuid import UUID, uuid4
 
@@ -23,10 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from marko.core.config import Settings, backend_config_path, get_settings
 from marko.core.cost_encryption import CostCiphertextError
 from marko.infrastructure.db.models import (
+    CatalogIdentityLink,
     CatalogImportBatch,
     CatalogItem,
     CatalogItemCostRecord,
     CatalogItemOverride,
+    CrossLink,
+    FitmentCrossReference,
     MarketObservation,
     ObservationTierClassification,
     PricingRecommendation,
@@ -43,16 +46,54 @@ from marko.services.catalog_costs import (
     add_encrypted_cost_record,
     get_decrypted_catalog_cost,
 )
+from marko.services.public_search_keys import (
+    PublicSearchKey,
+    build_public_search_keys,
+)
+from marko.services.catalog_identity_safety import (
+    active_identity_graph_config,
+    active_identity_runtime_sha256,
+    catalog_identity_pair_has_safe_shape,
+    confirmed_catalog_identity_conditions,
+    is_internal_catalog_code,
+)
 from marko.services.cost_privacy import (
     CostPrivacyBlocked,
     privacy_safe_mapping,
 )
-from metis.pricing.raise_policy import (
-    RaisePolicy,
-    RaisePolicyConfigError,
-    default_raise_policy,
-    load_raise_policy,
+from marko.services.cross_links import (
+    CATALOG_IDENTITY_RUN_SNAPSHOT_EXTRACTION,
+    CATALOG_IDENTITY_RUN_SNAPSHOT_METHOD,
 )
+from marko.services.fitment_cross_bridge import (
+    FITMENT_CROSS_IDENTITY_KIND,
+    FitmentCrossBridgeError,
+    fitment_cross_snapshots_by_candidate,
+    load_fitment_cross_authorities,
+    validate_fitment_cross_snapshot,
+)
+from marko.services.scraper_architecture import (
+    ADMISSION_POLICY_VERSION,
+    SCRAPE_REQUEST_CONTRACT_VERSION,
+    AcquisitionMode,
+    ActorType,
+    InputKind,
+    ScrapeRequest,
+    ScrapeRequestItem,
+    SourceType,
+    admit_prom_public_item,
+    parser_contract_defaults,
+)
+from marko.services.scraper_contract import (
+    PROM_ADAPTER_VERSION,
+    QueryInput,
+    ScrapeInput,
+    ScraperBoundaryError,
+    ScraperErrorCode,
+    fallback_input_hash,
+)
+from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
+from marko.services.source_access import require_live_prom_marketplace_collection
 from metis.pricing import (
     CalibrationPair,
     CoefficientModel,
@@ -65,30 +106,14 @@ from metis.pricing import (
     fit_shrinkage_coefficients,
     fit_simple_coefficients,
 )
-from metis.pricing.tiering import TIER_METHOD_VERSION
 from metis.pricing.observability import pricing_event
-from marko.services.scraper_contract import (
-    PROM_ADAPTER_VERSION,
-    QueryInput,
-    ScrapeInput,
-    ScraperBoundaryError,
-    ScraperErrorCode,
-    fallback_input_hash,
+from metis.pricing.raise_policy import (
+    RaisePolicy,
+    RaisePolicyConfigError,
+    default_raise_policy,
+    load_raise_policy,
 )
-from marko.services.scraper_architecture import (
-    ADMISSION_POLICY_VERSION,
-    AcquisitionMode,
-    ActorType,
-    InputKind,
-    SCRAPE_REQUEST_CONTRACT_VERSION,
-    ScrapeRequest,
-    ScrapeRequestItem,
-    SourceType,
-    admit_prom_public_item,
-    parser_contract_defaults,
-)
-from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
-from marko.services.source_access import require_live_prom_marketplace_collection
+from metis.pricing.tiering import TIER_METHOD_VERSION
 
 PARSER_ADAPTER_VERSION = PROM_ADAPTER_VERSION
 ACTIVE_RUN_STATUSES = (
@@ -100,6 +125,14 @@ ACTIVE_RUN_STATUSES = (
     "calculating",
 )
 TERMINAL_RUN_ITEM_STATUSES = ("calculated", "manual_review", "failed", "cancelled")
+# These actions carry a price decision, even when the UI treats them as
+# advisory.  A historical recommendation for a row whose identity is only a
+# supplier/MPN code must never be exposed as an actionable market price: the
+# query may have been performed against the wrong namespace.  Manual and
+# insufficient-data outcomes remain visible so the operator can repair the
+# catalog identity and rerun it.
+PRICE_BEARING_RECOMMENDATION_ACTIONS = frozenset({"RAISE", "HOLD", "LOWER"})
+IDENTITY_BLOCKED_RECOMMENDATION_ACTION = "CUSTOMER_OE_REQUIRED_FOR_PRICE_RECOMMENDATION"
 CATALOG_OVERRIDE_SNAPSHOT_FIELDS = (
     "stock_status",
     "stock_qty",
@@ -125,7 +158,7 @@ CATALOG_OVERRIDE_SNAPSHOT_FIELDS = (
 # состава этого раздела обязано менять и версию: иначе два несовместимых набора
 # байт назывались бы одним контрактом.  v1 (без раздела ``execution``) остаётся
 # читаемым, но байт-в-байт не воспроизводим и потому не повторяем.
-PRICING_RUN_SCOPE_CONTRACT_VERSION = "pricing-run-scope-v2"
+PRICING_RUN_SCOPE_CONTRACT_VERSION = "pricing-run-scope-v3"
 LEGACY_SCOPE_CONTRACT_VERSIONS = ("pricing-run-scope-v1",)
 # Версия канонического документа политики исполнения. Меняется вместе с
 # составом сохраняемых байт: иначе два несовместимых набора носили бы один
@@ -298,8 +331,7 @@ def _require_complete_dataclass_payload(
     missing = sorted({item.name for item in fields(declared)} - set(payload))
     if missing:
         raise PricingRunError(
-            f"EXECUTION_POLICY_INCOMPLETE: {label} snapshot omits "
-            + ", ".join(missing)
+            f"EXECUTION_POLICY_INCOMPLETE: {label} snapshot omits " + ", ".join(missing)
         )
 
 
@@ -498,8 +530,10 @@ def load_run_execution_policy(run: PricingRun) -> PricingPolicy:
     if _is_sha256_hex(expected):
         return policy_from_snapshot(run.policy_config, expected_hash=expected)
     if not is_legacy_unbounded_run(run):
-        detail = "carries no execution policy hash" if expected is None else (
-            "carries a malformed execution policy hash"
+        detail = (
+            "carries no execution policy hash"
+            if expected is None
+            else ("carries a malformed execution policy hash")
         )
         raise PricingRunExecutionPolicyError(
             f"EXECUTION_POLICY_NOT_FROZEN: run {getattr(run, 'id', '<unsaved>')} "
@@ -636,6 +670,21 @@ class ScopeCandidate:
     override_values: Mapping[str, Any] | None
     cost_record_id: UUID | None
     cost_record_sequence_no: int | None
+    part_numbers_norm: tuple[str, ...] = ()
+    identity_reason: str | None = None
+    # Confirmed one-hop identity edges are execution inputs.  Keeping their
+    # full provenance here makes preview/start hashing detect a graph change and
+    # lets the run persist exactly the links the operator previewed.
+    confirmed_identity_links: tuple[Mapping[str, Any], ...] = ()
+    # Semantic identity inputs used by the comparability/Luna layer. Keeping
+    # them outside the frozen scope let a catalog edit change a running review
+    # without changing its run membership or pricing inputs.
+    oe_raw: str = ""
+    mpn_raw: str = ""
+    description: str | None = None
+    applicability_brands: tuple[str, ...] = ()
+    applicability_models: tuple[str, ...] = ()
+    characteristics_raw: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -653,6 +702,8 @@ class PricingRunScopeEstimate:
     unique_scrape_inputs: int
     duplicate_items: int
     worst_case_duration_seconds: int
+    network_eligible_items: int = 0
+    identity_blocked_items: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -679,6 +730,198 @@ class PricingRunScope:
         """Исполняемая часть манифеста — ровно то, по чему считается хеш."""
 
         return self.manifest[SCOPE_MANIFEST_EXECUTION_SECTION]
+
+
+MIN_PUBLIC_QUERY_NUMBER_LENGTH = 4
+
+
+def customer_identity_query_from_fields(
+    *,
+    identity_status: str | None,
+    oe_norm: str | None,
+    mpn_norm: str | None,
+    part_numbers_norm: Iterable[str] = (),
+) -> str:
+    """Resolve one safe retrieval number from a catalog identity snapshot.
+
+    This field-level form is shared by pricing-run scope and the catalog
+    discovery API.  Keeping the rule in one pure function prevents the UI
+    discovery path from reintroducing the old ``oe_norm``-first behavior for
+    rows whose ``oe_norm`` is actually a private KEMP shelf code.
+    """
+    def public(value: str | None) -> str:
+        normalized = str(value or "").strip()
+        return (
+            normalized
+            if normalized and not is_internal_catalog_code(normalized)
+            else ""
+        )
+
+    def usable_fallback(value: str | None) -> str:
+        """Return a non-authoritative public number safe for retrieval fallback.
+
+        A short alphanumeric manufacturer code can be meaningful (for example
+        ``A1``), while a bare three-digit value is commonly a truncated export
+        prefix and produces a large, unrelated Prom result set.  Exact
+        ``OE_CONFIRMED`` values are handled separately and are not subject to
+        this heuristic: their graph status is the authority.
+        """
+
+        normalized = public(value)
+        if not normalized:
+            return ""
+        if normalized.isdigit() and len(normalized) < MIN_PUBLIC_QUERY_NUMBER_LENGTH:
+            return ""
+        return normalized
+
+    # ``identity_status`` is persisted by import/reparse, but legacy rows and
+    # external adapters may differ only by case.  Namespace selection must be
+    # stable across those representations: an OE-confirmed row must always
+    # search its original vehicle OE, never fall through to the supplier MPN.
+    status = str(identity_status or "").strip().upper()
+    oe = public(oe_norm)
+    mpn = public(mpn_norm)
+    part_numbers = tuple(
+        number
+        for value in part_numbers_norm
+        if (number := public(value))
+    )
+    if status == "OE_CONFIRMED":
+        # An explicit OE namespace is a contract, not a preference order.  If
+        # its value is absent/private, refuse the row instead of silently
+        # searching the supplier MPN and making that unrelated number look like
+        # the vehicle identity.
+        return oe
+    if status == "MPN_ONLY":
+        # ``oe_norm`` is not an OE in this namespace.  For the canonical KEMP
+        # export it can still contain a private 776... shelf code, while the
+        # actual public article is present in the characteristics list.  Never
+        # let the shelf code become a Prom query.  A complete MPN wins; when
+        # the spreadsheet truncated it to a short numeric prefix (for example
+        # ``115`` instead of ``115070``), use the public characteristic token
+        # instead.  If no such token exists, retain the explicit MPN.
+        # Do not fall back to ``oe_norm`` here.  In this namespace that field is
+        # explicitly *not* an asserted original OE: the canonical customer
+        # export stores ``Код_товару`` there, and it may be a private KEMP shelf
+        # code or an unresolved supplier number.  Treating it as a public
+        # market query would silently promote an unverified value to identity
+        # evidence.  A row without a public MPN/part number must remain
+        # identity-blocked until the import/reparse assigns an explicit
+        # ``OE_CONFIRMED`` status.
+        usable_mpn = usable_fallback(mpn)
+        if usable_mpn and len(usable_mpn) >= MIN_PUBLIC_QUERY_NUMBER_LENGTH:
+            return usable_mpn
+        for number in part_numbers:
+            usable_number = usable_fallback(number)
+            if usable_number and len(usable_number) >= MIN_PUBLIC_QUERY_NUMBER_LENGTH:
+                return usable_number
+        # Keep a non-numeric short MPN available as a retrieval fallback; a
+        # short numeric prefix is identity-blocked rather than sent to Prom.
+        return usable_mpn
+    usable_mpn = usable_fallback(mpn)
+    if usable_mpn:
+        return usable_mpn
+    for number in part_numbers:
+        if usable_number := usable_fallback(number):
+            return usable_number
+    return ""
+
+
+def customer_identity_query(candidate: ScopeCandidate) -> str:
+    """Choose a query only from identity evidence, never from an unknown code."""
+
+    return customer_identity_query_from_fields(
+        identity_status=candidate.identity_status,
+        oe_norm=candidate.oe_norm,
+        mpn_norm=candidate.mpn_norm,
+        part_numbers_norm=candidate.part_numbers_norm,
+    )
+
+
+def customer_public_search_keys(
+    candidate: ScopeCandidate,
+) -> tuple[PublicSearchKey, ...]:
+    """Ordered public Prom query keys for multi-key discovery expansion.
+
+    The first pricing-primary key (when present) matches
+    ``customer_identity_query`` for OE_CONFIRMED rows.  Additional CROSS / MPN /
+    characteristic numbers expand retrieval only; they do not relax
+    ``customer_identity_available``.
+    """
+
+    primary = customer_identity_query(candidate)
+    return build_public_search_keys(
+        identity_status=candidate.identity_status,
+        oe_norm=candidate.oe_norm,
+        mpn_norm=candidate.mpn_norm,
+        part_numbers_norm=candidate.part_numbers_norm,
+        confirmed_identity_links=candidate.confirmed_identity_links,
+        primary_query=primary or None,
+    )
+
+
+def declared_widenings(candidate: ScopeCandidate) -> tuple[str, ...]:
+    """Confirmed cross numbers this row may widen retrieval with.
+
+    The original vehicle OE stays the market identity; a cross is an allowed
+    widening only when it comes from a confirmed graph edge with provenance,
+    so ``retrieval_only`` keys — MPNs and characteristic part numbers — are
+    excluded here even though they are safe to *search*. Freezing the list
+    into the acquisition input is what lets the persisted boundary refuse a
+    widening the run never declared.
+    """
+
+    return tuple(
+        key.number
+        for key in customer_public_search_keys(candidate)
+        if key.role == "CROSS" and key.confidence == "confirmed"
+    )
+
+
+def retrieval_only_queries(candidate: ScopeCandidate) -> tuple[str, ...]:
+    """Public keys this row may *search* with but never be identified by.
+
+    The row's own supplier MPN and its characteristic part numbers. They are
+    the complement of :func:`declared_widenings`: safe to send to Prom, and
+    carrying no claim about what comes back. A row one of these retrieved is
+    still verified against the original vehicle OE — it earns its evidence off
+    the card or it stays discovery / manual review. Freezing them separately
+    is what lets the persistence boundary tell the two tiers apart instead of
+    seeing one anonymous pile of extra queries.
+    """
+
+    return tuple(
+        key.number
+        for key in customer_public_search_keys(candidate)
+        if key.role in {"PUBLIC_MPN", "PART_NUMBER"}
+    )
+
+
+def customer_search_context(candidate: ScopeCandidate) -> str:
+    """Frozen retrieval-only context; it is never candidate identity evidence."""
+
+    return " ".join(
+        value.strip()
+        for value in (candidate.brand or "", candidate.name or "")
+        if value and value.strip()
+    )[:255]
+
+
+def customer_identity_available(candidate: ScopeCandidate) -> bool:
+    """Whether this row may create a *pricing* market-acquisition input.
+
+    The discovery layer may still use an MPN or a customer part-number list to
+    enrich a row for operator review. A pricing run is stricter: its primary
+    market query must be an asserted vehicle OE. This prevents a KEMP/private
+    manufacturer number from becoming a hidden Prom query and then looking like
+    an original-part market identity downstream.
+    """
+
+    status = str(getattr(candidate, "identity_status", "") or "").strip().upper()
+    if status != "OE_CONFIRMED":
+        return False
+    value = str(getattr(candidate, "oe_norm", "") or "").strip()
+    return bool(value and not is_internal_catalog_code(value))
 
 
 def _canonical_json(payload: Any) -> str:
@@ -768,10 +1011,12 @@ def _exclusion_digest(exclusions: Sequence[ScopeExclusion]) -> str:
 def scope_input_key(candidate: ScopeCandidate) -> str:
     """Тот же ключ дедупликации, что и у сетевых входов прогона (оценка сверху)."""
 
+    if not customer_identity_available(candidate):
+        return f"identity-missing:{candidate.catalog_item_id}"
     url = (candidate.product_url or "").strip()
     if url:
         return f"url:{url}"
-    return "query:" + " ".join(candidate.oe_norm.strip().upper().split())
+    return "query:" + " ".join(customer_identity_query(candidate).upper().split())
 
 
 def _candidate_fingerprint(candidate: ScopeCandidate) -> dict[str, Any]:
@@ -931,16 +1176,23 @@ def build_pricing_run_scope(
     if not items:
         raise PricingRunError("SCOPE_EMPTY: no eligible catalog rows in the scope")
 
-    unique_inputs = len({scope_input_key(candidate) for candidate in items})
+    network_candidates = [
+        candidate for candidate in items if customer_identity_available(candidate)
+    ]
+    unique_inputs = len(
+        {scope_input_key(candidate) for candidate in network_candidates}
+    )
     estimate = PricingRunScopeEstimate(
         requested_items=len(selected),
         eligible_items=len(items),
         excluded_items=len(exclusions),
         unique_scrape_inputs=unique_inputs,
-        duplicate_items=len(items) - unique_inputs,
+        duplicate_items=len(network_candidates) - unique_inputs,
         worst_case_duration_seconds=_worst_case_duration_seconds(
             unique_inputs, settings
         ),
+        network_eligible_items=len(network_candidates),
+        identity_blocked_items=len(items) - len(network_candidates),
     )
     snapshot_hash = catalog_snapshot_fingerprint(catalog_candidates)
     truncated = len(exclusions) > SCOPE_EXCLUSION_SAMPLE_LIMIT
@@ -1083,13 +1335,45 @@ async def load_scope_candidates(
             .order_by(CatalogItem.source_row, CatalogItem.sku)
         )
     ).all()
-    return [
+    item_ids = [item.id for item, _, _, _ in rows]
+    links_by_item: dict[UUID, list[dict[str, Any]]] = {}
+    if item_ids:
+        identity_links = list(
+            (
+                await session.scalars(
+                    select(CatalogIdentityLink)
+                    .where(
+                        *confirmed_catalog_identity_conditions(workspace_id),
+                        CatalogIdentityLink.catalog_item_id.in_(item_ids),
+                    )
+                    .order_by(
+                        CatalogIdentityLink.catalog_item_id,
+                        CatalogIdentityLink.our_oem_norm,
+                        CatalogIdentityLink.extracted_oem_norm,
+                        CatalogIdentityLink.extraction_method,
+                        CatalogIdentityLink.sequence_no,
+                    )
+                )
+            ).all()
+        )
+        for link in identity_links:
+            if not catalog_identity_pair_has_safe_shape(
+                link.our_oem_norm, link.extracted_oem_norm
+            ):
+                continue
+            links_by_item.setdefault(link.catalog_item_id, []).append(
+                _catalog_identity_link_snapshot(link)
+            )
+
+    candidates = [
         ScopeCandidate(
             catalog_item_id=item.id,
             source_row=item.source_row,
             sku=item.sku,
             oe_norm=item.oe_norm,
+            oe_raw=item.oe_raw,
             mpn_norm=item.mpn_norm,
+            mpn_raw=item.mpn_raw,
             name=item.name,
             brand=item.brand,
             category=item.category,
@@ -1110,6 +1394,13 @@ async def load_scope_candidates(
             conversion_rate_proxy=item.conversion_rate_proxy,
             manual_priority=item.manual_priority,
             identity_status=item.identity_status,
+            part_numbers_norm=tuple(item.part_numbers_norm or ()),
+            description=item.description,
+            applicability_brands=tuple(item.applicability_brands or ()),
+            applicability_models=tuple(item.applicability_models or ()),
+            characteristics_raw=dict(item.characteristics_raw or {}),
+            identity_reason=item.identity_reason,
+            confirmed_identity_links=tuple(links_by_item.get(item.id, ())),
             override_id=override.id if override is not None else None,
             override_values=_override_values(override),
             cost_record_id=cost_record_id,
@@ -1119,6 +1410,241 @@ async def load_scope_candidates(
         )
         for item, override, cost_record_id, sequence_no in rows
     ]
+    if not candidates:
+        return candidates
+
+    # Fitment cross references are append-only knowledge records, separate from
+    # the customer reference graph.  Load every revision so the bridge can
+    # identify superseded leaves and live conflicts instead of accidentally
+    # reviving an older confirmation.
+    fitment_crosses = list(
+        (
+            await session.scalars(
+                select(FitmentCrossReference)
+                .where(FitmentCrossReference.workspace_id == workspace_id)
+                .order_by(
+                    FitmentCrossReference.valid_from,
+                    FitmentCrossReference.id,
+                )
+            )
+        ).all()
+    )
+    fitment_authorities = await load_fitment_cross_authorities(
+        session,
+        workspace_id=workspace_id,
+        records=fitment_crosses,
+    )
+    fitment_by_item = fitment_cross_snapshots_by_candidate(
+        candidate_queries={
+            candidate.catalog_item_id: customer_identity_query(candidate)
+            for candidate in candidates
+        },
+        records=fitment_crosses,
+        authorities=fitment_authorities,
+    )
+    return [
+        replace(
+            candidate,
+            confirmed_identity_links=(
+                *candidate.confirmed_identity_links,
+                *fitment_by_item.get(candidate.catalog_item_id, ()),
+            ),
+        )
+        for candidate in candidates
+    ]
+
+
+def _catalog_identity_link_snapshot(link: CatalogIdentityLink) -> dict[str, Any]:
+    """Canonical evidence document copied into a bounded pricing run."""
+
+    return {
+        "catalog_identity_link_id": str(link.id),
+        "catalog_item_id": str(link.catalog_item_id),
+        "our_oem_norm": link.our_oem_norm,
+        "extracted_oem_norm": link.extracted_oem_norm,
+        "extracted_raw": link.extracted_raw,
+        "raw_context": link.raw_context,
+        "extraction_method": link.extraction_method,
+        "validation_status": link.validation_status,
+        "anomaly": link.anomaly,
+        "corroborating_sources": list(link.corroborating_sources or ()),
+        "validation_details": _json_safe(dict(link.validation_details or {})),
+        "method_version": link.method_version,
+        "config_sha256": link.config_sha256,
+    }
+
+
+def _frozen_catalog_cross_rows(
+    *, run: PricingRun, candidates: Sequence[ScopeCandidate]
+) -> list[CrossLink]:
+    """Materialize the previewed identity graph as run-owned evidence.
+
+    ``catalog_identity_links`` outlive every pricing run and can be reparsed.
+    A run must not read that mutable graph later, so each unique confirmed pair
+    is copied at start from the already-hashed ``ScopeCandidate`` snapshot.
+    Multiple source rows for the same pair remain visible inside
+    ``source_evidence`` rather than violating the run-pair uniqueness key.
+    """
+
+    rows: list[CrossLink] = []
+    grouped: dict[tuple[str, str], list[tuple[UUID, dict[str, Any]]]] = {}
+    active_graph = active_identity_graph_config()
+    active_runtime_sha256 = active_identity_runtime_sha256()
+    for candidate in candidates:
+        for raw in candidate.confirmed_identity_links:
+            link = dict(raw)
+            if link.get("validation_status") != "CONFIRMED" or link.get("anomaly"):
+                # The loader already filters these.  Re-check because a
+                # hand-built trusted scope must not smuggle REVIEW evidence in.
+                raise PricingRunStartContractError(
+                    "IDENTITY_GRAPH_NOT_CONFIRMED: a frozen identity edge is not "
+                    "eligible for a pricing run"
+                )
+            evidence_kind = str(
+                link.get("identity_evidence_kind") or "CATALOG_IDENTITY"
+            )
+            if evidence_kind == FITMENT_CROSS_IDENTITY_KIND:
+                try:
+                    link = validate_fitment_cross_snapshot(
+                        link,
+                        catalog_item_id=candidate.catalog_item_id,
+                        customer_query=customer_identity_query(candidate),
+                    )
+                except FitmentCrossBridgeError as exc:
+                    raise PricingRunStartContractError(
+                        f"FITMENT_CROSS_INVALID: {exc}"
+                    ) from exc
+            elif evidence_kind == "CATALOG_IDENTITY":
+                if (
+                    link.get("method_version") != active_graph.method_version
+                    or link.get("config_sha256") != active_runtime_sha256
+                ):
+                    raise PricingRunStartContractError(
+                        "IDENTITY_GRAPH_STALE: a frozen identity edge was not "
+                        "produced by the active identity algorithm and config"
+                    )
+            else:
+                raise PricingRunStartContractError(
+                    "IDENTITY_GRAPH_UNKNOWN_EVIDENCE: a frozen identity edge "
+                    "names an unsupported evidence kind"
+                )
+            our_oem = str(link.get("our_oem_norm") or "").strip()
+            extracted_oem = str(link.get("extracted_oem_norm") or "").strip()
+            if not catalog_identity_pair_has_safe_shape(our_oem, extracted_oem):
+                raise PricingRunStartContractError(
+                    "IDENTITY_GRAPH_CORRUPT: a frozen identity edge has an "
+                    "empty, self-referential, or private-code pair"
+                )
+            recorded_item_id = str(link.get("catalog_item_id") or "")
+            if recorded_item_id and recorded_item_id != str(candidate.catalog_item_id):
+                raise PricingRunStartContractError(
+                    "IDENTITY_GRAPH_ITEM_MISMATCH: a frozen edge belongs to a "
+                    "different catalog item"
+                )
+            grouped.setdefault((our_oem, extracted_oem), []).append(
+                (candidate.catalog_item_id, link)
+            )
+
+    for (our_oem, extracted_oem), entries in sorted(grouped.items()):
+        catalog_item_id = min((item_id for item_id, _ in entries), key=str)
+        ordered = sorted(
+            (link for _, link in entries),
+            key=lambda value: (
+                str(value.get("catalog_item_id") or ""),
+                str(value.get("extraction_method") or ""),
+                str(value.get("catalog_identity_link_id") or ""),
+            ),
+        )
+        evidence_hash = _sha256_payload(
+            {
+                "method_version": CATALOG_IDENTITY_RUN_SNAPSHOT_METHOD,
+                "catalog_item_id": str(catalog_item_id),
+                "our_oem_norm": our_oem,
+                "extracted_oem_norm": extracted_oem,
+                "source_evidence": ordered,
+            }
+        )
+        source_methods = sorted(
+            {
+                str(value.get("extraction_method") or "")
+                for value in ordered
+                if str(value.get("extraction_method") or "").strip()
+            }
+        )
+        source_ids = [
+            str(value.get("catalog_identity_link_id") or "")
+            for value in ordered
+            if str(value.get("catalog_identity_link_id") or "").strip()
+        ]
+        fitment_cross_ids = [
+            str(value.get("fitment_cross_reference_id") or "")
+            for value in ordered
+            if str(value.get("fitment_cross_reference_id") or "").strip()
+        ]
+        contains_fitment_cross = bool(fitment_cross_ids)
+        confidence_values: list[Decimal] = []
+        for value in ordered:
+            raw_confidence = (value.get("validation_details") or {}).get("confidence")
+            try:
+                parsed_confidence = Decimal(str(raw_confidence))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise PricingRunStartContractError(
+                    "IDENTITY_GRAPH_CONFIDENCE_INVALID: confirmed identity "
+                    "evidence must carry explicit numeric confidence"
+                ) from exc
+            if not parsed_confidence.is_finite() or not Decimal(
+                "0"
+            ) < parsed_confidence <= Decimal("1"):
+                raise PricingRunStartContractError(
+                    "IDENTITY_GRAPH_CONFIDENCE_INVALID: confirmed identity "
+                    "confidence must be in (0, 1]"
+                )
+            confidence_values.append(parsed_confidence)
+        confidence = min(confidence_values)
+        rows.append(
+            CrossLink(
+                workspace_id=run.workspace_id,
+                pricing_run_id=run.id,
+                catalog_item_id=catalog_item_id,
+                our_oem_norm=our_oem,
+                extracted_oem_norm=extracted_oem,
+                source_listing_url=(
+                    f"urn:marko:catalog-identity-snapshot:{run.id}:{catalog_item_id}"
+                ),
+                source_seller=(
+                    "VERIFIED_IDENTITY_GRAPH"
+                    if contains_fitment_cross
+                    else "CUSTOMER_REFERENCE_GRAPH"
+                ),
+                raw_context="\n".join(
+                    dict.fromkeys(
+                        str(value.get("raw_context") or "")
+                        for value in ordered
+                        if str(value.get("raw_context") or "").strip()
+                    )
+                ),
+                extraction_method=CATALOG_IDENTITY_RUN_SNAPSHOT_EXTRACTION,
+                validation_status="CONFIRMED",
+                rejection_reason=None,
+                reciprocal_evidence_url=None,
+                source_evidence=ordered,
+                validation_details={
+                    "confidence": str(confidence),
+                    "evidence_kind": (
+                        "FROZEN_VERIFIED_IDENTITY"
+                        if contains_fitment_cross
+                        else "FROZEN_CATALOG_IDENTITY"
+                    ),
+                    "catalog_identity_link_ids": source_ids,
+                    "fitment_cross_reference_ids": fitment_cross_ids,
+                    "source_methods": source_methods,
+                    "source_evidence_sha256": evidence_hash,
+                },
+                method_version=CATALOG_IDENTITY_RUN_SNAPSHOT_METHOD,
+                config_sha256=evidence_hash,
+            )
+        )
+    return rows
 
 
 def _override_values(
@@ -1566,7 +2092,10 @@ class OperatorRunStart:
     confirm_full_catalog: bool = False
 
     def __post_init__(self) -> None:
-        if not isinstance(self.idempotency_key, str) or not self.idempotency_key.strip():
+        if (
+            not isinstance(self.idempotency_key, str)
+            or not self.idempotency_key.strip()
+        ):
             raise PricingRunStartContractError(
                 "START_CONTRACT_REQUIRED: a non-empty idempotency_key is mandatory "
                 "for an operator start"
@@ -2016,7 +2545,9 @@ def _catalog_item_snapshot(candidate: ScopeCandidate) -> dict[str, Any]:
         "source_row": candidate.source_row,
         "sku": candidate.sku,
         "oe_norm": candidate.oe_norm,
+        "oe_raw": candidate.oe_raw,
         "mpn_norm": candidate.mpn_norm,
+        "mpn_raw": candidate.mpn_raw,
         "name": candidate.name,
         "brand": candidate.brand,
         "category": candidate.category,
@@ -2026,6 +2557,16 @@ def _catalog_item_snapshot(candidate: ScopeCandidate) -> dict[str, Any]:
         "product_url": candidate.product_url,
         "is_available": candidate.is_available,
         "identity_status": candidate.identity_status,
+        "identity_reason": candidate.identity_reason,
+        "part_numbers_norm": list(candidate.part_numbers_norm),
+        "description": candidate.description,
+        "applicability_brands": list(candidate.applicability_brands),
+        "applicability_models": list(candidate.applicability_models),
+        "characteristics_raw": _json_safe(dict(candidate.characteristics_raw)),
+        "confirmed_identity_links": [
+            _json_safe(dict(link)) for link in candidate.confirmed_identity_links
+        ],
+        "customer_identity_available": customer_identity_available(candidate),
         "stock_qty": _decimal_or_none(candidate.stock_qty),
         "stock_age_days": _decimal_or_none(candidate.stock_age_days),
         "expected_units_sold": _decimal_or_none(candidate.expected_units_sold),
@@ -2117,6 +2658,16 @@ class FrozenCatalogItem:
     override_values: Mapping[str, Any] | None
     catalog_item_override_id: UUID | None
     cost_record_id: UUID | None
+    part_numbers_norm: tuple[str, ...] = ()
+    identity_reason: str | None = None
+    confirmed_identity_links: tuple[Mapping[str, Any], ...] = ()
+    customer_identity_available: bool = False
+    oe_raw: str = ""
+    mpn_raw: str = ""
+    description: str | None = None
+    applicability_brands: tuple[str, ...] = ()
+    applicability_models: tuple[str, ...] = ()
+    characteristics_raw: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2233,12 +2784,21 @@ def frozen_catalog_item_from_snapshot(
     override_id = snapshot.get("catalog_item_override_id")
     cost_record_id = snapshot.get("cost_record_id")
     raw_values = snapshot.get("override_values")
+    raw_identity_links = snapshot.get("confirmed_identity_links") or ()
+    if not isinstance(raw_identity_links, (list, tuple)) or any(
+        not isinstance(value, Mapping) for value in raw_identity_links
+    ):
+        raise PricingRunSnapshotError(
+            "START_SNAPSHOT_CORRUPT: confirmed identity links are not mappings"
+        )
     return FrozenCatalogItem(
         id=UUID(_snapshot_required_str(snapshot, "catalog_item_id")),
         source_row=int(snapshot.get("source_row") or 0),
         sku=_snapshot_required_str(snapshot, "sku"),
         oe_norm=_snapshot_required_str(snapshot, "oe_norm"),
+        oe_raw=str(snapshot.get("oe_raw") or ""),
         mpn_norm=str(snapshot.get("mpn_norm") or ""),
+        mpn_raw=str(snapshot.get("mpn_raw") or ""),
         name=str(snapshot.get("name") or ""),
         brand=snapshot.get("brand"),
         category=_snapshot_required_str(snapshot, "category"),
@@ -2264,6 +2824,40 @@ def frozen_catalog_item_from_snapshot(
         override_values=dict(raw_values) if isinstance(raw_values, Mapping) else None,
         catalog_item_override_id=UUID(str(override_id)) if override_id else None,
         cost_record_id=UUID(str(cost_record_id)) if cost_record_id else None,
+        part_numbers_norm=tuple(
+            str(value)
+            for value in (snapshot.get("part_numbers_norm") or ())
+            if str(value).strip()
+        ),
+        identity_reason=(
+            str(snapshot.get("identity_reason"))
+            if snapshot.get("identity_reason") is not None
+            else None
+        ),
+        confirmed_identity_links=tuple(dict(value) for value in raw_identity_links),
+        customer_identity_available=bool(
+            snapshot.get("customer_identity_available", False)
+        ),
+        description=(
+            str(snapshot.get("description"))
+            if snapshot.get("description") is not None
+            else None
+        ),
+        applicability_brands=tuple(
+            str(value)
+            for value in (snapshot.get("applicability_brands") or ())
+            if str(value).strip()
+        ),
+        applicability_models=tuple(
+            str(value)
+            for value in (snapshot.get("applicability_models") or ())
+            if str(value).strip()
+        ),
+        characteristics_raw=(
+            dict(snapshot.get("characteristics_raw") or {})
+            if isinstance(snapshot.get("characteristics_raw"), Mapping)
+            else {}
+        ),
     )
 
 
@@ -2558,6 +3152,10 @@ async def create_pricing_run(
         if winner is None:
             raise PricingRunError(f"PRICING_RUN_CONFLICT: {exc.orig}") from exc
         return winner
+    frozen_cross_rows = _frozen_catalog_cross_rows(run=run, candidates=catalog_items)
+    if frozen_cross_rows:
+        session.add_all(frozen_cross_rows)
+        await session.flush()
     if preview_contract is not None:
         # Контракт назвал прогон, который им открыт: повтор той же попытки
         # вернёт этот прогон, а не создаст второй.
@@ -2569,7 +3167,8 @@ async def create_pricing_run(
     target_hash_by_item: dict[UUID, str] = {}
     for catalog_item in catalog_items:
         raw_url = (catalog_item.product_url or "").strip() or None
-        raw_query = catalog_item.oe_norm
+        raw_query = customer_identity_query(catalog_item)
+        search_context = customer_search_context(catalog_item)
         input_kind = InputKind.PRODUCT_SEED if raw_url else InputKind.QUERY
         request = ScrapeRequest(
             contract_version=SCRAPE_REQUEST_CONTRACT_VERSION,
@@ -2592,17 +3191,43 @@ async def create_pricing_run(
                 ScrapeRequestItem(
                     item_id=str(catalog_item.catalog_item_id),
                     input_kind=input_kind,
-                    input_value=raw_url or raw_query,
+                    # Missing identity is rejected below before admission.  A
+                    # stable SKU keeps this audit request structurally valid;
+                    # it is never dispatched or used as a market query.
+                    input_value=raw_url or raw_query or catalog_item.sku,
                     priority=0,
                     client_item_reference=catalog_item.sku,
-                    metadata=({"query": raw_query} if raw_url else {"language": "ua"}),
+                    metadata=(
+                        {"query": raw_query}
+                        if raw_url
+                        else {
+                            "language": "ua",
+                            "search_context": search_context,
+                            "fallback_queries": list(
+                                declared_widenings(catalog_item)
+                            ),
+                            "discovery_queries": list(
+                                retrieval_only_queries(catalog_item)
+                            ),
+                        }
+                    ),
                 )
             ],
         )
         rejected_reason: str | None = None
         metadata_payload: dict[str, Any]
         admitted_input: ScrapeInput | QueryInput | None = None
+        persisted_input_kind = input_kind.value
         try:
+            if not customer_identity_available(catalog_item):
+                raise ScraperBoundaryError(
+                    code=ScraperErrorCode.CUSTOMER_IDENTITY_MISSING,
+                    message=(
+                        "Customer data contains no confirmed vehicle OE for this "
+                        "catalog row"
+                    ),
+                    retryable=False,
+                )
             if source_mode == "e2e_fixture_replay":
                 admission = None
                 admitted_input = (
@@ -2615,6 +3240,7 @@ async def create_pricing_run(
                     else QueryInput.build(
                         raw_query,
                         language="ua",
+                        search_context=search_context,
                         adapter_version=PARSER_ADAPTER_VERSION,
                     )
                 )
@@ -2639,21 +3265,41 @@ async def create_pricing_run(
                 )
             scrape_input = admitted_input
         except (ScraperBoundaryError, ValueError) as exc:
+            identity_missing = (
+                isinstance(exc, ScraperBoundaryError)
+                and exc.code == ScraperErrorCode.CUSTOMER_IDENTITY_MISSING
+            )
+            # A missing-identity row needs its own terminal audit target.  It
+            # must never deduplicate onto a valid row merely because both rows
+            # happen to carry the same product URL: that would materialize the
+            # other row's market evidence into a product the customer did not
+            # identify.
+            hash_url = None if identity_missing else raw_url
+            hash_query = (
+                f"customer-identity-missing:{catalog_item.catalog_item_id}"
+                if identity_missing
+                else raw_query
+            )
+            if identity_missing:
+                persisted_input_kind = InputKind.QUERY.value
             input_hash = fallback_input_hash(
-                raw_url,
-                raw_query,
-                input_kind=input_kind.value,
+                hash_url,
+                hash_query,
+                input_kind=persisted_input_kind,
                 adapter_version=PARSER_ADAPTER_VERSION,
             )
             canonical_url = None
             product_key = None
-            normalized_query = " ".join(raw_query.strip().upper().split())
+            normalized_query = (
+                "" if identity_missing else " ".join(raw_query.strip().upper().split())
+            )
             metadata_payload = {
                 "adapter_version": PARSER_ADAPTER_VERSION,
-                "input_kind": input_kind.value,
+                "input_kind": persisted_input_kind,
                 "product_url": raw_url,
                 "query": normalized_query,
                 "input_hash": input_hash,
+                "customer_identity_available": not identity_missing,
             }
             policy_decision_id = f"rejected-{uuid4()}"
             source_policy_version = ADMISSION_POLICY_VERSION
@@ -2712,7 +3358,7 @@ async def create_pricing_run(
                 original_url=raw_url,
                 canonical_url=canonical_url,
                 product_key=product_key,
-                input_kind=input_kind.value,
+                input_kind=persisted_input_kind,
                 query=normalized_query,
                 input_hash=input_hash,
                 adapter_version=PARSER_ADAPTER_VERSION,
@@ -2748,7 +3394,11 @@ async def create_pricing_run(
                 ),
                 error_category=rejected_reason,
                 error_detail=(
-                    "Rejected by trusted admission before network execution"
+                    "Customer supplied no confirmed vehicle OE; matching was "
+                    "skipped before network execution"
+                    if rejected_reason
+                    == ScraperErrorCode.CUSTOMER_IDENTITY_MISSING.value
+                    else "Rejected by trusted admission before network execution"
                     if rejected_reason
                     else None
                 ),
@@ -3388,6 +4038,7 @@ async def load_target_tier_coefficients(
     category: str,
     oe_norm: str,
     policy: PricingPolicy,
+    comparison_identity_keys: Iterable[str] = (),
 ) -> dict[tuple[str, ProductTier], TierCoefficient]:
     frozen = await load_tier_coefficients(
         session,
@@ -3398,29 +4049,36 @@ async def load_target_tier_coefficients(
     if not policy.require_target_leakage_protection:
         return frozen
     pairs = await load_run_calibration_pairs(session, pricing_run_id=run.id)
-    normalized_target = oe_norm.strip().upper()
-    if not any(pair.oe_norm.strip().upper() == normalized_target for pair in pairs):
+    excluded_identities = {
+        value.strip().upper()
+        for value in (oe_norm, *comparison_identity_keys)
+        if value and value.strip()
+    }
+    if not any(pair.oe_norm.strip().upper() in excluded_identities for pair in pairs):
         return frozen
+    leakage_safe_pairs = [
+        pair
+        for pair in pairs
+        if pair.oe_norm.strip().upper() not in excluded_identities
+    ]
     method_version = f"tier-{policy.coefficient_model.value}-v2:loo-run-{run.id}"
     if policy.coefficient_model == CoefficientModel.SIMPLE_MEDIAN:
         fitted = fit_simple_coefficients(
-            pairs,
+            leakage_safe_pairs,
             min_pairs=policy.min_category_pairs,
             min_effective_pairs=policy.min_effective_pairs,
             max_interval_ratio=policy.max_allowed_interval_width,
             method_version=method_version,
-            exclude_oe_norm=normalized_target,
         )
     else:
         fitted = fit_shrinkage_coefficients(
-            pairs,
+            leakage_safe_pairs,
             shrinkage_k=policy.shrinkage_k,
             min_category_pairs=policy.min_category_pairs,
             min_global_pairs=policy.min_global_pairs,
             min_effective_pairs=policy.min_effective_pairs,
             max_interval_ratio=policy.max_allowed_interval_width,
             method_version=method_version,
-            exclude_oe_norm=normalized_target,
         )
     return {key: value for key, value in fitted.items() if key[0] == category}
 
@@ -3510,7 +4168,21 @@ async def list_recommendations(
     # operator is standing on. Narrowing them by `queue`/`action` made every tile
     # read 0 while finished recommendations sat one tab away, which reads as "the
     # system found nothing" instead of "look under another tab".
-    scope_conditions = [PricingRecommendation.pricing_run_id == run_id]
+    # Price-bearing recommendation rows are admissible only for a catalog item
+    # whose original vehicle/OE identity was explicitly confirmed.  MPN_ONLY
+    # rows remain useful in the review queue, but an old RAISE/HOLD/LOWER row
+    # must not leak through a later API/export query as if its supplier number
+    # were the original part identity.
+    identity_scope_condition = or_(
+        CatalogItem.identity_status == "OE_CONFIRMED",
+        PricingRecommendation.action.in_(
+            ("MANUAL_REVIEW", "INSUFFICIENT_DATA")
+        ),
+    )
+    scope_conditions = [
+        PricingRecommendation.pricing_run_id == run_id,
+        identity_scope_condition,
+    ]
     if confidence_grade:
         scope_conditions.append(
             PricingRecommendation.confidence_grade == confidence_grade
@@ -3555,9 +4227,7 @@ async def list_recommendations(
             .label("lower_count"),
             func.count(PricingRecommendation.id)
             .filter(
-                PricingRecommendation.action.in_(
-                    ("MANUAL_REVIEW", "INSUFFICIENT_DATA")
-                )
+                PricingRecommendation.action.in_(("MANUAL_REVIEW", "INSUFFICIENT_DATA"))
             )
             .label("review_count"),
             func.count(PricingRecommendation.id)
@@ -3608,6 +4278,30 @@ async def list_recommendations(
         ).all()
     )
     return [(row[0], row[1]) for row in rows], total, run_id, action_counts
+
+
+def recommendation_price_identity_allowed(item: Any, action: str | None) -> bool:
+    """Return whether a persisted recommendation may carry a price decision.
+
+    ``CatalogItem.oe_norm`` was overloaded on pre-WP-2 rows: for ``MPN_ONLY``
+    imports it can be a private KEMP code.  The database recommendation is
+    immutable, so old rows cannot be rewritten in place.  Every read/export
+    boundary therefore applies this last-mile guard as well as the creation
+    and calculation gates.
+
+    Small in-memory adapters used by pure tests may not expose
+    ``identity_status``; those retain the historical explicit-OE fallback only
+    when a non-empty ``oe_norm`` is present.  Real ORM rows always persist the
+    status and consequently fail closed when it is ``UNRESOLVED``/``MPN_ONLY``.
+    """
+
+    normalized_action = str(action or "").strip().upper()
+    if normalized_action not in PRICE_BEARING_RECOMMENDATION_ACTIONS:
+        return True
+    raw_status = getattr(item, "identity_status", None)
+    if raw_status is None:
+        return bool(getattr(item, "oe_norm", None))
+    return str(raw_status or "").strip().upper() == "OE_CONFIRMED"
 
 
 def _recommendation_sort_order(sort: str) -> list[Any]:
@@ -3779,7 +4473,8 @@ async def add_recommendation_decision(
         raise PricingRunError("Unknown recommendation decision")
     if decision == "accepted" and not recommendation.automatic_eligible:
         raise PricingRunError(
-            "Ineligible recommendation cannot be accepted; reject it or record a manual override"
+            "Ineligible recommendation cannot be accepted; reject it or record "
+            "a manual override"
         )
     if decision == "overridden" and (new_price is None or new_price <= 0):
         raise PricingRunError("Override requires a positive new_price")
@@ -3912,6 +4607,10 @@ __all__ = [
     "canonical_start_request_hash",
     "catalog_snapshot_fingerprint",
     "create_pricing_run",
+    "customer_identity_available",
+    "customer_identity_query",
+    "customer_public_search_keys",
+    "retrieval_only_queries",
     "execution_policy_document",
     "execution_policy_hash",
     "frozen_catalog_item_from_snapshot",

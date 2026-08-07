@@ -30,6 +30,10 @@ from marko.infrastructure.db.models import (
 )
 from marko.infrastructure.db.session import get_session
 from marko.services.auth import AuthContext
+from marko.services.catalog_identity_safety import (
+    active_identity_graph_config,
+    active_identity_runtime_sha256,
+)
 from marko.services.pricing_runs import (
     uses_frozen_start_inputs,
     ACTIVE_RUN_STATUSES,
@@ -60,18 +64,27 @@ from marko.services.pricing_runs import (
     PricingRunStartContractError,
     ScopeCandidate,
     TrustedRunStart,
+    _catalog_item_snapshot,
+    _frozen_catalog_cross_rows,
     _replayed_run_or_conflict,
     _reused_active_run_or_conflict,
     build_pricing_run_scope,
     canonical_manifest_bytes,
     canonical_start_request_hash,
     catalog_snapshot_fingerprint,
+    customer_identity_available,
+    customer_identity_query,
+    customer_search_context,
+    frozen_catalog_item_from_snapshot,
     membership_digest,
     plan_pricing_run_replay,
     policy_fingerprint,
     policy_from_dict,
+    resolve_execution_catalog_item,
     run_start_identity,
+    scope_input_key,
     scope_manifest_hash,
+    start_snapshot_fingerprint,
 )
 
 # Актор и отпечаток запроса, которыми размечены строки в этом наборе: важны не
@@ -119,7 +132,7 @@ def _candidate(
         "views_30d": None,
         "conversion_rate_proxy": None,
         "manual_priority": Decimal("1"),
-        "identity_status": "UNRESOLVED",
+        "identity_status": "OE_CONFIRMED",
         "override_id": override_id,
         "override_values": override_values,
         "cost_record_id": cost_record_id,
@@ -129,12 +142,103 @@ def _candidate(
     return ScopeCandidate(**kwargs)
 
 
+def _confirmed_identity_link(
+    catalog_item_id: UUID,
+    *,
+    link_id: UUID | None = None,
+    our_oem: str = "1K0121251",
+    extracted_oem: str = "7L6121253C",
+    status: str = "CONFIRMED",
+    anomaly: str | None = None,
+) -> dict:
+    return {
+        "catalog_identity_link_id": str(link_id or uuid4()),
+        "catalog_item_id": str(catalog_item_id),
+        "our_oem_norm": our_oem,
+        "extracted_oem_norm": extracted_oem,
+        "extracted_raw": extracted_oem,
+        "raw_context": f"reference row for {extracted_oem}",
+        "extraction_method": "KEMP_REFERENCE_MAP_V2",
+        "validation_status": status,
+        "anomaly": anomaly,
+        "corroborating_sources": ["KEMP_REFERENCE_MAP_V2"],
+        "validation_details": {
+            "source": "customer_reference",
+            "confidence": "0.90",
+            "automatic_eligible": True,
+        },
+        "method_version": active_identity_graph_config().method_version,
+        "config_sha256": active_identity_runtime_sha256(),
+    }
+
+
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         pricing_collection_worker_count=2,
         pricing_collection_item_deadline_seconds=1800,
         pricing_collection_min_interval_seconds=2.0,
     )
+
+
+def test_customer_search_context_is_stable_retrieval_context_not_identity() -> None:
+    candidate = _candidate(
+        oe_norm="25307",
+        brand="GKN-Spidan",
+        name="Шрус VW Polo Golf Octavia Fabia",
+    )
+
+    assert customer_identity_query(candidate) == "25307"
+    assert customer_search_context(candidate) == (
+        "GKN-Spidan Шрус VW Polo Golf Octavia Fabia"
+    )
+
+
+def test_oe_confirmed_query_uses_original_oe_not_supplier_mpn() -> None:
+    """The public market query is the vehicle OE, never KEMP's MPN."""
+
+    candidate = _candidate(
+        oe_norm="06A121012X",
+        mpn_norm="77641360",
+        identity_status="oe_confirmed",  # legacy casing must not change namespace
+        part_numbers_norm=("TH652688J",),
+    )
+
+    assert customer_identity_query(candidate) == "06A121012X"
+
+
+def test_oe_confirmed_without_public_oe_is_identity_blocked() -> None:
+    """An invalid OE namespace must not fall through to a supplier MPN."""
+
+    candidate = _candidate(
+        oe_norm="77641360",
+        mpn_norm="TH652688J",
+        identity_status="OE_CONFIRMED",
+    )
+
+    assert customer_identity_query(candidate) == ""
+    assert customer_identity_available(candidate) is False
+
+
+def test_unrecognized_identity_status_does_not_promote_oe_to_confirmed_query() -> None:
+    """Only an explicit graph status may promote a raw catalog OE field."""
+
+    candidate = _candidate(
+        oe_norm="06A121012X",
+        mpn_norm="TH652688J",
+        identity_status="legacy_unknown",
+    )
+
+    # The unresolved/legacy namespace remains a public MPN fallback; it does
+    # not silently claim that the raw ``oe_norm`` is an original OE.
+    assert customer_identity_query(candidate) == "TH652688J"
+
+
+def test_customer_search_context_is_bounded_for_long_catalog_names() -> None:
+    candidate = _candidate(name="x" * 400)
+
+    context = customer_search_context(candidate)
+
+    assert len(context) == 255
 
 
 def _scope(candidates, **overrides):
@@ -210,6 +314,236 @@ def test_catalog_snapshot_hash_changes_when_the_start_time_cost_changes() -> Non
     assert before != after
 
 
+def test_catalog_snapshot_hash_changes_when_confirmed_identity_graph_changes() -> None:
+    item_id = uuid4()
+    before = catalog_snapshot_fingerprint((_candidate(catalog_item_id=item_id),))
+    after = catalog_snapshot_fingerprint(
+        (
+            _candidate(
+                catalog_item_id=item_id,
+                confirmed_identity_links=(_confirmed_identity_link(item_id),),
+            ),
+        )
+    )
+
+    assert before != after
+
+
+def test_catalog_snapshot_freezes_semantic_comparability_inputs() -> None:
+    item_id = uuid4()
+    frozen_candidate = _candidate(
+        catalog_item_id=item_id,
+        oe_raw="1K0 121 251",
+        mpn_raw="KEMP-RAD-1",
+        description="Радіатор 625x440, нижній патрубок праворуч",
+        applicability_brands=("IVECO",),
+        applicability_models=("DAILY",),
+        characteristics_raw={"width_mm": 625, "height_mm": 440},
+    )
+    edited_live_candidate = _candidate(
+        catalog_item_id=item_id,
+        oe_raw="DIFFERENT-OE",
+        mpn_raw="DIFFERENT-MPN",
+        description="Інша деталь після старту прогона",
+        applicability_brands=("FORD",),
+        applicability_models=("FOCUS",),
+        characteristics_raw={"width_mm": 500, "height_mm": 300},
+    )
+
+    assert catalog_snapshot_fingerprint(
+        (frozen_candidate,)
+    ) != catalog_snapshot_fingerprint((edited_live_candidate,))
+
+    frozen = frozen_catalog_item_from_snapshot(_catalog_item_snapshot(frozen_candidate))
+    assert frozen.oe_raw == "1K0 121 251"
+    assert frozen.mpn_raw == "KEMP-RAD-1"
+    assert frozen.description == "Радіатор 625x440, нижній патрубок праворуч"
+    assert frozen.applicability_brands == ("IVECO",)
+    assert frozen.applicability_models == ("DAILY",)
+    assert frozen.characteristics_raw == {"width_mm": 625, "height_mm": 440}
+
+
+@pytest.mark.parametrize(
+    "semantic_change",
+    [
+        {"oe_raw": "CHANGED-OE"},
+        {"mpn_raw": "CHANGED-MPN"},
+        {"description": "Змінений опис"},
+        {"applicability_brands": ("FORD",)},
+        {"applicability_models": ("FOCUS",)},
+        {"characteristics_raw": {"pins": 4}},
+    ],
+)
+def test_each_semantic_comparability_input_changes_scope_hash(
+    semantic_change: dict,
+) -> None:
+    item_id = uuid4()
+    baseline = _candidate(
+        catalog_item_id=item_id,
+        oe_raw="BASE-OE",
+        mpn_raw="BASE-MPN",
+        description="Базовий опис",
+        applicability_brands=("VW",),
+        applicability_models=("GOLF",),
+        characteristics_raw={"pins": 6},
+    )
+    changed_fields = {
+        "oe_raw": "BASE-OE",
+        "mpn_raw": "BASE-MPN",
+        "description": "Базовий опис",
+        "applicability_brands": ("VW",),
+        "applicability_models": ("GOLF",),
+        "characteristics_raw": {"pins": 6},
+        **semantic_change,
+    }
+    changed = _candidate(catalog_item_id=item_id, **changed_fields)
+
+    assert catalog_snapshot_fingerprint((baseline,)) != catalog_snapshot_fingerprint(
+        (changed,)
+    )
+
+
+def test_bounded_execution_does_not_read_live_semantic_catalog_edits() -> None:
+    candidate = _candidate(
+        description="Заморожений опис",
+        applicability_brands=("VW",),
+        characteristics_raw={"pins": 6},
+    )
+    snapshot = _catalog_item_snapshot(candidate)
+    run = SimpleNamespace(scope_contract_version=PRICING_RUN_SCOPE_CONTRACT_VERSION)
+    run_item = SimpleNamespace(
+        id=uuid4(),
+        start_snapshot=snapshot,
+        start_snapshot_hash=start_snapshot_fingerprint(snapshot),
+    )
+    live_item = SimpleNamespace(
+        description="Змінений живий опис",
+        applicability_brands=["FORD"],
+        characteristics_raw={"pins": 4},
+    )
+
+    resolved = resolve_execution_catalog_item(run, run_item, live_item)
+
+    assert resolved.description == "Заморожений опис"
+    assert resolved.applicability_brands == ("VW",)
+    assert resolved.characteristics_raw == {"pins": 6}
+
+
+def test_confirmed_identity_edges_are_frozen_once_per_run_pair() -> None:
+    low = UUID("00000000-0000-0000-0000-00000000000a")
+    high = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    run = PricingRun(id=uuid4(), workspace_id=uuid4())
+    rows = _frozen_catalog_cross_rows(
+        run=run,
+        candidates=(
+            _candidate(
+                catalog_item_id=high,
+                confirmed_identity_links=(_confirmed_identity_link(high),),
+            ),
+            _candidate(
+                catalog_item_id=low,
+                confirmed_identity_links=(_confirmed_identity_link(low),),
+            ),
+        ),
+    )
+
+    assert len(rows) == 1
+    frozen = rows[0]
+    assert frozen.catalog_item_id == low
+    assert frozen.validation_status == "CONFIRMED"
+    assert frozen.extraction_method == "CATALOG_IDENTITY_SNAPSHOT"
+    assert len(frozen.source_evidence) == 2
+    assert frozen.validation_details["evidence_kind"] == "FROZEN_CATALOG_IDENTITY"
+    assert len(frozen.config_sha256) == 64
+
+
+@pytest.mark.parametrize(
+    ("status", "anomaly"),
+    (("REVIEW", None), ("CONFIRMED", "SHARED_ARTICLE_FANOUT")),
+)
+def test_unapproved_identity_edge_cannot_enter_a_pricing_run(
+    status: str, anomaly: str | None
+) -> None:
+    item_id = uuid4()
+    candidate = _candidate(
+        catalog_item_id=item_id,
+        confirmed_identity_links=(
+            _confirmed_identity_link(item_id, status=status, anomaly=anomaly),
+        ),
+    )
+
+    with pytest.raises(
+        PricingRunStartContractError, match="IDENTITY_GRAPH_NOT_CONFIRMED"
+    ):
+        _frozen_catalog_cross_rows(
+            run=PricingRun(id=uuid4(), workspace_id=uuid4()),
+            candidates=(candidate,),
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"method_version": "identity-graph-v1"},
+        {"config_sha256": "0" * 64},
+    ),
+)
+def test_stale_identity_edge_cannot_enter_a_pricing_run(overrides: dict) -> None:
+    item_id = uuid4()
+    link = _confirmed_identity_link(item_id)
+    link.update(overrides)
+
+    with pytest.raises(PricingRunStartContractError, match="IDENTITY_GRAPH_STALE"):
+        _frozen_catalog_cross_rows(
+            run=PricingRun(id=uuid4(), workspace_id=uuid4()),
+            candidates=(
+                _candidate(
+                    catalog_item_id=item_id,
+                    confirmed_identity_links=(link,),
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("confidence", (None, "invalid", "NaN", "0", "1.01"))
+def test_confirmed_identity_edge_requires_explicit_valid_confidence(
+    confidence: str | None,
+) -> None:
+    item_id = uuid4()
+    link = _confirmed_identity_link(item_id)
+    link["validation_details"]["confidence"] = confidence
+
+    with pytest.raises(
+        PricingRunStartContractError,
+        match="IDENTITY_GRAPH_CONFIDENCE_INVALID",
+    ):
+        _frozen_catalog_cross_rows(
+            run=PricingRun(id=uuid4(), workspace_id=uuid4()),
+            candidates=(
+                _candidate(
+                    catalog_item_id=item_id,
+                    confirmed_identity_links=(link,),
+                ),
+            ),
+        )
+
+
+def test_private_catalog_code_cannot_enter_a_pricing_run() -> None:
+    item_id = uuid4()
+    link = _confirmed_identity_link(item_id, extracted_oem="77643352C")
+
+    with pytest.raises(PricingRunStartContractError, match="IDENTITY_GRAPH_CORRUPT"):
+        _frozen_catalog_cross_rows(
+            run=PricingRun(id=uuid4(), workspace_id=uuid4()),
+            candidates=(
+                _candidate(
+                    catalog_item_id=item_id,
+                    confirmed_identity_links=(link,),
+                ),
+            ),
+        )
+
+
 def test_full_catalog_scope_manifest_records_selection_estimates_and_hashes() -> None:
     candidates = (
         _candidate(sku="SKU-A", source_row=2, oe_norm="1K0121251"),
@@ -229,6 +563,8 @@ def test_full_catalog_scope_manifest_records_selection_estimates_and_hashes() ->
     # Две позиции делят один поисковый ввод, поэтому сетевых входов два.
     assert scope.estimate.unique_scrape_inputs == 2
     assert scope.estimate.duplicate_items == 1
+    assert scope.estimate.network_eligible_items == 3
+    assert scope.estimate.identity_blocked_items == 0
     assert scope.estimate.worst_case_duration_seconds == 1800
     manifest = scope.manifest
     execution = manifest[SCOPE_MANIFEST_EXECUTION_SECTION]
@@ -243,6 +579,48 @@ def test_full_catalog_scope_manifest_records_selection_estimates_and_hashes() ->
     )
     assert advisory["estimate"]["eligible_items"] == 3
     assert advisory["exclusions"] == []
+
+
+def test_scope_counts_missing_identity_without_counting_a_network_input() -> None:
+    shared_url = "https://example.com/catalog/shared"
+    identified = _candidate(
+        sku="SKU-WITH-MPN",
+        source_row=2,
+        oe_norm="",
+        mpn_norm="1K0121251",
+        identity_status="MPN_ONLY",
+        product_url=shared_url,
+    )
+    unidentified = _candidate(
+        sku="SKU-INTERNAL-CODE",
+        source_row=3,
+        oe_norm="776435",
+        mpn_norm="",
+        identity_status="UNRESOLVED",
+        identity_reason="CUSTOMER_IDENTITY_MISSING",
+        product_url=shared_url,
+    )
+
+    scope = _scope((identified, unidentified))
+
+    # Both source rows remain in the immutable run membership, but neither can
+    # create a pricing network input: the first has only an MPN and the second
+    # is unresolved.
+    assert scope.estimate.eligible_items == 2
+    assert scope.estimate.network_eligible_items == 0
+    assert scope.estimate.identity_blocked_items == 2
+    assert scope.estimate.unique_scrape_inputs == 0
+    assert scope.estimate.duplicate_items == 0
+    assert scope.manifest[SCOPE_MANIFEST_ADVISORY_SECTION]["estimate"] == {
+        "requested_items": 2,
+        "eligible_items": 2,
+        "excluded_items": 0,
+        "unique_scrape_inputs": 0,
+        "duplicate_items": 0,
+        "worst_case_duration_seconds": 0,
+        "network_eligible_items": 0,
+        "identity_blocked_items": 2,
+    }
 
 
 def test_explicit_scope_is_bounded_to_the_requested_items() -> None:
@@ -302,6 +680,110 @@ def test_unavailable_items_are_excluded_with_a_stable_reason_code() -> None:
     # Исключение — часть исполняемой семантики, а не только пояснение для глаз.
     assert execution["exclusions"]["counts_by_reason_code"] == {"ITEM_UNAVAILABLE": 1}
     assert execution["exclusions"]["count"] == 1
+
+
+def test_unresolved_customer_code_is_not_a_scrape_identity() -> None:
+    unresolved = _candidate(
+        identity_status="UNRESOLVED",
+        identity_reason="CUSTOMER_IDENTITY_MISSING",
+        oe_norm="776435",
+        mpn_norm="",
+        part_numbers_norm=(),
+    )
+    supplied_mpn = _candidate(
+        identity_status="UNRESOLVED",
+        oe_norm="776436",
+        mpn_norm="LM11749",
+    )
+
+    assert customer_identity_available(unresolved) is False
+    assert scope_input_key(unresolved).startswith("identity-missing:")
+    assert customer_identity_available(supplied_mpn) is False
+    assert scope_input_key(supplied_mpn).startswith("identity-missing:")
+
+
+def test_private_catalog_codes_never_become_market_queries() -> None:
+    public_after_private = _candidate(
+        identity_status="MPN_ONLY",
+        oe_norm="4256839",
+        mpn_norm="77646059",
+        part_numbers_norm=("7764 6059", "A6383240604"),
+    )
+    private_only = _candidate(
+        identity_status="MPN_ONLY",
+        oe_norm="77646059",
+        mpn_norm="77646059",
+        part_numbers_norm=("7764 6059",),
+    )
+
+    assert customer_identity_query(public_after_private) == "A6383240604"
+    assert customer_identity_available(public_after_private) is False
+    assert customer_identity_query(private_only) == ""
+    assert customer_identity_available(private_only) is False
+
+
+def test_mpn_only_uses_full_public_part_number_when_mpn_field_is_truncated() -> None:
+    # In the canonical workbook ``Код_товару`` may be a private KEMP shelf code
+    # in ``oe_norm`` and the MPN column may contain only a short prefix.  The
+    # full public number from the characteristics block is the safe query.
+    candidate = _candidate(
+        oe_norm="776414",
+        mpn_norm="115",
+        part_numbers_norm=("115070",),
+        identity_status="MPN_ONLY",
+    )
+
+    assert customer_identity_query(candidate) == "115070"
+
+
+def test_mpn_only_falls_back_to_secondary_mpn_when_primary_code_is_private() -> None:
+    candidate = _candidate(
+        oe_norm="77646059",
+        mpn_norm="LM11749",
+        identity_status="MPN_ONLY",
+    )
+
+    assert customer_identity_query(candidate) == "LM11749"
+
+
+def test_mpn_only_never_promotes_unverified_oe_field_to_market_query() -> None:
+    """A raw ``oe_norm`` in the MPN namespace is not original-OE evidence."""
+
+    candidate = _candidate(
+        identity_status="MPN_ONLY",
+        oe_norm="93818439",
+        mpn_norm="",
+        part_numbers_norm=(),
+    )
+
+    assert customer_identity_query(candidate) == ""
+    assert customer_identity_available(candidate) is False
+
+
+def test_short_numeric_mpn_is_not_a_market_identity_without_full_number() -> None:
+    """A truncated numeric prefix must not trigger a broad Prom search."""
+
+    candidate = _candidate(
+        identity_status="MPN_ONLY",
+        oe_norm="776414",
+        mpn_norm="115",
+        part_numbers_norm=(),
+    )
+
+    assert customer_identity_query(candidate) == ""
+    assert customer_identity_available(candidate) is False
+
+
+def test_short_alphanumeric_mpn_remains_discovery_fallback_only() -> None:
+    candidate = _candidate(
+        identity_status="MPN_ONLY",
+        oe_norm="776414",
+        mpn_norm="A1",
+        part_numbers_norm=(),
+    )
+
+    assert customer_identity_query(candidate) == "A1"
+    assert customer_identity_available(candidate) is False
 
 
 def test_requesting_an_unknown_item_is_a_hard_scope_error() -> None:
@@ -365,7 +847,9 @@ def test_manifest_without_a_versioned_execution_section_has_no_hash() -> None:
         scope_manifest_hash({"contract_version": "pricing-run-scope-v1"})
 
 
-def test_changed_policy_content_changes_the_scope_hash_under_one_version_label() -> None:
+def test_changed_policy_content_changes_the_scope_hash_under_one_version_label() -> (
+    None
+):
     """Хеш обязан связывать содержимое политики, а не ярлык её версии."""
 
     lenient = policy_from_dict({"version": "pricing-v2", "max_age_hours": 72})
@@ -767,9 +1251,7 @@ def test_a_tampered_manifest_cannot_pass_as_the_same_request() -> None:
     smuggled["execution"] = {**smuggled["execution"], "scope_mode": "EXPLICIT_ITEMS"}
     existing.scope_manifest = smuggled
 
-    with pytest.raises(
-        PricingRunIdempotencyConflictError, match="scope_manifest_hash"
-    ):
+    with pytest.raises(PricingRunIdempotencyConflictError, match="scope_manifest_hash"):
         _replayed_run_or_conflict(
             existing, identity=_identity(scope, idempotency_key="operator-key-0001")
         )
@@ -875,9 +1357,7 @@ def test_replay_of_a_bounded_run_keeps_its_ordered_membership() -> None:
 
     assert plan.scope_mode == EXPLICIT_ITEMS_SCOPE
     assert plan.scope_mode != FULL_CATALOG_SCOPE
-    assert list(plan.catalog_item_ids) == [
-        item.catalog_item_id for item in scope.items
-    ]
+    assert list(plan.catalog_item_ids) == [item.catalog_item_id for item in scope.items]
     assert plan.start.confirmation_source == CONFIRMATION_SOURCE_SYSTEM_REPLAY
     assert plan.start.expected_scope_hash == scope.scope_hash
     assert plan.start.expected_catalog_snapshot_hash == scope.catalog_snapshot_hash

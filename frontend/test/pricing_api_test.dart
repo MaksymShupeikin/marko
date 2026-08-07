@@ -155,6 +155,8 @@ void main() {
 
     expect(review.verdict, 'COMPARABLE');
     expect(review.pricingEligible, isTrue);
+    expect(review.identityVerdict, 'MATCH');
+    expect(review.pricingAdmission, 'ADMITTED');
   });
 
   test('records customer comparability feedback', () async {
@@ -167,7 +169,8 @@ void main() {
           );
           final body = jsonDecode(request.body) as Map<String, dynamic>;
           expect(body['decision'], 'CORRECT');
-          expect(body['corrected_verdict'], 'NOT_COMPARABLE');
+          expect(body['corrected_identity_verdict'], 'NOT_MATCH');
+          expect(body['corrected_pricing_admission'], 'EXCLUDED');
           return http.Response(jsonEncode(_comparabilityReviewJson), 201);
         }),
         baseUrl: 'http://api.test',
@@ -176,12 +179,61 @@ void main() {
 
     await api.recordComparabilityFeedback('review-1', {
       'decision': 'CORRECT',
-      'corrected_verdict': 'NOT_COMPARABLE',
-      'corrected_match_level': 'NOT_APPLICABLE',
+      'corrected_identity_verdict': 'NOT_MATCH',
+      'corrected_identity_match_level': 'NOT_APPLICABLE',
+      'corrected_pricing_admission': 'EXCLUDED',
       'confidence': 1,
       'reason': 'Different side',
       'evidence_corrections': <dynamic>[],
     });
+  });
+
+  test('loads run comparability metrics without inventing accuracy', () async {
+    final api = PricingApi(
+      ApiClient(
+        client: MockClient((request) async {
+          expect(
+            request.url.path,
+            '/api/v1/pricing/runs/run-1/comparability-report',
+          );
+          return http.Response(
+            jsonEncode({
+              'run_id': 'run-1',
+              'generated_at': '2026-08-04T12:00:00Z',
+              'run_status': 'completed',
+              'contract_version': 'comparability-v2',
+              'totals': {'market_candidates': 20, 'reviewed_candidates': 20},
+              'identity_verdict_counts': {
+                'MATCH': 7,
+                'NOT_MATCH': 10,
+                'MANUAL_REVIEW': 3,
+              },
+              'pricing_admission_counts': {
+                'ADMITTED': 5,
+                'EXCLUDED': 12,
+                'MANUAL_REVIEW': 3,
+              },
+              'automatic_decision_coverage': '0.85',
+              'abstention_rate': '0.15',
+              'provider': {'valid_terminal_rate': '1.0'},
+              'parser': {'parser_failures': 0},
+              'seller_integrity': {'owned_store_admitted': 0},
+              'performance': {'latency_ms_p95': 500},
+              'cost': {'estimated_total': '0.01'},
+              'accuracy': {'status': 'NOT_EVALUATED', 'metrics': null},
+            }),
+            200,
+          );
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+
+    final report = await api.getComparabilityReport('run-1');
+
+    expect(report.automaticDecisionCoverage, 0.85);
+    expect(report.accuracyStatus, 'NOT_EVALUATED');
+    expect(report.identityVerdictCounts['NOT_MATCH'], 10);
   });
 
   test('verifies a recommendation through the replay endpoint', () async {

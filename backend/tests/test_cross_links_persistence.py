@@ -15,9 +15,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from marko.infrastructure.db.models import CrossLink
 from marko.services.cross_links import (
+    CATALOG_IDENTITY_RUN_SNAPSHOT_EXTRACTION,
+    CATALOG_IDENTITY_RUN_SNAPSHOT_METHOD,
     CrossLinkPersistenceError,
     count_cross_links_for_run,
     persist_cross_links_for_run,
@@ -46,6 +49,7 @@ class _CatalogItem:
     id: UUID
     oe_norm: str = "OUR1234"
     category: str | None = "radiator"
+    identity_status: str | None = None
 
 
 @dataclass
@@ -56,6 +60,11 @@ class _Observation:
     seller_name: str
     price: Decimal
     comparison_evidence: dict[str, Any] | None = None
+    is_owned: bool = False
+    is_kemp: bool = False
+    cohort_role: str | None = None
+    seller_id: str | None = None
+    source: str | None = None
 
 
 class _Result:
@@ -83,11 +92,13 @@ class _FakeSession:
         self._scalar_value = scalar_value
         self.added: list[CrossLink] = []
         self.flushed = 0
+        self.executed_statement: Any | None = None
 
     async def get(self, _model: Any, _pk: UUID) -> _Run | None:
         return self._run
 
     async def execute(self, _statement: Any) -> _Result:
+        self.executed_statement = _statement
         return _Result(self._rows)
 
     async def scalars(self, _statement: Any) -> _Result:
@@ -109,6 +120,12 @@ def _rows(
     catalog_id: UUID | None = None,
     comparison_evidence: dict[str, Any] | None = None,
     seller_name: str = "Independent Seller",
+    is_owned: bool = False,
+    is_kemp: bool = False,
+    cohort_role: str | None = None,
+    identity_status: str | None = None,
+    seller_id: str | None = None,
+    source: str | None = None,
 ) -> list[tuple[_Observation, _CatalogItem]]:
     return [
         (
@@ -119,8 +136,16 @@ def _rows(
                 seller_name=seller_name,
                 price=Decimal("1000"),
                 comparison_evidence=comparison_evidence,
+                is_owned=is_owned,
+                is_kemp=is_kemp,
+                cohort_role=cohort_role,
+                seller_id=seller_id,
+                source=source,
             ),
-            _CatalogItem(id=catalog_id or uuid4()),
+            _CatalogItem(
+                id=catalog_id or uuid4(),
+                identity_status=identity_status,
+            ),
         )
     ]
 
@@ -159,6 +184,161 @@ async def test_first_run_inserts_every_decision_once() -> None:
     assert all(row.pricing_run_id == RUN_ID for row in session.added)
     assert all(row.method_version == result.method_version for row in session.added)
     assert all(row.config_sha256 == result.config_sha256 for row in session.added)
+    persisted_decision = next(
+        decision
+        for decision in result.analysis.pair_decisions
+        if decision.extracted_oem_norm == "ABC12345"
+    )
+    assert persisted_decision.validation_details["automatic_eligible"] is False
+    assert (
+        persisted_decision.validation_details["automatic_eligibility_reason"]
+        == "STABLE_SELLER_ID_REQUIRED"
+    )
+
+
+@pytest.mark.asyncio
+async def test_owned_storefront_cannot_create_cross_evidence() -> None:
+    session = _FakeSession(run=_Run(), rows=_rows(is_owned=True))
+
+    result = await _persist(session)
+
+    assert result.inserted == 0
+    assert result.analysis.listings_total == 0
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_kemp_reference_cannot_create_independent_cross_evidence() -> None:
+    """The target brand is reference evidence, never an external seller."""
+
+    session = _FakeSession(
+        run=_Run(),
+        rows=_rows(
+            is_kemp=True,
+            cohort_role="KEMP_REFERENCE",
+            identity_status="OE_CONFIRMED",
+            seller_id="kemp-seller",
+        ),
+    )
+
+    result = await _persist(session)
+
+    assert result.analysis.listings_total == 0
+    assert result.inserted == 0
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_manual_review_observation_cannot_create_cross_evidence() -> None:
+    session = _FakeSession(
+        run=_Run(),
+        rows=_rows(
+            cohort_role="MANUAL_REVIEW",
+            identity_status="OE_CONFIRMED",
+            seller_id="review-seller",
+        ),
+    )
+
+    result = await _persist(session)
+
+    assert result.analysis.listings_total == 0
+    assert result.inserted == 0
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_mpn_only_seed_cannot_create_oem_cross_evidence() -> None:
+    session = _FakeSession(
+        run=_Run(),
+        rows=_rows(identity_status="MPN_ONLY"),
+    )
+
+    result = await _persist(session)
+
+    assert result.inserted == 0
+    assert result.analysis.listings_total == 0
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_non_prom_source_cannot_enter_prom_cross_graph() -> None:
+    """Seller ids are namespaced by marketplace, not just numeric text."""
+
+    session = _FakeSession(
+        run=_Run(),
+        rows=_rows(source="other_marketplace"),
+    )
+
+    result = await _persist(session)
+
+    assert result.analysis.listings_total == 0
+    assert result.inserted == 0
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_production_query_binds_marketplace_and_identity_guards() -> None:
+    """The SQL boundary must carry the same guards as the compatibility path."""
+
+    session = _FakeSession(run=_Run(), rows=[])
+    await _persist(session)
+
+    assert session.executed_statement is not None
+    rendered = str(
+        session.executed_statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": False},
+        )
+    )
+    assert "market_observations.source IN" in rendered
+    assert "catalog_items.identity_status" in rendered
+    assert "observation_tier_classifications.is_owned" in rendered
+    assert "observation_tier_classifications.is_kemp" in rendered
+    assert "observation_tier_classifications.cohort_role" in rendered
+    assert "observation_tier_classifications.is_used" in rendered
+    assert "observation_tier_classifications.is_dumping" in rendered
+    assert "marketplace_stores.marketplace" in rendered
+    assert "workspace_stores.kind" in rendered
+
+
+@pytest.mark.asyncio
+async def test_persisted_cross_requires_two_stable_seller_ids() -> None:
+    catalog_id = uuid4()
+    rows = [
+        (
+            _Observation(
+                source_listing_id="listing-a",
+                description=DESCRIPTION,
+                url="https://prom.ua/ua/p-listing-a.html",
+                seller_name="Same network A",
+                seller_id="seller-a",
+                price=Decimal("1000"),
+            ),
+            _CatalogItem(id=catalog_id),
+        ),
+        (
+            _Observation(
+                source_listing_id="listing-b",
+                description=DESCRIPTION,
+                url="https://prom.ua/ua/p-listing-b.html",
+                seller_name="Same network B",
+                seller_id="seller-b",
+                price=Decimal("1000"),
+            ),
+            _CatalogItem(id=catalog_id),
+        ),
+    ]
+    session = _FakeSession(run=_Run(), rows=rows)
+
+    result = await _persist(session)
+
+    assert result.analysis.pair_decisions
+    confirmed = next(
+        decision
+        for decision in result.analysis.pair_decisions
+        if decision.extracted_oem_norm == "ABC12345"
+    )
+    assert confirmed.validation_details["automatic_eligible"] is True
 
 
 @pytest.mark.asyncio
@@ -174,6 +354,52 @@ async def test_identical_replay_reuses_snapshot_without_inserting() -> None:
     assert second.added == []
     assert second.flushed == 0
     assert result.config_sha256 == baseline.config_sha256
+
+
+@pytest.mark.asyncio
+async def test_catalog_identity_snapshot_covers_pair_and_stage_inserts_only_missing(
+) -> None:
+    baseline_session = _FakeSession(run=_Run(), rows=_rows())
+    baseline = await _persist(baseline_session)
+    assert baseline.inserted == 2
+    catalog_snapshot = baseline_session.added[0]
+    catalog_snapshot.extraction_method = CATALOG_IDENTITY_RUN_SNAPSHOT_EXTRACTION
+    catalog_snapshot.method_version = CATALOG_IDENTITY_RUN_SNAPSHOT_METHOD
+    catalog_snapshot.config_sha256 = "a" * 64
+
+    session = _FakeSession(
+        run=_Run(), rows=_rows(), existing=[catalog_snapshot]
+    )
+    result = await _persist(session)
+
+    assert result.inserted == 1
+    assert result.reused == 1
+    assert len(session.added) == 1
+    assert session.added[0].extracted_oem_norm != (
+        catalog_snapshot.extracted_oem_norm
+    )
+
+
+@pytest.mark.asyncio
+async def test_replay_accepts_complete_stage_snapshot_beside_catalog_snapshot() -> None:
+    baseline_session = _FakeSession(run=_Run(), rows=_rows())
+    await _persist(baseline_session)
+    catalog_snapshot, stage_snapshot = baseline_session.added
+    catalog_snapshot.extraction_method = CATALOG_IDENTITY_RUN_SNAPSHOT_EXTRACTION
+    catalog_snapshot.method_version = CATALOG_IDENTITY_RUN_SNAPSHOT_METHOD
+    catalog_snapshot.config_sha256 = "b" * 64
+
+    session = _FakeSession(
+        run=_Run(),
+        rows=_rows(),
+        existing=[catalog_snapshot, stage_snapshot],
+    )
+    result = await _persist(session)
+
+    assert result.inserted == 0
+    assert result.reused == 2
+    assert session.added == []
+    assert session.flushed == 0
 
 
 @pytest.mark.asyncio

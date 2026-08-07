@@ -77,6 +77,7 @@ class CatalogProduct {
     required this.name,
     required this.sku,
     required this.oe,
+    this.mpn,
     required this.modelId,
     required this.brand,
     required this.imageUrl,
@@ -100,6 +101,7 @@ class CatalogProduct {
       name: json['name'] as String,
       sku: json['sku'] as String?,
       oe: json['oe'] as String?,
+      mpn: json['mpn'] as String?,
       modelId: json['model_id'] as String?,
       brand: json['brand'] as String?,
       imageUrl: json['image_url'] as String?,
@@ -127,6 +129,7 @@ class CatalogProduct {
   final String name;
   final String? sku;
   final String? oe;
+  final String? mpn;
   final String? modelId;
   final String? brand;
   final String? imageUrl;
@@ -277,6 +280,9 @@ class CatalogDiscoveredOffer {
     required this.title,
     required this.url,
     required this.sku,
+    this.mpn,
+    this.oeRaw,
+    this.partNumbers = const [],
     required this.brand,
     required Object salePrice,
     required Object? referencePrice,
@@ -306,6 +312,11 @@ class CatalogDiscoveredOffer {
       title: json['title'] as String,
       url: json['url'] as String,
       sku: json['sku'] as String?,
+      mpn: json['mpn'] as String?,
+      oeRaw: json['oe_raw'] as String?,
+      partNumbers: (json['part_numbers'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
       brand: json['brand'] as String?,
       salePrice: json['sale_price'] ?? 0,
       referencePrice: json['reference_price'],
@@ -341,6 +352,9 @@ class CatalogDiscoveredOffer {
   final String title;
   final String url;
   final String? sku;
+  final String? mpn;
+  final String? oeRaw;
+  final List<String> partNumbers;
   final String? brand;
   final DecimalValue salePrice;
   final DecimalValue? referencePrice;
@@ -508,7 +522,7 @@ class CatalogCompetitorComparison {
   final double? dispersion;
   final List<CatalogDiscoveredOffer> discoveryItems;
 
-  /// Counts towards the fair price.
+  /// Kept for the discovery API shape; discovery rows never enter pricing.
   final List<CatalogDiscoveredOffer> pricingEvidence;
 
   /// Same part, level unknown or unconvertible: shown, never priced against.

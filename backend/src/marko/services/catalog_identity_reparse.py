@@ -18,9 +18,9 @@ turn a lone claim into a corroborated one, or a settled number into a superseded
 one — so those are updated, while the identity of the row is not.
 
 **Nothing is deleted.** The table is append-only by design. A link the current
-files no longer produce is reported as stale rather than removed: it was real
-evidence when it was written, and deciding it is not evidence any more is a
-judgement this package does not make on its own.
+inputs no longer produce is preserved but quarantined as stale.  Historical
+evidence remains inspectable, while no obsolete edge can keep widening current
+pricing merely because an earlier run once stamped it CONFIRMED.
 """
 
 from __future__ import annotations
@@ -29,20 +29,24 @@ from collections.abc import Iterable, Mapping, Sequence
 import csv
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from metis.pricing.crosses import normalize_cross_oem
 from metis.pricing.identity_graph import (
+    Anomaly,
     IdentityGraph,
     IdentityGraphConfig,
     LinkStatus,
     SourceNumbers,
     build_identity_graph,
+    is_safe_public_number_shape,
     shared_article_numbers,
 )
 from metis.pricing.kemp_reference import (
@@ -59,11 +63,23 @@ from metis.pricing.kemp_site import (
     TokenClass,
     extract_numbers,
     known_number_set,
+    split_tokens,
 )
 
 from marko.infrastructure.db.models import CatalogIdentityLink, CatalogItem
+from marko.services.catalog_identity_safety import identity_runtime_config_sha256
+from marko.services.semantic_candidate_features import (
+    SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+    build_semantic_feature_matrix,
+)
 
 SITE_SOURCE = "KEMP_SITE"
+# The site harvest is a customer-owned, medium-trust source.  Bind every row
+# to the exact HTTPS host and to the search code that produced the card.  A
+# copied CSV row pointing at another domain (or at a different KEMP search)
+# must not silently acquire KEMP's source standing.
+KEMP_SITE_HOSTS = frozenset({"kemp.ua", "www.kemp.ua"})
+KEMP_SITE_INTERNAL_CODE_RE = re.compile(r"^776[0-9A-Z]{1,9}$")
 OWN_EXPORT_SOURCE = "OWN_EXPORT_CHARACTERISTIC"
 #: The supplier article column of the reference book, which names the same part
 #: under another maker's number without claiming it is the vehicle maker's.
@@ -71,6 +87,11 @@ REFERENCE_ARTICLE_SOURCE = "KEMP_REFERENCE_ARTICLE"
 #: The row's own code column, which holds an internal shelf number for some
 #: rows and a real part number for the rest.
 OWN_EXPORT_CODE_SOURCE = "OWN_EXPORT_CODE"
+
+DISCARD_INTERNAL_CATALOG_CODE = "INTERNAL_CATALOG_CODE"
+DISCARD_AMBIGUOUS_INTERNAL_CODES = "AMBIGUOUS_INTERNAL_CATALOG_CODES"
+ANOMALY_STALE_AFTER_REPARSE = Anomaly.STALE_AFTER_REPARSE.value
+CONFIRMED_IDENTITY_LINK_CONFIDENCE = "0.90"
 
 
 class CatalogIdentityReparseError(ValueError):
@@ -108,6 +129,19 @@ class SourceIndex:
     #: attributes to a supplier brand.  Refused as an OE and counted, because a
     #: silent refusal at this scale is indistinguishable from a coverage drop.
     supplier_number_claims: int = 0
+    #: Same private catalogue key, but source revisions explicitly disagree on
+    #: a hard physical identity dimension.  The evidence is retained verbatim;
+    #: every resulting graph edge stays REVIEW until a human resolves it.
+    semantic_conflicts: Mapping[str, tuple[Mapping[str, Any], ...]] = field(
+        default_factory=dict
+    )
+    #: Exact public number reused by different private catalog identities whose
+    #: titles contradict on a high-certainty structural dimension.  This is
+    #: narrower than ordinary fan-out: engine-only or dimension-only drift is
+    #: not enough to defeat an exact number by itself.
+    semantic_fanout_conflicts: Mapping[
+        str, tuple[Mapping[str, Any], ...]
+    ] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +168,11 @@ class ItemPlan:
     links: tuple[PlannedLink, ...]
     identity_status: str
     identity_reason: str | None
+    #: Private KEMP shelf codes recovered from the declared part-number block.
+    #: Exactly one is a safe join key into the two customer reference books;
+    #: none of them is ever a public cross identifier.
+    internal_catalog_codes: tuple[str, ...] = ()
+    reference_lookup_codes: tuple[str, ...] = ()
     #: The OE this row should carry, when the row does not already carry one and
     #: a source supplied it. Empty means leave the imported value alone.
     fill_oe_raw: str = ""
@@ -235,6 +274,277 @@ def supplier_articles_by_code(
 #: answering it "supplier" here would be the same guess WP-2 refuses to make.
 _SUPPLIER_BRAND_KINDS = frozenset({BrandKind.AFTERMARKET, BrandKind.NOT_A_BRAND})
 
+# Commercial quantity/unit conflicts stop pricing admission but do not disprove
+# that two source rows describe the same physical part.  Only the dimensions
+# below are strong enough to quarantine an identity join between XLS revisions.
+_SOURCE_IDENTITY_CONFLICT_DIMENSIONS = frozenset(
+    {
+        "domain",
+        "part_type",
+        "part_subtype",
+        "assembly_level",
+        "serviceability",
+        "side",
+        "position",
+        "climate_variant",
+        "connectors_pins",
+        "technical_specs",
+        "opening_temperature",
+        "housing",
+        "engine",
+    }
+)
+
+# For an exact public number, engine lists and measurements can legitimately
+# differ across compatible applications or suppliers.  Structural component,
+# assembly, side and connector disagreements are materially stronger: the same
+# identifier cannot safely stand for a reservoir and an impeller, or a lock
+# housing and a complete lock assembly.
+_PUBLIC_NUMBER_FANOUT_CONFLICT_DIMENSIONS = frozenset(
+    {
+        "domain",
+        "part_type",
+        "part_subtype",
+        "assembly_level",
+        "serviceability",
+        "side",
+        "position",
+        "climate_variant",
+        "connectors_pins",
+        "opening_temperature",
+        "housing",
+    }
+)
+
+
+def reference_semantic_conflicts(
+    editions: Sequence[tuple[str, ReferenceMap]],
+    *,
+    config: IdentityGraphConfig,
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Find explicit identity contradictions hidden by a shared private key.
+
+    A private KEMP code is a join key, not proof that every historical row under
+    it is one part.  The customer files currently contain cases where the older
+    revision says left and the newer says right, or rear and front.  Recency can
+    choose which row is current; it cannot turn the two rows into cross numbers
+    of one physical part.
+
+    Multiple distinct rows inside one edition are compared as well: one
+    truncated key can otherwise fuse unrelated parts before provenance has any
+    chance to help.  Across editions, only revisions from the same publisher
+    are compared. Distinct publishers are independent evidence sources and
+    their number-level disagreements are handled by ``OE_SOURCE_CONFLICT``.
+    """
+
+    by_code: dict[str, list[tuple[str, str]]] = {}
+    for source, reference in editions:
+        for row in reference.rows:
+            code = row.mpn.strip()
+            title = row.name.strip()
+            if code and title:
+                entry = (source, title)
+                if entry not in by_code.setdefault(code, []):
+                    by_code[code].append(entry)
+
+    result: dict[str, tuple[Mapping[str, Any], ...]] = {}
+    for code in sorted(by_code):
+        evidence: list[Mapping[str, Any]] = []
+        entries = sorted(
+            by_code[code],
+            key=lambda item: (config.sources[item[0]].vintage, item[0], item[1]),
+        )
+        for left_index, (left_source, left_title) in enumerate(entries):
+            left_rule = config.sources[left_source]
+            for right_source, right_title in entries[left_index + 1 :]:
+                right_rule = config.sources[right_source]
+                if (
+                    left_source != right_source
+                    and left_rule.publisher != right_rule.publisher
+                ):
+                    continue
+                matrix = build_semantic_feature_matrix(
+                    {"name": left_title}, {"title": right_title}
+                )
+                conflicts = tuple(
+                    conflict
+                    for conflict in matrix["hard_stop_conflicts"]
+                    if conflict["dimension"] in _SOURCE_IDENTITY_CONFLICT_DIMENSIONS
+                )
+                if not conflicts:
+                    continue
+                evidence.append(
+                    {
+                        "left_source": left_source,
+                        "left_vintage": left_rule.vintage,
+                        "left_title": left_title,
+                        "right_source": right_source,
+                        "right_vintage": right_rule.vintage,
+                        "right_title": right_title,
+                        "conflicts": list(conflicts),
+                        "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+                    }
+                )
+        if evidence:
+            result[code] = tuple(evidence)
+    return result
+
+
+def site_semantic_conflicts(
+    editions: Sequence[tuple[str, ReferenceMap]],
+    site_sources: Mapping[str, SourceNumbers],
+    *,
+    config: IdentityGraphConfig,
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Compare each retained KEMP card title with the newest book title.
+
+    The site card is medium-trust evidence: it can corroborate a number, but
+    it must not silently repair a stale or mis-bound private-code join.  Only
+    the newest title for each code is compared; an older book revision is
+    already handled by ``reference_semantic_conflicts`` and must not create a
+    second disagreement merely because it is historical.  An explicit
+    structural conflict (part family, component/assembly, side, position,
+    etc.) quarantines the key for human review.  Missing or merely different
+    wording remains UNKNOWN rather than becoming a false conflict.
+    """
+
+    latest: dict[str, list[tuple[str, str]]] = {}
+    for source, reference in editions:
+        vintage = config.sources[source].vintage
+        for row in reference.rows:
+            code = row.mpn.strip()
+            title = row.name.strip()
+            if not code or not title:
+                continue
+            current = latest.get(code)
+            if current is None:
+                latest[code] = [(source, title)]
+                continue
+            current_vintage = config.sources[current[0][0]].vintage
+            if vintage > current_vintage:
+                latest[code] = [(source, title)]
+            elif vintage == current_vintage and (source, title) not in current:
+                current.append((source, title))
+
+    result: dict[str, tuple[Mapping[str, Any], ...]] = {}
+    for code, site_source in site_sources.items():
+        site_title = _semantic_title_from_context(site_source.raw_context)
+        if not site_title:
+            continue
+        evidence: list[Mapping[str, Any]] = []
+        for reference_source, reference_title in latest.get(code, ()):
+            matrix = build_semantic_feature_matrix(
+                {"name": reference_title}, {"title": site_title}
+            )
+            conflicts = tuple(
+                conflict
+                for conflict in matrix["hard_stop_conflicts"]
+                if conflict["dimension"] in _SOURCE_IDENTITY_CONFLICT_DIMENSIONS
+            )
+            if conflicts:
+                evidence.append(
+                    {
+                        "left_source": reference_source,
+                        "left_vintage": config.sources[reference_source].vintage,
+                        "left_title": reference_title,
+                        "right_source": SITE_SOURCE,
+                        "right_vintage": config.sources[SITE_SOURCE].vintage,
+                        "right_title": site_title,
+                        "conflicts": list(conflicts),
+                        "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+                    }
+                )
+        if evidence:
+            result[code] = tuple(evidence)
+    return result
+
+
+def public_number_semantic_conflicts(
+    by_code: Mapping[str, Sequence[SourceNumbers]],
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Find exact public numbers joining structurally incompatible identities.
+
+    Ordinary fan-out may be two duplicate catalog rows for the same physical
+    part.  It remains fail-closed at the persistence reader, but this function
+    makes the stronger subset explicit: the same normalized number appears
+    under different private keys and the associated titles disagree on a
+    structural identity dimension.  Those conflicts must also quarantine a
+    canonical-only graph, where no link row exists for the SQL fan-out guard.
+    """
+
+    claims: dict[str, list[tuple[str, str, str]]] = {}
+    for code, entries in by_code.items():
+        for entry in entries:
+            title = _semantic_title_from_context(entry.raw_context)
+            if not title:
+                continue
+            for raw in entry.numbers:
+                normalized = normalize_cross_oem(raw)
+                claim = (code, entry.extraction_method, title)
+                if (
+                    is_safe_public_number_shape(normalized)
+                    and claim not in claims.setdefault(normalized, [])
+                ):
+                    claims[normalized].append(claim)
+
+    result: dict[str, tuple[Mapping[str, Any], ...]] = {}
+    for number in sorted(claims):
+        by_owner: dict[str, list[tuple[str, str]]] = {}
+        for code, source, title in claims[number]:
+            by_owner.setdefault(code, []).append((source, title))
+        owners = sorted(by_owner)
+        if len(owners) < 2:
+            continue
+        evidence: list[Mapping[str, Any]] = []
+        for left_index, left_code in enumerate(owners):
+            for right_code in owners[left_index + 1 :]:
+                for left_source, left_title in by_owner[left_code]:
+                    for right_source, right_title in by_owner[right_code]:
+                        matrix = build_semantic_feature_matrix(
+                            {"name": left_title}, {"title": right_title}
+                        )
+                        conflicts = tuple(
+                            conflict
+                            for conflict in matrix["hard_stop_conflicts"]
+                            if conflict["dimension"]
+                            in _PUBLIC_NUMBER_FANOUT_CONFLICT_DIMENSIONS
+                        )
+                        if not conflicts:
+                            continue
+                        evidence.append(
+                            {
+                                "left_code": left_code,
+                                "left_source": left_source,
+                                "left_title": left_title,
+                                "right_code": right_code,
+                                "right_source": right_source,
+                                "right_title": right_title,
+                                "conflicts": list(conflicts),
+                                "extractor_version": (
+                                    SEMANTIC_FEATURE_EXTRACTOR_VERSION
+                                ),
+                            }
+                        )
+        if evidence:
+            result[number] = tuple(evidence)
+    return result
+
+
+def _semantic_title_from_context(raw_context: str) -> str:
+    """Recover title-like evidence without reading URL punctuation as facts.
+
+    KEMP_SITE stores the exact source URL as context.  Its slug is useful
+    evidence, but a hyphen after ``ac`` is a word separator, not the product
+    assertion ``AC-``.  Decode only the final path segment and replace slug
+    separators before passing it to the semantic extractor.
+    """
+
+    text = raw_context.strip()
+    if text.casefold().startswith(("http://", "https://")):
+        slug = unquote(urlsplit(text).path.rsplit("/", 1)[-1])
+        return slug.replace("-", " ").replace("_", " ").strip()
+    return text.split(" | ", 1)[0].strip()
+
 
 def article_numbers(
     article: str, *, own_code: str, tokens: KempSiteTokensConfig
@@ -251,18 +561,146 @@ def article_numbers(
     self-reference check, because it is not a cross in the first place.
     """
 
-    if not article.strip():
+    if not article.strip() or _DIMENSION_ONLY_ARTICLE.fullmatch(article):
         return ()
     extraction = extract_numbers(
-        [("sku", article)],
+        [("sku", chunk) for chunk in _article_identity_chunks(article, tokens=tokens)],
         config=tokens,
         known=known_number_set([own_code], tokens),
     )
-    return tuple(
+    raw_numbers = tuple(
         token.raw
         for token in extraction.tokens
         if token.token_class is not TokenClass.INTERNAL_CODE
     )
+    return _expand_slash_shorthand(raw_numbers, raw_context=article)
+
+
+def _article_identity_chunks(
+    article: str, *, tokens: KempSiteTokensConfig
+) -> tuple[str, ...]:
+    """Remove editorial brand labels and split adjacent complete identifiers.
+
+    Customer exports contain both formatted identifiers (``7E5 827 505 A``)
+    and prose-prefixed values (``Audi 4F0260403E``).  Normalizing the latter as
+    one token publishes the fictitious node ``AUDI4F0260403E``.  Some cells
+    also place two complete identifiers next to each other with whitespace.
+
+    Keep a formatted identifier whole unless every digit-bearing fragment is
+    independently long enough to be a complete identifier.  The private KEMP
+    namespace and explicitly configured aftermarket shapes are recognized
+    before this rule, so ``7764 1257`` and ``VKBA 3901`` retain their intended
+    classification.
+    """
+
+    chunks: list[str] = []
+    for raw_chunk in split_tokens(article, tokens):
+        chunk = raw_chunk.strip()
+        normalized = normalize_cross_oem(chunk)
+        upper = chunk.upper()
+        if (
+            tokens.internal_code_pattern.fullmatch(normalized)
+            or any(rule.pattern.match(upper) for rule in tokens.aftermarket_patterns)
+        ):
+            chunks.append(chunk)
+            continue
+
+        fragments = chunk.split()
+        while fragments and not any(character.isdigit() for character in fragments[0]):
+            fragments.pop(0)
+        while (
+            fragments
+            and not any(character.isdigit() for character in fragments[-1])
+            and len(normalize_cross_oem(fragments[-1])) > 1
+        ):
+            fragments.pop()
+        if not fragments:
+            # A short alphabetic fragment after ``/`` or ``,`` is a catalogue
+            # suffix (``...A/K`` or ``...B,L,R``), not an editorial brand.
+            # Preserve it for ``_expand_slash_shorthand``; the expansion logic
+            # decides whether the base makes that suffix unambiguous.
+            if (
+                len(normalize_cross_oem(chunk)) <= 3
+                and ({"/", ","} & set(article))
+            ):
+                chunks.append(chunk)
+            continue
+
+        digit_fragments = [
+            fragment for fragment in fragments if any(character.isdigit() for character in fragment)
+        ]
+        if (
+            len(digit_fragments) >= 2
+            and all(len(normalize_cross_oem(fragment)) >= tokens.min_length for fragment in digit_fragments)
+        ):
+            chunks.extend(digit_fragments)
+        else:
+            chunks.append(" ".join(fragments))
+    return tuple(chunks)
+
+
+_DIMENSION_ONLY_ARTICLE = re.compile(
+    r"\s*\d{1,4}(?:[.,]\d+)?\s*[*xх×]\s*\d{1,4}(?:[.,]\d+)?"
+    r"(?:\s*[*xх×]\s*\d{1,4}(?:[.,]\d+)?)?\s*(?:mm|мм)?\s*",
+    re.IGNORECASE,
+)
+_TRAILING_LETTERS = re.compile(r"[A-Z]+$")
+
+
+def _expand_slash_shorthand(
+    numbers: Sequence[str], *, raw_context: str
+) -> tuple[str, ...]:
+    """Expand compact suffix lists without emitting suffixes as global IDs.
+
+    Customer cells use catalog shorthand such as ``1J0959455A/K`` and
+    ``8K0407151/152/695``.  The old tokenizer emitted ``K`` and ``152`` as
+    standalone public numbers, so unrelated products sharing those fragments
+    became cross-linked.  A suffix is expanded only when the first token gives
+    an unambiguous base.  Bare alphabetic fragments after a numeric-only base
+    are dropped rather than guessed.
+    """
+
+    if len(numbers) < 2 or not ({"/", ","} & set(raw_context)):
+        return tuple(numbers)
+    base_raw = numbers[0]
+    base = normalize_cross_oem(base_raw)
+    if len(base) < 4:
+        # A short numeric prefix followed by one full token is a composite
+        # catalogue identifier, not a list.  JCB uses values such as
+        # ``331/28235L``; splitting that cell published the common prefix
+        # ``331`` as a global cross and falsely joined the left and right
+        # handles.  Preserve the exact cell so ordinary normalization produces
+        # the single identifier ``33128235L``.
+        if (
+            "/" in raw_context
+            and len(numbers) == 2
+            and base.isdigit()
+            and len(normalize_cross_oem(numbers[1])) >= 4
+        ):
+            return (raw_context.strip(),)
+        return tuple(numbers)
+
+    expanded: list[str] = [base_raw]
+    for raw in numbers[1:]:
+        suffix = normalize_cross_oem(raw)
+        if not suffix or len(suffix) >= 4:
+            if raw:
+                expanded.append(raw)
+            continue
+        replacement: str | None = None
+        if suffix.isalpha():
+            trailing = _TRAILING_LETTERS.search(base)
+            if trailing is not None:
+                replacement = f"{base[: trailing.start()]}{suffix}"
+            # With no letter suffix in the base, ``/MG`` may be a brand/editor
+            # note.  It is not safe to manufacture a new identifier.
+        elif suffix.isalnum() and len(base) >= len(suffix) + 3:
+            replacement = f"{base[: -len(suffix)]}{suffix}"
+        if replacement and replacement not in {
+            normalize_cross_oem(value) for value in expanded
+        }:
+            expanded.append(replacement)
+    return tuple(expanded)
 
 
 #: The only class of harvested number that is a claim about this part's OE.
@@ -289,11 +727,88 @@ def load_site_source(path: str | Path) -> tuple[dict[str, SourceNumbers], int]:
             raw = (row.get("number_raw") or "").strip()
             if not code or not raw:
                 continue
+            source_url = (row.get("source_url") or "").strip()
+            if not _kemp_site_source_url_binds_code(source_url, code):
+                raise CatalogIdentityReparseError(
+                    "KEMP_SITE row has untrusted or unbound source_url: "
+                    f"code={code!r}, url={source_url!r}"
+                )
             if (row.get("token_class") or "").strip() != SITE_OE_TOKEN_CLASS:
                 not_an_oe += 1
                 continue
+            # New harvests bind the card to the searched private code through
+            # schema.org/Product.mpn.  A conflicting structured object is a
+            # concrete card-binding failure, not an invitation to fall back to
+            # a fuzzy slug.  Legacy CSVs without this column remain readable
+            # as medium-trust review evidence until the next harvest.
+            structured_status = (row.get("structured_status") or "").strip()
+            structured_mpn = (row.get("structured_mpn") or "").strip()
+            if structured_status == "MPN_MISMATCH":
+                raise CatalogIdentityReparseError(
+                    "KEMP_SITE structured Product.mpn does not bind to search code: "
+                    f"code={code!r}, structured_mpn={structured_mpn!r}"
+                )
+            if structured_status == "PRODUCT_MATCH" and (
+                not structured_mpn
+                or normalize_cross_oem(structured_mpn) != normalize_cross_oem(code)
+            ):
+                raise CatalogIdentityReparseError(
+                    "KEMP_SITE structured Product.mpn is missing or unbound: "
+                    f"code={code!r}, structured_mpn={structured_mpn!r}"
+                )
             grouped.setdefault(code, []).append(raw)
-            contexts.setdefault(code, (row.get("source_url") or "").strip())
+            # New harvests carry the retained card title.  Keep the URL in the
+            # context as well: the title is semantic evidence, while the URL
+            # is the provenance a reviewer can open and re-check.  Old v1 CSVs
+            # remain readable and fall back to the URL/slug parser.
+            source_title = (
+                row.get("source_title") or row.get("title") or ""
+            ).strip()
+            structured_title = (row.get("structured_name") or "").strip()
+            source_image_url = (row.get("source_image_url") or "").strip()
+            structured_image_url = (row.get("structured_image_url") or "").strip()
+            if source_image_url and not _kemp_site_media_url_is_safe(
+                source_image_url
+            ):
+                raise CatalogIdentityReparseError(
+                    "KEMP_SITE row has untrusted source_image_url: "
+                    f"code={code!r}, url={source_image_url!r}"
+                )
+            if structured_image_url and not _kemp_site_media_url_is_safe(
+                structured_image_url
+            ):
+                raise CatalogIdentityReparseError(
+                    "KEMP_SITE structured image URL is untrusted: "
+                    f"code={code!r}, url={structured_image_url!r}"
+                )
+            semantic_title = structured_title or source_title
+            context = " | ".join(
+                value
+                for value in (
+                    semantic_title,
+                    (
+                        f"visible_title={source_title}"
+                        if structured_title
+                        and source_title
+                        and structured_title != source_title
+                        else ""
+                    ),
+                    source_url,
+                    f"image={source_image_url}" if source_image_url else "",
+                    (
+                        f"structured_image={structured_image_url}"
+                        if structured_image_url
+                        else ""
+                    ),
+                    (
+                        f"structured_mpn_status={structured_status}"
+                        if structured_status
+                        else ""
+                    ),
+                )
+                if value
+            )
+            contexts.setdefault(code, context)
     return (
         {
             code: SourceNumbers(
@@ -304,6 +819,58 @@ def load_site_source(path: str | Path) -> tuple[dict[str, SourceNumbers], int]:
             for code, numbers in grouped.items()
         },
         not_an_oe,
+    )
+
+
+def _kemp_site_source_url_binds_code(source_url: str, code: str) -> bool:
+    """Validate the immutable provenance contract of one harvested card.
+
+    ``kemp_site_harvest`` obtains links from a search result and records the
+    query code.  Friendly product URLs and the legacy ``index.php`` route are
+    both present in the retained capture.  Requiring HTTPS, the customer host,
+    a product-card path and an exact ``search=<internal code>`` binding keeps a
+    stale or manually edited CSV from turning an arbitrary page into identity
+    evidence.
+    """
+
+    if not KEMP_SITE_INTERNAL_CODE_RE.fullmatch(
+        normalize_cross_oem(code.upper())
+    ):
+        return False
+    try:
+        parsed = urlsplit(source_url)
+    except ValueError:
+        return False
+    if parsed.scheme.casefold() != "https":
+        return False
+    if (parsed.hostname or "").casefold() not in KEMP_SITE_HOSTS:
+        return False
+    query = parse_qs(parsed.query, keep_blank_values=False)
+    search_values = query.get("search") or ()
+    if len(search_values) != 1:
+        return False
+    if normalize_cross_oem(search_values[0]) != normalize_cross_oem(code):
+        return False
+    path = parsed.path.rstrip("/")
+    if path.casefold().startswith("/kemp-"):
+        return True
+    if path.casefold() == "/index.php":
+        route = (query.get("route") or ("",))[0].casefold()
+        return route == "product/product" and bool((query.get("product_id") or ("",))[0])
+    return False
+
+
+def _kemp_site_media_url_is_safe(source_url: str) -> bool:
+    """Accept only an HTTPS media URL served by the customer site."""
+
+    try:
+        parsed = urlsplit(source_url)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.casefold() == "https"
+        and (parsed.hostname or "").casefold() in KEMP_SITE_HOSTS
+        and bool(parsed.path)
     )
 
 
@@ -324,9 +891,7 @@ def build_source_index(
     without_code = 0
     supplier_number_claims = 0
 
-    editions = [
-        load_reference_edition(path, config=config) for path in reference_paths
-    ]
+    editions = [load_reference_edition(path, config=config) for path in reference_paths]
     for name, _ in editions:
         if loaded.count(name):
             raise CatalogIdentityReparseError(
@@ -334,6 +899,8 @@ def build_source_index(
             )
         loaded.append(name)
     supplier_articles = supplier_articles_by_code(editions, kinds)
+    semantic_conflicts = reference_semantic_conflicts(editions, config=config)
+    site_numbers: dict[str, SourceNumbers] = {}
 
     for name, reference in editions:
         for row in reference.rows:
@@ -341,9 +908,7 @@ def build_source_index(
             if not code:
                 without_code += 1
                 continue
-            article_parts = article_numbers(
-                row.article, own_code=code, tokens=tokens
-            )
+            article_parts = article_numbers(row.article, own_code=code, tokens=tokens)
             articles_by_code.setdefault(code, []).extend(article_parts)
             context = f"{row.name} | {row.article} | {row.article_brand}".strip(" |")
             identity = resolve_identity(row, kinds=kinds, tokens=tokens)
@@ -371,9 +936,7 @@ def build_source_index(
             # the same part under another maker's number, which is exactly what
             # widens an identity at the gate.  It goes in under the source that
             # claims no OE, so it can never contradict one.
-            crosses = article_numbers(
-                identity.mpn_raw, own_code=code, tokens=tokens
-            )
+            crosses = article_numbers(identity.mpn_raw, own_code=code, tokens=tokens)
             if crosses:
                 by_code.setdefault(code, []).append(
                     SourceNumbers(
@@ -392,21 +955,56 @@ def build_source_index(
         for code, entry in site_numbers.items():
             by_code.setdefault(code, []).append(entry)
 
+        for code, conflicts in site_semantic_conflicts(
+            editions,
+            site_numbers,
+            config=config,
+        ).items():
+            semantic_conflicts[code] = tuple(
+                (*semantic_conflicts.get(code, ()), *conflicts)
+            )
+
+    frozen_by_code = {code: tuple(entries) for code, entries in by_code.items()}
+    semantic_fanout_conflicts = public_number_semantic_conflicts(frozen_by_code)
     return SourceIndex(
-        by_code={code: tuple(entries) for code, entries in by_code.items()},
+        by_code=frozen_by_code,
         shared_articles=shared_article_numbers(articles_by_code),
         loaded_sources=tuple(loaded),
         mpn_only_rows=mpn_only,
         rows_without_code=without_code,
         supplier_number_claims=supplier_number_claims,
+        semantic_conflicts=semantic_conflicts,
+        semantic_fanout_conflicts=semantic_fanout_conflicts,
     )
 
 
 # ------------------------------------------------------------------- planning
 
 
-def _own_export_numbers(part_numbers_raw: Iterable[str]) -> SourceNumbers | None:
-    numbers = tuple(value for value in part_numbers_raw if value and value.strip())
+def _internal_catalog_codes(
+    part_numbers_raw: Iterable[str], *, tokens: KempSiteTokensConfig
+) -> tuple[str, ...]:
+    codes = {
+        normalized
+        for value in part_numbers_raw
+        if (normalized := normalize_cross_oem(value))
+        and tokens.internal_code_pattern.fullmatch(normalized)
+    }
+    return tuple(sorted(codes))
+
+
+def _own_export_numbers(
+    part_numbers_raw: Iterable[str], *, tokens: KempSiteTokensConfig
+) -> SourceNumbers | None:
+    """Keep declared public numbers while removing private shelf join keys."""
+
+    numbers = tuple(
+        number
+        for value in part_numbers_raw
+        if value and value.strip()
+        for number in article_numbers(value, own_code="", tokens=tokens)
+        if not tokens.internal_code_pattern.fullmatch(normalize_cross_oem(number))
+    )
     if not numbers:
         return None
     return SourceNumbers(
@@ -423,7 +1021,7 @@ def plan_identity(
     current_oe_norm: str,
     index: SourceIndex,
     config: IdentityGraphConfig,
-    tokens: KempSiteTokensConfig | None = None,
+    tokens: KempSiteTokensConfig,
     code_raw: str = "",
 ) -> ItemPlan:
     """Decide this row's graph, its links and its identity status.
@@ -443,11 +1041,29 @@ def plan_identity(
     """
 
     code = own_code.strip()
-    is_internal = bool(
-        tokens is not None and code and tokens.internal_code_pattern.match(code)
-    )
-    sources: list[SourceNumbers] = list(index.by_code.get(code, ()))
-    own_numbers = _own_export_numbers(part_numbers_raw)
+    code_norm = normalize_cross_oem(code)
+    is_internal = bool(code_norm and tokens.internal_code_pattern.fullmatch(code_norm))
+    internal_codes = _internal_catalog_codes(part_numbers_raw, tokens=tokens)
+
+    # The live export usually carries its stable 776... reference-book key in
+    # ``Код запчастини``, while ``Код_товару`` already carries the public OE.
+    # The old implementation looked only at the latter and therefore joined
+    # merely 550 rows; worse, it emitted the former as a CONFIRMED cross.  One
+    # recovered private code is unambiguous.  More than one must never be
+    # guessed between.
+    lookup_codes = [code_norm] if code_norm else []
+    if len(internal_codes) == 1 and internal_codes[0] not in lookup_codes:
+        lookup_codes.append(internal_codes[0])
+
+    sources: list[SourceNumbers] = []
+    source_semantic_conflicts = {
+        lookup_code: index.semantic_conflicts[lookup_code]
+        for lookup_code in lookup_codes
+        if lookup_code in index.semantic_conflicts
+    }
+    for lookup_code in lookup_codes:
+        sources.extend(index.by_code.get(lookup_code, ()))
+    own_numbers = _own_export_numbers(part_numbers_raw, tokens=tokens)
     if own_numbers is not None:
         sources.append(own_numbers)
     if code and not is_internal:
@@ -459,14 +1075,44 @@ def plan_identity(
             )
         )
 
+    # Preserve every source's reviewer-openable context, not only the graph's
+    # preferred context.  The canonical edge is usually the reference-map
+    # article, while KEMP_SITE may carry the exact card URL/title/image that
+    # corroborates it.  Keeping this as audit metadata avoids changing the
+    # identity decision or importing any monetary field into pricing.
+    source_contexts_by_number: dict[str, dict[str, str]] = {}
+    for source in sources:
+        for raw_number in source.numbers:
+            normalized = normalize_cross_oem(raw_number)
+            if not normalized:
+                continue
+            source_contexts_by_number.setdefault(normalized, {}).setdefault(
+                source.extraction_method, source.raw_context
+            )
+
     graph = build_identity_graph(
         # Only a shelf number is a self reference.  Passing a real part number
         # here would delete from the graph the very number the gate searches by.
-        own_code=code if is_internal else "",
+        own_code=(
+            code_norm
+            if is_internal
+            else internal_codes[0]
+            if len(internal_codes) == 1
+            else ""
+        ),
         sources=sources,
         config=config,
         shared_article_numbers=index.shared_articles,
+        source_semantic_conflict=bool(source_semantic_conflicts),
+        public_number_semantic_fanout=frozenset(
+            index.semantic_fanout_conflicts
+        ),
     )
+    public_number_semantic_conflicts = {
+        number: index.semantic_fanout_conflicts[number]
+        for number in graph.all_numbers
+        if number in index.semantic_fanout_conflicts
+    }
 
     links = tuple(
         PlannedLink(
@@ -479,23 +1125,54 @@ def plan_identity(
             anomaly=link.anomaly,
             corroborating_sources=link.corroborating_sources,
             validation_details={
+                "confidence": (
+                    CONFIRMED_IDENTITY_LINK_CONFIDENCE
+                    if link.validation_status is LinkStatus.CONFIRMED
+                    else "0"
+                ),
+                "automatic_eligible": (
+                    link.validation_status is LinkStatus.CONFIRMED
+                ),
                 "own_code": code,
+                "internal_catalog_codes": list(internal_codes),
+                "reference_lookup_codes": lookup_codes,
                 "canonical_source": graph.canonical_source,
+                "canonical_sources": list(graph.canonical_sources),
                 "graph_anomalies": list(graph.anomalies),
                 "sources_consulted": list(index.loaded_sources),
+                "source_contexts": source_contexts_by_number.get(
+                    link.extracted_oem_norm, {}
+                ),
+                "source_semantic_conflicts": source_semantic_conflicts,
+                "public_number_semantic_conflicts": (
+                    public_number_semantic_conflicts
+                ),
+                "semantic_feature_extractor_version": (
+                    SEMANTIC_FEATURE_EXTRACTOR_VERSION
+                ),
+                "identity_graph_config_sha256": config.source_sha256,
+                "token_config_sha256": tokens.source_sha256,
+                "runtime_config_sha256": identity_runtime_config_sha256(config, tokens),
             },
         )
         for link in graph.links
     )
 
     status, reason = _identity_status(graph, config)
-    fill_raw, fill_norm = _oe_to_fill(graph, config, current_oe_norm, code)
+    fill_raw, fill_norm = _oe_to_fill(
+        graph,
+        config,
+        current_oe_norm,
+        tokens=tokens,
+    )
     return ItemPlan(
         own_code=code,
         graph=graph,
         links=links,
         identity_status=status,
         identity_reason=reason,
+        internal_catalog_codes=internal_codes,
+        reference_lookup_codes=tuple(lookup_codes),
         fill_oe_raw=fill_raw,
         fill_oe_norm=fill_norm,
     )
@@ -518,15 +1195,46 @@ def _asserted_numbers(
     confirmed as a *statement* and never claimed any of its numbers was the OE.
     """
 
+    def assertion_is_eligible(
+        sources: Sequence[str], *, evidence_confirmed: bool
+    ) -> bool:
+        # A second source only corroborates an OE assertion when it also
+        # asserts that the number is an OE.  A supplier article/cross list is
+        # valid evidence that the number belongs to the same physical part,
+        # but it cannot turn a medium-trust KEMP_SITE token into an OE merely
+        # because both rows contain the same number.  The previous
+        # ``len(sources) > 1`` rule did exactly that for KEMP_SITE +
+        # KEMP_REFERENCE_ARTICLE and could fill the catalog OE from an
+        # unlabelled site SKU.
+        oe_sources = tuple(
+            source for source in sources if config.sources[source].asserts_oe
+        )
+        return any(
+            config.sources[source].asserts_oe
+            and (
+                config.sources[source].status is LinkStatus.CONFIRMED
+                or (evidence_confirmed and len(oe_sources) > 1)
+            )
+            for source in oe_sources
+        )
+
     found: list[tuple[str, str]] = []
-    if graph.canonical and graph.canonical_source is not None:
-        rule = config.sources[graph.canonical_source]
-        if rule.asserts_oe and rule.status is LinkStatus.CONFIRMED:
-            found.append((graph.canonical, graph.canonical))
+    if (
+        graph.canonical
+        and not graph.anomalies
+        and assertion_is_eligible(
+            graph.canonical_sources,
+            evidence_confirmed=True,
+        )
+    ):
+        found.append((graph.canonical, graph.canonical))
     for link in graph.links:
         # ``is_confirmed`` already covers a kemp.ua edge promoted by a second
         # source agreeing with it, which is corroboration rather than trust.
-        if config.sources[link.extraction_method].asserts_oe and link.is_confirmed:
+        if link.is_confirmed and assertion_is_eligible(
+            link.corroborating_sources,
+            evidence_confirmed=True,
+        ):
             found.append((link.extracted_oem_norm, link.extracted_raw))
     return found
 
@@ -548,7 +1256,8 @@ def _oe_to_fill(
     graph: IdentityGraph,
     config: IdentityGraphConfig,
     current_oe_norm: str,
-    own_code: str,
+    *,
+    tokens: KempSiteTokensConfig,
 ) -> tuple[str, str]:
     """The OE to write onto a row that has none, or nothing.
 
@@ -564,12 +1273,14 @@ def _oe_to_fill(
     asserted = _asserted_numbers(graph, config)
     if not asserted:
         return "", ""
-    current = (current_oe_norm or "").strip()
-    own_norm = normalize_cross_oem(own_code)
-    if current and current != own_norm:
+    current = normalize_cross_oem(current_oe_norm)
+    # Existing public identifiers belong to the customer's imported truth and
+    # are never rewritten automatically.  The only non-empty value we are
+    # authorised to repair is a proven private KEMP shelf code.
+    if current and not tokens.internal_code_pattern.fullmatch(current):
         return "", ""
     normalized, raw = asserted[0]
-    if normalized == own_norm:
+    if normalized == current:
         return "", ""
     return raw, normalized
 
@@ -583,7 +1294,7 @@ async def reparse_workspace_identity(
     workspace_id: UUID,
     index: SourceIndex,
     config: IdentityGraphConfig,
-    tokens: KempSiteTokensConfig | None = None,
+    tokens: KempSiteTokensConfig,
     dry_run: bool = False,
     batch_size: int = 500,
 ) -> ReparseReport:
@@ -592,6 +1303,21 @@ async def reparse_workspace_identity(
     report = ReparseReport(dry_run=dry_run)
     existing = await _existing_link_keys(session, workspace_id=workspace_id)
     produced: set[tuple[UUID, str, str, str]] = set()
+
+    if not dry_run:
+        # Quarantine first, then restore every edge produced by the current
+        # deterministic plan through the upsert below.  Both operations share
+        # one transaction, so a failed partial reparse rolls back instead of
+        # leaving a half-disabled graph.  This also handles catalog-row changes
+        # where method/config hashes alone cannot distinguish an obsolete edge.
+        await session.execute(
+            update(CatalogIdentityLink)
+            .where(CatalogIdentityLink.workspace_id == workspace_id)
+            .values(
+                validation_status=LinkStatus.REVIEW.value,
+                anomaly=ANOMALY_STALE_AFTER_REPARSE,
+            )
+        )
 
     offset = 0
     while True:
@@ -646,6 +1372,7 @@ async def reparse_workspace_identity(
                         catalog_item_id=item.id,
                         link=link,
                         config=config,
+                        tokens=tokens,
                     )
             if not dry_run:
                 _apply_item_fields(item, plan)
@@ -671,6 +1398,10 @@ def _record_plan(
         _count(report.anomaly_counts, anomaly)
     for reason in plan.graph.discarded.values():
         _count(report.discard_counts, reason)
+    for _ in plan.internal_catalog_codes:
+        _count(report.discard_counts, DISCARD_INTERNAL_CATALOG_CODE)
+    if len(plan.internal_catalog_codes) > 1:
+        _count(report.discard_counts, DISCARD_AMBIGUOUS_INTERNAL_CODES)
 
 
 def _apply_item_fields(item: CatalogItem, plan: ItemPlan) -> None:
@@ -707,6 +1438,7 @@ async def _upsert_link(
     catalog_item_id: UUID,
     link: PlannedLink,
     config: IdentityGraphConfig,
+    tokens: KempSiteTokensConfig,
 ) -> None:
     values = {
         "id": uuid4(),
@@ -722,7 +1454,7 @@ async def _upsert_link(
         "corroborating_sources": list(link.corroborating_sources),
         "validation_details": dict(link.validation_details),
         "method_version": config.method_version,
-        "config_sha256": config.source_sha256,
+        "config_sha256": identity_runtime_config_sha256(config, tokens),
     }
     statement = insert(CatalogIdentityLink).values(**values)
     await session.execute(
@@ -747,8 +1479,11 @@ async def _upsert_link(
 
 
 __all__ = [
+    "ANOMALY_STALE_AFTER_REPARSE",
     "OWN_EXPORT_CODE_SOURCE",
     "OWN_EXPORT_SOURCE",
+    "DISCARD_AMBIGUOUS_INTERNAL_CODES",
+    "DISCARD_INTERNAL_CATALOG_CODE",
     "SITE_SOURCE",
     "CatalogIdentityReparseError",
     "ItemPlan",
@@ -760,6 +1495,7 @@ __all__ = [
     "load_reference_edition",
     "load_site_source",
     "supplier_articles_by_code",
+    "site_semantic_conflicts",
     "plan_identity",
     "reparse_workspace_identity",
 ]

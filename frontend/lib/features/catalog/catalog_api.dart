@@ -8,6 +8,19 @@ class CatalogApi {
 
   final ApiClient _client;
 
+  Future<CatalogIdentifierEnrichment> enrichIdentifiers({
+    required String storeId,
+    required String externalId,
+  }) async {
+    final payload = await _client.postJson(
+      '/api/v1/catalog/products/identifiers',
+      body: {'store_id': storeId, 'external_id': externalId},
+    );
+    return CatalogIdentifierEnrichment.fromJson(
+      payload as Map<String, dynamic>,
+    );
+  }
+
   Future<CatalogProduct> getProduct(String productId) async {
     final payload = await _client.getJson(
       '/api/v1/catalog/products/$productId',
@@ -36,11 +49,12 @@ class CatalogApi {
   Future<CatalogCompetitorComparison> listCompetitors({
     String? sku,
     String? oe,
+    String? mpn,
     String? brand,
   }) async {
     final payload = await _client.getJson(
       '/api/v1/catalog/competitors',
-      queryParameters: {'sku': ?sku, 'oe': ?oe, 'brand': ?brand},
+      queryParameters: {'sku': ?sku, 'oe': ?oe, 'mpn': ?mpn, 'brand': ?brand},
     );
     return CatalogCompetitorComparison.fromJson(
       payload as Map<String, dynamic>,
@@ -50,6 +64,7 @@ class CatalogApi {
   Future<CatalogCompetitorComparison> discoverCompetitors({
     String? sku,
     String? oe,
+    String? mpn,
     String? brand,
     String? title,
     Object? currentPrice,
@@ -62,6 +77,7 @@ class CatalogApi {
       body: {
         'sku': sku,
         'oe': oe,
+        'mpn': mpn,
         'brand': brand,
         'title': title,
         'current_price': currentPrice,
@@ -78,12 +94,31 @@ class CatalogApi {
     required String storeId,
     required String externalId,
   }) async {
-    final payload = await _client.postJson(
-      '/api/v1/catalog/products/oe',
-      body: {'store_id': storeId, 'external_id': externalId},
-    );
-    return (payload as Map<String, dynamic>)['oe'] as String?;
+    return (await enrichIdentifiers(
+      storeId: storeId,
+      externalId: externalId,
+    )).oe;
   }
+}
+
+class CatalogIdentifierEnrichment {
+  const CatalogIdentifierEnrichment({
+    required this.oe,
+    required this.mpn,
+    required this.status,
+  });
+
+  factory CatalogIdentifierEnrichment.fromJson(Map<String, dynamic> json) {
+    return CatalogIdentifierEnrichment(
+      oe: json['oe'] as String?,
+      mpn: json['mpn'] as String?,
+      status: json['status'] as String? ?? 'UNKNOWN',
+    );
+  }
+
+  final String? oe;
+  final String? mpn;
+  final String status;
 }
 
 final catalogApiProvider = Provider<CatalogApi>((ref) {

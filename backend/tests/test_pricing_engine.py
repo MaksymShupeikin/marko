@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -6,6 +7,7 @@ from metis.pricing import (
     CoefficientModel,
     CompetitorOffer,
     ConfidenceAggregation,
+    EvidenceState,
     PricingPolicy,
     PriorityScoreType,
     ProductPricingContext,
@@ -70,6 +72,8 @@ def offer(
         "tier_confidence": Decimal("0.95"),
         "source_confidence": Decimal("1"),
         "currency_raw": "UAH",
+        "semantic_gate_current": True,
+        "automatic_eligible": True,
         "is_kemp": is_kemp,
         "is_dumping": is_dumping,
     }
@@ -95,6 +99,42 @@ def context(price: str = "800", **overrides) -> ProductPricingContext:
 
 def market_prices(start: int = 1000) -> list[CompetitorOffer]:
     return [offer(index, str(start + index * 50)) for index in range(5)]
+
+
+def test_stale_semantic_gate_snapshot_is_excluded_from_pricing_cohort() -> None:
+    offers = market_prices()
+    offers[0] = replace(offers[0], semantic_gate_current=False)
+
+    result = recommend_price(
+        context(),
+        offers,
+        BUDGET_COEFFICIENTS,
+    )
+
+    assert all(value.observation_id != "obs-0" for value in result.evidence)
+    assert any(
+        value.observation_id == "obs-0"
+        and value.reason == "SEMANTIC_GATE_NOT_CURRENT"
+        for value in result.excluded
+    )
+
+
+def test_persisted_automatic_ineligible_offer_is_excluded_from_pricing_cohort() -> None:
+    offers = market_prices()
+    offers[0] = replace(offers[0], automatic_eligible=False)
+
+    result = recommend_price(
+        context(),
+        offers,
+        BUDGET_COEFFICIENTS,
+    )
+
+    assert all(value.observation_id != "obs-0" for value in result.evidence)
+    assert any(
+        value.observation_id == "obs-0"
+        and value.reason == "PERSISTED_AUTOMATIC_ELIGIBILITY_REQUIRED"
+        for value in result.excluded
+    )
 
 
 def test_oem_prices_are_normalized_to_kemp_equivalent() -> None:
@@ -225,6 +265,52 @@ def test_non_dumping_kemp_offer_is_reference_only_not_a_guardrail() -> None:
     assert result.recommended_price == Decimal("1000")
     assert result.target_market_count == 5
     assert result.kemp_reference_count == 1
+
+
+def test_kemp_reference_with_failed_comparability_is_not_trusted() -> None:
+    offers = market_prices()
+    unverified = offer(
+        10,
+        "850",
+        tier=ProductTier.KEMP,
+        is_kemp=True,
+        comparison_evidence=verified_comparison_evidence(
+            stable_seller_id="seller-10",
+            source_record_id="obs-10",
+            dimension_overrides={"condition": EvidenceState.UNKNOWN},
+        ),
+    )
+
+    result = recommend_price(context(), [*offers, unverified], BUDGET_COEFFICIENTS)
+
+    assert result.kemp_reference_count == 0
+    assert any(
+        item.observation_id == "obs-10"
+        and item.reason == "MANUAL_MISSING_CONDITION"
+        for item in result.excluded
+    )
+
+
+def test_kemp_reference_without_comparability_evidence_is_not_trusted() -> None:
+    offers = market_prices()
+    missing_evidence = offer(
+        11,
+        "850",
+        tier=ProductTier.KEMP,
+        is_kemp=True,
+        comparison_evidence=None,
+    )
+
+    result = recommend_price(
+        context(), [*offers, missing_evidence], BUDGET_COEFFICIENTS
+    )
+
+    assert result.kemp_reference_count == 0
+    assert any(
+        item.observation_id == "obs-11"
+        and item.reason == "MANUAL_MISSING_COMPARABILITY_EVIDENCE"
+        for item in result.excluded
+    )
 
 
 def test_dumping_kemp_offer_is_excluded_from_center_and_guardrail() -> None:

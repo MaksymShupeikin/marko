@@ -16,6 +16,10 @@ _FIELDS_PATH_MAP = {
     "id": "id",
     "name": "name",
     "sku": "sku",
+    # Manufacturer part number exposed on product-card responses.  It is kept
+    # separate from OE: an MPN may support identity, but is not an OE claim by
+    # itself.
+    "mpn": "identifiers.mpn",
     "price": "price",
     "price_original": "priceOriginal",
     "discounted_price": "discountedPrice",
@@ -30,6 +34,7 @@ _FIELDS_PATH_MAP = {
     # Native Prom search field; lets deterministic gates reason about the
     # product domain without fetching the marketplace category taxonomy.
     "category_ids": "categoryIds",
+    "category": "category.caption",
     "brand": "manufacturerInfo.name",
     "model_id": "model.id",  # cross-seller model identity (may be absent)
     "seller_id": "company.id",  # present in search results
@@ -63,6 +68,55 @@ _FALLBACK_KEYS = {
     "oe_raw": "oe",
 }
 
+# Prom product cards frequently put a manufacturer's/catalogue code in a
+# labelled attribute (most commonly ``Код запчастини``) while leaving
+# ``identifiers.mpn`` empty. Keep these values separate from MPN/OE: a seller
+# code is retrieval evidence, not an invented manufacturer assertion. The
+# original label and source path remain in ``characteristics``.
+_PART_NUMBER_ATTRIBUTE_LABELS = frozenset(
+    {
+        "кодзапчастини",
+        "кодзапчасти",
+        "коддетали",
+        "кодвиробника",
+        "кодпроизводителя",
+        "номерзапчастини",
+        "номерзапчасти",
+        "номердетали",
+        "артикул",
+        "артикулдетали",
+        "partnumber",
+        "partno",
+        "manufacturerpartnumber",
+        "oem",
+        "oe",
+        "mpn",
+    }
+)
+# A labelled original/OE number is a public vehicle-part identity. Keep this
+# namespace stricter than ``_PART_NUMBER_ATTRIBUTE_LABELS``: labels such as
+# ``Артикул`` and ``Код запчастини`` often contain a supplier/seller code and
+# must not silently become the marketplace query key.
+_ORIGINAL_OE_ATTRIBUTE_LABELS = frozenset(
+    {
+        "oe",
+        "oem",
+        "oenumber",
+        "oemnumber",
+        "originaloe",
+        "originaloem",
+        "originalnumber",
+        "originalpartnumber",
+        "оригинальныйномер",
+        "оригинальныйартикул",
+        "номероригинала",
+        "оригінальнийномер",
+        "оригінальнийартикул",
+        "номероригіналу",
+    }
+)
+_PART_NUMBER_SPLIT_RE = re.compile(r"\s*(?:[,;|\n]+|\s+/\s*)\s*")
+
 
 def get_nested(data: dict, path: str) -> Any:
     """Get a nested value from a dict by dot path, e.g. ``company.name``."""
@@ -81,6 +135,7 @@ class Product:
     id: int | None
     name: str | None
     sku: str | None
+    mpn: str | None
     price: str | None
     price_original: str | None
     discounted_price: str | None
@@ -92,6 +147,7 @@ class Product:
     measure_unit: str | None
     category_id: int | None
     category_ids: list[int] | None
+    category: str | None
     brand: str | None
     model_id: str | None
     seller_id: int | None
@@ -114,7 +170,14 @@ class Product:
     package_quantity: int | None
     characteristics: Any
     description: str | None
-    url: str | None  # calculated, not from map; kept last for CSV compatibility
+    # Explicitly labelled Prom codes. This is intentionally not folded into
+    # ``mpn`` or ``oe_raw``; downstream identity gates retain the namespace.
+    part_numbers: tuple[str, ...] = ()
+    # Added by the bounded candidate-detail pass, never by the listing parser.
+    # It binds merged non-monetary fields to the exact product-card bytes and
+    # records explicit failure/not-selected states for fail-closed replay.
+    detail_evidence: dict[str, Any] | None = None
+    url: str | None = None  # calculated, kept last for CSV compatibility
 
     @classmethod
     def from_raw(cls, raw: dict, lang: str = "ua") -> Product:
@@ -133,6 +196,34 @@ class Product:
             values["description"] = raw.get("descriptionPlain") or raw.get(
                 "descriptionFull"
             )
+        # ProductCardPageQuery uses ``attributes`` while listing/search
+        # responses historically exposed ``characteristics``.  Normalize the
+        # former into the latter rather than silently dropping every detail
+        # attribute (observed on 7/7 retained product-card captures).
+        if values["characteristics"] is None:
+            values["characteristics"] = _normalize_product_attributes(
+                raw.get("attributes")
+            )
+        if values["condition"] is None:
+            values["condition"] = _single_characteristic_value(
+                values["characteristics"],
+                labels={"condition", "стан", "состояние"},
+            )
+        if values["package_quantity"] is None:
+            package_raw = _single_characteristic_value(
+                values["characteristics"],
+                labels={
+                    "packagequantity",
+                    "quantityinpackage",
+                    "кількістьвупаковці",
+                    "кількістьвпакуванні",
+                    "количествовупаковке",
+                },
+            )
+            values["package_quantity"] = _positive_integer(package_raw)
+        values["part_numbers"] = _extract_labelled_part_numbers(
+            values["characteristics"]
+        )
         values["url"] = cls._build_url(values["id"], values["url_text"], lang)
         return cls(**values)
 
@@ -159,12 +250,150 @@ class Product:
         if unknown:
             raise ValueError(f"Unknown normalized Product fields: {unknown}")
         values = {name: snapshot.get(name) for name in cls.field_names()}
+        if values.get("part_numbers") is None:
+            values["part_numbers"] = ()
         return cls(**values)
 
     @classmethod
     def field_names(cls) -> list[str]:
         """Column names in stable order for the CSV header."""
         return list(cls.__dataclass_fields__.keys())
+
+
+def _attribute_label(value: object) -> str:
+    return re.sub(r"[^a-zа-яіїє0-9]", "", str(value or "").casefold())
+
+
+def _normalize_product_attributes(value: object) -> list[dict[str, Any]] | None:
+    """Convert Prom ``attributes[].values[]`` to stable scalar characteristics.
+
+    One normalized row is emitted per value.  This preserves multi-valued
+    fitment attributes without stringifying a Python list, and gives every
+    downstream extractor the shape it already accepts: ``name`` + ``value``.
+    Invalid rows are ignored locally; an explicitly present empty attributes
+    list remains an empty list rather than becoming an invented value.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return None
+    normalized: list[dict[str, Any]] = []
+    for attribute_index, attribute in enumerate(value):
+        if not isinstance(attribute, dict):
+            continue
+        name = str(attribute.get("name") or "").strip()
+        if not name:
+            continue
+        raw_values = attribute.get("values")
+        if not isinstance(raw_values, list):
+            raw_values = [attribute.get("value")]
+        for value_index, raw_value in enumerate(raw_values):
+            scalar = raw_value.get("value") if isinstance(raw_value, dict) else raw_value
+            text = str(scalar or "").strip()
+            if not text:
+                continue
+            normalized.append(
+                {
+                    "id": attribute.get("id"),
+                    "name": name,
+                    "group": str(attribute.get("group") or "").strip() or None,
+                    "value": text,
+                    "source_path": (
+                        f"$.attributes[{attribute_index}].values[{value_index}].value"
+                    ),
+                }
+            )
+    return normalized
+
+
+def _single_characteristic_value(
+    characteristics: object,
+    *,
+    labels: set[str],
+) -> str | None:
+    if not isinstance(characteristics, list):
+        return None
+    values = {
+        str(item.get("value") or "").strip()
+        for item in characteristics
+        if isinstance(item, dict)
+        and _attribute_label(item.get("name")) in labels
+        and str(item.get("value") or "").strip()
+    }
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _extract_labelled_part_numbers(characteristics: object) -> tuple[str, ...]:
+    """Extract codes from explicitly labelled Prom attributes.
+
+    Prom may store several codes in one value, e.g.
+    ``77646966, 230 588, 230589``. Split only unambiguous list separators;
+    title/description text is never promoted to a structured identifier.
+    """
+
+    if not isinstance(characteristics, list):
+        return ()
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in characteristics:
+        if not isinstance(item, dict):
+            continue
+        if _attribute_label(item.get("name")) not in _PART_NUMBER_ATTRIBUTE_LABELS:
+            continue
+        raw = str(item.get("value") or "").strip()
+        if not raw:
+            continue
+        for candidate in _PART_NUMBER_SPLIT_RE.split(raw):
+            value = candidate.strip(" \t\r\n,;|/")
+            if not value or value.casefold() in seen:
+                continue
+            if not re.search(r"[0-9A-Za-zА-Яа-яЇїІіЄєҐґ]", value):
+                continue
+            seen.add(value.casefold())
+            result.append(value)
+    return tuple(result)
+
+
+def extract_labelled_original_oe_numbers(characteristics: object) -> tuple[str, ...]:
+    """Return values from explicitly original/OE-labelled characteristics.
+
+    The result is deliberately separate from :attr:`Product.part_numbers`.
+    Prom's generic ``Артикул``/``Код запчастини`` fields are useful retrieval
+    evidence but do not establish that a number is the vehicle manufacturer's
+    OE. Only an explicit OE/OEM/original-number label may outrank a supplier
+    MPN when constructing a public search query. Values are kept in source
+    order, de-duplicated case-insensitively, and never guessed from title text.
+    """
+
+    if not isinstance(characteristics, list):
+        return ()
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in characteristics:
+        if not isinstance(item, dict):
+            continue
+        if _attribute_label(item.get("name")) not in _ORIGINAL_OE_ATTRIBUTE_LABELS:
+            continue
+        raw = str(item.get("value") or "").strip()
+        if not raw:
+            continue
+        for candidate in _PART_NUMBER_SPLIT_RE.split(raw):
+            value = candidate.strip(" \t\r\n,;|/")
+            if not value or value.casefold() in seen:
+                continue
+            if not re.search(r"[0-9A-Za-zА-Яа-яЇїІіЄєҐґ]", value):
+                continue
+            seen.add(value.casefold())
+            result.append(value)
+    return tuple(result)
+
+
+def _positive_integer(value: object) -> int | None:
+    if value is None:
+        return None
+    match = re.fullmatch(r"\s*([1-9]\d{0,3})(?:\s*(?:шт\.?|pcs?\.?))?\s*", str(value), re.I)
+    return int(match.group(1)) if match is not None else None
 
 
 @dataclass(frozen=True)

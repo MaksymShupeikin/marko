@@ -109,6 +109,10 @@ async def _seed_run(*, workspace_id: UUID, user_id: UUID) -> UUID:
                     current_price=Decimal("1000"),
                     currency="UAH",
                     is_available=True,
+                    # A priced fixture must carry the same identity contract
+                    # as a real admitted run.  ``UNRESOLVED`` is intentionally
+                    # excluded from price-bearing recommendation reads.
+                    identity_status="OE_CONFIRMED",
                     raw_row={},
                 )
             )

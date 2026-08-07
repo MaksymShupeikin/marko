@@ -67,6 +67,7 @@ from marko.services.fitment_hitl import (
     review_fitment_recommendation,
 )
 from marko.services.fitment_source_routing import route_fitment_sources
+from marko.services.market_price import effective_observation_price
 from marko.worker.celery_app import celery_app
 from metis.fitment import (
     CommercialContext,
@@ -290,7 +291,7 @@ async def get_product_candidates(
             title=observation.title,
             brand=observation.brand_raw,
             url=observation.url,
-            price=observation.sale_price or observation.price,
+            price=effective_observation_price(observation),
             reference_price=observation.reference_price,
             currency=observation.currency,
             observed_at=observation.observed_at,

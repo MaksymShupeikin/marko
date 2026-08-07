@@ -72,6 +72,41 @@ def is_canonical_pagination_redirect(
     return source_without_page == sorted(target_pairs)
 
 
+def is_self_describing_pagination_redirect(
+    *,
+    status_code: int | None,
+    request_url: str | None,
+    redirect_location: str | None,
+) -> bool:
+    """Same check, with the page number read from the request URL itself.
+
+    A caller holding only a recorded request has no separate page counter: in a
+    pricing trace, candidate card fetches are interleaved with search pages, so
+    a request's position in the trace stops being its page number as soon as
+    more than one candidate is enriched. A URL carrying no single numeric
+    ``page`` cannot be a page past the end and stays an error.
+    """
+
+    if not request_url:
+        return False
+    page_values = [
+        value
+        for key, value in parse_qsl(
+            urlsplit(request_url).query,
+            keep_blank_values=True,
+        )
+        if key == "page"
+    ]
+    if len(page_values) != 1 or not page_values[0].isdigit():
+        return False
+    return is_canonical_pagination_redirect(
+        status_code=status_code,
+        request_url=request_url,
+        redirect_location=redirect_location,
+        page_num=int(page_values[0]),
+    )
+
+
 class UnsafeResponse(RequestFailed):
     """Response violates the bounded fetch security contract."""
 

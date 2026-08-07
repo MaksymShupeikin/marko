@@ -27,8 +27,9 @@ class _ComparabilityFeedbackDialog extends StatefulWidget {
 class _ComparabilityFeedbackDialogState
     extends State<_ComparabilityFeedbackDialog> {
   String _decision = 'CONFIRM';
-  late String _verdict;
-  late String _matchLevel;
+  late String _identityVerdict;
+  late String _identityMatchLevel;
+  late String _pricingAdmission;
   late double _confidence;
   late final TextEditingController _reason;
   String? _error;
@@ -36,9 +37,14 @@ class _ComparabilityFeedbackDialogState
   @override
   void initState() {
     super.initState();
-    _verdict = widget.review.verdict;
-    _matchLevel = widget.review.matchLevel;
-    _confidence = widget.review.confidence.clamp(0, 1);
+    _identityVerdict = widget.review.identityVerdict;
+    _identityMatchLevel = widget.review.identityMatchLevel;
+    _pricingAdmission = widget.review.pricingAdmission;
+    if (widget.review.hardStopConflicts.isNotEmpty &&
+        _pricingAdmission == 'ADMITTED') {
+      _pricingAdmission = 'EXCLUDED';
+    }
+    _confidence = widget.review.decisionConfidence.clamp(0, 1);
     _reason = TextEditingController();
   }
 
@@ -108,34 +114,41 @@ class _ComparabilityFeedbackDialogState
             if (correcting) ...[
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                initialValue: _verdict,
+                initialValue: _identityVerdict,
                 isExpanded: true,
                 decoration: InputDecoration(
-                  labelText: context.localized(ru: 'Вердикт', uk: 'Вердикт'),
+                  labelText: context.localized(
+                    ru: 'Identity verdict',
+                    uk: 'Identity verdict',
+                  ),
                 ),
-                items: _verdicts
-                    .where((value) => value != 'COMPARABLE' || !hasHardStop)
+                items: _identityVerdicts
                     .map(
                       (value) => DropdownMenuItem(
                         value: value,
-                        child: Text(_verdictLabel(context, value)),
+                        child: Text(_identityVerdictLabel(context, value)),
                       ),
                     )
                     .toList(growable: false),
                 onChanged: (value) {
                   if (value == null) return;
                   setState(() {
-                    _verdict = value;
-                    _matchLevel = value == 'COMPARABLE'
+                    _identityVerdict = value;
+                    _identityMatchLevel = value == 'MATCH'
                         ? 'ACCEPTABLE_ANALOGUE'
                         : 'SUSPICIOUS';
+                    if (value != 'MATCH' && _pricingAdmission == 'ADMITTED') {
+                      _pricingAdmission = value == 'NOT_MATCH'
+                          ? 'EXCLUDED'
+                          : 'MANUAL_REVIEW';
+                    }
                   });
                 },
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                key: ValueKey('$_verdict/$_matchLevel'),
-                initialValue: _matchLevel,
+                key: ValueKey('$_identityVerdict/$_identityMatchLevel'),
+                initialValue: _identityMatchLevel,
                 isExpanded: true,
                 decoration: InputDecoration(
                   labelText: context.localized(
@@ -144,7 +157,7 @@ class _ComparabilityFeedbackDialogState
                   ),
                 ),
                 items:
-                    (_verdict == 'COMPARABLE'
+                    (_identityVerdict == 'MATCH'
                             ? _positiveLevels
                             : _negativeLevels)
                         .map(
@@ -154,8 +167,39 @@ class _ComparabilityFeedbackDialogState
                           ),
                         )
                         .toList(growable: false),
-                onChanged: (value) =>
-                    setState(() => _matchLevel = value ?? _matchLevel),
+                onChanged: (value) => setState(
+                  () => _identityMatchLevel = value ?? _identityMatchLevel,
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: ValueKey(
+                  '$_identityVerdict/$_pricingAdmission/$hasHardStop',
+                ),
+                initialValue: _pricingAdmission,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: context.localized(
+                    ru: 'Pricing admission',
+                    uk: 'Pricing admission',
+                  ),
+                ),
+                items: _pricingAdmissions
+                    .where(
+                      (value) =>
+                          value != 'ADMITTED' ||
+                          (_identityVerdict == 'MATCH' && !hasHardStop),
+                    )
+                    .map(
+                      (value) => DropdownMenuItem(
+                        value: value,
+                        child: Text(_pricingAdmissionLabel(context, value)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) => setState(
+                  () => _pricingAdmission = value ?? _pricingAdmission,
+                ),
               ),
               const SizedBox(height: 12),
               Text(
@@ -233,8 +277,15 @@ class _ComparabilityFeedbackDialogState
     }
     Navigator.of(context).pop({
       'decision': _decision,
-      'corrected_verdict': _decision == 'CORRECT' ? _verdict : null,
-      'corrected_match_level': _decision == 'CORRECT' ? _matchLevel : null,
+      'corrected_identity_verdict': _decision == 'CORRECT'
+          ? _identityVerdict
+          : null,
+      'corrected_identity_match_level': _decision == 'CORRECT'
+          ? _identityMatchLevel
+          : null,
+      'corrected_pricing_admission': _decision == 'CORRECT'
+          ? _pricingAdmission
+          : null,
       'confidence': _decision == 'CORRECT' ? _confidence : null,
       'reason': reason,
       'evidence_corrections': <Map<String, dynamic>>[],
@@ -242,18 +293,27 @@ class _ComparabilityFeedbackDialogState
   }
 }
 
-const _verdicts = <String>['COMPARABLE', 'NOT_COMPARABLE', 'INSUFFICIENT_DATA'];
+const _identityVerdicts = <String>['MATCH', 'NOT_MATCH', 'MANUAL_REVIEW'];
 const _positiveLevels = <String>['EXACT', 'ACCEPTABLE_ANALOGUE'];
 const _negativeLevels = <String>['SUSPICIOUS', 'NOT_APPLICABLE'];
+const _pricingAdmissions = <String>['ADMITTED', 'EXCLUDED', 'MANUAL_REVIEW'];
 
-String _verdictLabel(BuildContext context, String value) => switch (value) {
-  'COMPARABLE' => context.localized(ru: 'Сопоставим', uk: 'Зіставний'),
-  'NOT_COMPARABLE' => context.localized(
-    ru: 'Не сопоставим',
-    uk: 'Не зіставний',
-  ),
-  _ => context.localized(ru: 'Недостаточно данных', uk: 'Недостатньо даних'),
-};
+String _identityVerdictLabel(BuildContext context, String value) =>
+    switch (value) {
+      'MATCH' => context.localized(ru: 'Совпадает', uk: 'Збігається'),
+      'NOT_MATCH' => context.localized(ru: 'Не совпадает', uk: 'Не збігається'),
+      _ => context.localized(ru: 'Ручная проверка', uk: 'Ручна перевірка'),
+    };
+
+String _pricingAdmissionLabel(BuildContext context, String value) =>
+    switch (value) {
+      'ADMITTED' => context.localized(
+        ru: 'Допущен в цену',
+        uk: 'Допущено до ціни',
+      ),
+      'EXCLUDED' => context.localized(ru: 'Исключён', uk: 'Виключено'),
+      _ => context.localized(ru: 'Ручная проверка', uk: 'Ручна перевірка'),
+    };
 
 String _levelLabel(BuildContext context, String value) => switch (value) {
   'EXACT' => context.localized(ru: 'Полное совпадение', uk: 'Повний збіг'),

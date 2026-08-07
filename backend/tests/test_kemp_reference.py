@@ -74,7 +74,9 @@ def test_every_brand_value_in_the_shipped_map_is_classified(reference, kinds) ->
 
 
 def test_the_dictionary_covers_all_101_observed_values(reference, kinds) -> None:
-    observed = {row.article_brand.strip() for row in reference.rows if row.article_brand.strip()}
+    observed = {
+        row.article_brand.strip() for row in reference.rows if row.article_brand.strip()
+    }
 
     assert len(observed) == 100  # 101 distinct cells, one of them empty
     assert all(kinds.kind_of(value) is not BrandKind.UNKNOWN for value in observed)
@@ -105,7 +107,9 @@ def test_conveyor_suppliers_are_still_aftermarket(kinds) -> None:
 
 
 def test_an_unlisted_brand_is_unknown_rather_than_assumed(kinds) -> None:
-    assert kinds.kind_of("Some Supplier That Did Not Exist Yesterday") is BrandKind.UNKNOWN
+    assert (
+        kinds.kind_of("Some Supplier That Did Not Exist Yesterday") is BrandKind.UNKNOWN
+    )
 
 
 def test_lookup_ignores_case_and_surrounding_whitespace(kinds) -> None:
@@ -274,14 +278,18 @@ def test_article_repeating_the_internal_code_is_not_an_oe(kinds) -> None:
     """Row 77641853 of the map literally repeats our own warehouse code in the
     article column. That code is ours, not Opel's."""
 
-    identity = _resolve(_row(mpn="77641853", article="77641853", article_brand="General Motors"), kinds)
+    identity = _resolve(
+        _row(mpn="77641853", article="77641853", article_brand="General Motors"), kinds
+    )
 
     assert identity.reason is IdentityReason.ARTICLE_IS_INTERNAL_CODE
     assert identity.oe_norm == ""
 
 
 def test_any_internal_code_shape_is_refused_not_only_our_own_row(kinds) -> None:
-    identity = _resolve(_row(mpn="77641229", article="77642269", article_brand="VAG"), kinds)
+    identity = _resolve(
+        _row(mpn="77641229", article="77642269", article_brand="VAG"), kinds
+    )
 
     assert identity.reason is IdentityReason.ARTICLE_IS_INTERNAL_CODE
 
@@ -289,7 +297,9 @@ def test_any_internal_code_shape_is_refused_not_only_our_own_row(kinds) -> None:
 def test_spacing_inside_a_number_does_not_hide_a_self_reference(kinds) -> None:
     """``115 070`` and ``115070`` are one number (WP-1); so are these."""
 
-    identity = _resolve(_row(mpn="77641853", article="776 41853", article_brand="VAG"), kinds)
+    identity = _resolve(
+        _row(mpn="77641853", article="776 41853", article_brand="VAG"), kinds
+    )
 
     assert identity.reason is IdentityReason.ARTICLE_IS_INTERNAL_CODE
 
@@ -460,17 +470,56 @@ def test_the_newer_layout_loads_without_a_brand_column(oe_map) -> None:
     assert oe_map.rows[0].oe == "31211128157"
 
 
+def test_real_customer_row_keeps_vehicle_oe_separate_from_kemp_mpn(oe_map, kinds) -> None:
+    """The imported workbook's columns must retain their semantic roles.
+
+    ``Номер`` is the vehicle manufacturer's original OE used for the Prom
+    market query.  ``Номер производителя`` is KEMP's private join key and
+    ``Артикул`` is the supplier article.  A regression which swaps either
+    column would still produce a syntactically valid identity while searching
+    the wrong market.
+    """
+
+    row = next(row for row in oe_map.rows if row.mpn == "77641360")
+    assert row.oe == "31211128157"
+    assert row.article == "561948-AEZ72"
+    identity = _resolve(row, kinds)
+
+    assert identity.identity_status is IdentityStatus.OE_CONFIRMED
+    assert identity.oe_norm == "31211128157"
+    assert identity.mpn == "77641360"
+    assert identity.mpn_norm == "561948AEZ72"
+
+
 def test_the_newer_file_nearly_doubles_the_positions_with_an_oe(
     oe_map, reference, kinds
 ) -> None:
-    """Homoglyph recovery raises the measured combined coverage to 6160."""
+    """Coverage after private-code rejection, measured on both customer files."""
 
-    old = {i.mpn for i in resolve_all(reference, kinds=kinds, tokens=TOKENS) if i.has_oe}
+    old = {
+        i.mpn for i in resolve_all(reference, kinds=kinds, tokens=TOKENS) if i.has_oe
+    }
     new = {i.mpn for i in resolve_all(oe_map, kinds=kinds, tokens=TOKENS) if i.has_oe}
 
     assert len(old) == 3248
-    assert len(new) == 5798
-    assert len(old | new) == 6160
+    # The widened private 776 namespace deliberately rejects 77646444-34 as
+    # an OE: it is a KEMP shelf-code variant, not a public Renault number.
+    assert len(new) == 5796
+    assert len(old | new) == 6159
+
+
+def test_private_catalog_code_with_variant_suffix_is_not_an_oe(kinds) -> None:
+    """Exact customer row: ``77646444-34`` is shelf code plus variant 34.
+
+    Before the bounded 776 namespace was measured, punctuation let it inflate
+    OE coverage and create a false public identity for a Renault Laguna shock.
+    """
+
+    identity = _resolve(_v2(oe="77646444-34", article="339704"), kinds)
+
+    assert identity.identity_status is IdentityStatus.MPN_ONLY
+    assert identity.reason is IdentityReason.OE_COLUMN_NOT_AN_OE
+    assert identity.oe_norm == ""
 
 
 def test_the_two_files_join_cleanly_on_the_internal_code(oe_map, reference) -> None:

@@ -53,7 +53,7 @@ from metis.pricing import (
     EvidenceState,
     normalize_oe,
 )
-from metis.pricing.comparability import categorical_dimension
+from metis.pricing.comparability import normalized_categorical_dimension
 from metis.identifiers import OEM_HOMOGLYPHS
 from marko.services.ai_evidence_extraction import (
     AI_EVIDENCE_PROMPT_VERSION,
@@ -1129,7 +1129,8 @@ def propose_evidence_fill(
             refusals.append((dimension, FillRefusal.ALREADY_DETERMINED))
             continue
         candidate_value = item.canonical_values[0]
-        computed = categorical_dimension(
+        computed = normalized_categorical_dimension(
+            dimension,
             lookup.get(dimension),
             candidate_value,
             evidence_refs=_evidence_refs(report, item),

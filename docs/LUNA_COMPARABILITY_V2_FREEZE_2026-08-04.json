@@ -1,0 +1,135 @@
+{
+  "artifact_version": "luna-comparability-freeze-v2",
+  "created_on": "2026-08-04",
+  "baseline": {
+    "branch": "leonid/pricing-engine",
+    "git_sha": "a1b755a7d11a495262c35edd804a63074bba771d",
+    "worktree_clean_at_freeze": true,
+    "backend_tests_passed": 50,
+    "flutter_tests_passed": 12,
+    "dart_analyze": "PASS"
+  },
+  "runtime_contract": {
+    "contract_version": "comparability-v2",
+    "prompt_version": "marko-product-comparability-v2",
+    "schema_version": "marko-product-comparability-output-v2",
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "xhigh",
+    "default_mode": "off",
+    "system_instructions_sha256": "033aaf88af48245377fa339be4a07e73cfeba1195747b77948145507fcc5f58a",
+    "strict_schema_canonical_sha256": "575a15402f8d23c3c6cc45d477d01bd0cfae2da86eee4bafe47ee23d01d41d8e",
+    "implementation_file_sha256": "345ab5c81bf0522a2ef35c640a0994f82aa6eeeb9d47bba5187424bbfd88de30",
+    "migration_0044_sha256": "96a3562d20117457fe0a50f605fa7ada05cee3496f699b70363de2b0ad7bd0c8",
+    "migration_0045_sha256": "7a3cbbf5449ea83f9b55ba8c60c1b94dc0fe39914a7fd1e034ccc0a590101076"
+  },
+  "smoke_benchmark": {
+    "root": ".artifacts/metis_luna_benchmark_20260803",
+    "role": "SMOKE_REGRESSION_ONLY",
+    "benchmark_input_sha256": "51fd4253a3411da0e472de4b23fecb5c5beb20623375ebbbbc009d6985a91ace",
+    "ground_truth_sha256": "4718aa5b9d4d757dbed366166b626caa75ec044db6c89887287ec728aaedb3c2",
+    "luna_output_sha256": "1a8b56a8e26b81eb63c9afaaf62352e04775610e5d2bcc1023e6e92ee7362355",
+    "metrics_sha256": "276a35b64b5672901d57f334a8cf8b7cfeee1dc874f9a8c0c5d09900d3b48641",
+    "prompt_sha256": "4ac901ec960a4bac48d4eaf0fab8997953f08ab1b7cb7a5d9d8670288e107335",
+    "output_schema_sha256": "8b3d7c8bd6c9d880886d25af6b1fc6f0cc949aff2e13530e4c42cb377cae0886",
+    "image_manifest_sha256": "eef379193c935b8eda4f471f0a717b7eab08524773d210de51c82b810433e417",
+    "preserved_control_image_sha256": "7c071c38f144f12fc00eecef59c10b1176fb1bbfbd4e85dde4415aa6b978bd81",
+    "pairs": 20,
+    "true_matches": 10,
+    "hard_negatives": 10,
+    "false_matches": 0,
+    "false_not_matches": 0,
+    "automatic_match_recall": "0.700000",
+    "automatic_decision_coverage": "0.850000",
+    "one_sided_false_match_upper_95": "0.258866",
+    "status": "SMOKE_REGRESSION_PASS",
+    "promotion_eligible": false
+  },
+  "customer_identity_policy": {
+    "workbook": "backend/data/kemp_prom_catalog.xlsx",
+    "workbook_sha256": "7871f6b20b21d96bbd7b5c2ea8c951c2144a6adec04acac5229261c2172e0e91",
+    "sheet": "Export Products Sheet",
+    "source_rows": 4901,
+    "initial_parse": {
+      "imported_rows": 4901,
+      "issues": 0,
+      "identity_status_counts": {
+        "MPN_ONLY": 4327,
+        "UNRESOLVED": 574
+      },
+      "identity_reason_counts": {
+        "CUSTOMER_MPN_COLUMN": 3446,
+        "CUSTOMER_PART_NUMBER_LIST": 881,
+        "CUSTOMER_IDENTITY_MISSING": 574
+      }
+    },
+    "after_customer_and_pinned_identity_reparse": {
+      "identity_status_counts": {
+        "OE_CONFIRMED": 131,
+        "MPN_ONLY": 4730,
+        "UNRESOLVED": 40
+      },
+      "network_requests": 0,
+      "luna_requests": 0
+    },
+    "unresolved_terminal_outcome": "NOT_MATCHED_CUSTOMER_IDENTITY_MISSING",
+    "unresolved_network_eligible": false,
+    "unresolved_luna_eligible": false,
+    "unresolved_pricing_admission": "EXCLUDED",
+    "external_identity_enrichment": "DISABLED_UNLESS_OFFICIAL_LICENSE_SOURCE_PERMISSION_AND_SEPARATE_PROVENANCE_GATES_EXIST"
+  },
+  "stage_state": {
+    "freeze": "PASS",
+    "integration": "IMPLEMENTED_AND_VERIFIED",
+    "development": "AVAILABLE_NOT_PROMOTION_DENOMINATOR",
+    "locked_acceptance": "BLOCKED_DATA",
+    "shadow_pilot": "BLOCKED_DATA_AND_NOT_EXECUTED",
+    "advisory_rollout": "BLOCKED_BY_PREVIOUS_GATES",
+    "full_catalog_4901": "NOT_EXECUTED"
+  },
+  "verification": {
+    "ruff_0_12": "PASS",
+    "compileall": "PASS",
+    "pytest_with_postgresql": {
+      "status": "PASS",
+      "passed": 2340,
+      "skipped": 6,
+      "warnings": 1
+    },
+    "alembic": {
+      "heads": [
+        "20260804_0045"
+      ],
+      "autogenerate_check": "NO_NEW_UPGRADE_OPERATIONS",
+      "offline_upgrade_sql": "PASS_TO_20260804_0045"
+    },
+    "dart_format": "PASS",
+    "dart_analyze": "PASS",
+    "flutter_test": {
+      "status": "PASS",
+      "passed": 218
+    },
+    "flutter_build_web": "PASS",
+    "docker_build": {
+      "status": "PASS",
+      "backend_image_sha256": "2779c2a4364f93ee3f5d53576ea659238a902e6de33e82ef273ab2f4850da672",
+      "frontend_image_sha256": "c05212ac5677a3165a562f5f0eec5df8b6ee25ccf05b4dc89ee33792b837823a",
+      "services": [
+        "migrate",
+        "api",
+        "worker",
+        "store-sync-worker",
+        "pricing-worker",
+        "scheduler",
+        "frontend"
+      ]
+    }
+  },
+  "boundaries": {
+    "live_prom_requests": false,
+    "live_tecdoc_requests": false,
+    "paid_luna_requests_during_implementation": false,
+    "automatic_price_publication": false,
+    "recommendations_require_human_decision": true,
+    "full_catalog_claim": "CATALOG_REPLAY_READINESS_ONLY"
+  }
+}

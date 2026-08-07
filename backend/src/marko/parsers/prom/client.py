@@ -6,8 +6,10 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+import hashlib
 
 import requests
 
@@ -18,6 +20,16 @@ from .config import ScrapeConfig
 from .exceptions import RequestFailed, UnsafeResponse
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class HttpDocument:
+    """A bounded decoded response bound to the exact retained response bytes."""
+
+    text: str
+    content_sha256: str
+    request_url: str
+    status_code: int
 
 
 class HttpClient:
@@ -43,8 +55,24 @@ class HttpClient:
 
     def get_html(self, url: str, params: dict | None = None) -> str:
         """Return page HTML content as text. Raises RequestFailed on failure."""
+        return self.get_document(url, params).text
+
+    def get_document(self, url: str, params: dict | None = None) -> HttpDocument:
+        """Return decoded HTML plus a hash of the exact bounded response bytes.
+
+        The HTTP journal stores the same response body independently.  Exposing
+        its digest at the extraction boundary lets a normalized candidate field
+        cite the concrete product-card capture instead of merely citing a URL.
+        """
+
         response = self._request(url, params)
-        return response.text
+        body = response.content
+        return HttpDocument(
+            text=response.text,
+            content_sha256=hashlib.sha256(body).hexdigest(),
+            request_url=str(response.url or url),
+            status_code=int(response.status_code),
+        )
 
     def close(self) -> None:
         self._session.close()

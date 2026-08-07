@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "marko-formal-part-query-spike-v1",
+  "title": "Formal part query emitted by a semantic reviewer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "standardized_name",
+    "part_type",
+    "vehicle",
+    "installation",
+    "known_identifiers",
+    "evidence_gaps"
+  ],
+  "properties": {
+    "standardized_name": {"type": "string", "minLength": 1},
+    "part_type": {"type": "string", "minLength": 1},
+    "vehicle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "makes",
+        "models",
+        "generation",
+        "production_year_start",
+        "production_year_end",
+        "engine_code",
+        "vin_or_frame"
+      ],
+      "properties": {
+        "makes": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "models": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "generation": {"type": ["string", "null"]},
+        "production_year_start": {"type": ["integer", "null"]},
+        "production_year_end": {"type": ["integer", "null"]},
+        "engine_code": {"type": ["string", "null"]},
+        "vin_or_frame": {"type": ["string", "null"]}
+      }
+    },
+    "installation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "side"],
+      "properties": {
+        "position": {"type": ["string", "null"]},
+        "side": {"type": ["string", "null"]}
+      }
+    },
+    "known_identifiers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "value", "source"],
+        "properties": {
+          "kind": {
+            "enum": ["OE", "MPN", "CROSS", "INTERNAL", "UNKNOWN"]
+          },
+          "value": {"type": "string", "minLength": 1},
+          "source": {
+            "enum": [
+              "CUSTOMER_CATALOG",
+              "PINNED_CAPTURE",
+              "CONFIRMED_CROSSLINK",
+              "MODEL_INFERRED"
+            ]
+          }
+        }
+      }
+    },
+    "evidence_gaps": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    }
+  }
+}

@@ -9,6 +9,7 @@ from marko.services.discovery_funnel import (
     aggregate_discovery_funnel,
     render_discovery_funnel_prometheus,
 )
+from marko.services.semantic_candidate_gate import SEMANTIC_PRICING_GATE_VERSION
 from metis.pricing import CANDIDATE_GATE_ORDER
 
 
@@ -23,7 +24,23 @@ def _offer(
         selection_status=status,
         selection_reason=reason,
         passed_gates=list(passed),
-        selection_details={"stopped_gate": stopped} if stopped else {},
+        selection_details=(
+            {
+                "stopped_gate": stopped,
+            }
+            if stopped
+            else (
+                {
+                    "semantic_gate": {
+                        "status": "PRICING_EVIDENCE",
+                        "reason": "OK",
+                        "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+                    }
+                }
+                if status == "PRICING_EVIDENCE"
+                else {}
+            )
+        ),
     )
 
 
@@ -76,13 +93,40 @@ def test_discovery_funnel_exposes_conditional_pass_and_absolute_ceiling() -> Non
         "conditional_pass_rate": "0.666667",
         "conditional_terminal_rate": "0.333333",
         "survival_ceiling_ratio": "0.666667",
-        "single_gate_unlock_upper_bound": 2,
-        "single_gate_unlock_upper_bound_ratio": "0.666667",
+        "single_gate_unlock_upper_bound": 1,
+        "single_gate_unlock_upper_bound_ratio": "0.333333",
         "counterfactual_ceiling_method": "SHORT_CIRCUIT_UPPER_BOUND",
     }
     assert snapshot.gates["oem_identity"]["reached"] == 2
     assert snapshot.gates["oem_identity"]["survival_ceiling_ratio"] == "0.333333"
     assert snapshot.categories[0]["category"] == "Brakes"
+
+
+def test_discovery_funnel_quarantines_historical_pricing_evidence() -> None:
+    run_id = uuid4()
+    run = SimpleNamespace(
+        id=run_id,
+        status="completed",
+        reference_category="Brakes",
+        prom_reported_total=1,
+        retrieved_count=1,
+        persisted_count=1,
+        rejected_count=0,
+        owned_excluded_count=0,
+        unfetched_count=0,
+    )
+    historical = _offer(
+        status="PRICING_EVIDENCE",
+        reason="OK",
+        passed=tuple(CANDIDATE_GATE_ORDER),
+    )
+    historical.selection_details = {}
+
+    snapshot = aggregate_discovery_funnel([run], {run_id: [historical]})
+
+    assert snapshot.status_counts == {"REFERENCE_ONLY": 1}
+    assert snapshot.selection_reasons == {"DISCOVERY_ONLY_NOT_PRICING_EVIDENCE": 1}
+    assert snapshot.gates["own_seller"]["single_gate_unlock_upper_bound"] == 0
 
 
 def test_discovery_funnel_prometheus_is_low_cardinality() -> None:

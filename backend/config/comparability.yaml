@@ -1,5 +1,5 @@
 schema_version: metis-deterministic-candidate-selection-v1
-method_version: deterministic-candidate-gates-v1
+method_version: deterministic-candidate-gates-v3-physical-variants
 
 # Ownership is tenant data and is loaded fail-closed from workspace_stores.
 # Shared policy must never seed one customer's seller IDs.
@@ -104,6 +104,28 @@ variant_axes:
     outer:
       prefixes: ["зовніш", "наруж"]
       words: ["outer"]
+  # These axes are deliberately expressed only through explicit, domain
+  # specific wording.  An unknown physical specification is not a mismatch;
+  # rejection happens only when both sides assert opposite values.  This
+  # protects exact OE matches from known variant collisions such as radiator
+  # cell geometry, rated power, and ignition-lock pin count.
+  core_shape:
+    flat_cells:
+      phrases: ["плоские соты", "плоски соти", "flat cells"]
+    round_cells:
+      phrases: ["круглые соты", "кругли соти", "round cells"]
+  power_rating:
+    350w:
+      regex: ["(?<!\\w)350\\s*w(?!\\w)"]
+    450w:
+      regex: ["(?<!\\w)450\\s*w(?!\\w)"]
+  connector_pins:
+    four_pin:
+      regex:
+        - "(?<!\\w)4\\s*(?:pin|контакт\\w*)(?!\\w)"
+    six_pin:
+      regex:
+        - "(?<!\\w)6\\s*(?:pin|контакт\\w*)(?!\\w)"
 
 applicability:
   year_regex: '(?<!\d)(?:19|20)\d{2}(?!\d)'
@@ -166,6 +188,194 @@ category_domain:
   enabled: true
   allowlist_enforced: false
   allowed_ancestors: []
+
+  # [0, 55] is the observed Prom automotive branch.  It is a trusted branch,
+  # not an identity proof: explicit non-automotive wording below still wins.
+  trusted_automotive_ancestors:
+    - path: [0, 55]
+      label: "Автозапчастини та аксесуари"
+  require_semantic_for_unknown: true
+  semantic_markers:
+    # These markers only establish a domain; they never establish that the
+    # candidate is the same OE or the same sellable configuration.
+    automotive:
+      words:
+        - "vw"
+        - "bmw"
+        - "audi"
+        - "ford"
+        - "kia"
+        - "opel"
+        - "seat"
+        - "fiat"
+        - "honda"
+        - "mazda"
+        - "volvo"
+        - "iveco"
+        - "isuzu"
+        - "toyota"
+        - "nissan"
+        - "renault"
+        - "peugeot"
+        - "citroen"
+        - "subaru"
+        - "suzuki"
+        - "hyundai"
+        - "mitsubishi"
+        - "volkswagen"
+        - "мерседес"
+        - "фольксваген"
+        - "тойота"
+        - "авто"
+      prefixes:
+        - "автозапчаст"
+        - "запчаст"
+        - "автомоб"
+        - "радиатор"
+        - "амортиз"
+        - "термостат"
+        - "стартер"
+        - "генератор"
+        - "насос"
+        - "ступиц"
+        - "подшип"
+        - "колод"
+        - "датчик"
+        - "фильтр"
+        - "ремн"
+        - "ролик"
+        - "ремкомплект"
+        - "замок"
+        - "зажиган"
+        - "подвес"
+        - "рычаг"
+        - "тяга"
+        - "сайлент"
+        - "втул"
+        - "проклад"
+        - "клапан"
+        - "катуш"
+        - "форсун"
+        - "дроссел"
+        - "турбин"
+        - "картер"
+        - "масл"
+        - "сцеплен"
+        - "короб"
+        - "тормоз"
+        - "кузов"
+        - "капот"
+        - "багажник"
+        - "бампер"
+        - "фара"
+        - "крыл"
+        - "двер"
+        - "зеркал"
+        - "стеклооч"
+        - "шкив"
+        - "маховик"
+        - "шрус"
+        - "глуш"
+        - "выхлоп"
+        - "рул"
+        - "гидроусил"
+        - "бачок"
+        - "сальник"
+        - "привод"
+        - "полуос"
+        - "свеч"
+        - "провод"
+        - "аккум"
+        - "кардан"
+        - "патруб"
+        - "шланг"
+        - "опор"
+      phrases:
+        - "для автомобиля"
+        - "для авто"
+        - "для двигателя"
+        - "для акпп"
+        - "для кпп"
+        - "для volkswagen"
+        - "для toyota"
+    non_automotive:
+      words:
+        - "vitamin"
+        - "supplement"
+        - "lenovo"
+        - "gap"
+      prefixes:
+        - "витамин"
+        - "добавк"
+        - "коллаген"
+        - "нож"
+        - "ниж"
+        - "лезви"
+        - "фотофон"
+        - "фотозон"
+        - "винилов"
+        - "ноутбук"
+        - "компьютер"
+        - "смартфон"
+        - "телефон"
+        - "планшет"
+        - "клавиатур"
+        - "монитор"
+        - "наушник"
+        - "мебел"
+        - "стол"
+        - "стул"
+        - "шкаф"
+        - "диван"
+        - "кресл"
+        - "одеж"
+        - "куртк"
+        - "жилет"
+        - "футболк"
+        - "брюк"
+        - "плать"
+        - "юбк"
+        - "кепк"
+        - "балетк"
+        - "обув"
+        - "шапк"
+        - "сумк"
+        - "аквариум"
+        - "самокат"
+        - "велосипед"
+        - "беговел"
+        - "игруш"
+        - "тетрад"
+        - "зошит"
+        - "пенал"
+        - "обои"
+        - "маникюр"
+        - "медицин"
+        - "посуд"
+        - "бутыл"
+        - "полотен"
+        - "краск"
+        - "эмал"
+        - "мультимед"
+        - "адаптер"
+        - "переходник"
+        - "погруж"
+        - "глубин"
+        - "глибин"
+        - "скважин"
+        - "свердлов"
+        - "колод"
+      phrases:
+        - "для ноутбука"
+        - "для телефона"
+        - "для компьютера"
+        - "для скважины"
+        - "для колодца"
+        - "для воды"
+        - "насос для воды"
+        - "насос для скважины"
+        - "насос для колодца"
+        - "квадратный виниловый фотофон"
 
   blocked_ancestors:
     - path: [0, 13, 1808]

@@ -95,6 +95,8 @@ class PricingRunScopeEstimateResponse(BaseModel):
     unique_scrape_inputs: int
     duplicate_items: int
     worst_case_duration_seconds: int
+    network_eligible_items: int = 0
+    identity_blocked_items: int = 0
 
 
 class PricingRunScopeExclusionResponse(BaseModel):
@@ -316,6 +318,9 @@ class RecommendationResponse(BaseModel):
     catalog_item_id: UUID
     sku: str
     oe_norm: str
+    mpn_norm: str | None = None
+    search_identity: str | None = None
+    identity_status: str = "UNRESOLVED"
     name: str
     category: str
     stock_status: str
@@ -435,9 +440,20 @@ class ComparabilityReviewResponse(BaseModel):
     review_id: UUID
     market_observation_id: UUID
     input_hash: str
+    contract_version: Literal["comparability-v1", "comparability-v2"]
     verdict: Literal["COMPARABLE", "NOT_COMPARABLE", "INSUFFICIENT_DATA"]
     match_level: Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"]
     confidence: Decimal
+    identity_verdict: Literal["MATCH", "NOT_MATCH", "MANUAL_REVIEW"]
+    identity_match_level: Literal[
+        "EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"
+    ]
+    identity_match_score: Decimal
+    decision_confidence: Decimal
+    image_consistency: Literal["SUPPORTS", "CONFLICTS", "NON_DIAGNOSTIC", "UNAVAILABLE"]
+    reason_codes: list[str]
+    pricing_admission: Literal["ADMITTED", "EXCLUDED", "MANUAL_REVIEW"]
+    pricing_reason_codes: list[str]
     rationale: str
     dimension_findings: list[dict[str, Any]]
     hard_stop_conflicts: list[dict[str, Any]]
@@ -446,10 +462,19 @@ class ComparabilityReviewResponse(BaseModel):
     provider: str
     model_id: str
     prompt_version: str
+    reasoning_effort: str | None
+    model_settings_hash: str | None
     reviewed_at: datetime
     cache_hit_review_id: UUID | None
     image_urls: list[str]
     provider_response_id: str | None
+    usage: dict[str, Any]
+    latency_ms: int
+    estimated_cost: dict[str, Any]
+    rate_card_version: str | None
+    verified_cross_edge: dict[str, Any]
+    our_product: dict[str, Any]
+    candidate: dict[str, Any]
     error_code: str | None
     error_detail: str | None
     feedback_count: int
@@ -471,6 +496,7 @@ class ComparabilityFeedbackEvidenceReference(BaseModel):
         "CANDIDATE",
         "IMAGE",
         "DETERMINISTIC_GATE",
+        "VERIFIED_CROSS",
     ]
     field: str = Field(min_length=1, max_length=120)
     value: str = Field(default="", max_length=1000)
@@ -493,6 +519,7 @@ class ComparabilityFeedbackDimensionCorrection(BaseModel):
         "position",
         "condition",
         "package_quantity",
+        "unit_basis",
         "currency_presence",
     ]
     outcome: Literal["MATCH", "CONFLICT", "UNKNOWN", "NOT_APPLICABLE"]
@@ -515,6 +542,15 @@ class ComparabilityFeedbackRequest(BaseModel):
     corrected_match_level: (
         Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"] | None
     ) = None
+    corrected_identity_verdict: (
+        Literal["MATCH", "NOT_MATCH", "MANUAL_REVIEW"] | None
+    ) = None
+    corrected_identity_match_level: (
+        Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"] | None
+    ) = None
+    corrected_pricing_admission: (
+        Literal["ADMITTED", "EXCLUDED", "MANUAL_REVIEW"] | None
+    ) = None
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     reason: str = Field(min_length=3, max_length=2000)
     evidence_corrections: list[ComparabilityFeedbackDimensionCorrection] = Field(
@@ -524,16 +560,26 @@ class ComparabilityFeedbackRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_correction(self) -> ComparabilityFeedbackRequest:
+        legacy_supplied = any(
+            value is not None
+            for value in (self.corrected_verdict, self.corrected_match_level)
+        )
+        v2_values = (
+            self.corrected_identity_verdict,
+            self.corrected_identity_match_level,
+            self.corrected_pricing_admission,
+        )
+        v2_supplied = any(value is not None for value in v2_values)
         if self.decision == "CORRECT":
-            if self.corrected_verdict is None or self.corrected_match_level is None:
-                raise ValueError(
-                    "CORRECT requires corrected_verdict and corrected_match_level"
-                )
-        elif (
-            self.corrected_verdict is not None
-            or self.corrected_match_level is not None
-            or self.evidence_corrections
-        ):
+            if legacy_supplied and (
+                self.corrected_verdict is None or self.corrected_match_level is None
+            ):
+                raise ValueError("legacy correction fields must be supplied together")
+            if v2_supplied and any(value is None for value in v2_values):
+                raise ValueError("v2 correction fields must be supplied together")
+            if not legacy_supplied and not v2_supplied:
+                raise ValueError("CORRECT requires legacy or v2 corrected labels")
+        elif legacy_supplied or v2_supplied or self.evidence_corrections:
             raise ValueError("CONFIRM cannot carry corrected values")
         dimensions = [item.dimension for item in self.evidence_corrections]
         if len(dimensions) != len(set(dimensions)):
@@ -542,11 +588,32 @@ class ComparabilityFeedbackRequest(BaseModel):
 
 
 class ComparabilityStatusResponse(BaseModel):
-    mode: Literal["off", "shadow"]
+    mode: Literal["off", "shadow", "required"]
     provider: str
     model: str
+    reasoning_effort: str
+    contract_version: Literal["comparability-v2"] = "comparability-v2"
+    rate_card_version: str
     configured: bool
     automatic_price_publication: Literal[False] = False
+
+
+class ComparabilityRunReportResponse(BaseModel):
+    run_id: UUID
+    generated_at: datetime
+    run_status: str
+    contract_version: Literal["comparability-v2"] = "comparability-v2"
+    totals: dict[str, int]
+    identity_verdict_counts: dict[str, int]
+    pricing_admission_counts: dict[str, int]
+    automatic_decision_coverage: Decimal
+    abstention_rate: Decimal
+    provider: dict[str, Any]
+    parser: dict[str, Any]
+    seller_integrity: dict[str, Any]
+    performance: dict[str, Any]
+    cost: dict[str, Any]
+    accuracy: dict[str, Any]
 
 
 class AiEvidenceSpendEstimateResponse(BaseModel):
@@ -760,6 +827,11 @@ class CompetitorOfferInput(BaseModel):
         Literal["EXACT", "ACCEPTABLE_ANALOGUE", "SUSPICIOUS", "NOT_APPLICABLE"] | None
     ) = None
     semantic_review_confidence: Decimal | None = Field(default=None, ge=0, le=1)
+    # Stateless preview/QA callers must state that the supplied offer has
+    # already passed the upstream admission contract. Persisted Marko offers
+    # receive the value from MarketObservation instead.
+    automatic_eligible: bool = False
+    semantic_gate_current: bool = False
 
     def to_domain(self) -> CompetitorOffer:
         values = self.model_dump()
@@ -770,24 +842,58 @@ class CompetitorOfferInput(BaseModel):
 
 
 class TierCoefficientInput(BaseModel):
+    """Explicit, fail-closed coefficient contract for the stateless QA endpoint.
+
+    The endpoint cannot prove a caller-supplied calibration dataset, but it must
+    never manufacture validation evidence on the caller's behalf.  Every field
+    that contributes to coefficient admission is therefore required.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     category: str
     tier: ProductTier
     multiplier: Decimal = Field(gt=0)
-    model: CoefficientModel = CoefficientModel.SHRINKAGE
-    method_version: str = "api-input-v1"
-    sample_size: int = Field(default=10, ge=0)
-    effective_sample_size: Decimal = Field(default=Decimal("10"), ge=0)
-    confidence: Decimal = Field(default=Decimal("0.8"), ge=0, le=1)
-    validated: bool = True
-    log_effect: Decimal = Decimal("0")
+    model: CoefficientModel
+    method_version: str = Field(min_length=1, max_length=160)
+    sample_size: int = Field(ge=0)
+    effective_sample_size: Decimal = Field(ge=0)
+    confidence: Decimal = Field(ge=0, le=1)
+    validated: bool
+    log_effect: Decimal
     global_log_effect: Decimal | None = None
     shrinkage_weight: Decimal | None = None
     interval_low: Decimal | None = None
     interval_high: Decimal | None = None
-    dataset_hash: str = ""
-    coefficient_version: str = "api-input-v1"
+    dataset_hash: str = Field(pattern=SHA256_HEX_PATTERN)
+    coefficient_version: str = Field(min_length=1, max_length=200)
     validation_reasons: tuple[str, ...] = ()
     excluded_oe_norm: str | None = None
+
+    @model_validator(mode="after")
+    def validate_calibration_evidence(self) -> TierCoefficientInput:
+        if self.effective_sample_size > Decimal(self.sample_size):
+            raise ValueError("effective_sample_size cannot exceed sample_size")
+        interval_supplied = self.interval_low is not None or self.interval_high is not None
+        if interval_supplied and (
+            self.interval_low is None or self.interval_high is None
+        ):
+            raise ValueError("interval_low and interval_high must be supplied together")
+        if self.interval_low is not None and self.interval_high is not None:
+            if self.interval_low <= 0 or self.interval_high <= 0:
+                raise ValueError("coefficient interval bounds must be positive")
+            if not self.interval_low <= self.multiplier <= self.interval_high:
+                raise ValueError("multiplier must lie inside the coefficient interval")
+        if self.validated:
+            if self.sample_size <= 0 or self.effective_sample_size <= 0:
+                raise ValueError("validated coefficient requires positive sample support")
+            if self.confidence <= 0:
+                raise ValueError("validated coefficient requires positive confidence")
+            if self.interval_low is None or self.interval_high is None:
+                raise ValueError("validated coefficient requires a complete interval")
+            if self.validation_reasons:
+                raise ValueError("validated coefficient cannot carry validation failures")
+        return self
 
     def to_domain(self) -> TierCoefficient:
         return TierCoefficient(**self.model_dump())

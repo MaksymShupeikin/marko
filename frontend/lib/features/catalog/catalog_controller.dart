@@ -70,6 +70,7 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     return _api.listCompetitors(
       sku: product.sku,
       oe: product.oe,
+      mpn: product.mpn,
       brand: product.brand,
     );
   }
@@ -117,10 +118,27 @@ class CatalogController extends AsyncNotifier<CatalogState> {
 
   Future<CatalogCompetitorComparison> discoverCompetitors(
     CatalogProduct product,
-  ) {
+  ) async {
+    var oe = product.oe;
+    var mpn = product.mpn;
+    // Legacy store-sync rows may have neither public OE nor persisted MPN.
+    // Repair one exact owned listing before discovery so the search does not
+    // silently fall back to a weak title-only path.
+    if (oe == null && mpn == null) {
+      final store = product.primaryStore;
+      if (store != null) {
+        final enriched = await _api.enrichIdentifiers(
+          storeId: store.storeId,
+          externalId: store.externalId,
+        );
+        oe = enriched.oe;
+        mpn = enriched.mpn;
+      }
+    }
     return _api.discoverCompetitors(
       sku: product.sku,
-      oe: product.oe,
+      oe: oe,
+      mpn: mpn,
       brand: product.brand,
       title: product.name,
       currentPrice: product.primaryStore?.price ?? product.priceMin,

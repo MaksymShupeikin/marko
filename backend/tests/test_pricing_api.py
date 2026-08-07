@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
 from types import SimpleNamespace
@@ -8,8 +9,12 @@ from httpx import ASGITransport, AsyncClient
 
 from marko.api.dependencies import get_current_user
 from marko.api.main import app
+from marko.api.routers.v1.pricing import _recommendation_response
 from marko.infrastructure.db.models import User, WorkspaceRole
 from marko.services.auth import AuthContext
+from marko.services.comparability_activation import (
+    comparability_activation_artifact_verified,
+)
 from marko.services.pricing_runs import (
     PricingRunError,
     _merge_catalog_override_snapshot,
@@ -78,6 +83,7 @@ def test_activation_artifact_requires_exact_file_hash(tmp_path) -> None:
     artifact.write_text('{"approved":false}', encoding="utf-8")
     expected = hashlib.sha256(artifact.read_bytes()).hexdigest()
     assert activation_artifact_verified(str(artifact), expected)
+    assert not comparability_activation_artifact_verified(str(artifact), expected)
     assert not activation_artifact_verified(str(artifact), "0" * 64)
     assert not activation_artifact_verified(str(tmp_path / "missing"), expected)
 
@@ -144,6 +150,89 @@ def test_absolute_change_sort_is_literal_and_queue_independent() -> None:
     assert "confidence" in str(order[1])
     with pytest.raises(PricingRunError, match="Unknown recommendation sort"):
         _recommendation_sort_order("priority")
+
+
+def test_recommendation_response_hides_price_for_legacy_mpn_only_identity() -> None:
+    recommendation = SimpleNamespace(
+        id=uuid4(),
+        pricing_run_id=uuid4(),
+        catalog_snapshot_id=uuid4(),
+        action="RAISE",
+        current_price=Decimal("1000"),
+        fair_price=Decimal("1200"),
+        recommended_price=Decimal("1100"),
+        lower_bound=Decimal("1000"),
+        upper_bound=Decimal("1100"),
+        confidence=Decimal("0.90"),
+        confidence_grade="A",
+        weakest_factor=None,
+        factor_scores={},
+        competitor_count=5,
+        raw_competitor_count=5,
+        unique_seller_count=5,
+        clean_competitor_count=5,
+        target_market_count=5,
+        kemp_reference_count=0,
+        owned_store_count=0,
+        rejected_count=0,
+        effective_competitor_count=Decimal("5"),
+        dispersion=None,
+        outlier_method="none",
+        outlier_count=0,
+        sensitivity=None,
+        action_gates_passed=True,
+        automatic_eligible=True,
+        verified_seller_count=5,
+        comparability_policy_id="policy",
+        comparability_policy_hash="a" * 64,
+        decision_fingerprint="b" * 64,
+        hard_gate_trace={},
+        robust_diagnostic=None,
+        priority_score=Decimal("1"),
+        priority_score_type="gross_uplift_opportunity",
+        review_priority=Decimal("0"),
+        absolute_recommended_change=Decimal("100"),
+        percentage_recommended_change=Decimal("0.1"),
+        reason_codes=["LEGACY_RECOMMENDATION"],
+        evidence_observation_ids=[],
+        kemp_reference_observation_ids=[],
+        excluded_observations=[],
+        policy_version="policy-v1",
+        parser_version="parser-v1",
+        classifier_version="classifier-v1",
+        coefficient_version=None,
+        calibration_dataset_hash=None,
+        currency="UAH",
+        price_tick=Decimal("1"),
+        price_tick_version="uah-integer-v1",
+        computed_at=datetime(2026, 8, 6, tzinfo=UTC),
+        context_snapshot={"stock_status": "fresh"},
+        calculation_trace={},
+    )
+    item = SimpleNamespace(
+        id=uuid4(),
+        sku="77641360",
+        oe_norm="77641360",
+        mpn_norm="115",
+        part_numbers_norm=["115070"],
+        identity_status="MPN_ONLY",
+        name="Part",
+        category="Filters",
+        stock_status="fresh",
+    )
+
+    response = _recommendation_response(recommendation, item)
+
+    assert response.action == "MANUAL_REVIEW"
+    assert response.recommended_price is None
+    assert response.fair_price is None
+    assert response.lower_bound is None
+    assert response.upper_bound is None
+    assert response.absolute_recommended_change is None
+    assert response.percentage_recommended_change is None
+    assert response.action_gates_passed is False
+    assert response.automatic_eligible is False
+    assert "CUSTOMER_OE_REQUIRED_FOR_PRICE_RECOMMENDATION" in response.reason_codes
 
 
 @pytest.mark.parametrize(
@@ -222,9 +311,15 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
                     "age_hours": "1",
                     "match_confidence": "0.95",
                     "tier": "budget",
-                    "tier_confidence": "0.95",
-                    "source_confidence": "1",
-                    "comparison_evidence": comparison_evidence_to_dict(
+                        "tier_confidence": "0.95",
+                        "source_confidence": "1",
+                        # This endpoint test supplies a fully verified synthetic
+                        # offer.  Persisted market observations are fail-closed
+                        # by default and must explicitly carry both upstream
+                        # admission decisions.
+                        "automatic_eligible": True,
+                        "semantic_gate_current": True,
+                        "comparison_evidence": comparison_evidence_to_dict(
                         verified_comparison_evidence(
                             stable_seller_id=f"seller-{index}",
                             source_record_id=f"obs-{index}",
@@ -245,6 +340,7 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
                     "effective_sample_size": "18",
                     "confidence": "0.95",
                     "validated": True,
+                    "log_effect": "0",
                     "interval_low": "0.9",
                     "interval_high": "1.1",
                     "dataset_hash": "a" * 64,
@@ -281,6 +377,110 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     assert body["evidence"][0]["coefficient_version"] == "owner-tier-agnostic-v1"
 
 
+@pytest.mark.asyncio
+async def test_evaluate_endpoint_does_not_invent_coefficient_validation_evidence():
+    user = User(id=uuid4(), email="seller@example.com", is_active=True)
+
+    async def current_user_override():
+        return AuthContext(
+            user=user,
+            workspace_id=uuid4(),
+            workspace_role=WorkspaceRole.member,
+        )
+
+    app.dependency_overrides[get_current_user] = current_user_override
+    try:
+        payload = {
+            "context": {
+                "sku": "SKU-FAIL-CLOSED",
+                "category": "brakes",
+                "current_price": "800",
+            },
+            "offers": [],
+            "coefficients": [
+                {
+                    "category": "brakes",
+                    "tier": "budget",
+                    "multiplier": "1.2",
+                }
+            ],
+        }
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/v1/pricing/evaluate", json=payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    missing_fields = {
+        tuple(item["loc"])[-1]
+        for item in response.json()["detail"]
+        if item["type"] == "missing"
+    }
+    assert {
+        "model",
+        "method_version",
+        "sample_size",
+        "effective_sample_size",
+        "confidence",
+        "validated",
+        "log_effect",
+        "dataset_hash",
+        "coefficient_version",
+    } <= missing_fields
+
+
+@pytest.mark.asyncio
+async def test_evaluate_endpoint_rejects_unsupported_validated_coefficient():
+    user = User(id=uuid4(), email="seller@example.com", is_active=True)
+
+    async def current_user_override():
+        return AuthContext(
+            user=user,
+            workspace_id=uuid4(),
+            workspace_role=WorkspaceRole.member,
+        )
+
+    app.dependency_overrides[get_current_user] = current_user_override
+    try:
+        payload = {
+            "context": {
+                "sku": "SKU-FAIL-CLOSED",
+                "category": "brakes",
+                "current_price": "800",
+            },
+            "offers": [],
+            "coefficients": [
+                {
+                    "category": "brakes",
+                    "tier": "budget",
+                    "multiplier": "1.2",
+                    "model": "shrinkage",
+                    "method_version": "manual-test-v1",
+                    "sample_size": 0,
+                    "effective_sample_size": "0",
+                    "confidence": "0.8",
+                    "validated": True,
+                    "log_effect": "0.1823215568",
+                    "interval_low": "1.1",
+                    "interval_high": "1.3",
+                    "dataset_hash": "a" * 64,
+                    "coefficient_version": "manual-test-v1:aaaaaaaaaaaa",
+                }
+            ],
+        }
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/v1/pricing/evaluate", json=payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert "validated coefficient requires positive sample support" in response.text
+
+
 def test_openapi_exposes_additive_dispersion_contract() -> None:
     schemas = app.openapi()["components"]["schemas"]
     properties = schemas["PricingEvaluateResponse"]["properties"]
@@ -311,6 +511,8 @@ def test_openapi_exposes_llm_comparability_review_and_feedback_contract() -> Non
     review = schema["components"]["schemas"]["ComparabilityReviewResponse"]
 
     assert "/api/v1/pricing/comparability/status" in paths
+    assert "/api/v1/pricing/runs/{run_id}/comparability-report" in paths
+    assert "/api/v1/catalog/imports/{batch_id}/terminal-manifest" in paths
     assert (
         "/api/v1/pricing/observations/{observation_id}/comparability-reviews" in paths
     )
@@ -322,6 +524,11 @@ def test_openapi_exposes_llm_comparability_review_and_feedback_contract() -> Non
         "verdict",
         "match_level",
         "confidence",
+        "identity_verdict",
+        "identity_match_score",
+        "decision_confidence",
+        "image_consistency",
+        "pricing_admission",
         "rationale",
         "dimension_findings",
         "hard_stop_conflicts",
@@ -353,7 +560,10 @@ async def test_comparability_status_is_authenticated_and_advisory_only() -> None
     assert response.json() == {
         "mode": "off",
         "provider": "openai_responses",
-        "model": "gpt-5-mini",
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "xhigh",
+        "contract_version": "comparability-v2",
+        "rate_card_version": "openai-gpt-5.6-luna-standard-2026-07-30",
         "configured": False,
         "automatic_price_publication": False,
     }

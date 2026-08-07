@@ -75,6 +75,8 @@ def offer(
         "tier_confidence": Decimal("0.95"),
         "source_confidence": Decimal("1"),
         "currency_raw": "UAH",
+        "semantic_gate_current": True,
+        "automatic_eligible": True,
         "is_kemp": tier == ProductTier.KEMP,
     }
     values.update(overrides)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
 import zlib
@@ -179,6 +180,12 @@ async def load_replay_cache(
             )
         ).all()
     )
+    return _verified_replay(rows)
+
+
+def _verified_replay(rows: list) -> dict[str, ReplayEvidence]:
+    """Decompress and hash-verify newest-first rows into a replay cache."""
+
     replay: dict[str, ReplayEvidence] = {}
     for request, blob in rows:
         if request.request_key in replay:
@@ -207,6 +214,49 @@ async def load_replay_cache(
             content_sha256=blob.content_sha256,
         )
     return replay
+
+
+async def load_detail_replay_cache(
+    session: AsyncSession,
+    *,
+    max_age_hours: int,
+    request_kinds: tuple[str, ...] = ("product_page",),
+) -> dict[str, ReplayEvidence]:
+    """Replay retained competitor cards across positions and runs.
+
+    ``load_replay_cache`` is scoped to a single owner, so the same competitor
+    card was refetched for every position and every run. A card supplies no
+    monetary field — price, availability, title, images and seller identity
+    all deliberately stay at listing time, see
+    ``PromGateway._fetch_candidate_detail`` — so replaying one can save a
+    request but cannot move a price. That is what makes an unbounded detail
+    budget affordable at one request per two seconds.
+
+    Bytes are hash-verified on the way out exactly as for an owner-scoped
+    replay, and ``0`` hours disables the cache without a query.
+    """
+
+    if max_age_hours <= 0 or not request_kinds:
+        return {}
+    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+    rows = list(
+        (
+            await session.execute(
+                select(ScrapeHttpRequest, ScrapeEvidenceBlob)
+                .join(
+                    ScrapeEvidenceBlob,
+                    ScrapeEvidenceBlob.id == ScrapeHttpRequest.evidence_blob_id,
+                )
+                .where(
+                    ScrapeHttpRequest.request_kind.in_(request_kinds),
+                    ScrapeHttpRequest.outcome.in_(("success", "replayed")),
+                    ScrapeHttpRequest.started_at >= cutoff,
+                )
+                .order_by(ScrapeHttpRequest.started_at.desc())
+            )
+        ).all()
+    )
+    return _verified_replay(rows)
 
 
 async def evidence_coverage_ratio(

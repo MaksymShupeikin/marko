@@ -195,7 +195,12 @@ class CrossPairDecision:
     def automatic_eligible(self) -> bool:
         return (
             self.validation_status is CrossValidationStatus.CONFIRMED
-            and int(self.validation_details.get("independent_seller_count", 0)) >= 2
+            # A display name is not a durable seller identity.  Two listings
+            # may be the same seller under different shop names, while a
+            # missing ID must never be upgraded to independent evidence.
+            # The deduplicator writes this explicit count; requiring the
+            # field here also keeps hand-built/legacy decisions fail-closed.
+            and int(self.validation_details.get("stable_seller_id_count", 0)) >= 2
         )
 
 
@@ -787,20 +792,29 @@ def _deduplicate_pair_decisions(
                 and item.candidate.source_seller_id.strip()
             }
         )
-        source_seller_identities = {
-            (
-                f"id:{item.candidate.source_seller_id.strip()}"
-                if item.candidate.source_seller_id
-                and item.candidate.source_seller_id.strip()
-                else f"name:{item.candidate.source_seller.strip().casefold()}"
-            )
+        # Only stable seller IDs can establish independent market evidence.
+        # Display names remain useful diagnostics, but they are mutable,
+        # localized and frequently shared by multiple storefronts.
+        stable_seller_ids = {
+            item.candidate.source_seller_id.strip()
             for item in decisions
-            if (
-                item.candidate.source_seller_id
-                and item.candidate.source_seller_id.strip()
-            )
-            or item.candidate.source_seller.strip()
+            if item.candidate.source_seller_id
+            and item.candidate.source_seller_id.strip()
         }
+        display_seller_names = {
+            item.candidate.source_seller.strip().casefold()
+            for item in decisions
+            if item.candidate.source_seller.strip()
+        }
+        automatic_eligible = (
+            best.status is CrossValidationStatus.CONFIRMED
+            and len(stable_seller_ids) >= 2
+        )
+        cross_confidence = (
+            Decimal("1") - config.stage_c.via_cross_match_confidence_step
+            if automatic_eligible
+            else Decimal("0")
+        )
         pair_decisions.append(
             CrossPairDecision(
                 our_oem_norm=pair[0],
@@ -818,7 +832,13 @@ def _deduplicate_pair_decisions(
                 validation_details=MappingProxyType(
                     {
                         "source_count": len(evidence),
-                        "independent_seller_count": len(source_seller_identities),
+                        # Keep the historical field, but define it in terms
+                        # of durable IDs rather than display-name variants.
+                        "independent_seller_count": len(stable_seller_ids),
+                        "stable_seller_id_count": len(stable_seller_ids),
+                        "display_seller_count": len(display_seller_names),
+                        "automatic_eligible": automatic_eligible,
+                        "confidence": format(cross_confidence, "f"),
                         "source_seller_ids": source_seller_ids,
                         "source_sellers": source_sellers,
                         "source_statuses": [item.status.value for item in decisions],

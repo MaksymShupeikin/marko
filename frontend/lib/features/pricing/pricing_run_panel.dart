@@ -124,6 +124,8 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
   List<CatalogImportBatch> _imports = const [];
   List<PricingRunSummary> _runs = const [];
   PricingRunSummary? _active;
+  ComparabilityRunReport? _comparabilityReport;
+  bool _reportLoading = false;
 
   PricingApi get _pricing => ref.read(pricingApiProvider);
   CatalogImportApi get _catalog => ref.read(catalogImportApiProvider);
@@ -160,15 +162,18 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
           .where((batch) => batch.isSuccess)
           .toList(growable: false);
       final active = runs.where((run) => !run.isFinished).firstOrNull;
+      final shownRun = active ?? runs.firstOrNull;
       setState(() {
         _runs = runs;
         _imports = eligible;
-        _active = active ?? runs.firstOrNull;
+        if (_active?.id != shownRun?.id) _comparabilityReport = null;
+        _active = shownRun;
         _selectedBatchId = eligible.any((batch) => batch.id == _selectedBatchId)
             ? _selectedBatchId
             : eligible.firstOrNull?.id;
         _loading = false;
       });
+      unawaited(_loadComparabilityReport(shownRun));
       // A run started before this page was opened (or before a browser reload)
       // is still working. Without resuming here the panel froze on whatever
       // status the list happened to return.
@@ -177,6 +182,22 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
       if (!mounted) return;
       setState(() => _loading = false);
       _fail(error);
+    }
+  }
+
+  Future<void> _loadComparabilityReport(PricingRunSummary? run) async {
+    if (run == null) return;
+    if (mounted) setState(() => _reportLoading = true);
+    try {
+      final report = await _pricing.getComparabilityReport(run.id);
+      if (!mounted || _active?.id != run.id) return;
+      setState(() => _comparabilityReport = report);
+    } catch (error) {
+      if (!mounted || ref.classifySessionExpiry(error)) return;
+      // The pricing run remains usable when its observability report cannot be
+      // read. The next explicit refresh retries it.
+    } finally {
+      if (mounted) setState(() => _reportLoading = false);
     }
   }
 
@@ -246,6 +267,18 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
             uk: ' Відхилено позицій: ${scope.excludedItems}.',
           )
         : '';
+    final identityBlocked = scope.identityBlockedItems > 0
+        ? context.localized(
+            ru:
+                ' Без подтверждённого OE/MPN/кросса: '
+                '${scope.identityBlockedItems}; эти строки останутся в отчёте, '
+                'но сопоставляться не будут.',
+            uk:
+                ' Без підтвердженого OE/MPN/кросу: '
+                '${scope.identityBlockedItems}; ці рядки залишаться у звіті, '
+                'але не зіставлятимуться.',
+          )
+        : '';
     // Числа берутся из предпросмотра именно этой области, а не из доли
     // полного каталога: сколько позиций пригодно, знает только сервер.
     final confirmed = await _confirm(
@@ -253,12 +286,14 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
       titleUk: 'Запустити розрахунок цін?',
       bodyRu:
           'Область: ${choice.confirmationName(context)}. '
-          'В расчёт попадёт позиций: ${scope.eligibleItems}.$excluded '
+          'Строк в контуре: ${scope.eligibleItems}; к рыночному сопоставлению '
+          'допущено: ${scope.networkEligibleItems}.$excluded$identityBlocked '
           'В худшем случае это займёт около ${scope.worstCaseMinutes} мин. '
           'Расчёт не меняет цены на Prom.ua автоматически.',
       bodyUk:
           'Область: ${choice.confirmationName(context)}. '
-          'У розрахунок потрапить позицій: ${scope.eligibleItems}.$excluded '
+          'Рядків у контурі: ${scope.eligibleItems}; до ринкового зіставлення '
+          'допущено: ${scope.networkEligibleItems}.$excluded$identityBlocked '
           'У найгіршому разі це триватиме близько ${scope.worstCaseMinutes} хв. '
           'Розрахунок не змінює ціни на Prom.ua автоматично.',
       actionRu: 'Запустить',
@@ -311,6 +346,7 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
     await attempts.release(identity);
     if (!mounted) return;
     setState(() {
+      _comparabilityReport = null;
       _active = run;
       _runs = [run, ..._runs.where((item) => item.id != run.id)];
     });
@@ -353,7 +389,10 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
         },
       );
       if (generation != _pollGeneration) return;
-      if (finished.isFinished) widget.onRunFinished();
+      if (finished.isFinished) {
+        await _loadComparabilityReport(finished);
+        widget.onRunFinished();
+      }
     } on PricingRunPollingLimitExceeded catch (error) {
       if (!mounted || generation != _pollGeneration) return;
       setState(() {
@@ -518,6 +557,13 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
                     .map((batch) => batch.filename)
                     .firstOrNull,
               ),
+            if (_reportLoading) ...[
+              const SizedBox(height: 8),
+              const LinearProgressIndicator(),
+            ] else if (_comparabilityReport case final report?) ...[
+              const SizedBox(height: 10),
+              _ComparabilityReportCard(report: report),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 12),
               MarkoInlineMessage(
@@ -812,6 +858,82 @@ class _RunStatus extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _ComparabilityReportCard extends StatelessWidget {
+  const _ComparabilityReportCard({required this.report});
+
+  final ComparabilityRunReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final reviewed = report.totals['reviewed_candidates'] ?? 0;
+    final total = report.totals['market_candidates'] ?? 0;
+    final providerRate =
+        report.provider['valid_terminal_rate']?.toString() ?? '0';
+    final parserFailures = report.parser['parser_failures'] ?? 0;
+    final ownedAdmitted = report.sellerIntegrity['owned_store_admitted'] ?? 0;
+    final duplicateAdmitted =
+        report.sellerIntegrity['admitted_duplicate_candidates'] ?? 0;
+    final p95 = report.performance['latency_ms_p95'] ?? '—';
+    final tokenUsage = report.performance['token_usage'];
+    final tokens = tokenUsage is Map
+        ? tokenUsage['total_tokens']?.toString() ?? '0'
+        : '0';
+    final cost = report.cost['estimated_total']?.toString() ?? '0';
+    final accuracy = report.accuracyStatus == 'NOT_EVALUATED'
+        ? context.localized(
+            ru: 'accuracy: NOT_EVALUATED — нет подтверждённых labels',
+            uk: 'accuracy: NOT_EVALUATED — немає підтверджених labels',
+          )
+        : 'accuracy: ${report.accuracyStatus}';
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: colors.surfaceMuted.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Comparability report · ${report.contractVersion}',
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'coverage ${(report.automaticDecisionCoverage * 100).toStringAsFixed(1)}% · '
+            'abstention ${(report.abstentionRate * 100).toStringAsFixed(1)}% · '
+            'reviewed $reviewed/$total',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Text(
+            'identity ${report.identityVerdictCounts} · '
+            'pricing ${report.pricingAdmissionCounts}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Text(
+            'provider terminal rate=$providerRate · parser failures=$parserFailures · '
+            'owned admitted=$ownedAdmitted · duplicate admitted=$duplicateAdmitted',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Text(
+            'p95 latency=$p95 ms · tokens=$tokens · estimated cost=$cost USD',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Text(
+            accuracy,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: report.accuracyStatus == 'NOT_EVALUATED'
+                  ? colors.warning
+                  : colors.positive,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

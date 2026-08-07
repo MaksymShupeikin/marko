@@ -187,6 +187,18 @@ const pricingReasonTranslations = <String, PricingReasonTranslation>{
     ru: 'источник устарел',
     uk: 'джерело застаріло',
   ),
+  'SEMANTIC_GATE_NOT_CURRENT': PricingReasonTranslation(
+    ru: 'семантическая проверка устарела — предложение отправлено на повторную проверку',
+    uk: 'семантична перевірка застаріла — пропозицію відправлено на повторну перевірку',
+  ),
+  'PERSISTED_AUTOMATIC_ELIGIBILITY_REQUIRED': PricingReasonTranslation(
+    ru: 'сохранённое предложение не прошло явный допуск к автоматическому расчёту',
+    uk: 'збережена пропозиція не пройшла явний допуск до автоматичного розрахунку',
+  ),
+  'OE_AUTOMATIC_IDENTITY_EVIDENCE_INSUFFICIENT': PricingReasonTranslation(
+    ru: 'для автоматического сравнения недостаточно структурного доказательства OE',
+    uk: 'для автоматичного порівняння недостатньо структурованого доказу OE',
+  ),
   'USED_OR_REFURBISHED': PricingReasonTranslation(
     ru: 'товар бывший в употреблении или восстановленный',
     uk: 'товар вживаний або відновлений',
@@ -286,6 +298,14 @@ const pricingReasonTranslations = <String, PricingReasonTranslation>{
   'MANUAL_MISSING_COMPARABILITY_EVIDENCE': PricingReasonTranslation(
     ru: 'нет доказательств сопоставимости',
     uk: 'немає доказів зіставності',
+  ),
+  'CUSTOMER_IDENTITY_MISSING': PricingReasonTranslation(
+    ru:
+        'заказчик не указал подтверждённый OE, MPN или кросс-номер — '
+        'товар не сопоставлялся',
+    uk:
+        'замовник не вказав підтверджений OE, MPN або крос-номер — '
+        'товар не зіставлявся',
   ),
   'MANUAL_MISSING_OE_PROVENANCE': PricingReasonTranslation(
     ru: 'нет проверенного происхождения OE',

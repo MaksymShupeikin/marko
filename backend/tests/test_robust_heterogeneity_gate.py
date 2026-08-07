@@ -43,6 +43,8 @@ def _offer(index: int, price: str, *, seller_id: str | None = None):
         tier=ProductTier.BUDGET,
         tier_confidence=Decimal("0.95"),
         source_confidence=Decimal("1"),
+        semantic_gate_current=True,
+        automatic_eligible=True,
         comparison_evidence=verified_comparison_evidence(
             stable_seller_id=stable, source_record_id=f"obs-{index}"
         ),

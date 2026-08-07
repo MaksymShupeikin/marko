@@ -20,16 +20,19 @@ from sqlalchemy.dialects import postgresql
 
 from marko.infrastructure.db.models import CatalogItem
 from marko.services.catalog_identity_reparse import (
+    ANOMALY_STALE_AFTER_REPARSE,
     OWN_EXPORT_SOURCE,
     SourceIndex,
     reparse_workspace_identity,
 )
 from metis.pricing.identity_graph import load_identity_graph_config
+from metis.pricing.kemp_site import load_kemp_site_tokens
 
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
 CONFIG = load_identity_graph_config(BACKEND / "config/identity_graph.yaml")
+TOKENS = load_kemp_site_tokens(BACKEND / "config/kemp_site_tokens.yaml")
 WORKSPACE = UUID("11111111-1111-1111-1111-111111111111")
 
 EMPTY_INDEX = SourceIndex(by_code={}, shared_articles=frozenset(), loaded_sources=())
@@ -57,12 +60,16 @@ class _RecordingSession:
         self._existing = existing
         self._item_reads = 0
         self.inserts: list = []
+        self.updates: list = []
         self.commits = 0
 
     async def execute(self, statement):
         text = str(statement)
         if text.lstrip().upper().startswith("INSERT"):
             self.inserts.append(statement)
+            return _Rows([])
+        if text.lstrip().upper().startswith("UPDATE"):
+            self.updates.append(statement)
             return _Rows([])
         if "catalog_items" in text:
             self._item_reads += 1
@@ -93,6 +100,7 @@ async def _run(session, *, dry_run: bool = False):
         workspace_id=WORKSPACE,
         index=EMPTY_INDEX,
         config=CONFIG,
+        tokens=TOKENS,
         dry_run=dry_run,
     )
 
@@ -105,6 +113,7 @@ async def test_a_dry_run_writes_nothing_at_all() -> None:
     report = await _run(session, dry_run=True)
 
     assert session.inserts == []
+    assert session.updates == []
     assert session.commits == 0
     assert report.dry_run is True
     # And it still says what it would have done, or it is not a preview.
@@ -119,12 +128,17 @@ async def test_a_real_run_upserts_on_the_pair_and_source_constraint() -> None:
     await _run(session)
 
     assert len(session.inserts) == 1
+    assert len(session.updates) == 1
     # Compiled without literal binds: the JSON columns have no literal renderer,
     # and the clause under test is the conflict target, not the values.
     rendered = str(session.inserts[0].compile(dialect=postgresql.dialect()))
     assert "ON CONFLICT" in rendered.upper()
     assert "uq_catalog_identity_link_pair_source" in rendered
     assert session.commits == 1
+
+    quarantine = session.updates[0].compile(dialect=postgresql.dialect()).params
+    assert ANOMALY_STALE_AFTER_REPARSE in quarantine.values()
+    assert "REVIEW" in quarantine.values()
 
 
 @pytest.mark.asyncio

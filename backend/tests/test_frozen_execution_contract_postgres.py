@@ -20,9 +20,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import replace as dc_replace
 from decimal import Decimal
-import os
 from pathlib import Path
 from unittest.mock import Mock
 from uuid import UUID, uuid4
@@ -32,6 +32,8 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+import marko.services.market_collection as market_collection
+import marko.services.pricing_runs as pricing_runs
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
     CatalogImportBatch,
@@ -44,9 +46,7 @@ from marko.infrastructure.db.models import (
     Workspace,
 )
 from marko.infrastructure.db.session import async_session_factory
-import marko.services.market_collection as market_collection
 from marko.services.market_collection import _calculate_and_persist
-import marko.services.pricing_runs as pricing_runs
 from marko.services.pricing_runs import (
     ACTOR_TYPE_USER,
     CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
@@ -70,7 +70,6 @@ from marko.services.pricing_runs import (
     start_snapshot_fingerprint,
     verify_run_membership,
 )
-
 
 pytestmark = pytest.mark.postgres
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -185,6 +184,8 @@ async def _seed_catalog(
                     name=f"Позиция каталога {position}",
                     category="brakes",
                     brand="KEMP",
+                    identity_status="OE_CONFIRMED",
+                    identity_reason="EXPLICIT_OE_TEST_FIXTURE",
                     product_url=None,
                     current_price=Decimal("800") + position,
                     currency="UAH",
@@ -995,10 +996,23 @@ async def test_calculation_stays_frozen_for_every_catalog_field_class(
         # Подбор коэффициентов читает OE и категорию: записываем, что он получил.
         real_lookup = market_collection.load_target_tier_coefficients
 
-        async def _recording_lookup(session, *, run, category, oe_norm, policy):
+        async def _recording_lookup(
+            session,
+            *,
+            run,
+            category,
+            oe_norm,
+            policy,
+            comparison_identity_keys=(),
+        ):
             lookups.append({"category": category, "oe_norm": oe_norm})
             return await real_lookup(
-                session, run=run, category=category, oe_norm=oe_norm, policy=policy
+                session,
+                run=run,
+                category=category,
+                oe_norm=oe_norm,
+                policy=policy,
+                comparison_identity_keys=comparison_identity_keys,
             )
 
         monkeypatch.setattr(

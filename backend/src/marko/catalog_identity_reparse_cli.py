@@ -18,12 +18,19 @@ from uuid import UUID
 from marko.core.config import get_settings
 from marko.infrastructure.db.session import async_session_factory
 from marko.services.catalog_discovery import resolve_backend_path
+from marko.services.catalog_identity_safety import (
+    identity_runtime_config_sha256,
+    identity_runtime_implementation_sha256s,
+)
 from marko.services.catalog_identity_reparse import (
     CatalogIdentityReparseError,
     SourceIndex,
     build_source_index,
     plan_identity,
     reparse_workspace_identity,
+)
+from marko.services.semantic_candidate_features import (
+    SEMANTIC_FEATURE_EXTRACTOR_VERSION,
 )
 from metis.pricing.identity_graph import (
     IdentityGraphConfigError,
@@ -106,10 +113,33 @@ def _index_summary(index: SourceIndex) -> dict[str, object]:
         "mpn_only_rows": index.mpn_only_rows,
         "rows_without_code": index.rows_without_code,
         "supplier_number_claims": index.supplier_number_claims,
+        "semantic_conflict_codes": len(index.semantic_conflicts),
+        "semantic_conflicts": dict(sorted(index.semantic_conflicts.items())),
+        "semantic_fanout_conflict_numbers": len(index.semantic_fanout_conflicts),
+        "semantic_fanout_conflicts": dict(
+            sorted(index.semantic_fanout_conflicts.items())
+        ),
     }
 
 
-def _plan_summary(index: SourceIndex, config) -> dict[str, object]:
+def _contract_summary(config, tokens) -> dict[str, object]:
+    """Pin the algorithm behind a source-only plan, not just its output."""
+
+    return {
+        "identity_graph_method_version": config.method_version,
+        "identity_graph_config_sha256": config.source_sha256,
+        "token_config_sha256": tokens.source_sha256,
+        "semantic_feature_extractor_version": (
+            SEMANTIC_FEATURE_EXTRACTOR_VERSION
+        ),
+        "implementation_sha256s": dict(
+            identity_runtime_implementation_sha256s()
+        ),
+        "runtime_config_sha256": identity_runtime_config_sha256(config, tokens),
+    }
+
+
+def _plan_summary(index: SourceIndex, config, tokens) -> dict[str, object]:
     """What the files alone imply, before any catalogue row is consulted.
 
     Reported against the reference codes rather than the catalogue, and labelled
@@ -128,6 +158,7 @@ def _plan_summary(index: SourceIndex, config) -> dict[str, object]:
             current_oe_norm="",
             index=index,
             config=config,
+            tokens=tokens,
         )
         statuses[plan.identity_status] = statuses.get(plan.identity_status, 0) + 1
         for anomaly in plan.graph.anomalies:
@@ -163,7 +194,14 @@ async def _apply(args: argparse.Namespace) -> dict[str, object]:
             tokens=args.tokens_loaded,
             dry_run=bool(args.dry_run),
         )
-    return {"sources": _index_summary(index), "run": report.as_dict()}
+    return {
+        "contract": _contract_summary(
+            args.graph_config_loaded,
+            args.tokens_loaded,
+        ),
+        "sources": _index_summary(index),
+        "run": report.as_dict(),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -172,8 +210,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan":
             index = _build_index(args)
             payload = {
+                "contract": _contract_summary(
+                    args.graph_config_loaded,
+                    args.tokens_loaded,
+                ),
                 "sources": _index_summary(index),
-                "plan": _plan_summary(index, args.graph_config_loaded),
+                "plan": _plan_summary(
+                    index,
+                    args.graph_config_loaded,
+                    args.tokens_loaded,
+                ),
             }
         else:
             payload = asyncio.run(_apply(args))

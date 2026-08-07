@@ -18,6 +18,28 @@ from marko.infrastructure.db.models import (
     PricingRecommendation,
     PricingRunItem,
 )
+from marko.services.cost_privacy import privacy_safe_mapping
+from marko.services.decision_fingerprint import (
+    DECISION_FINGERPRINT_V1,
+    build_decision_fingerprint_payload,
+    canonical_sha256,
+)
+from marko.services.llm_comparability import effective_review_from_snapshot
+from marko.services.market_collection import (
+    _domain_offer,
+    _semantic_review_required_for_observation,
+    apply_comparability_activation_gate,
+    resolve_bound_execution_item,
+)
+from marko.services.pricing_runs import (
+    PricingRunSnapshotError,
+    customer_identity_available,
+    customer_identity_query,
+    get_pricing_run,
+    get_recommendation,
+    load_run_execution_policy,
+    load_target_tier_coefficients,
+)
 from metis.pricing import (
     PricingResult,
     ProductPricingContext,
@@ -27,27 +49,7 @@ from metis.pricing import (
     recommend_price,
     robust_dispersion_trace,
 )
-from marko.services.market_collection import (
-    _domain_offer,
-    apply_comparability_activation_gate,
-    resolve_bound_execution_item,
-)
-from marko.services.llm_comparability import effective_review_from_snapshot
-from marko.services.cost_privacy import privacy_safe_mapping
-from marko.services.decision_fingerprint import (
-    DECISION_FINGERPRINT_V1,
-    build_decision_fingerprint_payload,
-    canonical_sha256,
-)
-from marko.services.pricing_runs import (
-    PricingRunSnapshotError,
-    get_pricing_run,
-    get_recommendation,
-    load_run_execution_policy,
-    load_target_tier_coefficients,
-)
 from metis.pricing.observability import pricing_event
-
 
 REPLAY_CONTRACT_V1 = "recommendation-replay-v1"
 REPLAY_CONTRACT_V2 = "recommendation-replay-v2"
@@ -128,6 +130,16 @@ async def replay_recommendation(
         raise RecommendationReplayUnavailable(
             f"Recommendation run-item snapshot is not usable: {exc}"
         ) from exc
+    # A legacy recommendation may have been written before the pricing-run
+    # identity boundary existed.  Never let replay turn its stored MPN/private
+    # KEMP code into a fresh pricing result: replay is a calculation verifier,
+    # not an identity migration path.  The row must be re-enriched and started
+    # again only after a confirmed vehicle OE is persisted.
+    if not customer_identity_available(frozen_item):
+        raise RecommendationReplayUnavailable(
+            "Recommendation replay requires a confirmed vehicle OE; "
+            "MPN-only or unresolved identity cannot be replayed"
+        )
 
     rows = list(
         (
@@ -166,11 +178,33 @@ async def replay_recommendation(
         session,
         run=run,
         category=frozen_item.category,
-        oe_norm=frozen_item.oe_norm,
+        oe_norm=customer_identity_query(frozen_item),
         policy=policy,
+        comparison_identity_keys={
+            observation.comparison_identity_key
+            for observation, _classification in latest.values()
+            if observation.comparison_identity_key
+        },
     )
     llm_trace = trace.get("llm_comparability")
     llm_required = bool(isinstance(llm_trace, Mapping) and llm_trace.get("required"))
+    raw_required_observation_ids = (
+        llm_trace.get("required_observation_ids")
+        if isinstance(llm_trace, Mapping)
+        else None
+    )
+    if raw_required_observation_ids is None:
+        # Traces written before per-observation authority existed must replay
+        # under their original global-only contract.
+        required_observation_ids = frozenset()
+    elif not isinstance(raw_required_observation_ids, list) or not all(
+        isinstance(value, str) for value in raw_required_observation_ids
+    ):
+        raise RecommendationReplayUnavailable(
+            "Stored LLM comparability required-observation snapshot is invalid"
+        )
+    else:
+        required_observation_ids = frozenset(raw_required_observation_ids)
     review_snapshots = (
         llm_trace.get("reviews", ()) if isinstance(llm_trace, Mapping) else ()
     )
@@ -195,7 +229,13 @@ async def replay_recommendation(
                 classification,
                 calculated_at,
                 semantic_review=effective_reviews.get(observation.id),
-                semantic_review_required=llm_required,
+                semantic_review_required=(
+                    _semantic_review_required_for_observation(
+                        observation,
+                        global_required=llm_required,
+                        traced_required_observation_ids=required_observation_ids,
+                    )
+                ),
             )
             for observation, classification in latest.values()
         ],
@@ -311,7 +351,10 @@ def context_from_snapshot(snapshot: Mapping[str, Any]) -> ProductPricingContext:
         liquidity_target=_decimal_or_default(
             snapshot.get("liquidity_target"), Decimal("0")
         ),
-        urgency=_decimal_or_default(snapshot.get("urgency"), Decimal("1")),
+        # Missing legacy urgency must resolve to the domain/API default.  A
+        # default of one silently turns an absent signal into maximum urgency
+        # and can change the replayed priority score.
+        urgency=_decimal_or_default(snapshot.get("urgency"), Decimal("0")),
         manual_priority=_decimal_or_default(
             snapshot.get("manual_priority"), Decimal("1")
         ),

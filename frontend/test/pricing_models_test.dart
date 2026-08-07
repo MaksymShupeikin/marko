@@ -3,6 +3,86 @@ import 'package:marko_client/core/presentation_formatters.dart';
 import 'package:marko_client/features/pricing/pricing_models.dart';
 
 void main() {
+  test('pricing preview separates scope rows from matchable rows', () {
+    final preview = PricingRunPreview.fromJson({
+      'scope_mode': 'FULL_CATALOG',
+      'scope_hash': 'scope-hash',
+      'catalog_snapshot_hash': 'catalog-hash',
+      'preview_token': 'preview-token',
+      'requires_full_catalog_confirmation': true,
+      'estimate': {
+        'requested_items': 4901,
+        'eligible_items': 4901,
+        'excluded_items': 0,
+        'network_eligible_items': 4861,
+        'identity_blocked_items': 40,
+        'worst_case_duration_seconds': 7200,
+      },
+    });
+
+    expect(preview.eligibleItems, 4901);
+    expect(preview.networkEligibleItems, 4861);
+    expect(preview.identityBlockedItems, 40);
+    expect(preview.worstCaseMinutes, 120);
+  });
+
+  test('legacy pricing preview treats all eligible rows as matchable', () {
+    final preview = PricingRunPreview.fromJson({
+      'estimate': {'eligible_items': 12},
+    });
+
+    expect(preview.networkEligibleItems, 12);
+    expect(preview.identityBlockedItems, 0);
+  });
+
+  test(
+    'parses comparability-v2 identity, admission and cost independently',
+    () {
+      final review = ComparabilityReview.fromJson({
+        'review_id': 'review-v2',
+        'market_observation_id': 'obs-v2',
+        'input_hash': 'hash-v2',
+        'contract_version': 'comparability-v2',
+        'verdict': 'INSUFFICIENT_DATA',
+        'match_level': 'SUSPICIOUS',
+        'confidence': '0.88',
+        'identity_verdict': 'MATCH',
+        'identity_match_level': 'ACCEPTABLE_ANALOGUE',
+        'identity_match_score': '0.91',
+        'decision_confidence': '0.88',
+        'image_consistency': 'NON_DIAGNOSTIC',
+        'reason_codes': ['IDENTITY_MATCH'],
+        'pricing_admission': 'MANUAL_REVIEW',
+        'pricing_reason_codes': ['PRICING_EVIDENCE_MISSING_UNIT_BASIS'],
+        'rationale': 'Identity matches, unit basis is missing.',
+        'dimension_findings': <dynamic>[],
+        'hard_stop_conflicts': <dynamic>[],
+        'decision_source': 'LLM',
+        'status': 'COMPLETED',
+        'provider': 'openai_responses',
+        'model_id': 'gpt-5.6-luna',
+        'prompt_version': 'comparability-v2',
+        'reasoning_effort': 'xhigh',
+        'reviewed_at': '2026-08-04T12:00:00Z',
+        'image_urls': <dynamic>[],
+        'usage': {'input_tokens': 100, 'output_tokens': 20},
+        'latency_ms': 321,
+        'estimated_cost': {'total_usd': '0.000044'},
+        'verified_cross_edge': <String, dynamic>{},
+        'our_product': {'sku': 'SKU-1'},
+        'candidate': {'seller_id': 'seller-1'},
+        'pricing_eligible': false,
+      });
+
+      expect(review.identityVerdict, 'MATCH');
+      expect(review.identityMatchScore, 0.91);
+      expect(review.pricingAdmission, 'MANUAL_REVIEW');
+      expect(review.pricingEligible, isFalse);
+      expect(review.reasoningEffort, 'xhigh');
+      expect(review.estimatedCostUsd, '0.000044');
+    },
+  );
+
   test('parses an actionable recommendation with Decimal strings', () {
     final item = PricingRecommendation.fromJson({
       'id': 'recommendation-id',
@@ -109,6 +189,60 @@ void main() {
     };
 
     expect(PricingRecommendation.fromJson(json).needsReview, isTrue);
+  });
+
+  test('keeps MPN-only identity separate from OE', () {
+    final item = PricingRecommendation.fromJson({
+      'id': 'recommendation-mpn',
+      'pricing_run_id': 'run-id',
+      'catalog_item_id': 'item-id',
+      'sku': '77641360',
+      'oe_norm': '',
+      'mpn_norm': '115',
+      'search_identity': '115070',
+      'identity_status': 'MPN_ONLY',
+      'name': 'Part',
+      'category': 'Parts',
+      'stock_status': 'unknown',
+      'action': 'MANUAL_REVIEW',
+      'current_price': '100',
+      'fair_price': null,
+      'recommended_price': null,
+      'lower_bound': null,
+      'upper_bound': null,
+      'confidence': '0',
+      'confidence_grade': 'MANUAL',
+      'weakest_factor': null,
+      'factor_scores': <String, dynamic>{},
+      'competitor_count': 0,
+      'raw_competitor_count': 0,
+      'unique_seller_count': 0,
+      'clean_competitor_count': 0,
+      'target_market_count': 0,
+      'kemp_reference_count': 0,
+      'owned_store_count': 0,
+      'rejected_count': 0,
+      'effective_competitor_count': '0',
+      'dispersion': null,
+      'outlier_method': 'none',
+      'outlier_count': 0,
+      'sensitivity': null,
+      'action_gates_passed': false,
+      'automatic_eligible': false,
+      'verified_seller_count': 0,
+      'priority_score': '0',
+      'priority_score_type': 'none',
+      'review_priority': '0',
+      'absolute_recommended_change': null,
+      'percentage_recommended_change': null,
+      'reason_codes': <dynamic>['IDENTITY_EVIDENCE_INSUFFICIENT'],
+      'computed_at': '2026-08-06T12:00:00Z',
+    });
+
+    expect(item.oe, isEmpty);
+    expect(item.mpn, '115');
+    expect(item.searchIdentity, '115070');
+    expect(item.identityStatus, 'MPN_ONLY');
   });
 
   test('parses the gated budget-floor target as a non-applying advisory', () {

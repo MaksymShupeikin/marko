@@ -33,6 +33,7 @@ from marko.services.ai_evidence_extraction import (
     select_extraction_candidates,
 )
 from marko.services.ai_evidence_runtime import request_or_reuse_ai_evidence
+from marko.services.market_price import effective_observation_price
 from metis.pricing import EvidenceState, HardGateResult, comparison_evidence_from_dict
 from metis.pricing.types import ComparisonEvidence
 
@@ -187,7 +188,7 @@ async def process_ai_evidence_position(
             ExtractionCandidate(
                 observation_id=str(observation.id),
                 source_listing_id=observation.source_listing_id,
-                price=observation.sale_price or observation.price,
+                price=effective_observation_price(observation),
                 is_owned_seller=bool(tier and tier.is_owned),
                 deterministically_rejected=_deterministically_rejected(
                     observation, comparison, tier

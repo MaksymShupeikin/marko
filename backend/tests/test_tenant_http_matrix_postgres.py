@@ -34,6 +34,7 @@ from marko.api.main import create_app
 from marko.core.config import get_settings
 from marko.infrastructure.db.base import Base
 from marko.infrastructure.db.models import (
+    CandidateComparabilityReview,
     CatalogImportBatch,
     CatalogItem,
     FitmentAnalysis,
@@ -83,6 +84,7 @@ class ForeignResourceFixture:
     catalog_product_id: str
     pricing_run_id: UUID
     observation_id: UUID
+    comparability_review_id: UUID
     pricing_recommendation_id: UUID
     fitment_source_id: UUID
     fitment_analysis_id: UUID
@@ -173,6 +175,7 @@ async def _seed_foreign_workspace() -> ForeignResourceFixture:
     run_item_id = uuid4()
     capture_id = uuid4()
     observation_id = uuid4()
+    comparability_review_id = uuid4()
     pricing_recommendation_id = uuid4()
     source_id = uuid4()
     analysis_id = uuid4()
@@ -508,6 +511,39 @@ async def _seed_foreign_workspace() -> ForeignResourceFixture:
             )
         )
         session.add(
+            CandidateComparabilityReview(
+                id=comparability_review_id,
+                workspace_id=workspace_b_id,
+                market_observation_id=observation_id,
+                catalog_item_id=item_id,
+                request_key=hashlib.sha256(
+                    f"tenant-review-{comparability_review_id}".encode()
+                ).hexdigest(),
+                input_hash="9" * 64,
+                attempt_no=1,
+                prompt_version="tenant-matrix-v1",
+                schema_version="tenant-matrix-v1",
+                contract_version="comparability-v1",
+                provider="hard_rule",
+                model_id="none",
+                decision_source="HARD_RULE",
+                status="COMPLETED",
+                verdict="INSUFFICIENT_DATA",
+                match_level="SUSPICIOUS",
+                confidence=Decimal("0.5"),
+                reason_codes=["TENANT_MATRIX_FIXTURE"],
+                rationale="Foreign review used only for tenant isolation proof.",
+                dimension_findings=[],
+                hard_stop_conflicts=[],
+                input_snapshot={},
+                image_urls=[],
+                usage={},
+                latency_ms=0,
+                estimated_cost={},
+                reviewed_at=now,
+            )
+        )
+        session.add(
             FitmentMarketRecommendation(
                 id=fitment_recommendation_id,
                 workspace_id=workspace_b_id,
@@ -557,6 +593,7 @@ async def _seed_foreign_workspace() -> ForeignResourceFixture:
         catalog_product_id=catalog_product_id,
         pricing_run_id=run_id,
         observation_id=observation_id,
+        comparability_review_id=comparability_review_id,
         pricing_recommendation_id=pricing_recommendation_id,
         fitment_source_id=source_id,
         fitment_analysis_id=analysis_id,
@@ -596,6 +633,11 @@ def _foreign_resource_cases(f: ForeignResourceFixture) -> tuple[EndpointCase, ..
             "GET",
             "/api/v1/catalog/imports/{batch_id}",
             f"/api/v1/catalog/imports/{f.batch_id}",
+        ),
+        EndpointCase(
+            "GET",
+            "/api/v1/catalog/imports/{batch_id}/terminal-manifest",
+            f"/api/v1/catalog/imports/{f.batch_id}/terminal-manifest",
         ),
         EndpointCase(
             "GET", "/api/v1/stores/{store_id}", f"/api/v1/stores/{f.store_id}"
@@ -649,6 +691,11 @@ def _foreign_resource_cases(f: ForeignResourceFixture) -> tuple[EndpointCase, ..
         ),
         EndpointCase(
             "GET",
+            "/api/v1/pricing/runs/{run_id}/comparability-report",
+            f"/api/v1/pricing/runs/{f.pricing_run_id}/comparability-report",
+        ),
+        EndpointCase(
+            "GET",
             "/api/v1/pricing/runs/{run_id}/collection-metrics/prometheus",
             f"/api/v1/pricing/runs/{f.pricing_run_id}/collection-metrics/prometheus",
         ),
@@ -683,6 +730,26 @@ def _foreign_resource_cases(f: ForeignResourceFixture) -> tuple[EndpointCase, ..
             "/api/v1/pricing/observations/{observation_id}/tier-overrides",
             f"/api/v1/pricing/observations/{f.observation_id}/tier-overrides",
             json={"tier": "budget", "reason": "tenant isolation probe"},
+        ),
+        EndpointCase(
+            "GET",
+            "/api/v1/pricing/observations/{observation_id}/ai-evidence",
+            f"/api/v1/pricing/observations/{f.observation_id}/ai-evidence",
+        ),
+        EndpointCase(
+            "POST",
+            "/api/v1/pricing/observations/{observation_id}/comparability-reviews",
+            f"/api/v1/pricing/observations/{f.observation_id}/comparability-reviews",
+            json={"force": False},
+        ),
+        EndpointCase(
+            "POST",
+            "/api/v1/pricing/comparability-reviews/{review_id}/feedback",
+            (
+                "/api/v1/pricing/comparability-reviews/"
+                f"{f.comparability_review_id}/feedback"
+            ),
+            json={"decision": "CONFIRM", "reason": "tenant isolation probe"},
         ),
         EndpointCase(
             "POST",
@@ -825,7 +892,7 @@ async def test_every_resource_endpoint_hides_foreign_workspace_and_has_no_side_e
     _assert_disposable_database()
     fixture = await _seed_foreign_workspace()
     cases = _foreign_resource_cases(fixture)
-    assert len(cases) == 37
+    assert len(cases) == 42
 
     application = create_app()
     http_methods = {"get", "post", "put", "patch", "delete"}

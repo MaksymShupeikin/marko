@@ -8,6 +8,8 @@ import itertools
 from pathlib import Path
 import random
 
+import re
+
 import pytest
 
 from metis.pricing import (
@@ -26,6 +28,14 @@ from metis.pricing import (
     verified_comparison_evidence,
 )
 from metis.pricing.candidate_selection import load_candidate_selection_config
+from metis.pricing.comparability import (
+    _CATEGORICAL_STEMS,
+    normalized_categorical_dimension,
+)
+from marko.services.semantic_candidate_features import (
+    _POSITION_PATTERNS,
+    _SIDE_PATTERNS,
+)
 
 
 ABSTAIN = {
@@ -120,12 +130,38 @@ def _offer(
         tier=ProductTier.BUDGET,
         tier_confidence=Decimal("0.99"),
         source_confidence=Decimal("1"),
+        semantic_gate_current=True,
+        automatic_eligible=True,
         comparison_evidence=comparison,
     )
 
 
 def _market(**kwargs) -> list[CompetitorOffer]:
     return [_offer(index, **kwargs) for index in range(5)]
+
+
+def test_competitor_offer_defaults_are_fail_closed() -> None:
+    offer = CompetitorOffer(
+        observation_id="unadmitted-observation",
+        seller_id="seller-unadmitted",
+        seller_name="Seller",
+        price=Decimal("100"),
+        currency="UAH",
+        currency_raw="UAH",
+        is_available=True,
+        age_hours=Decimal("0"),
+        match_confidence=Decimal("0.99"),
+        tier=ProductTier.BUDGET,
+        tier_confidence=Decimal("0.99"),
+        source_confidence=Decimal("1"),
+        comparison_evidence=verified_comparison_evidence(
+            stable_seller_id="seller-unadmitted",
+            source_record_id="unadmitted-observation",
+        ),
+    )
+
+    assert offer.automatic_eligible is False
+    assert offer.semantic_gate_current is False
 
 
 def test_padded_normalized_currency_passes_the_currency_hard_gate() -> None:
@@ -448,3 +484,98 @@ def test_property_evidence_removal_or_conflict_never_increases_eligibility() -> 
         assert not result.automatic_eligible
     (TierCoefficient,)
     (category_comparability_rule,)
+
+
+@pytest.mark.parametrize(
+    ("dimension", "left", "right", "expected"),
+    (
+        ("side", "Лівий", "Передній лівий", EvidenceState.MATCH),
+        ("side", "Лівий", "Передній правий", EvidenceState.CONFLICT),
+        ("side", "лев", "левая сторона", EvidenceState.MATCH),
+        ("position", "Передній", "Передній лівий", EvidenceState.MATCH),
+        ("position", "Передній", "Задній лівий", EvidenceState.CONFLICT),
+        ("position", "front", "пер.", EvidenceState.MATCH),
+    ),
+)
+def test_a_compound_side_or_position_phrase_is_read_not_abandoned(
+    dimension: str,
+    left: str,
+    right: str,
+    expected: EvidenceState,
+) -> None:
+    """One fact, two vocabularies, and only the poorer one gated pricing.
+
+    The semantic extractor reads ``передній лівий`` as front + left from word
+    stems. The comparability layer looked its values up in an exact table of
+    18 side and 20 position tokens, so the same phrase came back UNKNOWN and
+    the candidate was held as ``MANUAL_MISSING_SIDE_OR_POSITION`` — a wording
+    gap recorded as missing evidence.
+    """
+
+    evidence = normalized_categorical_dimension(dimension, left, right)
+
+    assert evidence.state is expected
+
+
+@pytest.mark.parametrize(
+    ("dimension", "value"),
+    (
+        ("side", "лівий/правий"),
+        ("side", "левый или правый"),
+        ("position", "передній та задній"),
+    ),
+)
+def test_a_phrase_naming_both_values_stays_unknown(
+    dimension: str,
+    value: str,
+) -> None:
+    """Reading a stem must not become guessing which of two it meant."""
+
+    canonical = "лівий" if dimension == "side" else "передній"
+    evidence = normalized_categorical_dimension(dimension, canonical, value)
+
+    assert evidence.state is EvidenceState.UNKNOWN
+
+
+def test_an_unrelated_phrase_is_still_unknown_rather_than_a_conflict() -> None:
+    evidence = normalized_categorical_dimension("side", "Лівий", "Комплект")
+
+    assert evidence.state is EvidenceState.UNKNOWN
+
+
+def test_the_two_side_and_position_vocabularies_stay_in_sync() -> None:
+    """One fact, deliberately spelled twice, held equal by this test.
+
+    ``metis`` does not import ``marko``, so the comparability layer cannot
+    reuse the semantic extractor's patterns and carries its own copy. Only the
+    test suite sees both packages; without this, the copies drift and the
+    poorer one silently gates pricing again.
+    """
+
+    extractor = {
+        "side": _SIDE_PATTERNS,
+        "position": _POSITION_PATTERNS,
+    }
+    for dimension, patterns in extractor.items():
+        mirrored = {
+            canonical
+            for _pattern, canonical in _CATEGORICAL_STEMS[dimension]
+        }
+        assert mirrored == set(patterns), dimension
+
+    for dimension, phrases in (
+        ("side", ("лівий", "левая сторона", "left", "правий", "right")),
+        ("position", ("передній", "задня вісь", "front", "rear")),
+    ):
+        for phrase in phrases:
+            extracted = {
+                canonical
+                for canonical, regexes in extractor[dimension].items()
+                if any(re.search(regex, phrase, re.IGNORECASE) for regex in regexes)
+            }
+            mirrored = {
+                canonical
+                for pattern, canonical in _CATEGORICAL_STEMS[dimension]
+                if pattern.search(phrase)
+            }
+            assert extracted == mirrored, (dimension, phrase)

@@ -1,0 +1,25 @@
+{
+  "standardized_name": "rear left brake caliper without carrier",
+  "part_type": "brake_caliper",
+  "vehicle": {
+    "makes": ["Audi", "Volkswagen"],
+    "models": ["A4", "A6", "Passat"],
+    "generation": null,
+    "production_year_start": 1996,
+    "production_year_end": null,
+    "engine_code": null,
+    "vin_or_frame": null
+  },
+  "installation": {
+    "position": "rear",
+    "side": "left"
+  },
+  "known_identifiers": [],
+  "evidence_gaps": [
+    "OE_OR_MPN_MISSING",
+    "EXACT_GENERATION_NOT_PROVEN",
+    "ENGINE_OR_BRAKE_SYSTEM_NOT_PROVEN",
+    "VIN_OR_FRAME_MISSING"
+  ]
+}
+

@@ -218,7 +218,12 @@ def _recommend_price_core(
             or offer.tier == ProductTier.KEMP
             or offer.cohort_role == CohortRole.KEMP_REFERENCE
         ):
-            diagnostic_rejection = _kemp_reference_rejection(context, offer, policy)
+            diagnostic_rejection = _kemp_reference_rejection(
+                context,
+                offer,
+                policy,
+                legacy_replay=legacy_replay,
+            )
             if diagnostic_rejection is not None:
                 role = (
                     CohortRole.USED_REJECTED
@@ -740,11 +745,40 @@ def _kemp_reference_rejection(
     context: ProductPricingContext,
     offer: CompetitorOffer,
     policy: PricingPolicy,
+    *,
+    legacy_replay: bool,
 ) -> str | None:
     """Validate a diagnostic KEMP lane without granting target-market authority."""
 
     if not offer.price.is_finite() or offer.price <= ZERO:
         return "NON_POSITIVE_PRICE"
+    if (
+        not legacy_replay
+        and not offer.automatic_eligible
+        and offer.cohort_role != CohortRole.KEMP_REFERENCE
+    ):
+        return "PERSISTED_AUTOMATIC_ELIGIBILITY_REQUIRED"
+    if not legacy_replay and not offer.semantic_gate_current:
+        return "SEMANTIC_GATE_NOT_CURRENT"
+    # KEMP is a reference lane, not an evidence bypass.  A persisted market
+    # observation with no ComparisonEvidence is not a trusted reference: the
+    # absence is itself an unverified identity/comparability state, not an
+    # implicit pass.  Keep the explicit legacy replay escape hatch because
+    # old traces predate this contract and are never granted new automatic
+    # authority elsewhere.
+    if not legacy_replay:
+        if offer.comparison_evidence is None:
+            return "MANUAL_MISSING_COMPARABILITY_EVIDENCE"
+        comparability = evaluate_comparison_evidence(
+            offer.comparison_evidence,
+            seller_id=offer.seller_id,
+            currency_raw=offer.currency_raw,
+            currency_normalized=offer.currency,
+            required_currency=policy.currency,
+            category=context.category,
+        )
+        if not comparability.automatic_eligible:
+            return comparability.reason_codes[0]
     if offer.is_used or offer.tier == ProductTier.USED:
         return "USED_OR_REFURBISHED"
     if offer.is_dumping:
@@ -769,6 +803,10 @@ def _hard_rejection(
 ) -> tuple[str | None, ComparabilityDecision | None]:
     if not offer.price.is_finite() or offer.price <= ZERO:
         return "NON_POSITIVE_PRICE", None
+    if not legacy_replay and not offer.automatic_eligible:
+        return "PERSISTED_AUTOMATIC_ELIGIBILITY_REQUIRED", None
+    if not legacy_replay and not offer.semantic_gate_current:
+        return "SEMANTIC_GATE_NOT_CURRENT", None
     if not legacy_replay:
         comparability = evaluate_comparison_evidence(
             offer.comparison_evidence,

@@ -15,6 +15,7 @@ from metis.pricing.crosses import normalize_cross_oem
 from metis.pricing.identity_graph import (
     DISCARD_EMPTY_AFTER_NORMALIZATION,
     DISCARD_SELF_REFERENCE,
+    DISCARD_UNSAFE_PUBLIC_NUMBER_SHAPE,
     DISCARD_UNKNOWN_SOURCE,
     IDENTITY_GRAPH_SCHEMA_VERSION,
     Anomaly,
@@ -100,7 +101,40 @@ def test_anchor_preference_differs_from_status_trust(config) -> None:
 
 def test_config_is_hashed(config) -> None:
     assert len(config.source_sha256) == 64
-    assert config.method_version == "identity-graph-v1"
+    assert config.method_version == "identity-graph-v4"
+
+
+def test_source_semantic_conflict_quarantines_every_edge(config) -> None:
+    graph = build_identity_graph(
+        own_code="PRIVATE",
+        sources=[
+            SourceNumbers("KEMP_REFERENCE_MAP_V2", ("OE-1-NEW",), "new right"),
+            SourceNumbers("KEMP_REFERENCE_ARTICLE", ("CROSS-1",), "old left"),
+        ],
+        config=config,
+        source_semantic_conflict=True,
+    )
+
+    assert graph.anomalies == (Anomaly.SOURCE_SEMANTIC_CONFLICT.value,)
+    assert graph.links
+    assert all(link.validation_status is LinkStatus.REVIEW for link in graph.links)
+    assert all(
+        link.anomaly == Anomaly.SOURCE_SEMANTIC_CONFLICT.value
+        for link in graph.links
+    )
+
+
+def test_public_semantic_fanout_quarantines_a_canonical_only_graph(config) -> None:
+    graph = build_identity_graph(
+        own_code="PRIVATE",
+        sources=[SourceNumbers("KEMP_REFERENCE_MAP_V2", ("1K0905851",), "lock")],
+        config=config,
+        public_number_semantic_fanout=frozenset({"1K0905851"}),
+    )
+
+    assert graph.canonical == "1K0905851"
+    assert graph.links == ()
+    assert graph.anomalies == (Anomaly.PUBLIC_NUMBER_SEMANTIC_FANOUT.value,)
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -377,6 +411,26 @@ def test_punctuation_only_values_are_reported_not_silently_dropped(config) -> No
 
     assert graph.discarded["---"] == DISCARD_EMPTY_AFTER_NORMALIZATION
     assert graph.all_numbers == ("1K0413031BK",)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ("0", "000", "MG", "Fiat/Alfa/Lancia", "L"),
+)
+def test_unsafe_public_number_shapes_are_reported_and_discarded(
+    config, raw: str
+) -> None:
+    graph = _build(config, **{ARTICLE: (raw,)})
+
+    assert graph.links == ()
+    assert graph.discarded[raw] == DISCARD_UNSAFE_PUBLIC_NUMBER_SHAPE
+
+
+@pytest.mark.parametrize("raw", ("KL2", "S5G", "04", "A1"))
+def test_short_public_numbers_with_digits_are_preserved(config, raw: str) -> None:
+    graph = _build(config, **{ARTICLE: (raw,)})
+
+    assert graph.all_numbers == (raw,)
 
 
 def test_numbers_from_an_undeclared_source_are_refused_and_reported(config) -> None:

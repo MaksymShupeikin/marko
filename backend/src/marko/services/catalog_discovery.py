@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import re
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 import zlib
@@ -26,24 +28,35 @@ from marko.infrastructure.db.models import (
     CatalogDiscoveryCapture,
     CatalogDiscoveryOffer,
     CatalogDiscoveryRun,
+    CatalogItem,
     CatalogIdentityLink,
-    CrossLink,
     MarketplaceStore,
     ScrapeEvidenceBlob,
     StoreKind,
     WorkspaceStore,
 )
 from marko.parsers.prom.config import ScrapeConfig
-from marko.parsers.prom.exceptions import is_canonical_pagination_redirect
+from marko.parsers.prom.exceptions import is_self_describing_pagination_redirect
 from marko.parsers.prom.parser import parse_search
+from marko.services.scrape_coverage import coverage_summary as _coverage_summary
 from marko.services.offer_processing import (
     AcceptedCandidate,
     RejectedOffer,
     assess_candidate_source,
     process_offer_candidate,
 )
-from marko.services.owned_catalog import normalize_catalog_code
-from marko.services.pricing_runs import load_tier_coefficients
+from marko.services.catalog_identity_safety import (
+    catalog_identity_pair_has_safe_shape,
+    confirmed_catalog_identity_conditions,
+    is_internal_catalog_code,
+)
+from marko.services.owned_catalog import canonical_catalog_sku, normalize_catalog_code
+from marko.services.pricing_runs import (
+    customer_identity_query_from_fields,
+    load_tier_coefficients,
+)
+
+
 from marko.services.scrape_runtime import (
     LogicalRequestTrace,
     ScrapeExecutionTrace,
@@ -55,6 +68,10 @@ from marko.services.scraper_contract import (
     ScrapeOutput,
 )
 from marko.services.source_access import require_live_prom_marketplace_collection
+from marko.services.semantic_candidate_gate import (
+    SEMANTIC_PRICING_GATE_VERSION,
+    apply_semantic_pricing_gate,
+)
 from metis.pricing.raise_policy import (
     RaisePolicyConfigError,
     RaiseStrategy,
@@ -75,7 +92,23 @@ from metis.pricing import (
 )
 
 
+# Only identities that have been resolved by the importer/reparser may
+# participate in private-code resolution.  ``oe_norm`` is intentionally
+# populated on some MPN_ONLY legacy rows with a private KEMP shelf code; an
+# UNRESOLVED row must never be allowed to influence the consensus query merely
+# because that code happens to match the probe.
+_MATCHABLE_CATALOG_IDENTITY_STATUSES = ("OE_CONFIRMED", "MPN_ONLY")
+
+
 CATALOG_DISCOVERY_CONTRACT_VERSION = "catalog-discovery-v1"
+_SHORT_NUMERIC_IDENTITY_MAX_DIGITS = 6
+_IDENTIFIER_LABEL_RE = re.compile(
+    r"(?:\b(?:oe|oem|art|article|артикул|арт)\b|"
+    r"\bpart\s+(?:no|number)\b|"
+    r"\bкод\s+(?:запчасти|запчастини|виробника|производителя)\b|[#№])",
+    re.IGNORECASE,
+)
+_IDENTIFIER_BOUNDARY_CHARS = r"A-Za-zА-Яа-яЇїІіЄєҐґ0-9"
 
 
 class CatalogDiscoveryError(RuntimeError):
@@ -110,6 +143,12 @@ class CatalogDiscoveredOffer:
     selection_details: Mapping[str, object]
     predicted_tier: str
     tier_confidence: Decimal
+    # Candidate-native namespaces are exposed for operator verification.  They
+    # are read from the immutable raw snapshot, never reconstructed from our
+    # search query, so the UI cannot confuse intent with extracted evidence.
+    mpn: str | None = None
+    oe_raw: str | None = None
+    part_numbers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -196,19 +235,22 @@ def catalog_product_key(
     sku: str | None,
     oe: str | None,
     brand: str | None,
+    mpn: str | None = None,
 ) -> str:
     normalized_sku = normalize_catalog_code(sku)
     normalized_oe = normalize_catalog_code(oe)
+    normalized_mpn = normalize_catalog_code(mpn)
     normalized_brand = normalize_catalog_code(brand)
-    if not normalized_sku and not normalized_oe:
+    if not normalized_sku and not normalized_oe and not normalized_mpn:
         raise CatalogDiscoveryError(
             "CATALOG_DISCOVERY_IDENTIFIER_REQUIRED",
-            "Для поиска нужен OE/OEM или артикул товара.",
+            "Для поиска нужен OE/OEM, MPN или артикул товара.",
         )
     payload = json.dumps(
         {
             "sku": normalized_sku,
             "oe": normalized_oe,
+            "mpn": normalized_mpn,
             "brand": normalized_brand,
         },
         sort_keys=True,
@@ -217,7 +259,12 @@ def catalog_product_key(
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def catalog_discovery_query(*, sku: str | None, oe: str | None) -> str:
+def catalog_discovery_query(
+    *,
+    sku: str | None,
+    oe: str | None,
+    mpn: str | None = None,
+) -> str:
     """Pick the identifier to search the marketplace with.
 
     WP-2 makes the empty-``oe`` branch the common case rather than the odd one:
@@ -232,13 +279,150 @@ def catalog_discovery_query(*, sku: str | None, oe: str | None) -> str:
     a plain search term.
     """
 
-    query = normalize_catalog_code(oe) or normalize_catalog_code(sku)
+    query = (
+        normalize_catalog_code(oe)
+        or normalize_catalog_code(mpn)
+        or normalize_catalog_code(sku)
+    )
     if not query:
         raise CatalogDiscoveryError(
             "CATALOG_DISCOVERY_IDENTIFIER_REQUIRED",
-            "Для поиска нужен OE/OEM или артикул товара.",
+            "Для поиска нужен OE/OEM, MPN или артикул товара.",
         )
     return query
+
+
+def catalog_discovery_search_context(
+    *,
+    title: str | None,
+    brand: str | None,
+    category: str | None,
+) -> str | None:
+    """Build bounded retrieval context without changing the identity query.
+
+    Prom reuses short numeric manufacturer numbers across unrelated domains.
+    The exact number remains the only identity key; this context is merely an
+    additive second retrieval pass used by ``PromGateway`` for ambiguous
+    4--6-digit queries.  Keep it deterministic and bounded so it is safe to
+    freeze in the query input hash and never becomes an unbounded title search.
+    """
+
+    parts = tuple(
+        value.strip()
+        for value in (title, brand, category)
+        if isinstance(value, str) and value.strip()
+    )
+    if not parts:
+        return None
+    return " ".join(parts)[:255]
+
+
+def _catalog_identity_query_from_rows(rows: list[CatalogItem]) -> str | None:
+    """Return one consensus query from matching imported catalog rows.
+
+    Duplicate rows are expected in the customer's export.  A disagreement is
+    not expected, and must not be resolved by whichever row the database
+    happens to return first: that would make the discovery target
+    nondeterministic and could search a different part.
+    """
+
+    queries = {
+        query
+        for item in rows
+        if (
+            query := customer_identity_query_from_fields(
+                identity_status=item.identity_status,
+                oe_norm=item.oe_norm,
+                mpn_norm=item.mpn_norm,
+                part_numbers_norm=tuple(item.part_numbers_norm or ()),
+            )
+        )
+    }
+    return next(iter(queries)) if len(queries) == 1 else None
+
+
+async def _resolve_private_catalog_discovery_query(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    sku: str | None,
+    oe: str | None,
+    brand: str | None,
+    requested_query: str,
+    mpn: str | None = None,
+) -> str:
+    """Resolve a private KEMP input to a public MPN/characteristic number.
+
+    The live catalog UI often knows only the seller's private SKU (for
+    example ``776414``).  Searching that value on Prom is both noisy and
+    semantically wrong.  When the imported customer catalog contains the
+    same private key, use its frozen identity classification instead.  This
+    path is deliberately limited to private probes; an operator-supplied
+    public OE keeps the ordinary direct-search behavior.
+    """
+
+    normalized_mpn = normalize_catalog_code(mpn)
+    # An explicitly supplied *public* manufacturer number is already the
+    # retrieval key.  A private KEMP shelf code can also arrive in this field
+    # after a loose XLS mapping, however; it must take the same resolver path
+    # as a private SKU/OE and may never be sent to Prom as public identity.
+    if normalized_mpn and not is_internal_catalog_code(normalized_mpn):
+        return requested_query
+
+    probes = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                normalize_catalog_code(oe),
+                normalized_mpn,
+                canonical_catalog_sku(sku, brand),
+                normalize_catalog_code(sku),
+            )
+            if value
+        )
+    )
+    if not any(is_internal_catalog_code(value) for value in probes):
+        return requested_query
+
+    raw_sku = (sku or "").strip()
+    raw_oe = (oe or "").strip()
+    predicates = [
+        CatalogItem.oe_norm.in_(probes),
+        CatalogItem.mpn_norm.in_(probes),
+    ]
+    if raw_sku:
+        predicates.append(CatalogItem.sku == raw_sku)
+    if raw_oe:
+        predicates.append(CatalogItem.oe_raw == raw_oe)
+    rows = list(
+        (
+            await session.scalars(
+                select(CatalogItem)
+                .where(
+                    CatalogItem.workspace_id == workspace_id,
+                    CatalogItem.identity_status.in_(
+                        _MATCHABLE_CATALOG_IDENTITY_STATUSES
+                    ),
+                    or_(*predicates),
+                )
+                .order_by(CatalogItem.source_row, CatalogItem.id)
+                .limit(64)
+            )
+        ).all()
+    )
+    resolved = _catalog_identity_query_from_rows(rows)
+    if resolved:
+        return resolved
+    if not rows:
+        detail = "для приватного кода не найдена строка импортированного каталога"
+        code = "CATALOG_DISCOVERY_IDENTITY_UNRESOLVED"
+    else:
+        detail = "строки импортированного каталога дают неоднозначный публичный номер"
+        code = "CATALOG_DISCOVERY_IDENTITY_AMBIGUOUS"
+    raise CatalogDiscoveryError(
+        code,
+        f"Нельзя безопасно искать {requested_query}: {detail}.",
+    )
 
 
 async def collect_catalog_discovery(
@@ -248,6 +432,7 @@ async def collect_catalog_discovery(
     sku: str | None,
     oe: str | None,
     brand: str | None,
+    mpn: str | None = None,
     title: str | None = None,
     current_price: Decimal | None = None,
     currency: str | None = None,
@@ -258,8 +443,17 @@ async def collect_catalog_discovery(
 
     resolved_settings = settings or get_settings()
     require_live_prom_marketplace_collection(resolved_settings)
-    query = catalog_discovery_query(sku=sku, oe=oe)
-    product_key = catalog_product_key(sku=sku, oe=oe, brand=brand)
+    requested_query = catalog_discovery_query(sku=sku, oe=oe, mpn=mpn)
+    query = await _resolve_private_catalog_discovery_query(
+        session,
+        workspace_id=workspace_id,
+        sku=sku,
+        oe=oe,
+        mpn=mpn,
+        brand=brand,
+        requested_query=requested_query,
+    )
+    product_key = catalog_product_key(sku=sku, oe=oe, mpn=mpn, brand=brand)
     selection_config = load_candidate_selection_config(
         resolve_backend_path(resolved_settings.pricing_candidate_selection_path)
     )
@@ -332,6 +526,12 @@ async def collect_catalog_discovery(
             query,
             resolved_settings,
             search_page_limit=search_page_limit,
+            excluded_seller_ids=effective_owned_seller_ids,
+            search_context=catalog_discovery_search_context(
+                title=title,
+                brand=brand,
+                category=category,
+            ),
         )
         await _persist_live_result(
             session,
@@ -375,9 +575,10 @@ async def latest_catalog_discovery(
     sku: str | None,
     oe: str | None,
     brand: str | None,
+    mpn: str | None = None,
 ) -> CatalogDiscoverySnapshot | None:
     try:
-        product_key = catalog_product_key(sku=sku, oe=oe, brand=brand)
+        product_key = catalog_product_key(sku=sku, oe=oe, mpn=mpn, brand=brand)
     except CatalogDiscoveryError:
         return None
     run = await session.scalar(
@@ -418,19 +619,29 @@ async def get_catalog_discovery_run(
 def usable_search_requests(
     requests: tuple[LogicalRequestTrace, ...],
 ) -> tuple[LogicalRequestTrace, ...]:
-    """Return the requests that carry evidence, rejecting genuine failures.
+    """Return the search pages that carry evidence, rejecting genuine failures.
 
     Prom answers a page past the end of its own reported total with a 3xx to
     the canonical search URL. The gateway stops there deliberately, so that
     trailing probe is an end-of-pagination marker rather than an unfinished
     required request; failing the whole run on it discarded every page already
-    fetched. Any other unfinished request is still fatal, and a run in which
-    nothing succeeded has no evidence at all.
+    fetched. Any other unfinished search page is still fatal, and a run in
+    which nothing succeeded has no evidence at all.
+
+    Competitor product cards are deliberately not judged here. The gateway
+    degrades a broken card and keeps its listing, so one 404 must not discard
+    a whole run — the more so now that the detail budget is unbounded and a
+    run fetches every non-owned row. Excluding them also keeps the returned
+    count meaning what its consumers read it as: search pages fetched, the
+    number ``_coverage_summary`` compares against the page cap.
     """
 
+    pages = tuple(
+        request for request in requests if request.request_kind == "search_page"
+    )
     usable = tuple(
         request
-        for request in requests
+        for request in pages
         if request.outcome in {"success", "replayed"}
         and request.raw_body is not None
         and request.response_status_code is not None
@@ -438,19 +649,17 @@ def usable_search_requests(
     usable_ids = {id(request) for request in usable}
     tolerated = tuple(
         request
-        for request in requests
+        for request in pages
         if id(request) not in usable_ids
-        and request.error_category == "upstream_3xx"
-        and is_canonical_pagination_redirect(
+        and is_self_describing_pagination_redirect(
             status_code=request.response_status_code,
             request_url=request.prepared_url,
             redirect_location=request.response_redirect_location,
-            page_num=request.sequence_no,
         )
         and request.raw_body is not None
         and request.content_sha256 is not None
     )
-    if not usable or len(usable) + len(tolerated) != len(requests):
+    if not usable or len(usable) + len(tolerated) != len(pages):
         raise CatalogDiscoveryError(
             "CATALOG_DISCOVERY_HTTP_INCOMPLETE",
             "Не все обязательные поисковые запросы завершились успешно.",
@@ -463,8 +672,14 @@ def _collect_live(
     settings: Settings,
     *,
     search_page_limit: int,
+    excluded_seller_ids: frozenset[str] = frozenset(),
+    search_context: str | None = None,
 ) -> _LiveDiscoveryResult:
-    scrape_input = QueryInput.build(query, language="ua")
+    scrape_input = QueryInput.build(
+        query,
+        language="ua",
+        search_context=search_context,
+    )
     trace = ScrapeExecutionTrace(
         item_kind=CATALOG_DISCOVERY_CONTRACT_VERSION,
         execution_no=1,
@@ -476,11 +691,16 @@ def _collect_live(
         timeout=settings.pricing_scraper_http_timeout_seconds,
         max_attempts=max(1, settings.pricing_scraper_http_max_attempts),
         max_search_pages=search_page_limit,
+        max_oe_page_pages=max(1, settings.pricing_scraper_max_oe_page_pages),
         max_sellers=max(1, settings.pricing_scraper_max_sellers),
+        max_detail_cards=max(0, settings.pricing_scraper_max_detail_cards),
     )
     try:
         with scrape_execution(trace):
-            output = FrozenPromScraperAdapter(config).extract(scrape_input)
+            output = FrozenPromScraperAdapter(
+                config,
+                excluded_seller_ids=excluded_seller_ids,
+            ).extract(scrape_input)
         requests = tuple(trace.drain_completed_requests())
     finally:
         trace.close()
@@ -566,10 +786,13 @@ async def _persist_live_result(
 
     accepted_by_listing: dict[str, tuple[AcceptedCandidate, Decimal]] = {}
     rejected_count = 0
+    rejected_histogram: dict[str, int] = {}
     for index, raw_offer in enumerate(live.output.candidate_records):
         processed = process_offer_candidate(raw_offer, fallback_index=index)
         if isinstance(processed, RejectedOffer):
             rejected_count += 1
+            key = f"INPUT_{processed.outcome_code.value}:REJECTED"
+            rejected_histogram[key] = rejected_histogram.get(key, 0) + 1
             continue
         assessment = assess_candidate_source(
             processed,
@@ -601,17 +824,25 @@ async def _persist_live_result(
             owned_excluded_count += 1
         title = str(product.get("name") or "").strip()
         sku = str(product.get("sku") or "").strip() or None
-        title_contains_query = run.query in normalize_catalog_code(title)
-        sku_contains_query = run.query in normalize_catalog_code(sku)
+        title_contains_query = _title_carries_query(title, run.query)
+        # Structured SKU, MPN, labelled part numbers and native OE are identity
+        # namespaces.  Do not
+        # collapse them to ``sku or mpn``: a seller can expose a different
+        # internal SKU alongside the exact manufacturer number we searched.
+        # Every namespace uses exact normalized equality; substring matching
+        # would make 123456 appear in the unrelated 1234567 listing.
+        structured_identity_field = _structured_identity_field(product, run.query)
         identity_status = (
             "QUERY_TOKEN_PRESENT"
-            if title_contains_query or sku_contains_query
+            if title_contains_query or structured_identity_field is not None
             else "SEARCH_RESULT_UNVERIFIED"
         )
         reason_codes = ["DISCOVERY_ONLY_NOT_PRICING_EVIDENCE"]
-        if identity_status == "QUERY_TOKEN_PRESENT":
+        if structured_identity_field is not None:
+            reason_codes.append(f"STRUCTURED_{structured_identity_field}_MATCH")
+        if title_contains_query:
             reason_codes.append("QUERY_TOKEN_PRESENT_REQUIRES_VERIFICATION")
-        else:
+        if identity_status != "QUERY_TOKEN_PRESENT":
             reason_codes.append("QUERY_TOKEN_NOT_PRESENT")
         if is_owned:
             reason_codes.append("OWNED_SELLER_EXCLUDED")
@@ -627,6 +858,7 @@ async def _persist_live_result(
                     else None
                 ),
                 article_field=sku,
+                article_fields=_candidate_article_fields(product),
                 brand=str(product.get("brand") or "").strip() or None,
                 price=candidate.price,
                 condition=(
@@ -645,6 +877,37 @@ async def _persist_live_result(
             calibrated_premiums=selection.calibrated_premiums,
             tier_agnostic=selection.tier_agnostic,
         )
+        verdict = apply_semantic_pricing_gate(
+            verdict,
+            reference=selection.reference,
+            candidate={
+                **dict(product),
+                "title": title,
+                "description": (
+                    str(product.get("description")).strip()
+                    if product.get("description")
+                    else None
+                ),
+                "brand": str(product.get("brand") or "").strip() or None,
+                "category": product.get("category")
+                or product.get("category_name")
+                or product.get("category_title")
+                or "",
+            },
+            # Discovery may expose a candidate for operator review, but it is
+            # not the persisted market-observation path.  Require the same
+            # commercial fields here as the pricing boundary so a future
+            # caller cannot mistake a bare search hit for a unit-normalized
+            # price observation.
+            require_pricing_completeness=True,
+        )
+        # A catalog discovery run is deliberately a retrieval/diagnostic
+        # surface.  Even a candidate that passes the deterministic gates is
+        # not yet a pricing observation: it has no frozen observation row,
+        # seller/provenance admission, or recommendation membership.  Keep
+        # the original semantic gate in ``selection_details`` for audit, but
+        # fail closed at the discovery boundary.
+        verdict = _discovery_only_verdict(verdict)
         verdicts.append(verdict)
         reason_codes.extend(
             (
@@ -693,6 +956,13 @@ async def _persist_live_result(
         )
 
     histogram = verdict_histogram(verdicts)
+    # Rejected payloads have no safe price/listing row to persist, but their
+    # outcome must remain visible in the run accounting.  Otherwise malformed
+    # offers silently disappear and the operator cannot distinguish a clean
+    # market from parser/data loss.
+    for key, count in rejected_histogram.items():
+        histogram[key] = count
+    histogram = dict(sorted(histogram.items()))
     reported_total = live.prom_reported_total
     retrieved_count = len(live.output.candidate_records)
     unfetched_count, coverage_ratio, coverage_reason = _coverage_summary(
@@ -727,30 +997,86 @@ async def _persist_live_result(
     await session.commit()
 
 
-def _coverage_summary(
-    *,
-    reported_total: int | None,
-    retrieved_count: int,
-    request_count: int,
-    search_page_limit: int,
-) -> tuple[int, Decimal | None, str]:
-    unfetched_count = max(0, (reported_total or retrieved_count) - retrieved_count)
-    coverage_ratio = (
-        (Decimal(retrieved_count) / Decimal(reported_total)).quantize(
-            Decimal("0.000001")
-        )
-        if reported_total is not None and reported_total > 0
-        else None
+def _title_carries_query(title: str | None, query: str) -> bool:
+    """Return true only for an identifier-shaped title occurrence.
+
+    Prom search retrieval is intentionally broad, but the discovery flag is
+    shown as evidence to an operator. It must not claim an OE when the query
+    is merely a suffix/prefix of a longer article. Short all-numeric values are
+    accepted in a title only with an explicit identifier label; structured SKU
+    equality is handled by the caller.
+    """
+
+    # A KEMP shelf code is a private join key, never public identity evidence.
+    # Keep this helper fail-closed even if a caller bypasses the resolver and
+    # passes the original catalog code as the active query.
+    if not title or not query or is_internal_catalog_code(query):
+        return False
+    pieces = r"[\s./_-]*".join(re.escape(character) for character in query)
+    pattern = re.compile(
+        rf"(?<![{_IDENTIFIER_BOUNDARY_CHARS}]){pieces}"
+        rf"(?![{_IDENTIFIER_BOUNDARY_CHARS}])",
+        re.IGNORECASE,
     )
-    if reported_total is None:
-        reason = "PROM_TOTAL_UNKNOWN"
-    elif unfetched_count and request_count >= search_page_limit:
-        reason = "SEARCH_PAGE_HARD_CAP"
-    elif unfetched_count:
-        reason = "UPSTREAM_RESULT_GAP"
-    else:
-        reason = "FULL_REPORTED_RESULT_SET"
-    return unfetched_count, coverage_ratio, reason
+    for match in pattern.finditer(title):
+        if query.isdigit() and len(query) <= _SHORT_NUMERIC_IDENTITY_MAX_DIGITS:
+            prefix = title[max(0, match.start() - 48) : match.start()]
+            if _IDENTIFIER_LABEL_RE.search(prefix):
+                return True
+            continue
+        return True
+    return False
+
+
+def _candidate_article_fields(
+    product: Mapping[str, Any],
+) -> tuple[tuple[str, str], ...]:
+    """Return all candidate-native identifier namespaces in stable order.
+
+    The listing parser deliberately keeps ``sku``, ``mpn``, labelled part
+    numbers and ``oe_raw`` separate. Passing all namespaces to candidate
+    selection prevents a valid MPN
+    from being hidden by an unrelated seller SKU while retaining provenance
+    in the gate details.
+    """
+
+    fields: list[tuple[str, str]] = []
+    for label, key in (
+        ("SKU", "sku"),
+        ("MPN", "mpn"),
+        ("OE", "oe_raw"),
+    ):
+        value = str(product.get(key) or "").strip()
+        if value:
+            fields.append((label, value))
+    part_numbers = product.get("part_numbers")
+    if isinstance(part_numbers, (list, tuple)):
+        fields.extend(
+            ("PART_NUMBER", value)
+            for item in part_numbers
+            if (value := str(item or "").strip())
+        )
+    return tuple(fields)
+
+
+def _structured_identity_field(
+    product: Mapping[str, Any],
+    query: str,
+) -> str | None:
+    """Return the exact native namespace matching the active query."""
+
+    # The discovery UI must not turn a private supplier code into a claimed
+    # public OE/MPN match.  The resolver normally replaces it with a public
+    # mapped number; this guard protects direct/helper callers as well.
+    if is_internal_catalog_code(query):
+        return None
+    for label, value in _candidate_article_fields(product):
+        if (
+            not is_internal_catalog_code(value)
+            and normalize_candidate_oem(value) == query
+        ):
+            return label
+    return None
 
 
 async def _owned_seller_ids(
@@ -809,12 +1135,10 @@ async def _confirmed_cross_oems(
 ) -> frozenset[str]:
     """Numbers a confirmed link says name the same part as ``reference_oem``.
 
-    Two tables, one answer: ``cross_links`` holds pairs observed while pricing,
-    ``catalog_identity_links`` holds pairs read out of our own catalogue and the
-    KEMP sources (WP-3), which belong to no pricing run.  Both sides filter on
-    ``CONFIRMED``, so a link still under review — every kemp.ua link that no
-    second source corroborated, and every link carrying an anomaly — contributes
-    nothing here and therefore moves no price.
+    Only the current long-lived catalog identity graph is global authority.
+    ``cross_links`` are immutable evidence owned by one pricing run; promoting
+    them into every later discovery would turn a single historical seller claim
+    into permanent workspace knowledge without current-policy revalidation.
     """
 
     normalized_reference = normalize_candidate_oem(reference_oem)
@@ -823,26 +1147,11 @@ async def _confirmed_cross_oems(
     rows = list(
         (
             await session.execute(
-                select(CrossLink.our_oem_norm, CrossLink.extracted_oem_norm).where(
-                    CrossLink.workspace_id == workspace_id,
-                    CrossLink.validation_status == "CONFIRMED",
-                    or_(
-                        CrossLink.our_oem_norm == normalized_reference,
-                        CrossLink.extracted_oem_norm == normalized_reference,
-                    ),
-                )
-            )
-        ).all()
-    )
-    rows.extend(
-        (
-            await session.execute(
                 select(
                     CatalogIdentityLink.our_oem_norm,
                     CatalogIdentityLink.extracted_oem_norm,
                 ).where(
-                    CatalogIdentityLink.workspace_id == workspace_id,
-                    CatalogIdentityLink.validation_status == "CONFIRMED",
+                    *confirmed_catalog_identity_conditions(workspace_id),
                     or_(
                         CatalogIdentityLink.our_oem_norm == normalized_reference,
                         CatalogIdentityLink.extracted_oem_norm == normalized_reference,
@@ -851,6 +1160,11 @@ async def _confirmed_cross_oems(
             )
         ).all()
     )
+    rows = [
+        (our_oem, extracted_oem)
+        for our_oem, extracted_oem in rows
+        if catalog_identity_pair_has_safe_shape(our_oem, extracted_oem)
+    ]
     equivalents: set[str] = set()
     for our_oem, extracted_oem in rows:
         for value in (our_oem, extracted_oem):
@@ -945,6 +1259,13 @@ async def _snapshot_for_run(
             )
         ).all()
     )
+    effective_items = tuple(_effective_discovery_offer(offer) for offer in offers)
+    effective_histogram: dict[str, int] = {}
+    for item in effective_items:
+        histogram_key = f"{item.selection_reason} ({item.selection_status})"
+        effective_histogram[histogram_key] = (
+            effective_histogram.get(histogram_key, 0) + 1
+        )
     return CatalogDiscoverySnapshot(
         run_id=run.id,
         collected_at=run.completed_at or run.created_at,
@@ -955,10 +1276,21 @@ async def _snapshot_for_run(
         persisted_count=run.persisted_count,
         owned_excluded_count=run.owned_excluded_count,
         rejected_count=run.rejected_count,
-        pricing_evidence_count=run.pricing_evidence_count,
-        reference_only_count=run.reference_only_count,
-        rejected_candidate_count=run.rejected_candidate_count,
-        selection_histogram=dict(run.selection_histogram or {}),
+        # Do not trust historical run counters at the read boundary.  A run
+        # may have been persisted before the active semantic gate existed;
+        # its offers are still useful for discovery, but cannot be presented as
+        # current pricing evidence.
+        pricing_evidence_count=sum(
+            item.selection_status == "PRICING_EVIDENCE"
+            for item in effective_items
+        ),
+        reference_only_count=sum(
+            item.selection_status == "REFERENCE_ONLY" for item in effective_items
+        ),
+        rejected_candidate_count=sum(
+            item.selection_status == "REJECTED" for item in effective_items
+        ),
+        selection_histogram=dict(sorted(effective_histogram.items())),
         search_pages_fetched=run.request_count,
         search_page_limit=run.search_page_limit,
         unfetched_count=run.unfetched_count,
@@ -967,35 +1299,165 @@ async def _snapshot_for_run(
         selection_method_version=run.selection_method_version,
         selection_config_sha256=run.selection_config_sha256,
         brand_rules_dataset_id=run.brand_rules_dataset_id,
-        items=tuple(
-            CatalogDiscoveredOffer(
-                discovery_offer_id=offer.id,
-                source_listing_id=offer.source_listing_id,
-                seller_id=offer.seller_id,
-                seller_name=offer.seller_name,
-                title=offer.title,
-                url=offer.url,
-                sku=offer.sku,
-                brand=offer.brand,
-                sale_price=offer.sale_price,
-                reference_price=offer.reference_price,
-                currency=offer.currency,
-                measure_unit=offer.measure_unit,
-                is_available=offer.is_available,
-                title_contains_query=offer.title_contains_query,
-                identity_status=offer.identity_status,
-                source_confidence=offer.source_confidence,
-                reason_codes=tuple(offer.reason_codes),
-                selection_status=offer.selection_status,
-                selection_reason=offer.selection_reason,
-                passed_gates=tuple(offer.passed_gates),
-                selection_flags=tuple(offer.selection_flags),
-                selection_details=dict(offer.selection_details),
-                predicted_tier=offer.predicted_tier,
-                tier_confidence=offer.tier_confidence,
+        items=effective_items,
+    )
+
+
+def _has_current_semantic_admission(offer: CatalogDiscoveryOffer) -> bool:
+    """Return whether a persisted discovery offer has active gate proof.
+
+    ``selection_status`` and run counters predate the semantic gate and cannot
+    authorize a price on their own.  This read-side check prevents historical
+    rows from silently becoming pricing evidence after a safety upgrade.  New
+    runs persist the gate under ``selection_details``; old rows fail closed and
+    remain available as operator-visible discovery results.
+    """
+
+    if offer.selection_status != "PRICING_EVIDENCE":
+        return False
+    details = offer.selection_details
+    gate = details.get("semantic_gate") if isinstance(details, Mapping) else None
+    if not isinstance(gate, Mapping):
+        return False
+    return (
+        str(gate.get("status") or "").strip() == "PRICING_EVIDENCE"
+        and str(gate.get("reason") or "").strip() == "OK"
+        and str(gate.get("gate_version") or "").strip()
+        == SEMANTIC_PRICING_GATE_VERSION
+    )
+
+
+def _discovery_only_verdict(verdict: Any) -> Any:
+    """Prevent a discovery candidate from becoming price evidence.
+
+    ``CandidateStatus.PRICING_EVIDENCE`` is meaningful inside the pure
+    candidate-selection algorithm.  A persisted catalog discovery row is a
+    different boundary and must never be consumed as a market observation.
+    Preserve the pure verdict and semantic proof in the details for replay,
+    while exposing ``REFERENCE_ONLY`` to every discovery/API consumer.
+    """
+
+    if verdict.status is not CandidateStatus.PRICING_EVIDENCE:
+        return verdict
+    details = dict(verdict.details or {})
+    details["discovery_admission"] = {
+        "status": "REFERENCE_ONLY",
+        "reason": "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE",
+        "original_status": "PRICING_EVIDENCE",
+        "original_reason": verdict.reason,
+    }
+    return replace(
+        verdict,
+        status=CandidateStatus.REFERENCE_ONLY,
+        reason="DISCOVERY_ONLY_NOT_PRICING_EVIDENCE",
+        flags=tuple(
+            dict.fromkeys(
+                (*verdict.flags, "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE")
             )
-            for offer in offers
         ),
+        details=MappingProxyType(details),
+    )
+
+
+def _effective_discovery_offer(offer: CatalogDiscoveryOffer) -> CatalogDiscoveredOffer:
+    """Materialize one offer with a current, fail-closed read status."""
+
+    selection_status = offer.selection_status
+    selection_reason = offer.selection_reason
+    reason_codes = tuple(offer.reason_codes)
+    selection_flags = tuple(offer.selection_flags)
+    selection_details = dict(offer.selection_details or {})
+    if offer.selection_status == "PRICING_EVIDENCE":
+        stale = not _has_current_semantic_admission(offer)
+        selection_status = "REFERENCE_ONLY"
+        selection_reason = (
+            "SEMANTIC_GATE_STALE"
+            if stale
+            else "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE"
+        )
+        reason_codes = tuple(
+            dict.fromkeys(
+                (
+                    *reason_codes,
+                    *(("SEMANTIC_GATE_STALE",) if stale else ()),
+                    "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE",
+                )
+            )
+        )
+        selection_flags = tuple(
+            dict.fromkeys(
+                (
+                    *selection_flags,
+                    *(("SEMANTIC_GATE_STALE",) if stale else ()),
+                    "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE",
+                )
+            )
+        )
+        selection_details["runtime_admission"] = {
+            "status": "REFERENCE_ONLY",
+            "reason": selection_reason,
+            "original_selection_status": offer.selection_status,
+            "original_selection_reason": offer.selection_reason,
+            "required_gate_version": SEMANTIC_PRICING_GATE_VERSION,
+            "discovery_only": True,
+        }
+    return CatalogDiscoveredOffer(
+        discovery_offer_id=offer.id,
+        source_listing_id=offer.source_listing_id,
+        seller_id=offer.seller_id,
+        seller_name=offer.seller_name,
+        title=offer.title,
+        url=offer.url,
+        sku=offer.sku,
+        brand=offer.brand,
+        sale_price=offer.sale_price,
+        reference_price=offer.reference_price,
+        currency=offer.currency,
+        measure_unit=offer.measure_unit,
+        is_available=offer.is_available,
+        title_contains_query=offer.title_contains_query,
+        identity_status=offer.identity_status,
+        source_confidence=offer.source_confidence,
+        reason_codes=reason_codes,
+        selection_status=selection_status,
+        selection_reason=selection_reason,
+        passed_gates=tuple(offer.passed_gates),
+        selection_flags=selection_flags,
+        selection_details=selection_details,
+        predicted_tier=offer.predicted_tier,
+        tier_confidence=offer.tier_confidence,
+        mpn=_raw_snapshot_text(getattr(offer, "raw_snapshot", None), "mpn"),
+        oe_raw=_raw_snapshot_text(getattr(offer, "raw_snapshot", None), "oe_raw"),
+        part_numbers=_raw_snapshot_part_numbers(
+            getattr(offer, "raw_snapshot", None)
+        ),
+    )
+
+
+def _raw_snapshot_text(snapshot: Mapping[str, Any] | None, key: str) -> str | None:
+    """Read one candidate-native identifier without inventing a value."""
+
+    if not isinstance(snapshot, Mapping):
+        return None
+    value = snapshot.get(key)
+    text = str(value or "").strip()
+    return text or None
+
+
+def _raw_snapshot_part_numbers(
+    snapshot: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    """Read parser-extracted labelled codes without treating the query as data."""
+
+    if not isinstance(snapshot, Mapping):
+        return ()
+    raw = snapshot.get("part_numbers")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(
+        value
+        for item in raw
+        if (value := str(item or "").strip())
     )
 
 
@@ -1005,6 +1467,7 @@ __all__ = [
     "CatalogDiscoveryError",
     "CatalogDiscoverySnapshot",
     "catalog_discovery_query",
+    "catalog_discovery_search_context",
     "catalog_product_key",
     "collect_catalog_discovery",
     "get_catalog_discovery_run",

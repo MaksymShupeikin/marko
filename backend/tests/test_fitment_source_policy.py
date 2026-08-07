@@ -22,6 +22,7 @@ from marko.services.fitment_intelligence import (
     _authorize_submitted_evidence_batch,
     _json_safe,
     _resolve_cross_reference_evidence,
+    _validate_analysis_scope,
     register_fitment_source,
     register_source_document,
 )
@@ -82,6 +83,79 @@ def _source_kwargs() -> dict:
         "policy_version": "v1",
         "reviewed_at": NOW,
     }
+
+
+@pytest.mark.asyncio
+async def test_fitment_scope_cannot_replace_confirmed_oe_with_supplier_article() -> None:
+    workspace_id = uuid4()
+    catalog_item_id = uuid4()
+    observation_id = uuid4()
+    catalog_item = type(
+        "CatalogItemFixture",
+        (),
+        {
+            "workspace_id": workspace_id,
+            "identity_status": "OE_CONFIRMED",
+            "oe_norm": "330422371",
+        },
+    )()
+
+    class _Rows:
+        def all(self):
+            return [observation_id]
+
+    class _Session:
+        async def get(self, _model, _identifier):
+            return catalog_item
+
+        async def scalars(self, _statement):
+            return _Rows()
+
+    candidate = CandidateAnalysisSpec(
+        market_observation_id=observation_id,
+        identity=PartIdentity(manufacturer_article="1145200500"),
+        commercial_context=CommercialContext(),
+    )
+    spec = AnalysisSpec(
+        target_identity=PartIdentity(
+            manufacturer_article="1145200500",
+            oe_numbers=("1145200500",),
+        ),
+        target_commercial_context=CommercialContext(),
+        candidates=(candidate,),
+        source_policy_snapshot={},
+    )
+
+    with pytest.raises(
+        FitmentIntelligenceError,
+        match="confirmed original OE",
+    ):
+        await _validate_analysis_scope(
+            _Session(),  # type: ignore[arg-type]
+            workspace_id=workspace_id,
+            catalog_item_id=catalog_item_id,
+            pricing_run_id=None,
+            spec=spec,
+            authorize_evidence=False,
+        )
+
+    spec = AnalysisSpec(
+        target_identity=PartIdentity(
+            manufacturer_article="1145200500",
+            oe_numbers=("330 422 371",),
+        ),
+        target_commercial_context=CommercialContext(),
+        candidates=(candidate,),
+        source_policy_snapshot={},
+    )
+    await _validate_analysis_scope(
+        _Session(),  # type: ignore[arg-type]
+        workspace_id=workspace_id,
+        catalog_item_id=catalog_item_id,
+        pricing_run_id=None,
+        spec=spec,
+        authorize_evidence=False,
+    )
 
 
 @pytest.mark.asyncio
@@ -268,7 +342,10 @@ async def test_source_confirmed_cross_requires_authoritative_identity_evidence()
     row = _cross_row(tier="D", group="prom")
     session = _CrossEvidenceSession([row], review_count=0)
 
-    with pytest.raises(FitmentIntelligenceError, match="Tier A or two"):
+    with pytest.raises(
+        FitmentIntelligenceError,
+        match="strong persisted source evidence|Tier A or two",
+    ):
         await _resolve_cross_reference_evidence(
             session,  # type: ignore[arg-type]
             workspace_id=uuid4(),

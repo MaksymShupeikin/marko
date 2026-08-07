@@ -16,6 +16,7 @@ from marko.services.market_collection import (
     _verified_target_output,
 )
 from marko.services.scraper_contract import (
+    QueryInput,
     ScrapeOutput,
     ScraperBoundaryError,
     ScraperErrorCode,
@@ -43,7 +44,7 @@ def test_comparison_claim_is_rejected_after_generation_takeover() -> None:
         run_item_id=uuid4(),
         catalog_item_id=uuid4(),
         product_url="https://prom.ua/ua/p1-product.html",
-        oe_norm="OE-1",
+        search_identity="OE-1",
         delivery_no=5,
         fencing_token=7,
         execution_no=2,
@@ -129,3 +130,26 @@ def test_succeeded_target_requires_a_verified_content_identity() -> None:
 
     target.content_sha256 = output.content_sha256
     assert _verified_target_output(target).content_sha256 == output.content_sha256
+
+
+def test_v2_target_payload_must_be_bound_to_the_persisted_query() -> None:
+    scrape_input = QueryInput.build("7E5827505A")
+    output = ScrapeOutput.from_search(scrape_input, [])
+    target = ScrapeTarget(
+        status="succeeded",
+        payload=output.payload,
+        content_sha256=output.content_sha256,
+        input_kind=scrape_input.input_kind,
+        query=scrape_input.query,
+        input_hash=scrape_input.input_hash,
+        adapter_version=scrape_input.adapter_version,
+    )
+
+    assert _verified_target_output(target).requested_query == "7E5827505A"
+
+    target.query = "77641257"
+    with pytest.raises(
+        ScraperBoundaryError, match="not bound to its target"
+    ) as excinfo:
+        _verified_target_output(target)
+    assert excinfo.value.code is ScraperErrorCode.EVIDENCE_PERSISTENCE

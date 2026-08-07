@@ -9,6 +9,7 @@ from marko.infrastructure.db.models import (
     Listing,
     MarketplaceStore,
     PriceObservation,
+    StoreKind,
     WorkspaceStore,
 )
 from marko.services.owned_catalog import normalize_catalog_code
@@ -104,6 +105,12 @@ async def _search_other_stores(
         .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
         .where(
             WorkspaceStore.workspace_id == workspace_id,
+            # The endpoint is the competitor lane.  A workspace may contain
+            # several owned Prom storefronts (KEMP, АвтоБуст, ПРОФParts,
+            # Parts Avto); filtering only ``excluded_store_id`` leaks the
+            # other owned storefronts into the comparison UI and inflates the
+            # apparent market.
+            WorkspaceStore.kind == StoreKind.competitor,
             Listing.store_id != excluded_store_id,
             condition,
         )
@@ -210,10 +217,14 @@ def catalog_code_expression(column) -> ColumnElement[str]:
 
 
 def _identity_expressions() -> tuple[ColumnElement[str], ...]:
+    # ``Listing.external_id`` is the marketplace listing identifier in the
+    # Prom importer (the ``p<ID>``/numeric card id), not a product number.
+    # Treating it as an SKU lets an unrelated listing whose card id happens to
+    # equal an OE enter the identity lane.  Product identity must come from a
+    # seller article/model field or an explicitly captured ``oe_raw`` value.
     return (
         identity_expression(Listing.sku),
         identity_expression(Listing.model_id),
-        identity_expression(Listing.external_id),
         identity_expression(Listing.raw_data["oe_raw"].as_string()),
     )
 

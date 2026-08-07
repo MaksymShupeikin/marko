@@ -72,8 +72,30 @@ class Settings(BaseSettings):
     pricing_scraper_http_max_attempts: int = 4
     pricing_scraper_request_delay_seconds: float = 1.0
     pricing_scraper_request_jitter_seconds: float = 0.5
-    pricing_scraper_max_search_pages: int = 3
+    #: Raised from 3 to match catalog discovery: the two paths were reading
+    #: different amounts of the same result set, and the pricing side had
+    #: no instrumentation saying what its lower cap cost.
+    pricing_scraper_max_search_pages: int = Field(default=10, ge=1, le=50)
+    #: Pages of prom.ua's own part-code listing to walk.  Thirty offers per
+    #: page, and a grouping can hold hundreds, so this cap discards market
+    #: rather than noise; it is deliberately not the search cap.
+    pricing_scraper_max_oe_page_pages: int = Field(default=4, ge=1, le=20)
     pricing_scraper_max_sellers: int = 10
+    #: Candidate cards to fetch per position; ``0`` means every external row.
+    #: Owner decision 2026-08-06: parse as many as possible, so the gates pick
+    #: among all of them instead of trusting the pre-fetch title ranking. This
+    #: is affordable only because retained card bytes are replayed across
+    #: positions and runs; see ``pricing_detail_replay_max_age_hours``.
+    pricing_scraper_max_detail_cards: int = Field(default=0, ge=0, le=500)
+    #: How long a retained product card may be replayed instead of refetched.
+    #: A card supplies no monetary field — price, availability, title, images
+    #: and seller identity all stay at listing time — so staleness here cannot
+    #: move a price. ``0`` disables the shared cache.
+    pricing_detail_replay_max_age_hours: int = Field(default=72, ge=0, le=720)
+    #: Distinct external sellers a position must reach before a declared
+    #: cross number is spent on it. One seller is not a market, and a
+    #: recommendation wants several independent ones.
+    pricing_scraper_min_independent_sellers: int = Field(default=3, ge=0, le=50)
     catalog_discovery_max_search_pages: int = Field(default=10, ge=1, le=50)
     pricing_brand_tiers_path: str = ""
     pricing_crosses_path: str = "config/crosses.yaml"
@@ -90,19 +112,23 @@ class Settings(BaseSettings):
     pricing_llm_provider: Literal["openai_responses"] = "openai_responses"
     pricing_llm_base_url: str = "https://api.openai.com/v1"
     pricing_llm_api_key: SecretStr = SecretStr("")
-    pricing_llm_model: str = "gpt-5-mini"
+    pricing_llm_model: str = "gpt-5.6-luna"
+    # The paid comparator stays off by default.  Whenever an acceptance or
+    # advisory run enables it, the run manifest pins this value so cached
+    # evidence from a cheaper effort cannot be reused as xhigh evidence (or
+    # vice versa).
+    pricing_llm_reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "xhigh"
+    pricing_llm_image_detail: Literal["auto", "low", "high"] = "auto"
+    pricing_llm_rate_version: str = "openai-gpt-5.6-luna-standard-2026-07-30"
     pricing_llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     pricing_llm_max_output_tokens: int = Field(default=1600, ge=256, le=8000)
     pricing_llm_max_images: int = Field(default=4, ge=0, le=10)
     pricing_llm_max_concurrency: int = Field(default=4, ge=1, le=32)
-    # How many confirmed offers are enough for one catalogue position.  The
-    # cohort is judged cheapest first, so once this many are comparable the
-    # dearer tail cannot move a decision taken against the cheapest comparable
-    # offer.  The default equals ``pricing_scraper_max_sellers``, which is the
-    # cap the collector already applies, so it changes nothing until that cap is
-    # raised: a part-code page keeps a median 81 offers past the gates, and
-    # without a ceiling raising the cap turns ~46k provider calls per catalogue
-    # into ~376k.
+    # Retained for deployment compatibility with existing manifests.  The v2
+    # walk no longer stops after N positive reviews: every persisted candidate
+    # receives a terminal review or an explicit budget-exhausted manual state.
     pricing_llm_max_confirmed_reviews: int = Field(default=10, ge=1, le=200)
     # Hard bound on provider calls spent on ONE catalogue position, applied in
     # every mode.  The confirmation ceiling above bounds nothing in ``required``
@@ -304,6 +330,11 @@ class Settings(BaseSettings):
             if not self.pricing_llm_model.strip():
                 raise ValueError(
                     "PRICING_LLM_MODEL is required when "
+                    "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
+                )
+            if not self.pricing_llm_rate_version.strip():
+                raise ValueError(
+                    "PRICING_LLM_RATE_VERSION is required when "
                     "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
                 )
             self._require_transport_base_url(environment)

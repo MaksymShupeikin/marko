@@ -7,11 +7,11 @@ Alembic upgrade/downgrade и намеренно провоцирует гонк�
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
-from decimal import Decimal
 import os
-from pathlib import Path
 import subprocess
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
@@ -22,20 +22,39 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
+    CatalogIdentityLink,
     CatalogImportBatch,
     CatalogItem,
     CatalogItemOverride,
+    CrossLink,
+    FitmentAnalysis,
+    FitmentCandidateAssessment,
+    FitmentCrossReference,
+    FitmentEvidenceClaim,
+    FitmentSource,
+    FitmentSourceDocument,
+    MarketObservation,
     PricingRecommendation,
     PricingRun,
     PricingRunItem,
+    RawMarketCapture,
     ScrapeTarget,
     Workspace,
 )
 from marko.infrastructure.db.session import async_session_factory
-from marko.services.market_collection import _calculate_and_persist
+from marko.services import market_collection as market_collection_service
+from marko.services.catalog_identity_safety import (
+    active_identity_graph_config,
+    active_identity_runtime_sha256,
+)
 from marko.services.dead_letters import (
     DeadLetterReplayError,
     replay_dead_letter,
+)
+from marko.services.fitment_intelligence import FITMENT_CROSS_METHOD_VERSION
+from marko.services.market_collection import (
+    _calculate_and_persist,
+    process_pricing_item,
 )
 from marko.services.pricing_runs import (
     ACTOR_TYPE_USER,
@@ -44,10 +63,10 @@ from marko.services.pricing_runs import (
     EXPLICIT_ITEMS_SCOPE,
     FULL_CATALOG_SCOPE,
     PRICING_RUN_SCOPE_CONTRACT_VERSION,
+    PRICING_RUN_START_PERMISSION,
     SCOPE_MANIFEST_ADVISORY_SECTION,
     SCOPE_MANIFEST_EXECUTION_SECTION,
     SCOPE_MANIFEST_PROVENANCE_SECTION,
-    PRICING_RUN_START_PERMISSION,
     OperatorRunStart,
     PreviewActor,
     PricingRunActiveScopeConflictError,
@@ -56,15 +75,24 @@ from marko.services.pricing_runs import (
     TrustedRunStart,
     create_pricing_run,
     load_run_item_start_override,
+    load_scope_candidates,
     preview_pricing_run,
     preview_pricing_run_for_operator,
     scope_manifest_hash,
 )
 
-
 pytestmark = pytest.mark.postgres
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-APPEND_ONLY_TABLES = ("catalog_item_overrides",)
+APPEND_ONLY_TABLES = (
+    "catalog_item_overrides",
+    "fitment_candidate_assessments",
+    "fitment_cross_references",
+    "fitment_evidence_claims",
+    "fitment_source_documents",
+    "fitment_sources",
+    "market_observations",
+    "raw_market_captures",
+)
 
 
 def _postgres_enabled() -> bool:
@@ -166,9 +194,7 @@ def _authorized_source_environment(monkeypatch) -> None:
         "PRICING_BRAND_TIERS_PATH",
         str(BACKEND_ROOT / "src/marko/e2e/fixtures/brands.yaml"),
     )
-    monkeypatch.setenv(
-        "PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT", "PERMITTED_LIMITED"
-    )
+    monkeypatch.setenv("PROM_MARKETPLACE_SOURCE_ACCESS_VERDICT", "PERMITTED_LIMITED")
     monkeypatch.setenv(
         "PROM_MARKETPLACE_SOURCE_ACCESS_REFERENCE",
         "p15017-disposable-authorization-record",
@@ -218,6 +244,58 @@ async def _delete_disposable_workspace(workspace_id: UUID) -> None:
             # Членство прогона держит позицию каталога через RESTRICT (миграция
             # 0033): улику расчёта нельзя унести задним числом.  Одноразовая
             # уборка снимает сначала прогоны, а не ослабляет это правило.
+            analysis_ids = select(FitmentAnalysis.id).where(
+                FitmentAnalysis.workspace_id == workspace_id
+            )
+            source_ids = select(FitmentSource.id).where(
+                FitmentSource.workspace_id == workspace_id
+            )
+            run_item_ids = (
+                select(PricingRunItem.id)
+                .join(PricingRun)
+                .where(PricingRun.workspace_id == workspace_id)
+            )
+            await session.execute(
+                delete(FitmentEvidenceClaim).where(
+                    FitmentEvidenceClaim.analysis_id.in_(analysis_ids)
+                )
+            )
+            await session.execute(
+                delete(FitmentCandidateAssessment).where(
+                    FitmentCandidateAssessment.analysis_id.in_(analysis_ids)
+                )
+            )
+            await session.execute(
+                delete(FitmentAnalysis).where(
+                    FitmentAnalysis.workspace_id == workspace_id
+                )
+            )
+            await session.execute(
+                delete(FitmentSourceDocument).where(
+                    FitmentSourceDocument.source_id.in_(source_ids)
+                )
+            )
+            await session.execute(
+                delete(FitmentSource).where(FitmentSource.workspace_id == workspace_id)
+            )
+            await session.execute(
+                delete(MarketObservation).where(
+                    MarketObservation.pricing_run_item_id.in_(run_item_ids)
+                )
+            )
+            await session.execute(
+                delete(RawMarketCapture).where(
+                    RawMarketCapture.pricing_run_item_id.in_(run_item_ids)
+                )
+            )
+            await session.execute(
+                delete(CrossLink).where(CrossLink.workspace_id == workspace_id)
+            )
+            await session.execute(
+                delete(CatalogIdentityLink).where(
+                    CatalogIdentityLink.workspace_id == workspace_id
+                )
+            )
             await session.execute(
                 delete(PricingRun).where(PricingRun.workspace_id == workspace_id)
             )
@@ -279,6 +357,8 @@ async def _seed_catalog(
                     name=f"Позиция каталога {position}",
                     category="brakes",
                     brand="KEMP",
+                    identity_status="OE_CONFIRMED",
+                    identity_reason="EXPLICIT_OE_COLUMN",
                     product_url=None,
                     current_price=Decimal("800") + position,
                     currency="UAH",
@@ -287,6 +367,156 @@ async def _seed_catalog(
                 )
             )
         await session.commit()
+
+
+@pytest.mark.skipif(
+    not _postgres_enabled(),
+    reason="set MARKO_RUN_POSTGRES_INTEGRATION=1 with a disposable PostgreSQL database",
+)
+@pytest.mark.asyncio
+async def test_missing_customer_identity_is_terminal_without_network_or_url_dedup(
+    monkeypatch,
+) -> None:
+    _require_disposable_database()
+    _e2e_replay_environment(monkeypatch)
+    workspace_id = uuid4()
+    batch_id = uuid4()
+    identified_id, missing_id = uuid4(), uuid4()
+    fake_celery = Mock()
+    fake_celery.send_task = Mock(return_value=Mock())
+    shared_url = "https://example.test/catalog/shared-product"
+    network_called = False
+
+    def _network_must_not_run(*_args, **_kwargs):
+        nonlocal network_called
+        network_called = True
+        raise AssertionError("missing customer identity reached network collection")
+
+    monkeypatch.setattr(
+        market_collection_service,
+        "_collect_target_output",
+        _network_must_not_run,
+    )
+    try:
+        await _seed_catalog(
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+            item_ids=(identified_id, missing_id),
+        )
+        async with async_session_factory() as session:
+            identified = await session.get(CatalogItem, identified_id)
+            missing = await session.get(CatalogItem, missing_id)
+            assert identified is not None and missing is not None
+            identified.product_url = shared_url
+            missing.product_url = shared_url
+            missing.identity_status = "UNRESOLVED"
+            missing.identity_reason = "CUSTOMER_IDENTITY_MISSING"
+            missing.mpn_raw = ""
+            missing.mpn_norm = ""
+            await session.commit()
+
+        async with async_session_factory() as session:
+            preview = await preview_pricing_run(
+                session,
+                workspace_id=workspace_id,
+                import_batch_id=batch_id,
+                scope_mode=EXPLICIT_ITEMS_SCOPE,
+                catalog_item_ids=[identified_id, missing_id],
+            )
+        assert preview.estimate.eligible_items == 2
+        assert preview.estimate.network_eligible_items == 1
+        assert preview.estimate.identity_blocked_items == 1
+        assert preview.estimate.unique_scrape_inputs == 1
+
+        async with async_session_factory() as session:
+            run = await create_pricing_run(
+                session,
+                workspace_id=workspace_id,
+                import_batch_id=batch_id,
+                celery_app=fake_celery,
+                source_mode="e2e_fixture_replay",
+                scope_mode=EXPLICIT_ITEMS_SCOPE,
+                catalog_item_ids=[identified_id, missing_id],
+                start=_replay_start(
+                    expected_scope_hash=preview.scope_hash,
+                    expected_catalog_snapshot_hash=preview.catalog_snapshot_hash,
+                ),
+            )
+            run_id = run.id
+
+        async with async_session_factory() as session:
+            targets = list(
+                (
+                    await session.scalars(
+                        select(ScrapeTarget)
+                        .where(ScrapeTarget.pricing_run_id == run_id)
+                        .order_by(ScrapeTarget.input_hash)
+                    )
+                ).all()
+            )
+            assert len(targets) == 2, "blocked row deduplicated onto a valid URL target"
+            missing_item = await session.scalar(
+                select(PricingRunItem).where(
+                    PricingRunItem.pricing_run_id == run_id,
+                    PricingRunItem.catalog_item_id == missing_id,
+                )
+            )
+            assert missing_item is not None
+            missing_run_item_id = missing_item.id
+            missing_target = await session.get(
+                ScrapeTarget, missing_item.scrape_target_id
+            )
+            assert missing_target is not None
+            assert missing_target.status == "terminal_failure"
+            assert missing_target.execution_status == "TERMINAL_FAILED"
+            assert missing_target.acquisition_status == "BLOCKED"
+            assert missing_target.error_category == "customer_identity_missing"
+            assert missing_target.reason_codes == ["customer_identity_missing"]
+            assert missing_target.network_attempts == 0
+            assert missing_target.query == ""
+
+        # Simulate a stale/replayed target being reset to a collectable state.
+        # The worker must re-check the frozen customer namespace instead of
+        # trusting the target status and sending the MPN-only row to Prom.
+        async with async_session_factory() as session:
+            missing_item = await session.get(PricingRunItem, missing_run_item_id)
+            assert missing_item is not None
+            stale_target = await session.get(ScrapeTarget, missing_item.scrape_target_id)
+            assert stale_target is not None
+            stale_target.status = "queued"
+            stale_target.execution_status = "QUEUED"
+            stale_target.acquisition_status = "NOT_STARTED"
+            stale_target.parse_status = "NOT_STARTED"
+            stale_target.evidence_status = "NONE"
+            stale_target.downstream_eligibility = "UNKNOWN"
+            stale_target.reason_codes = []
+            stale_target.error_category = None
+            stale_target.error_detail = None
+            stale_target.finished_at = None
+            missing_item.status = "queued"
+            await session.commit()
+
+        assert (
+            await process_pricing_item(
+                missing_run_item_id,
+                task_id="missing-identity-test",
+            )
+            == run_id
+        )
+        assert network_called is False
+        async with async_session_factory() as session:
+            missing_item = await session.get(PricingRunItem, missing_run_item_id)
+            assert missing_item is not None
+            assert missing_item.status == "classified"
+            assert missing_item.checkpoint["reason"] == "customer_identity_missing"
+            missing_target = await session.get(
+                ScrapeTarget, missing_item.scrape_target_id
+            )
+            assert missing_target is not None
+            assert missing_target.network_attempts == 0
+    finally:
+        await _delete_disposable_workspace(workspace_id)
+        get_settings.cache_clear()
 
 
 @pytest.mark.skipif(
@@ -383,14 +613,36 @@ async def test_preview_freezes_the_scope_and_the_start_time_replay_inputs(
         )
         override_id = uuid4()
         async with async_session_factory() as session:
-            session.add(
-                CatalogItemOverride(
-                    id=override_id,
-                    catalog_item_id=item_ids[0],
-                    user_id=None,
-                    stock_status="dead_stock",
-                    reason="Правка оператора до старта прогона",
-                )
+            session.add_all(
+                [
+                    CatalogItemOverride(
+                        id=override_id,
+                        catalog_item_id=item_ids[0],
+                        user_id=None,
+                        stock_status="dead_stock",
+                        reason="Правка оператора до старта прогона",
+                    ),
+                    CatalogIdentityLink(
+                        id=uuid4(),
+                        workspace_id=workspace_id,
+                        catalog_item_id=item_ids[0],
+                        our_oem_norm="1K0121250",
+                        extracted_oem_norm="7L6121253C",
+                        extracted_raw="7L6 121 253 C",
+                        raw_context="customer reference row",
+                        extraction_method="KEMP_REFERENCE_MAP_V2",
+                        validation_status="CONFIRMED",
+                        anomaly=None,
+                        corroborating_sources=["KEMP_REFERENCE_MAP_V2"],
+                        validation_details={
+                            "source": "customer_reference",
+                            "confidence": "0.90",
+                            "automatic_eligible": True,
+                        },
+                        method_version=active_identity_graph_config().method_version,
+                        config_sha256=active_identity_runtime_sha256(),
+                    ),
+                ]
             )
             await session.commit()
 
@@ -479,6 +731,20 @@ async def test_preview_freezes_the_scope_and_the_start_time_replay_inputs(
             assert frozen.catalog_item_override_id == override_id
             assert frozen.start_snapshot["catalog_item_override_id"] == str(override_id)
             assert frozen.start_snapshot["current_price"] == "800.00"
+            assert len(frozen.start_snapshot["confirmed_identity_links"]) == 1
+            frozen_cross = await session.scalar(
+                select(CrossLink).where(
+                    CrossLink.pricing_run_id == run_id,
+                    CrossLink.our_oem_norm == "1K0121250",
+                    CrossLink.extracted_oem_norm == "7L6121253C",
+                )
+            )
+            assert frozen_cross is not None
+            assert frozen_cross.validation_status == "CONFIRMED"
+            assert frozen_cross.extraction_method == "CATALOG_IDENTITY_SNAPSHOT"
+            assert frozen_cross.validation_details["evidence_kind"] == (
+                "FROZEN_CATALOG_IDENTITY"
+            )
             replay_override = await load_run_item_start_override(session, frozen)
             assert replay_override is not None
             assert replay_override.id == override_id
@@ -486,6 +752,501 @@ async def test_preview_freezes_the_scope_and_the_start_time_replay_inputs(
     finally:
         await _delete_disposable_workspace(workspace_id)
         get_settings.cache_clear()
+
+
+@pytest.mark.skipif(
+    not _postgres_enabled(),
+    reason="set MARKO_RUN_POSTGRES_INTEGRATION=1 with a disposable PostgreSQL database",
+)
+@pytest.mark.asyncio
+async def test_scope_loader_rejects_fanout_private_and_stale_identity_edges() -> None:
+    """Only current, one-item, public identities may widen a pricing scope."""
+
+    _require_disposable_database()
+    workspace_id = uuid4()
+    batch_id = uuid4()
+    item_ids = (uuid4(), uuid4(), uuid4())
+    active_method = active_identity_graph_config().method_version
+    active_hash = active_identity_runtime_sha256()
+
+    def link(
+        item_id: UUID,
+        our_oem: str,
+        extracted_oem: str,
+        *,
+        method: str = active_method,
+        config_hash: str = active_hash,
+    ) -> CatalogIdentityLink:
+        return CatalogIdentityLink(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            catalog_item_id=item_id,
+            our_oem_norm=our_oem,
+            extracted_oem_norm=extracted_oem,
+            extracted_raw=extracted_oem,
+            raw_context="p15017 identity safety",
+            extraction_method="KEMP_REFERENCE_MAP_V2",
+            validation_status="CONFIRMED",
+            anomaly=None,
+            corroborating_sources=["KEMP_REFERENCE_MAP_V2"],
+            validation_details={
+                "confidence": "0.90",
+                "automatic_eligible": True,
+            },
+            method_version=method,
+            config_sha256=config_hash,
+        )
+
+    try:
+        await _seed_catalog(
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+            item_ids=item_ids,
+        )
+        async with async_session_factory() as session:
+            session.add_all(
+                [
+                    # Same number claims two catalog items: both edges fail
+                    # closed even though each row says CONFIRMED.
+                    link(item_ids[0], "1K0121250", "SHARED777"),
+                    link(item_ids[1], "1K0121251", "SHARED777"),
+                    # A private shelf value is not a part identity.
+                    link(item_ids[2], "1K0121252", "77643352C"),
+                    # An edge from an older algorithm cannot be revived.
+                    link(
+                        item_ids[2],
+                        "1K0121252",
+                        "STALE123",
+                        method="identity-graph-v1",
+                    ),
+                    # Control: one current, public, unambiguous edge survives.
+                    link(item_ids[2], "1K0121252", "SAFE123"),
+                ]
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            candidates = await load_scope_candidates(
+                session,
+                workspace_id=workspace_id,
+                import_batch_id=batch_id,
+            )
+
+        by_id = {candidate.catalog_item_id: candidate for candidate in candidates}
+        assert by_id[item_ids[0]].confirmed_identity_links == ()
+        assert by_id[item_ids[1]].confirmed_identity_links == ()
+        links = by_id[item_ids[2]].confirmed_identity_links
+        assert [entry["extracted_oem_norm"] for entry in links] == ["SAFE123"]
+    finally:
+        await _delete_disposable_workspace(workspace_id)
+
+
+@pytest.mark.skipif(
+    not _postgres_enabled(),
+    reason="set MARKO_RUN_POSTGRES_INTEGRATION=1 with a disposable PostgreSQL database",
+)
+@pytest.mark.asyncio
+async def test_scope_loader_freezes_only_effective_verified_fitment_crosses() -> None:
+    _require_disposable_database()
+    workspace_id = uuid4()
+    batch_id = uuid4()
+    item_ids = (uuid4(), uuid4(), uuid4())
+    now = datetime.now(UTC)
+    evidence_claim_id = uuid4()
+    weak_claim_id = uuid4()
+    wrong_numbers_claim_id = uuid4()
+
+    def cross(
+        position: int,
+        article: str,
+        *,
+        status: str = "source_confirmed",
+        installation_position: str | None = None,
+        evidence_ids: list[str] | None = None,
+        source_count: int = 2,
+        fingerprint: str,
+    ) -> FitmentCrossReference:
+        return FitmentCrossReference(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            brand="External catalog",
+            normalized_brand="externalcatalog",
+            article=article,
+            normalized_article=article,
+            oe=f"1K012125{position}",
+            normalized_oe=f"1K012125{position}",
+            installation_position=installation_position,
+            vehicle_key=None,
+            relation_status=status,
+            confidence=Decimal("0.90"),
+            evidence_ids=evidence_ids or [str(uuid4()), str(uuid4())],
+            source_count=source_count,
+            human_feedback_count=1 if status == "human_rejected" else 0,
+            record_fingerprint=fingerprint,
+            method_version=FITMENT_CROSS_METHOD_VERSION,
+            valid_from=now,
+            last_verified_at=now,
+        )
+
+    try:
+        await _seed_catalog(
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+            item_ids=item_ids,
+        )
+        async with async_session_factory() as session:
+            source_id = uuid4()
+            document_id = uuid4()
+            run_id = uuid4()
+            run_item_id = uuid4()
+            capture_id = uuid4()
+            observation_id = uuid4()
+            analysis_id = uuid4()
+            assessment_id = uuid4()
+            source_url = "https://catalog.example.test/cross/EXTA123"
+            session.add(
+                FitmentSource(
+                    id=source_id,
+                    workspace_id=workspace_id,
+                    source_key="official-cross-catalog",
+                    source_type="official_catalog",
+                    source_tier="A",
+                    base_reliability=Decimal("0.95"),
+                    domain="catalog.example.test",
+                    access_method="licensed_api",
+                    access_status="PERMITTED",
+                    access_reference="p15017-authority-fixture",
+                    robots_checked=True,
+                    terms_checked=True,
+                    rate_limit="1/min",
+                    cache_policy="fact-level-only",
+                    policy_version="authority-v1",
+                    reviewed_at=now,
+                )
+            )
+            await session.flush()
+            session.add(
+                FitmentSourceDocument(
+                    id=document_id,
+                    source_id=source_id,
+                    source_url=source_url,
+                    retrieval_query="1K0121250",
+                    content_sha256="e" * 64,
+                    content_locator="fixture://official-cross-catalog/EXTA123",
+                    response_metadata={"data_class": "synthetic_adversarial"},
+                    retrieved_at=now,
+                    expires_at=now + timedelta(days=30),
+                )
+            )
+            session.add(
+                PricingRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    import_batch_id=batch_id,
+                    status="failed",
+                    policy_version="authority-fixture-v1",
+                    policy_config={},
+                    parser_version="fixture-v1",
+                    error="authority fixture",
+                    finished_at=now,
+                )
+            )
+            await session.flush()
+            session.add(
+                PricingRunItem(
+                    id=run_item_id,
+                    pricing_run_id=run_id,
+                    catalog_item_id=item_ids[0],
+                    status="collected",
+                    idempotency_key=f"authority:{run_item_id}",
+                    attempts=1,
+                )
+            )
+            await session.flush()
+            session.add(
+                RawMarketCapture(
+                    id=capture_id,
+                    pricing_run_item_id=run_item_id,
+                    source="fixture",
+                    capture_kind="test_fixture",
+                    payload={"synthetic": True},
+                    content_sha256="f" * 64,
+                    parser_version="fixture-v1",
+                )
+            )
+            await session.flush()
+            session.add(
+                MarketObservation(
+                    id=observation_id,
+                    pricing_run_item_id=run_item_id,
+                    catalog_item_id=item_ids[0],
+                    raw_capture_id=capture_id,
+                    source="fixture",
+                    source_listing_id="authority-listing-1",
+                    seller_id="authority-seller",
+                    seller_name="Independent authority fixture",
+                    url="https://market.example.test/EXTA123",
+                    title="External cross EXTA123",
+                    description="Synthetic persisted authority chain",
+                    description_available=True,
+                    condition_raw="new",
+                    condition_state="NEW",
+                    condition_reason_codes=["FIXTURE"],
+                    cross_candidates=[],
+                    brand_raw="External catalog",
+                    search_oe_norm="1K0121250",
+                    extracted_oe_norms=["1K0121250"],
+                    oe_verification_status="UNKNOWN",
+                    oe_evidence=[],
+                    price=Decimal("1000"),
+                    currency="UAH",
+                    currency_raw="UAH",
+                    is_available=True,
+                    match_confidence=Decimal("0.95"),
+                    source_confidence=Decimal("0.55"),
+                    source_confidence_factors={"fixture": "0.55"},
+                    source_confidence_method_version="fixture-v1",
+                    parser_version="fixture-v1",
+                    calibration_exclusion_codes=["SYNTHETIC_FIXTURE"],
+                    observed_at=now,
+                )
+            )
+            session.add(
+                FitmentAnalysis(
+                    id=analysis_id,
+                    workspace_id=workspace_id,
+                    catalog_item_id=item_ids[0],
+                    pricing_run_id=run_id,
+                    idempotency_key=f"authority-{analysis_id.hex}"[:64],
+                    status="completed",
+                    workflow_state="FITMENT_EVALUATED",
+                    target_identity={"oe_numbers": ["1K0121250"]},
+                    target_commercial_context={"currency": "UAH"},
+                    source_policy_snapshot={"policy": "authority-v1"},
+                    request_payload={},
+                    contract_version="fitment-contract-v1",
+                    scoring_version="fitment-score-v1",
+                    request_sha256="1" * 64,
+                    finished_at=now,
+                )
+            )
+            await session.flush()
+            session.add(
+                FitmentCandidateAssessment(
+                    id=assessment_id,
+                    analysis_id=analysis_id,
+                    market_observation_id=observation_id,
+                    candidate_identity={"manufacturer_article": "EXTA123"},
+                    candidate_commercial_context={"currency": "UAH"},
+                    compatibility_status="confirmed_compatible",
+                    compatibility_probability=Decimal("0.99"),
+                    positive_evidence=Decimal("1"),
+                    negative_evidence=Decimal("0"),
+                    coverage=Decimal("1"),
+                    contradiction_rate=Decimal("0"),
+                    missing_critical_ratio=Decimal("0"),
+                    hard_rejections=[],
+                    reason_codes=["AUTHORITATIVE_CROSS"],
+                    missing_critical_fields=[],
+                    feature_consensus={},
+                    authoritative_confirmation=True,
+                    requires_manual_review=False,
+                    evidence_ids=[
+                        str(evidence_claim_id),
+                        str(weak_claim_id),
+                        str(wrong_numbers_claim_id),
+                    ],
+                    price_comparability_status="manual_review",
+                    price_eligible=False,
+                    competitor_weight=Decimal("0"),
+                    price_factor_trace={},
+                    price_reason_codes=["IDENTITY_ONLY"],
+                    contract_version="fitment-contract-v1",
+                    scoring_version="fitment-score-v1",
+                )
+            )
+            await session.flush()
+            session.add(
+                FitmentEvidenceClaim(
+                    id=evidence_claim_id,
+                    analysis_id=analysis_id,
+                    assessment_id=assessment_id,
+                    source_document_id=document_id,
+                    evidence_key=f"authority:{evidence_claim_id}",
+                    feature="cross_confirmed",
+                    evidence_value=Decimal("1"),
+                    source_external_id="official-cross-catalog",
+                    source_type="official_catalog",
+                    source_tier="A",
+                    source_reliability=Decimal("0.95"),
+                    extraction_confidence=Decimal("0.99"),
+                    directness=Decimal("1"),
+                    independence_factor=Decimal("1"),
+                    freshness_factor=Decimal("1"),
+                    correlation_group="official-cross-catalog",
+                    polarity="supports",
+                    statement_status="FACT",
+                    claim_value={"article": "EXTA123", "oe": "1K0121250"},
+                    source_url=source_url,
+                    raw_fragment="EXTA123 -> 1K0121250",
+                    source_document_sha256="e" * 64,
+                    retrieved_at=now,
+                )
+            )
+            session.add_all(
+                [
+                    FitmentEvidenceClaim(
+                        id=weak_claim_id,
+                        analysis_id=analysis_id,
+                        assessment_id=assessment_id,
+                        source_document_id=document_id,
+                        evidence_key=f"authority:{weak_claim_id}",
+                        feature="cross_confirmed",
+                        evidence_value=Decimal("1"),
+                        source_external_id="official-cross-catalog",
+                        source_type="official_catalog",
+                        source_tier="A",
+                        source_reliability=Decimal("0.95"),
+                        extraction_confidence=Decimal("0.10"),
+                        directness=Decimal("1"),
+                        independence_factor=Decimal("1"),
+                        freshness_factor=Decimal("1"),
+                        correlation_group="official-cross-catalog",
+                        polarity="supports",
+                        statement_status="FACT",
+                        claim_value={"article": "EXTA123", "oe": "1K0121250"},
+                        source_url=source_url,
+                        raw_fragment="EXTA123 -> 1K0121250",
+                        source_document_sha256="e" * 64,
+                        retrieved_at=now,
+                    ),
+                    FitmentEvidenceClaim(
+                        id=wrong_numbers_claim_id,
+                        analysis_id=analysis_id,
+                        assessment_id=assessment_id,
+                        source_document_id=document_id,
+                        evidence_key=f"authority:{wrong_numbers_claim_id}",
+                        feature="cross_confirmed",
+                        evidence_value=Decimal("1"),
+                        source_external_id="official-cross-catalog",
+                        source_type="official_catalog",
+                        source_tier="A",
+                        source_reliability=Decimal("0.95"),
+                        extraction_confidence=Decimal("0.99"),
+                        directness=Decimal("1"),
+                        independence_factor=Decimal("1"),
+                        freshness_factor=Decimal("1"),
+                        correlation_group="official-cross-catalog",
+                        polarity="supports",
+                        statement_status="FACT",
+                        claim_value={"article": "OTHER123", "oe": "OTHER456"},
+                        source_url=source_url,
+                        raw_fragment="OTHER123 -> OTHER456",
+                        source_document_sha256="e" * 64,
+                        retrieved_at=now,
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    # The first row has a complete, current, Tier-A primary
+                    # evidence chain and is safe for one-hop widening.
+                    cross(
+                        0,
+                        "EXTA123",
+                        evidence_ids=[str(evidence_claim_id)],
+                        source_count=1,
+                        fingerprint="a" * 64,
+                    ),
+                    # These cached conclusions name the same pair, but their
+                    # primary evidence is weak or names other numbers.  They
+                    # must not create additional frozen authority.
+                    cross(
+                        0,
+                        "EXTA123",
+                        evidence_ids=[str(weak_claim_id)],
+                        source_count=1,
+                        fingerprint="e" * 64,
+                    ),
+                    cross(
+                        0,
+                        "EXTA123",
+                        evidence_ids=[str(wrong_numbers_claim_id)],
+                        source_count=1,
+                        fingerprint="f" * 64,
+                    ),
+                    # A live rejection of the same pair blocks the older
+                    # confirmation even if the caller omitted supersedes_id.
+                    cross(1, "EXTB123", fingerprint="b" * 64),
+                    cross(
+                        1,
+                        "EXTB123",
+                        status="human_rejected",
+                        fingerprint="c" * 64,
+                    ),
+                    # Position-limited evidence cannot become a global edge
+                    # until the catalog row carries matching structured fitment.
+                    cross(
+                        2,
+                        "EXTC123",
+                        installation_position="rear-right",
+                        fingerprint="d" * 64,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            candidates = await load_scope_candidates(
+                session,
+                workspace_id=workspace_id,
+                import_batch_id=batch_id,
+            )
+
+        by_id = {candidate.catalog_item_id: candidate for candidate in candidates}
+        admitted = by_id[item_ids[0]].confirmed_identity_links
+        assert len(admitted) == 1
+        assert admitted[0]["identity_evidence_kind"] == "FITMENT_CROSS_REFERENCE"
+        assert admitted[0]["extracted_oem_norm"] == "EXTA123"
+        assert by_id[item_ids[1]].confirmed_identity_links == ()
+        assert by_id[item_ids[2]].confirmed_identity_links == ()
+
+        # A later source-policy row is authoritative.  The immutable evidence
+        # remains in storage, but it must stop widening the next preview as
+        # soon as access is revoked.
+        async with async_session_factory() as session:
+            session.add(
+                FitmentSource(
+                    id=uuid4(),
+                    workspace_id=workspace_id,
+                    source_key="official-cross-catalog",
+                    source_type="official_catalog",
+                    source_tier="A",
+                    base_reliability=Decimal("0.95"),
+                    domain="catalog.example.test",
+                    access_method="licensed_api",
+                    access_status="NOT_PERMITTED",
+                    access_reference="p15017-revoked-policy",
+                    robots_checked=True,
+                    terms_checked=True,
+                    rate_limit="0/min",
+                    cache_policy="retain-evidence-only",
+                    policy_version="authority-v2-revoked",
+                    reviewed_at=now + timedelta(seconds=1),
+                )
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            revoked = await load_scope_candidates(
+                session,
+                workspace_id=workspace_id,
+                import_batch_id=batch_id,
+            )
+        revoked_by_id = {candidate.catalog_item_id: candidate for candidate in revoked}
+        assert revoked_by_id[item_ids[0]].confirmed_identity_links == ()
+    finally:
+        await _delete_disposable_workspace(workspace_id)
 
 
 @pytest.mark.skipif(
@@ -668,7 +1429,8 @@ async def test_scope_and_start_snapshot_are_immutable_after_creation(
             await session.commit()
 
         for statement in (
-            "UPDATE pricing_runs SET scope_hash = 'f' || repeat('0', 63) WHERE id = :id",
+            "UPDATE pricing_runs SET scope_hash = 'f' || repeat('0', 63) "
+            "WHERE id = :id",
             "UPDATE pricing_runs SET scope_mode = 'FULL_CATALOG' WHERE id = :id",
             "UPDATE pricing_runs SET scope_manifest = '{}'::json WHERE id = :id",
             "UPDATE pricing_runs SET full_catalog_confirmed = true WHERE id = :id",
@@ -704,7 +1466,7 @@ async def test_scope_and_start_snapshot_are_immutable_after_creation(
     reason="set MARKO_RUN_POSTGRES_INTEGRATION=1 with a disposable PostgreSQL database",
 )
 @pytest.mark.asyncio
-async def test_operator_full_catalog_run_without_confirmation_is_rejected_by_the_database(
+async def test_operator_full_catalog_without_confirmation_is_rejected_by_database(
     monkeypatch,
 ) -> None:
     """Подтверждение полного каталога держится проверкой БД, а не только кодом."""
@@ -875,9 +1637,7 @@ async def test_concurrent_starts_with_different_scopes_never_share_a_run(
                         source_mode="e2e_fixture_replay",
                         scope_mode=EXPLICIT_ITEMS_SCOPE,
                         catalog_item_ids=[item_ids[position]],
-                        start=_replay_start(
-                            idempotency_key=f"racing-scope-{position}"
-                        ),
+                        start=_replay_start(idempotency_key=f"racing-scope-{position}"),
                     )
                 except Exception as exc:  # noqa: BLE001 - важен именно тип отказа
                     await session.rollback()
@@ -1021,9 +1781,9 @@ async def test_dead_letter_replay_keeps_the_bounded_scope_of_the_failed_run(
             )
             failed_id = failed.id
             failed_scope_hash = failed.scope_hash
-            failed_membership = failed.scope_manifest[
-                SCOPE_MANIFEST_EXECUTION_SECTION
-            ]["membership"]["catalog_item_ids"]
+            failed_membership = failed.scope_manifest[SCOPE_MANIFEST_EXECUTION_SECTION][
+                "membership"
+            ]["catalog_item_ids"]
         assert failed_membership == [str(item_ids[0]), str(item_ids[1])]
 
         dead_letter_id = await _fail_run_with_a_dead_letter(failed_id)

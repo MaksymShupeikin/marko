@@ -16,6 +16,7 @@ from marko.infrastructure.db.models import (
     CatalogDiscoveryRun,
     CrossLink,
 )
+from marko.services.catalog_discovery import _effective_discovery_offer
 from metis.pricing import CANDIDATE_GATE_ORDER
 
 
@@ -137,6 +138,15 @@ async def load_candidate_selection_report(
             )
         ).all()
     )
+    # Run counters and histograms are mutable legacy fields.  Recompute the
+    # customer-facing outcome from the current read boundary so an old
+    # discovery row labelled PRICING_EVIDENCE cannot reappear as price input
+    # after a safety upgrade.
+    effective_offers = [_effective_discovery_offer(offer) for offer in offers]
+    effective_histogram: dict[str, int] = {}
+    for offer in effective_offers:
+        key = f"{offer.selection_status}:{offer.selection_reason}"
+        effective_histogram[key] = effective_histogram.get(key, 0) + 1
     applicability_unknown_count = sum(
         "APPLICABILITY_UNKNOWN" in (offer.selection_flags or []) for offer in offers
     )
@@ -170,10 +180,18 @@ async def load_candidate_selection_report(
     return CandidateSelectionReport(
         run_id=run.id,
         query=run.query,
-        histogram=dict(run.selection_histogram or {}),
-        pricing_evidence_count=run.pricing_evidence_count,
-        reference_only_count=run.reference_only_count,
-        rejected_candidate_count=run.rejected_candidate_count,
+        histogram=dict(sorted(effective_histogram.items())),
+        pricing_evidence_count=sum(
+            offer.selection_status == "PRICING_EVIDENCE"
+            for offer in effective_offers
+        ),
+        reference_only_count=sum(
+            offer.selection_status == "REFERENCE_ONLY"
+            for offer in effective_offers
+        ),
+        rejected_candidate_count=sum(
+            offer.selection_status == "REJECTED" for offer in effective_offers
+        ),
         prom_reported_total=run.prom_reported_total,
         retrieved_count=run.retrieved_count,
         persisted_count=run.persisted_count,

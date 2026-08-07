@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
@@ -64,6 +64,7 @@ from marko.services.catalog_discovery import (
     CatalogDiscoveryError,
     collect_catalog_discovery,
 )
+from marko.services.discovery_funnel import _effective_status
 from metis.pricing import classify_tier, normalize_candidate_oem
 
 
@@ -1083,7 +1084,17 @@ async def build_coverage_report(
                 )
             ).all()
         )
-        facts = [offer_facts(offer) for offer in offers]
+        # Recompute the discovery-only status at the measurement boundary as
+        # well.  Otherwise a legacy row labelled PRICING_EVIDENCE could
+        # inflate the plan-S ceiling even though no frozen market observation
+        # exists for it.
+        facts = [
+            replace(
+                offer_facts(offer),
+                selection_status=_effective_status(offer),
+            )
+            for offer in offers
+        ]
         for item in facts:
             if item.is_available is True:
                 availability["available"] += 1

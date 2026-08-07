@@ -817,6 +817,10 @@ class CatalogDiscoveryOffer(Base):
             name="ck_catalog_discovery_offer_values",
         ),
         CheckConstraint(
+            "reference_price IS NULL OR sale_price <= reference_price",
+            name="ck_catalog_discovery_offer_sale_not_above_reference",
+        ),
+        CheckConstraint(
             "identity_status IN ('QUERY_TOKEN_PRESENT', 'SEARCH_RESULT_UNVERIFIED')",
             name="ck_catalog_discovery_offer_identity_status",
         ),
@@ -1046,6 +1050,14 @@ class CatalogImportBatch(TimestampMixin, Base):
             "status IN ('queued', 'running', 'completed', 'partial', 'failed')",
             name="ck_catalog_import_batch_status",
         ),
+        CheckConstraint(
+            "(row_outcomes_contract_version IS NULL AND "
+            "row_outcomes_sha256 IS NULL) OR "
+            "(row_outcomes_contract_version = 'catalog-row-outcomes-v1' AND "
+            "char_length(row_outcomes_sha256) = 64 AND "
+            "json_array_length(row_outcomes) = total_rows)",
+            name="ck_catalog_import_row_outcomes_contract",
+        ),
         Index(
             "ix_catalog_import_batch_workspace_created", "workspace_id", "created_at"
         ),
@@ -1067,6 +1079,13 @@ class CatalogImportBatch(TimestampMixin, Base):
     imported_rows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     rejected_rows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error_log: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    row_outcomes_contract_version: Mapped[str | None] = mapped_column(String(48))
+    row_outcomes_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    row_outcomes: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+        server_default="[]",
+    )
     # Frequency of every characteristic name the workbook carried, split into
     # recognized and unrecognized, plus extraction anomalies.  A seller renaming
     # a field has to show up as a number here instead of as missing identity.
@@ -1942,6 +1961,16 @@ class MarketObservation(Base):
         ),
         CheckConstraint("price > 0", name="ck_market_observation_price_positive"),
         CheckConstraint(
+            "(sale_price IS NULL OR sale_price > 0) AND "
+            "(reference_price IS NULL OR reference_price > 0)",
+            name="ck_market_observation_price_boundaries",
+        ),
+        CheckConstraint(
+            "reference_price IS NULL OR sale_price IS NULL OR "
+            "sale_price <= reference_price",
+            name="ck_market_observation_sale_not_above_reference",
+        ),
+        CheckConstraint(
             "match_confidence >= 0 AND match_confidence <= 1",
             name="ck_market_observation_match_confidence",
         ),
@@ -2223,6 +2252,39 @@ class CandidateComparabilityReview(Base):
             "latency_ms >= 0",
             name="ck_candidate_comparability_review_latency",
         ),
+        CheckConstraint(
+            "contract_version IN ('comparability-v1', 'comparability-v2')",
+            name="ck_candidate_comparability_review_contract",
+        ),
+        CheckConstraint(
+            "contract_version <> 'comparability-v2' OR ("
+            "identity_verdict IN ('MATCH', 'NOT_MATCH', 'MANUAL_REVIEW') AND "
+            "identity_match_level IN "
+            "('EXACT', 'ACCEPTABLE_ANALOGUE', 'SUSPICIOUS', 'NOT_APPLICABLE') AND "
+            "identity_match_score >= 0 AND identity_match_score <= 1 AND "
+            "decision_confidence >= 0 AND decision_confidence <= 1 AND "
+            "image_consistency IN "
+            "('SUPPORTS', 'CONFLICTS', 'NON_DIAGNOSTIC', 'UNAVAILABLE') AND "
+            "pricing_admission IN ('ADMITTED', 'EXCLUDED', 'MANUAL_REVIEW') AND "
+            "reasoning_effort IN ('none', 'low', 'medium', 'high', 'xhigh', 'max') AND "
+            "char_length(model_settings_hash) = 64)",
+            name="ck_candidate_comparability_review_v2_complete",
+        ),
+        CheckConstraint(
+            "contract_version <> 'comparability-v2' OR "
+            "((identity_verdict = 'MATCH' AND identity_match_level IN "
+            "('EXACT', 'ACCEPTABLE_ANALOGUE')) OR "
+            "(identity_verdict <> 'MATCH' AND identity_match_level IN "
+            "('SUSPICIOUS', 'NOT_APPLICABLE')))",
+            name="ck_candidate_comparability_review_v2_identity_level",
+        ),
+        CheckConstraint(
+            "contract_version <> 'comparability-v2' OR "
+            "((pricing_admission = 'ADMITTED' AND verdict = 'COMPARABLE') OR "
+            "(pricing_admission = 'EXCLUDED' AND verdict = 'NOT_COMPARABLE') OR "
+            "(pricing_admission = 'MANUAL_REVIEW' AND verdict = 'INSUFFICIENT_DATA'))",
+            name="ck_candidate_comparability_review_v2_projection",
+        ),
         Index(
             "ix_candidate_comparability_review_observation_time",
             "market_observation_id",
@@ -2234,6 +2296,12 @@ class CandidateComparabilityReview(Base):
             "input_hash",
             "prompt_version",
             "model_id",
+        ),
+        Index(
+            "ix_candidate_comparability_review_model_settings",
+            "workspace_id",
+            "input_hash",
+            "model_settings_hash",
         ),
     )
 
@@ -2252,13 +2320,30 @@ class CandidateComparabilityReview(Base):
     attempt_no: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     prompt_version: Mapped[str] = mapped_column(String(80))
     schema_version: Mapped[str] = mapped_column(String(80))
+    contract_version: Mapped[str] = mapped_column(
+        String(40), default="comparability-v1", server_default="comparability-v1"
+    )
     provider: Mapped[str] = mapped_column(String(50))
     model_id: Mapped[str] = mapped_column(String(160))
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    model_settings_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     decision_source: Mapped[str] = mapped_column(String(24))
     status: Mapped[str] = mapped_column(String(20))
     verdict: Mapped[str] = mapped_column(String(24), index=True)
     match_level: Mapped[str] = mapped_column(String(32))
     confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    identity_verdict: Mapped[str | None] = mapped_column(String(24), index=True)
+    identity_match_level: Mapped[str | None] = mapped_column(String(32))
+    identity_match_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    decision_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    image_consistency: Mapped[str | None] = mapped_column(String(24))
+    reason_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    pricing_admission: Mapped[str | None] = mapped_column(String(24), index=True)
+    pricing_reason_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     rationale: Mapped[str] = mapped_column(Text)
     dimension_findings: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, default=list, server_default="[]"
@@ -2280,6 +2365,10 @@ class CandidateComparabilityReview(Base):
         JSON, default=dict, server_default="{}"
     )
     latency_ms: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    estimated_cost: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    rate_card_version: Mapped[str | None] = mapped_column(String(120))
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_detail: Mapped[str | None] = mapped_column(Text)
     reviewed_at: Mapped[datetime] = mapped_column(
@@ -2317,6 +2406,30 @@ class CandidateComparabilityFeedback(Base):
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
             name="ck_candidate_comparability_feedback_confidence",
         ),
+        CheckConstraint(
+            "corrected_identity_verdict IS NULL OR corrected_identity_verdict IN "
+            "('MATCH', 'NOT_MATCH', 'MANUAL_REVIEW')",
+            name="ck_candidate_comparability_feedback_identity_verdict",
+        ),
+        CheckConstraint(
+            "corrected_identity_match_level IS NULL OR corrected_identity_match_level IN "
+            "('EXACT', 'ACCEPTABLE_ANALOGUE', 'SUSPICIOUS', 'NOT_APPLICABLE')",
+            name="ck_candidate_comparability_feedback_identity_level",
+        ),
+        CheckConstraint(
+            "corrected_pricing_admission IS NULL OR corrected_pricing_admission IN "
+            "('ADMITTED', 'EXCLUDED', 'MANUAL_REVIEW')",
+            name="ck_candidate_comparability_feedback_pricing_admission",
+        ),
+        CheckConstraint(
+            "(corrected_identity_verdict IS NULL AND "
+            "corrected_identity_match_level IS NULL AND "
+            "corrected_pricing_admission IS NULL) OR "
+            "(decision = 'CORRECT' AND corrected_identity_verdict IS NOT NULL AND "
+            "corrected_identity_match_level IS NOT NULL AND "
+            "corrected_pricing_admission IS NOT NULL)",
+            name="ck_candidate_comparability_feedback_v2_correction",
+        ),
         Index(
             "ix_candidate_comparability_feedback_review_time",
             "review_id",
@@ -2341,6 +2454,9 @@ class CandidateComparabilityFeedback(Base):
     decision: Mapped[str] = mapped_column(String(16))
     corrected_verdict: Mapped[str | None] = mapped_column(String(24))
     corrected_match_level: Mapped[str | None] = mapped_column(String(32))
+    corrected_identity_verdict: Mapped[str | None] = mapped_column(String(24))
+    corrected_identity_match_level: Mapped[str | None] = mapped_column(String(32))
+    corrected_pricing_admission: Mapped[str | None] = mapped_column(String(24))
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
     reason: Mapped[str] = mapped_column(Text)
     evidence_corrections: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -2471,7 +2587,9 @@ class AiEvidenceRequestClaim(Base):
         ForeignKey("ai_evidence_request_events.id", ondelete="RESTRICT"), index=True
     )
     claim_token: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True)
-    recovery: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    recovery: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     claimed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -2618,7 +2736,9 @@ class AiEvidenceExtraction(Base):
     reasoning_effort: Mapped[str] = mapped_column(String(16))
     max_output_tokens: Mapped[int] = mapped_column(Integer)
     max_input_chars: Mapped[int] = mapped_column(Integer)
-    target_fields: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    target_fields: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     verifier_version: Mapped[str] = mapped_column(String(80))
     oe_normalization_version: Mapped[str] = mapped_column(String(80))
     mode: Mapped[str] = mapped_column(String(16))
@@ -2930,7 +3050,8 @@ class CatalogIdentityLink(Base):
         CheckConstraint(
             "anomaly IS NULL OR anomaly IN "
             "('OE_SOURCE_CONFLICT', 'SHARED_ARTICLE_FANOUT', "
-            "'OE_SUPERSEDED_BY_NEWER_REFERENCE')",
+            "'OE_SUPERSEDED_BY_NEWER_REFERENCE', 'SOURCE_SEMANTIC_CONFLICT', "
+            "'PUBLIC_NUMBER_SEMANTIC_FANOUT', 'STALE_AFTER_REPARSE')",
             name="ck_catalog_identity_link_anomaly",
         ),
         # An anomaly means we cannot tell which number is right, so the link

@@ -14,6 +14,8 @@ from metis.pricing import (
 from marko.services.decision_fingerprint import canonical_sha256
 from marko.services.oe_reenrichment import (
     OeReenrichmentDataError,
+    _classification_allows_automatic,
+    _persisted_semantic_gate_allowed,
     build_reenrichment_patch,
 )
 from marko.services.offer_identity import (
@@ -26,6 +28,10 @@ from marko.services.scraper_contract import (
     PROM_OUTPUT_SCHEMA_VERSION,
     QueryInput,
 )
+from marko.services.semantic_candidate_features import (
+    SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+)
+from marko.services.semantic_candidate_gate import SEMANTIC_PRICING_GATE_VERSION
 
 
 Q = "1K0121251"
@@ -106,14 +112,81 @@ def _product(**overrides: object) -> dict[str, object]:
     return value
 
 
+def _frozen_item(oe: str = Q):
+    return SimpleNamespace(
+        category="water_pumps",
+        oe_norm=oe,
+        mpn_norm="",
+        identity_status="OE_CONFIRMED",
+        part_numbers_norm=(),
+    )
+
+
 def _build(product: dict[str, object], *, crosses=()):
     return build_reenrichment_patch(
         observation=_observation(),
-        frozen_item=SimpleNamespace(category="water_pumps", oe_norm=Q),
+        frozen_item=_frozen_item(),
         capture=_capture(product),
         run=SimpleNamespace(policy_config={}),
         confirmed_crosses=crosses,
     )
+
+
+@pytest.mark.parametrize(
+    ("classification", "expected"),
+    (
+        (None, False),
+        (
+            SimpleNamespace(
+                is_owned=False,
+                is_kemp=False,
+                is_used=False,
+                cohort_role="TARGET_MARKET",
+            ),
+            True,
+        ),
+        (
+            SimpleNamespace(
+                is_owned=True,
+                is_kemp=False,
+                is_used=False,
+                cohort_role="TARGET_MARKET",
+            ),
+            False,
+        ),
+        (
+            SimpleNamespace(
+                is_owned=False,
+                is_kemp=True,
+                is_used=False,
+                cohort_role="KEMP_REFERENCE",
+            ),
+            False,
+        ),
+        (
+            SimpleNamespace(
+                is_owned=False,
+                is_kemp=False,
+                is_used=True,
+                cohort_role="USED_REJECTED",
+            ),
+            False,
+        ),
+        (
+            SimpleNamespace(
+                is_owned=False,
+                is_kemp=False,
+                is_used=False,
+                cohort_role="MANUAL_REVIEW",
+            ),
+            False,
+        ),
+    ),
+)
+def test_reenrichment_automatic_admission_requires_target_market_classification(
+    classification, expected
+) -> None:
+    assert _classification_allows_automatic(classification) is expected
 
 
 def test_reenrichment_exact_oe_is_deterministic_and_network_free() -> None:
@@ -121,7 +194,7 @@ def test_reenrichment_exact_oe_is_deterministic_and_network_free() -> None:
     observation = _observation()
     inputs = {
         "observation": observation,
-        "frozen_item": SimpleNamespace(category="water_pumps", oe_norm=Q),
+        "frozen_item": _frozen_item(),
         "capture": capture,
         "run": SimpleNamespace(policy_config={}),
     }
@@ -143,6 +216,74 @@ def test_reenrichment_never_promotes_query_without_candidate_evidence() -> None:
     assert patch.verified_matched_oe_norm is None
     assert patch.comparison_identity_key is None
     assert patch.automatic_eligible is False
+
+
+def test_reenrichment_never_promotes_without_the_persisted_semantic_gate() -> None:
+    """Identity replay must not bypass the category-aware pricing boundary."""
+
+    patch = _build(_product(oe_raw=Q))
+
+    assert patch.oe_verification_status == OeVerificationStatus.VERIFIED_EXACT.value
+    assert patch.automatic_eligible is False
+    assert patch.comparability_hard_gate_result == "MANUAL_REVIEW"
+    assert (
+        "REENRICHMENT_SEMANTIC_GATE_REQUIRED"
+        in patch.comparison_evidence["reason_codes"]
+    )
+
+
+def test_reenrichment_rejects_gate_snapshot_without_identity_admission_proof() -> None:
+    """A current gate version alone cannot authorize identity replay."""
+
+    observation = SimpleNamespace(
+        candidate_snapshot={
+            "semantic_gate": {
+                "status": "PRICING_EVIDENCE",
+                "reason": "OK",
+                "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+                "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+            }
+        }
+    )
+
+    assert _persisted_semantic_gate_allowed(observation) is False
+
+    observation.candidate_snapshot["identity_admission"] = {
+        "automatic_evidence_sufficient": True,
+    }
+    assert _persisted_semantic_gate_allowed(observation) is True
+
+
+def test_reenrichment_binds_gate_to_listing_and_capture() -> None:
+    """A valid gate copied from another retained offer must be rejected."""
+
+    capture_id = uuid4()
+    observation = SimpleNamespace(
+        source_listing_id="42",
+        raw_capture_id=capture_id,
+        candidate_snapshot={
+            "source_locator": {
+                "source_listing_id": "42",
+                "raw_capture_id": str(capture_id),
+            },
+            "semantic_gate": {
+                "status": "PRICING_EVIDENCE",
+                "reason": "OK",
+                "gate_version": SEMANTIC_PRICING_GATE_VERSION,
+                "extractor_version": SEMANTIC_FEATURE_EXTRACTOR_VERSION,
+            },
+            "identity_admission": {
+                "automatic_evidence_sufficient": True,
+            },
+        },
+    )
+
+    assert _persisted_semantic_gate_allowed(observation) is True
+    observation.source_listing_id = "other-listing"
+    assert _persisted_semantic_gate_allowed(observation) is False
+    observation.source_listing_id = "42"
+    observation.raw_capture_id = uuid4()
+    assert _persisted_semantic_gate_allowed(observation) is False
 
 
 def test_reenrichment_uses_only_confirmed_one_hop_cross() -> None:
@@ -170,7 +311,7 @@ def test_reenrichment_records_missing_source_record_as_typed_failure() -> None:
     ):
         build_reenrichment_patch(
             observation=_observation(listing_id="missing"),
-            frozen_item=SimpleNamespace(category="water_pumps", oe_norm=Q),
+            frozen_item=_frozen_item(),
             capture=_capture(_product()),
             run=SimpleNamespace(policy_config={}),
         )
@@ -189,7 +330,7 @@ def test_reenrichment_reads_target_output_through_capture_reference() -> None:
 
     patch = build_reenrichment_patch(
         observation=_observation(),
-        frozen_item=SimpleNamespace(category="water_pumps", oe_norm=Q),
+        frozen_item=_frozen_item(),
         capture=reference_capture,
         run=SimpleNamespace(policy_config={}),
         structured_payload=structured.payload,

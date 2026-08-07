@@ -8,14 +8,15 @@ repeating a successful network collection.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, replace
 import functools
 import hashlib
 import json
 import math
 import traceback
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any, Literal, Mapping
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -45,75 +46,64 @@ from marko.infrastructure.db.models import (
 )
 from marko.infrastructure.db.session import async_session_factory
 from marko.parsers.prom.config import ScrapeConfig
-from marko.parsers.prom.gateway import PromGateway
-from metis.pricing import (
-    CalibrationPair,
-    normalize_oe,
-    COMPARABILITY_CONTRACT_VERSION,
-    CoefficientModel,
-    CohortRole,
-    ComparisonEvidence,
-    CompetitorOffer,
-    ProductTier,
-    PricingResult,
-    RecommendationAction,
-    TierClassification,
-    bind_persisted_provenance,
-    calibration_dataset_hash,
-    category_comparability_rule,
-    classify_condition,
-    classify_tier,
-    cluster_diagnostic_to_dict,
-    comparison_evidence_from_dict,
-    comparison_evidence_to_dict,
-    HardGateResult,
-    extract_description_cross_candidates,
-    load_approved_brand_rules,
-    normalize_brand,
-    recommend_price,
-    robust_dispersion_trace,
-)
-from metis.pricing.raise_policy import RaisePolicy, RaiseStrategy
-from metis.pricing.numeric import (
-    TRANSCENDENTAL_PROFILE_VERSION,
-    TRANSCENDENTAL_RELATIVE_TOLERANCE,
-)
-from metis.pricing.statistics import median as decimal_median
-from metis.pricing.observability import pricing_event
-from marko.services.collection_guard import DistributedCollectionGuard
-from marko.services.catalog_costs import (
-    decrypt_cost_record,
-    get_decrypted_catalog_cost,
+from marko.parsers.prom.exceptions import is_self_describing_pagination_redirect
+from marko.parsers.prom.gateway import PROM_PRODUCT_DETAIL_SCHEMA_VERSION, PromGateway
+from marko.services.ai_evidence_extraction import (
+    AI_EVIDENCE_SELECTION_VERSION,
+    resolve_ai_evidence_config,
 )
 from marko.services.calibration_eligibility import (
     CALIBRATION_ELIGIBILITY_VERSION,
     calibration_identity_record,
     evaluate_calibration_eligibility,
 )
+from marko.services.catalog_costs import (
+    decrypt_cost_record,
+    get_decrypted_catalog_cost,
+)
+from marko.services.catalog_identity_safety import (
+    catalog_identity_pair_has_safe_shape,
+    is_internal_catalog_code,
+)
+from marko.services.collection_guard import DistributedCollectionGuard
 from marko.services.decision_fingerprint import (
     DECISION_FINGERPRINT_VERSION,
     build_decision_fingerprint_payload,
     canonical_sha256,
 )
-from marko.services.matching import PriceComparison
 from marko.services.llm_comparability import (
     ComparabilityMatchLevel,
     EffectiveComparabilityReview,
     apply_effective_review_to_evidence,
+    current_review_runtime_identity,
     ensure_run_item_comparability_reviews,
     ensure_target_comparability_reviews,
     load_effective_review_map,
 )
+from marko.services.comparability_activation import (
+    comparability_activation_artifact_verified,
+)
+from marko.services.matching import PriceComparison
+from marko.services.market_price import effective_observation_price
 from marko.services.offer_identity import (
-    ConfirmedCross,
-    SOURCE_PAGE_ASSERTION_CONFIDENCE,
-    SourceAssertion,
+    IdentityNamespace,
+    IDENTITY_NAMESPACE_VERSION,
     OE_EXTRACTOR_VERSION,
+    SOURCE_PAGE_ASSERTION_CONFIDENCE,
+    automatic_identity_evidence_sufficient,
+    customer_identity_namespace,
+    ConfirmedCross,
     OeVerificationStatus,
+    SourceAssertion,
     bind_oe_verification,
     canonical_cross_identity_key,
     evidence_items_to_dicts,
     extract_oe_evidence,
+    extract_prom_motors_cross_proposals,
+    namespace_bound_verification,
+    namespace_identity_admission,
+    persisted_identity_fields_consistent,
+    verified_identity_namespace,
     verify_offer_identity,
 )
 from marko.services.offer_processing import (
@@ -131,53 +121,105 @@ from marko.services.offer_processing import (
 from marko.services.pricing_runs import (
     FrozenCatalogItem,
     PricingRunSnapshotError,
-    build_pricing_context,
     activation_artifact_verified,
+    build_pricing_context,
     calibrate_tier_coefficients,
+    customer_identity_available,
+    customer_identity_query,
+    customer_search_context,
     frozen_catalog_item_from_snapshot,
     get_latest_override,
-    load_run_item_start_cost_record,
-    uses_frozen_start_inputs,
     load_run_execution_policy,
+    load_run_item_start_cost_record,
     load_target_tier_coefficients,
     persist_run_calibration_pairs,
     require_activated_run_policy,
     resolve_execution_override,
     run_is_bounded,
+    uses_frozen_start_inputs,
     verified_start_snapshot,
     verify_run_membership,
 )
 from marko.services.scrape_journal import (
     evidence_coverage_ratio,
+    load_detail_replay_cache,
     load_replay_cache,
     persist_http_traces,
     retained_raw_evidence_bytes,
 )
+from marko.services.scrape_coverage import (
+    coverage_summary,
+    reported_total_from_search_pages,
+)
 from marko.services.scrape_runtime import (
+    LogicalRequestTrace,
     ScrapeExecutionTrace,
     scrape_execution,
 )
 from marko.services.scraper_contract import (
+    PROM_ADAPTER_VERSION,
+    PROM_OUTPUT_SCHEMA_VERSION,
+    RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED,
     AcquisitionInput,
     AttemptMeasurement,
     AttemptResourceProbe,
     FrozenPromScraperAdapter,
-    PROM_ADAPTER_VERSION,
-    RETRIEVAL_KIND_PROM_OE_PAGE_WIDENED,
     ScrapeInput,
     ScrapeOutput,
     ScraperBoundaryError,
     ScraperErrorCode,
     build_acquisition_input,
     classify_scraper_exception,
+    declared_discovery_queries_from_payload,
     retrieval_kind_is_widened,
 )
 from marko.services.scraper_outbox import enqueue_dispatch
 from marko.services.source_access import require_live_prom_marketplace_collection
-from marko.services.ai_evidence_extraction import (
-    AI_EVIDENCE_SELECTION_VERSION,
-    resolve_ai_evidence_config,
+from marko.services.semantic_candidate_gate import (
+    apply_semantic_pricing_gate,
+    semantic_gate_snapshot_is_current,
 )
+from metis.pricing import (
+    COMPARABILITY_CONTRACT_VERSION,
+    CandidateItem,
+    CandidateSelectionConfig,
+    CandidateStatus,
+    CandidateVerdict,
+    CalibrationPair,
+    CoefficientModel,
+    CohortRole,
+    ComparisonEvidence,
+    CompetitorOffer,
+    HardGateResult,
+    PricingResult,
+    ProductTier,
+    ReferenceItem,
+    RecommendationAction,
+    TierClassification,
+    bind_persisted_provenance,
+    calibration_dataset_hash,
+    category_comparability_rule,
+    check_candidate,
+    classify_condition,
+    classify_tier,
+    cluster_diagnostic_to_dict,
+    comparison_evidence_from_dict,
+    comparison_evidence_to_dict,
+    extract_description_cross_candidates,
+    load_approved_brand_rules,
+    load_candidate_selection_config,
+    normalize_brand,
+    normalize_oe,
+    recommend_price,
+    robust_dispersion_trace,
+)
+from metis.pricing.numeric import (
+    TRANSCENDENTAL_PROFILE_VERSION,
+    TRANSCENDENTAL_RELATIVE_TOLERANCE,
+)
+from metis.pricing.observability import pricing_event
+from metis.pricing.raise_policy import RaisePolicy, RaiseStrategy
+from metis.pricing.statistics import median as decimal_median
 
 
 class PricingItemNotFoundError(LookupError):
@@ -250,7 +292,8 @@ def resolve_bound_execution_item(
         raise FrozenBindingError(
             "START_SNAPSHOT_UNBOUND: run item "
             f"{getattr(run_item, 'id', None)} belongs to run "
-            f"{getattr(run_item, 'pricing_run_id', None)}, not {getattr(run, 'id', None)}"
+            f"{getattr(run_item, 'pricing_run_id', None)}, not "
+            f"{getattr(run, 'id', None)}"
         )
     if live_item is not None and _snapshot_binding_value(
         getattr(live_item, "id", None)
@@ -292,14 +335,10 @@ def _require_complete_snapshot(
                 )
             continue
         if not isinstance(value, str):
-            raise FrozenBindingError(
-                f"START_SNAPSHOT_CORRUPT: {name} is not a string"
-            )
+            raise FrozenBindingError(f"START_SNAPSHOT_CORRUPT: {name} is not a string")
         # ``mpn_norm`` законно бывает пустым; остальные обязаны нести значение.
         if name != "mpn_norm" and not value.strip():
-            raise FrozenBindingError(
-                f"START_SNAPSHOT_INCOMPLETE: {name} is empty"
-            )
+            raise FrozenBindingError(f"START_SNAPSHOT_INCOMPLETE: {name} is empty")
 
 
 def _require_snapshot_bindings(
@@ -468,7 +507,7 @@ class CollectionClaim:
     run_item_id: UUID
     catalog_item_id: UUID
     product_url: str | None
-    oe_norm: str
+    search_identity: str
     scrape_target_id: UUID | None = None
     scrape_attempt_id: UUID | None = None
     delivery_no: int = 0
@@ -669,7 +708,7 @@ async def process_pricing_item(
             functools.partial(
                 _collect_comparison,
                 claim.product_url,
-                claim.oe_norm,
+                claim.search_identity,
                 excluded_seller_ids=claim.excluded_seller_ids,
             )
         )
@@ -700,9 +739,18 @@ async def _process_target_collection(claim: CollectionClaim) -> UUID:
     trace: ScrapeExecutionTrace | None = None
     try:
         async with async_session_factory() as session:
-            replay_cache = await load_replay_cache(
+            # Cards shared across positions first, this target's own evidence
+            # on top: a replay bound to this target must always win over the
+            # same URL captured for another one.
+            replay_cache = await load_detail_replay_cache(
                 session,
-                scrape_target_id=scrape_target_id,
+                max_age_hours=settings.pricing_detail_replay_max_age_hours,
+            )
+            replay_cache.update(
+                await load_replay_cache(
+                    session,
+                    scrape_target_id=scrape_target_id,
+                )
             )
         trace = ScrapeExecutionTrace(
             item_kind="comparison_job",
@@ -790,21 +838,63 @@ def _collect_target_output(
         timeout=settings.pricing_scraper_http_timeout_seconds,
         max_attempts=max(1, settings.pricing_scraper_http_max_attempts),
         max_sellers=max(1, settings.pricing_scraper_max_sellers),
+        max_detail_cards=max(0, settings.pricing_scraper_max_detail_cards),
         max_search_pages=max(1, settings.pricing_scraper_max_search_pages),
+        max_oe_page_pages=max(1, settings.pricing_scraper_max_oe_page_pages),
     )
     with scrape_execution(trace):
         output = FrozenPromScraperAdapter(
             config,
             excluded_seller_ids=excluded_seller_ids,
+            min_independent_sellers=(
+                settings.pricing_scraper_min_independent_sellers
+            ),
         ).extract(scrape_input)
     _raise_on_required_request_failure(trace)
     return output
 
 
-def _raise_on_required_request_failure(trace: ScrapeExecutionTrace) -> None:
-    failures = trace.failed_requests(
-        request_kinds={"product_page", "search_page"},
+def _required_request_failures(
+    trace: ScrapeExecutionTrace,
+) -> tuple[LogicalRequestTrace, ...]:
+    """Failures that leave the target without the evidence it came for.
+
+    A competitor's product card is not a required request.  ``PromGateway``
+    already degrades a broken card to ``detail_status=FAILED`` and keeps the
+    listing, and ``_detail_evidence_automatic_safe`` refuses to price it, so
+    failing the whole target here discarded every search page and every other
+    candidate that did complete — one 404 on one competitor made the position
+    permanently uncollected, because ``upstream_4xx`` is not retryable.  The
+    seed card is not affected: its fetch raises out of ``extract`` before this
+    check runs.  A target where *no* card completed is still fatal, because
+    search rows alone can never become automatically priceable.
+
+    A search page that fails is fatal unless it is Prom's canonical
+    end-of-pagination redirect, which ``_collect_candidates`` deliberately
+    stops on while keeping everything already collected.  The catalog-discovery
+    path has tolerated the same probe since 2026-07-26; the pricing path had
+    not, so a reported total larger than the served one discarded the position.
+    """
+
+    fatal = tuple(
+        failure
+        for failure in trace.failed_requests(request_kinds={"search_page"})
+        if not is_self_describing_pagination_redirect(
+            status_code=failure.response_status_code,
+            request_url=failure.prepared_url,
+            redirect_location=failure.response_redirect_location,
+        )
     )
+    card_failures = trace.failed_requests(request_kinds={"product_page"})
+    if card_failures and not trace.succeeded_requests(
+        request_kinds={"product_page"}
+    ):
+        fatal += (card_failures[0],)
+    return fatal
+
+
+def _raise_on_required_request_failure(trace: ScrapeExecutionTrace) -> None:
+    failures = _required_request_failures(trace)
     if not failures:
         return
     failure = failures[0]
@@ -849,6 +939,43 @@ def _verified_target_output(target: ScrapeTarget) -> ScrapeOutput:
         raise ScraperBoundaryError(
             ScraperErrorCode.EVIDENCE_PERSISTENCE,
             "Stored target payload SHA-256 does not match its content identity",
+            retryable=False,
+        )
+    if output.payload.get("schema_version") != PROM_OUTPUT_SCHEMA_VERSION:
+        return output
+    bindings = {
+        "input kind": (
+            str(target.input_kind or ""),
+            str(output.input_payload.get("input_kind") or ""),
+        ),
+        "input hash": (str(target.input_hash or ""), str(output.input_hash or "")),
+        "query": (str(target.query or ""), str(output.requested_query or "")),
+        "adapter version": (
+            str(target.adapter_version or ""),
+            str(output.payload.get("adapter_version") or ""),
+        ),
+    }
+    if target.input_kind == "product_seed":
+        bindings.update(
+            {
+                "canonical URL": (
+                    str(target.canonical_url or ""),
+                    str(output.input_payload.get("canonical_url") or ""),
+                ),
+                "product key": (
+                    str(target.product_key or ""),
+                    str(output.input_payload.get("product_key") or ""),
+                ),
+            }
+        )
+    mismatches = [
+        name for name, (expected, actual) in bindings.items() if expected != actual
+    ]
+    if mismatches:
+        raise ScraperBoundaryError(
+            ScraperErrorCode.EVIDENCE_PERSISTENCE,
+            "Stored target payload is not bound to its target: "
+            + ", ".join(mismatches),
             retryable=False,
         )
     return output
@@ -940,6 +1067,40 @@ async def _claim_item(
             await finalize_pricing_run(run.id)
             return None
         if target is not None:
+            # A stale/replayed target can outlive the identity state that was
+            # present when it was created.  Re-check the frozen customer
+            # namespace before *any* target status (including ``succeeded``)
+            # can materialize evidence.  This keeps old MPN-only targets from
+            # becoming priceable through a direct worker redelivery.
+            if not customer_identity_available(catalog_item):
+                error = ScraperBoundaryError(
+                    ScraperErrorCode.CUSTOMER_IDENTITY_MISSING,
+                    "Pricing collection requires a confirmed vehicle OE",
+                    retryable=False,
+                )
+                now = datetime.now(UTC)
+                if target.status != "terminal_failure":
+                    target.status = "terminal_failure"
+                    _set_terminal_target_contract(
+                        target,
+                        reason=error.code.value,
+                        raw_available=target.raw_size_bytes > 0,
+                    )
+                    target.error_category = error.code.value
+                    target.error_detail = str(error)[:4000]
+                    target.finished_at = target.finished_at or now
+                target.owner_task_id = None
+                target.lease_expires_at = None
+                item.status = "classified"
+                item.error = str(error)[:4000]
+                item.checkpoint = {
+                    "stage": "classified_without_evidence",
+                    "scrape_target_id": str(target.id),
+                    "reason": error.code.value,
+                    "at": now.isoformat(),
+                }
+                await session.commit()
+                return None
             return await _claim_target_item(
                 session,
                 item=item,
@@ -950,6 +1111,24 @@ async def _claim_item(
                 is_redelivery=is_redelivery,
             )
         if item.status == "collecting" and item.task_id and item.task_id != task_id:
+            return None
+        # Legacy/unbounded runs predate the materialized target boundary and
+        # therefore have no ``ScrapeTarget`` to carry the start-time identity
+        # admission.  Do not let that compatibility path turn an MPN-only
+        # customer row into a live Prom query.  The current run creator blocks
+        # this earlier; this guard closes the historical worker path as well.
+        if not customer_identity_available(catalog_item):
+            item.status = "classified"
+            item.error = (
+                "CUSTOMER_IDENTITY_MISSING: pricing collection requires "
+                "a confirmed vehicle OE"
+            )[:4000]
+            item.checkpoint = {
+                "stage": "classified_without_evidence",
+                "reason": "customer_identity_missing",
+                "at": datetime.now(UTC).isoformat(),
+            }
+            await session.commit()
             return None
         excluded_seller_ids = frozenset(
             await _owned_seller_external_ids(session, run.workspace_id)
@@ -967,7 +1146,7 @@ async def _claim_item(
             run_item_id=item.id,
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
-            oe_norm=catalog_item.oe_norm,
+            search_identity=customer_identity_query(catalog_item),
             excluded_seller_ids=excluded_seller_ids,
         )
 
@@ -1018,7 +1197,7 @@ async def _claim_target_item(
                 run_item_id=item.id,
                 catalog_item_id=catalog_item.id,
                 product_url=catalog_item.product_url,
-                oe_norm=catalog_item.oe_norm,
+                search_identity=target.query,
                 scrape_target_id=target.id,
                 scrape_attempt_id=attempt.id,
                 delivery_no=attempt.delivery_no,
@@ -1033,7 +1212,7 @@ async def _claim_target_item(
             run_item_id=item.id,
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
-            oe_norm=catalog_item.oe_norm,
+            search_identity=target.query,
             scrape_target_id=target.id,
             scrape_attempt_id=attempt.id,
             delivery_no=attempt.delivery_no,
@@ -1070,7 +1249,7 @@ async def _claim_target_item(
             run_item_id=item.id,
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
-            oe_norm=catalog_item.oe_norm,
+            search_identity=target.query,
             scrape_target_id=target.id,
             scrape_attempt_id=attempt.id,
             delivery_no=attempt.delivery_no,
@@ -1100,7 +1279,7 @@ async def _claim_target_item(
             run_item_id=item.id,
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
-            oe_norm=catalog_item.oe_norm,
+            search_identity=target.query,
             scrape_target_id=target.id,
             scrape_attempt_id=attempt.id,
             delivery_no=attempt.delivery_no,
@@ -1173,7 +1352,7 @@ async def _claim_target_item(
             run_item_id=item.id,
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
-            oe_norm=catalog_item.oe_norm,
+            search_identity=target.query,
             scrape_target_id=target.id,
             scrape_attempt_id=attempt.id,
             delivery_no=attempt.delivery_no,
@@ -1185,6 +1364,11 @@ async def _claim_target_item(
             target.input_kind,
             target.query if target.input_kind == "query" else target.original_url,
             query=target.query,
+            search_context=(
+                customer_search_context(catalog_item)
+                if target.input_kind == "query"
+                else None
+            ),
             language="ua",
             adapter_version=target.adapter_version,
         )
@@ -1218,7 +1402,7 @@ async def _claim_target_item(
             run_item_id=item.id,
             catalog_item_id=catalog_item.id,
             product_url=catalog_item.product_url,
-            oe_norm=catalog_item.oe_norm,
+            search_identity=target.query,
             scrape_target_id=target.id,
             scrape_attempt_id=attempt.id,
             delivery_no=attempt.delivery_no,
@@ -1276,7 +1460,7 @@ async def _claim_target_item(
         run_item_id=item.id,
         catalog_item_id=catalog_item.id,
         product_url=catalog_item.product_url,
-        oe_norm=catalog_item.oe_norm,
+        search_identity=target.query,
         scrape_target_id=target.id,
         scrape_attempt_id=attempt.id,
         delivery_no=attempt.delivery_no,
@@ -1404,6 +1588,22 @@ async def _persist_target_success(
                 target.id,
                 execution_no=claim.delivery_no,
             )
+            # What the page cap cost, measured rather than assumed.  Catalog
+            # discovery has reported this since 2026-07-26; without it the
+            # pricing path could not say whether a thin market was the market
+            # or the cap.
+            reported_total, pages_fetched = reported_total_from_search_pages(
+                completed_requests
+            )
+            unfetched_count, coverage_ratio, coverage_reason = coverage_summary(
+                reported_total=reported_total,
+                retrieved_count=len(output.comparison_payload.get("offers") or ()),
+                request_count=pages_fetched,
+                search_page_limit=max(
+                    1,
+                    get_settings().pricing_scraper_max_search_pages,
+                ),
+            )
             pricing_event(
                 "scrape_items_terminal",
                 status="success",
@@ -1413,6 +1613,13 @@ async def _persist_target_success(
                 delivery_no=claim.delivery_no,
                 evidence_coverage=str(coverage),
                 structured_completeness=str(output.structured_completeness),
+                prom_reported_total=reported_total,
+                search_pages_fetched=pages_fetched,
+                unfetched_count=unfetched_count,
+                coverage_ratio=(
+                    None if coverage_ratio is None else str(coverage_ratio)
+                ),
+                coverage_reason=coverage_reason,
             )
             return True
     except Exception:
@@ -1755,7 +1962,7 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
                 confirmed_crosses = await _load_confirmed_crosses(
                     session,
                     run=run,
-                    catalog_item=catalog_item,
+                    search_identity=target.query,
                 )
                 accounting = await _persist_payload_observations(
                     session,
@@ -1770,6 +1977,14 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
                     observed_at=observed_at,
                     source_type=target.source_type,
                     confirmed_crosses=confirmed_crosses,
+                    # Ключи только-извлечения, замороженные тем же входом. Без
+                    # них строка, найденная по ним, роняла бы прогон как
+                    # незаявленное расширение.
+                    declared_discovery_queries=(
+                        declared_discovery_queries_from_payload(
+                            output.input_payload
+                        )
+                    ),
                     # Конверт приобретения: подготовленный URL, идентичность
                     # запроса и запрошенный номер приезжают из самого payload-а,
                     # а не восстанавливаются из каталога.
@@ -1919,8 +2134,12 @@ async def _materialize_target_evidence_transaction(scrape_target_id: UUID) -> No
                     value=1,
                 )
                 status_metric = {
-                    OeVerificationStatus.VERIFIED_EXACT.value: "oe_verified_exact_total",
-                    OeVerificationStatus.VERIFIED_CROSS.value: "oe_verified_cross_total",
+                    OeVerificationStatus.VERIFIED_EXACT.value: (
+                        "oe_verified_exact_total"
+                    ),
+                    OeVerificationStatus.VERIFIED_CROSS.value: (
+                        "oe_verified_cross_total"
+                    ),
                     OeVerificationStatus.UNKNOWN.value: "oe_unknown_total",
                     OeVerificationStatus.CONFLICT.value: "oe_conflict_total",
                     OeVerificationStatus.AMBIGUOUS.value: "oe_ambiguous_total",
@@ -2079,6 +2298,7 @@ async def _verified_raw_evidence_manifest(
             "logical_request_id": str(request.id),
             "request_key": request.request_key,
             "request_kind": request.request_kind,
+            "prepared_url": request.prepared_url,
             "execution_no": request.execution_no,
             "sequence_no": request.sequence_no,
             "evidence_blob_id": str(blob.id),
@@ -2094,35 +2314,161 @@ async def _load_confirmed_crosses(
     session,
     *,
     run: PricingRun,
-    catalog_item: CatalogItem,
+    search_identity: str,
 ) -> tuple[ConfirmedCross, ...]:
-    """Load only explicit, one-hop CONFIRMED cross decisions for this run."""
+    """Load explicit one-hop CONFIRMED run evidence in either orientation."""
+
+    normalized_search_identity = normalize_oe(search_identity)
+    if normalized_search_identity is None:
+        return ()
 
     rows = list(
         (
             await session.scalars(
-                select(CrossLink).where(
+                select(CrossLink)
+                .where(
                     CrossLink.workspace_id == run.workspace_id,
                     CrossLink.pricing_run_id == run.id,
-                    CrossLink.our_oem_norm == catalog_item.oe_norm,
                     CrossLink.validation_status == "CONFIRMED",
+                    or_(
+                        CrossLink.our_oem_norm == normalized_search_identity,
+                        CrossLink.extracted_oem_norm == normalized_search_identity,
+                    ),
+                )
+                .order_by(
+                    CrossLink.our_oem_norm,
+                    CrossLink.extracted_oem_norm,
+                    CrossLink.id,
                 )
             )
         ).all()
     )
-    result: list[ConfirmedCross] = []
+    # A public OE may occur on more than one owned catalog item.  The global
+    # catalog reader already quarantines that fan-out; the run-local CrossLink
+    # reader must enforce the same rule or a single ambiguous edge can widen a
+    # different SKU's market.  First collect the candidate endpoints from the
+    # query, then fetch only rows touching those endpoints (not the whole run).
+    candidate_endpoints: set[str] = set()
     for row in rows:
-        raw_confidence = row.validation_details.get("confidence", "0.90")
+        if not catalog_identity_pair_has_safe_shape(
+            row.our_oem_norm, row.extracted_oem_norm
+        ):
+            continue
+        left = normalize_oe(row.our_oem_norm)
+        right = normalize_oe(row.extracted_oem_norm)
+        if left != normalized_search_identity and right != normalized_search_identity:
+            continue
+        details = row.validation_details if isinstance(row.validation_details, Mapping) else {}
+        if details.get("automatic_eligible") is True and left and right:
+            candidate_endpoints.add(
+                right if left == normalized_search_identity else left
+            )
+    related_rows: list[CrossLink] = []
+    if candidate_endpoints:
+        related_rows = list(
+            (
+                await session.scalars(
+                    select(CrossLink)
+                    .where(
+                        CrossLink.workspace_id == run.workspace_id,
+                        CrossLink.pricing_run_id == run.id,
+                        CrossLink.validation_status == "CONFIRMED",
+                        or_(
+                            CrossLink.our_oem_norm.in_(candidate_endpoints),
+                            CrossLink.extracted_oem_norm.in_(candidate_endpoints),
+                        ),
+                    )
+                    .order_by(
+                        CrossLink.our_oem_norm,
+                        CrossLink.extracted_oem_norm,
+                        CrossLink.id,
+                    )
+                )
+            ).all()
+        )
+    all_rows: list[CrossLink] = []
+    seen_row_ids: set[str] = set()
+    for row in (*rows, *related_rows):
+        row_id = str(row.id)
+        if row_id in seen_row_ids:
+            continue
+        seen_row_ids.add(row_id)
+        all_rows.append(row)
+
+    memberships: dict[str, set[str]] = {}
+    for row in all_rows:
+        if not catalog_identity_pair_has_safe_shape(
+            row.our_oem_norm, row.extracted_oem_norm
+        ):
+            continue
+        details = row.validation_details if isinstance(row.validation_details, Mapping) else {}
+        if details.get("automatic_eligible") is not True:
+            continue
+        try:
+            confidence = Decimal(str(details.get("confidence")))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if not confidence.is_finite() or not Decimal("0") < confidence <= Decimal("1"):
+            continue
+        left = normalize_oe(row.our_oem_norm)
+        right = normalize_oe(row.extracted_oem_norm)
+        item_id = str(row.catalog_item_id)
+        if left and right and item_id:
+            memberships.setdefault(left, set()).add(item_id)
+            memberships.setdefault(right, set()).add(item_id)
+    ambiguous_endpoints = {
+        number for number, item_ids in memberships.items() if len(item_ids) > 1
+    }
+    result: list[ConfirmedCross] = []
+    seen_candidates: set[str] = set()
+    for row in rows:
+        if not catalog_identity_pair_has_safe_shape(
+            row.our_oem_norm, row.extracted_oem_norm
+        ):
+            continue
+        row_our = normalize_oe(row.our_oem_norm)
+        row_extracted = normalize_oe(row.extracted_oem_norm)
+        if normalized_search_identity not in {row_our, row_extracted}:
+            # Defense in depth for alternate dialects, replay fakes, and a
+            # future query refactor: only an edge incident to this search may
+            # leave the reader.
+            continue
+        validation_details = (
+            row.validation_details
+            if isinstance(row.validation_details, Mapping)
+            else {}
+        )
+        # Both the customer identity snapshot and the description-cross
+        # snapshot must carry the explicit admission decision that produced
+        # them.  The catalog snapshot is a stronger source, but its method
+        # name alone is not a proof: a partially written/review-only row must
+        # never widen the one-hop graph into a pricing run.
+        if validation_details.get("automatic_eligible") is not True:
+            continue
+        raw_confidence = validation_details.get("confidence")
         try:
             confidence = Decimal(str(raw_confidence))
         except (InvalidOperation, TypeError, ValueError):
-            confidence = Decimal("0.90")
-        if not confidence.is_finite() or not Decimal("0") <= confidence <= Decimal("1"):
-            confidence = Decimal("0.90")
+            continue
+        if not confidence.is_finite() or not Decimal("0") < confidence <= Decimal("1"):
+            continue
+        candidate_identity = (
+            row.extracted_oem_norm
+            if row_our == normalized_search_identity
+            else row.our_oem_norm
+        )
+        candidate_identity = normalize_oe(candidate_identity)
+        if candidate_identity is None or candidate_identity in seen_candidates:
+            continue
+        if candidate_identity in ambiguous_endpoints:
+            # Keep the row visible in raw evidence, but never let a public
+            # number shared by multiple catalog items become a pricing cross.
+            continue
+        seen_candidates.add(candidate_identity)
         result.append(
             ConfirmedCross(
-                search_oe_norm=row.our_oem_norm,
-                candidate_oe_norm=row.extracted_oem_norm,
+                search_oe_norm=normalized_search_identity,
+                candidate_oe_norm=candidate_identity,
                 canonical_identity_key=canonical_cross_identity_key(
                     row.our_oem_norm,
                     row.extracted_oem_norm,
@@ -2150,6 +2496,30 @@ def _offer_payload_sha256(raw_offer: Any) -> str | None:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _verified_capture_raw_evidence(
+    capture: RawMarketCapture,
+) -> tuple[Mapping[str, Any], ...]:
+    """Return the capture manifest only when its canonical hash still matches."""
+
+    capture_payload = getattr(capture, "payload", None)
+    payload = capture_payload if isinstance(capture_payload, Mapping) else {}
+    raw_evidence = payload.get("raw_evidence")
+    expected_hash = str(payload.get("raw_manifest_sha256") or "").casefold()
+    if isinstance(raw_evidence, list) and raw_evidence:
+        actual_hash = canonical_sha256(raw_evidence)
+        entries_valid = all(
+            isinstance(entry, Mapping)
+            and len(str(entry.get("raw_content_sha256") or "")) == 64
+            and set(str(entry.get("raw_content_sha256") or "").casefold()).issubset(
+                set("0123456789abcdef")
+            )
+            for entry in raw_evidence
+        )
+        if entries_valid and actual_hash == expected_hash:
+            return tuple(raw_evidence)
+    return ()
+
+
 def _candidate_raw_manifest(
     capture: RawMarketCapture,
     *,
@@ -2164,27 +2534,13 @@ def _candidate_raw_manifest(
     an empty hash and can never verify OE identity or source provenance.
     """
 
-    capture_payload = getattr(capture, "payload", None)
-    payload = capture_payload if isinstance(capture_payload, Mapping) else {}
-    raw_evidence = payload.get("raw_evidence")
-    expected_hash = str(payload.get("raw_manifest_sha256") or "").casefold()
-    verified_hash = ""
-    if isinstance(raw_evidence, list) and raw_evidence:
-        actual_hash = canonical_sha256(raw_evidence)
-        entries_valid = all(
-            isinstance(entry, Mapping)
-            and len(str(entry.get("raw_content_sha256") or "")) == 64
-            and set(str(entry.get("raw_content_sha256") or "").casefold()).issubset(
-                set("0123456789abcdef")
-            )
-            for entry in raw_evidence
-        )
-        if entries_valid and actual_hash == expected_hash:
-            verified_hash = actual_hash
+    raw_evidence = _verified_capture_raw_evidence(capture)
     return {
         "source_record_id": source_record_id,
         "raw_capture_id": str(capture.id),
-        "raw_content_sha256": verified_hash,
+        "raw_content_sha256": (
+            canonical_sha256(list(raw_evidence)) if raw_evidence else ""
+        ),
     }
 
 
@@ -2357,6 +2713,232 @@ def _bind_acquisition_lineage(
         setattr(observation, name, value)
 
 
+def _market_candidate_selection_config() -> tuple[
+    CandidateSelectionConfig | None,
+    str | None,
+]:
+    """Load the deterministic semantic policy once per persistence batch.
+
+    ``market_collection`` is the pricing path, not the discovery path.  It
+    therefore cannot rely on discovery having already loaded
+    ``comparability.yaml``.  A missing or invalid policy is a manual-review
+    condition: collection remains observable, but no observation from that
+    batch may enter an automatic pricing cohort.
+    """
+
+    raw_path = str(get_settings().pricing_candidate_selection_path or "").strip()
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        backend_root = Path(__file__).resolve().parents[3]
+        candidate = backend_root / path
+        if candidate.is_file():
+            path = candidate
+    try:
+        return load_candidate_selection_config(path), None
+    except Exception as exc:  # noqa: BLE001 - fail closed at the pricing boundary
+        return None, f"SEMANTIC_GATE_CONFIG_UNAVAILABLE:{type(exc).__name__}"
+
+
+def _category_path_from_product(product: Mapping[str, Any]) -> tuple[int, ...]:
+    """Read Prom's root-to-leaf category path without inventing taxonomy."""
+
+    raw = product.get("category_ids")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    path: list[int] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return ()
+        try:
+            path.append(int(value))
+        except (TypeError, ValueError):
+            return ()
+    return tuple(path)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _catalog_semantic_reference_payload(
+    catalog_item: CatalogItem,
+) -> dict[str, Any]:
+    """Project the frozen catalog row into the semantic extractor boundary.
+
+    ``ReferenceItem`` intentionally stays small for candidate-selection.  The
+    semantic pricing gate, however, must be able to compare package/unit and
+    category-specific facts against the owned seed instead of treating a
+    missing seed field as an implicit match.  Only fields already present in
+    the frozen catalog snapshot are copied; this helper never invents a
+    condition, quantity, or physical specification.
+    """
+
+    identity_status = str(
+        getattr(catalog_item, "identity_status", "UNRESOLVED")
+        or "UNRESOLVED"
+    ).strip().upper()
+
+    def public_identity(value: Any) -> str | None:
+        normalized = normalize_oe(str(value or ""))
+        if not normalized or is_internal_catalog_code(normalized):
+            return None
+        return normalized
+
+    # ``CatalogItem.oe_norm`` is overloaded on legacy MPN_ONLY rows: it may
+    # contain KEMP's private 776... join key rather than a vehicle OE.  The
+    # semantic gate is not allowed to interpret that value as an OE and then
+    # manufacture a conflict/admission from it.  The retrieval identity is
+    # still frozen by ``customer_identity_query`` and remains available as a
+    # separately named field.
+    public_oe = (
+        public_identity(getattr(catalog_item, "oe_norm", None))
+        if identity_status == "OE_CONFIRMED"
+        else None
+    )
+    public_mpn = public_identity(getattr(catalog_item, "mpn_norm", None))
+    payload: dict[str, Any] = {
+        "name": str(getattr(catalog_item, "name", "") or ""),
+        "description": getattr(catalog_item, "description", None),
+        "brand": getattr(catalog_item, "brand", None),
+        "category": getattr(catalog_item, "category", None),
+        "sku": getattr(catalog_item, "sku", None),
+        "oe": public_oe,
+        "mpn": public_mpn,
+        "search_identity": customer_identity_query(catalog_item),
+        "identity_status": identity_status,
+        "applicability_brands": list(
+            getattr(catalog_item, "applicability_brands", ()) or ()
+        ),
+        "applicability_models": list(
+            getattr(catalog_item, "applicability_models", ()) or ()
+        ),
+    }
+    characteristics = getattr(catalog_item, "characteristics_raw", None)
+    if isinstance(characteristics, Mapping):
+        payload["characteristics"] = dict(characteristics)
+    raw_row = getattr(catalog_item, "raw_row", None)
+    if isinstance(raw_row, Mapping):
+        # Keep raw import fields nested so the semantic extractor can use
+        # their provenance without allowing this projection to become a
+        # second identity source.
+        payload["raw_row"] = dict(raw_row)
+    return payload
+
+
+def _market_semantic_candidate_verdict(
+    *,
+    reference: ReferenceItem,
+    product: Mapping[str, Any],
+    price: Decimal,
+    selection_config: CandidateSelectionConfig,
+    owned_sellers: set[str],
+    confirmed_crosses: tuple[ConfirmedCross, ...],
+    brand_tiers: dict[str, ProductTier],
+    authoritative_identity: bool,
+    verified_oe_identity: bool = False,
+    reference_payload: Mapping[str, Any] | None = None,
+    require_pricing_completeness: bool = False,
+    require_analogue_dimensions: bool = False,
+) -> CandidateVerdict:
+    """Apply the same semantic safety gate to the persisted pricing path.
+
+    The ordinary market collector already has a separate, provenance-bound OE
+    verifier.  This helper deliberately does *not* replace that verifier and
+    does not make a search hit an identity match.  Candidate selection is used
+    only to supply category/identity context to the semantic extractor; its
+    tier/calibration outcome is not allowed to override the existing pricing
+    policy here.  The final result is consequently a semantic admission
+    decision only: ``PRICING_EVIDENCE`` or a visible ``REFERENCE_ONLY`` hold.
+    """
+
+    title = str(product.get("name") or product.get("title") or "").strip()
+    description = _optional_string(product.get("description"))
+    seller_id = str(product.get("seller_id") or "").strip()[:255]
+    seller_name = str(product.get("seller_name") or "Unknown seller").strip()
+    article_field = _optional_string(product.get("sku"))
+    article_fields_list = [
+        (label, value)
+        for label, key in (("SKU", "sku"), ("MPN", "mpn"), ("OE", "oe_raw"))
+        if (value := _optional_string(product.get(key))) is not None
+    ]
+    raw_part_numbers = product.get("part_numbers")
+    if isinstance(raw_part_numbers, (list, tuple)):
+        article_fields_list.extend(
+            ("PART_NUMBER", value)
+            for item in raw_part_numbers
+            if (value := _optional_string(item)) is not None
+        )
+    article_fields = tuple(article_fields_list)
+    candidate = CandidateItem(
+        seller_id=seller_id,
+        seller_name=seller_name,
+        title=title,
+        description=description,
+        article_field=article_field,
+        article_fields=article_fields,
+        brand=_optional_string(product.get("brand")),
+        price=price,
+        condition=_optional_string(
+            product.get("condition") or product.get("condition_raw")
+        ),
+        category_id=_optional_int(product.get("category_id")),
+        category_path=_category_path_from_product(product),
+    )
+    selection = check_candidate(
+        reference,
+        candidate,
+        selection_config,
+        owned_seller_ids=owned_sellers,
+        confirmed_cross_oems=frozenset(
+            cross.candidate_oe_norm for cross in confirmed_crosses
+        ),
+        brand_tiers=brand_tiers,
+        tier_agnostic=True,
+        identity_source="PROM_OE_PAGE" if authoritative_identity else None,
+    )
+    # The collector has already established OE identity with
+    # ``verify_offer_identity``.  Only the *strategy* gates are intentionally
+    # not duplicated here.  Identity/domain/condition/package/applicability
+    # gates remain hard stops: replacing them with PRICING_EVIDENCE would let
+    # a blocked category, used/damaged offer, dismantler, or variant conflict
+    # reach the semantic gate and potentially re-enter the pricing cohort.
+    #
+    # ``OWN_BRAND`` is retained as a strategy-only exception because the
+    # persisted path assigns KEMP/reference rows their own cohort role and the
+    # calibration lane needs the semantic snapshot.  It can never make
+    # ``automatic_eligible`` true.  The other two reasons are defensive
+    # compatibility for callers that do not enable ``tier_agnostic``.
+    strategy_only_reasons = {
+        "OWN_BRAND",
+        "TIER_UNKNOWN",
+        "PREMIUM_NOT_CALIBRATED",
+    }
+    if (
+        selection.status is not CandidateStatus.PRICING_EVIDENCE
+        and selection.reason in strategy_only_reasons
+    ):
+        selection = replace(
+            selection,
+            status=CandidateStatus.PRICING_EVIDENCE,
+            reason="MARKET_VERIFIED_IDENTITY",
+        )
+    return apply_semantic_pricing_gate(
+        selection,
+        reference=reference,
+        candidate=dict(product),
+        authoritative_identity=authoritative_identity,
+        verified_oe_identity=verified_oe_identity,
+        reference_payload=reference_payload,
+        require_pricing_completeness=require_pricing_completeness,
+        require_analogue_dimensions=require_analogue_dimensions,
+    )
+
+
 async def _persist_payload_observations(
     session,
     *,
@@ -2371,17 +2953,35 @@ async def _persist_payload_observations(
     observed_at: datetime,
     source_type: str,
     confirmed_crosses: tuple[ConfirmedCross, ...] = (),
+    declared_discovery_queries: tuple[str, ...] = (),
     prepared_url: str | None = None,
     acquisition_input_hash: str | None = None,
     acquisition_query: str | None = None,
 ) -> OfferAccounting:
-    policy = (
-        load_run_execution_policy(run) if hasattr(run, "policy_config") else None
+    policy = load_run_execution_policy(run) if hasattr(run, "policy_config") else None
+    semantic_selection_config, semantic_config_error = (
+        _market_candidate_selection_config()
     )
+    if semantic_config_error is not None:
+        pricing_event(
+            "market_semantic_gate_config_unavailable",
+            pricing_run_id=str(run.id),
+            pricing_run_item_id=str(run_item.id),
+            reason=semantic_config_error,
+        )
+    expected_search_identity = normalize_oe(customer_identity_query(catalog_item))
+    seed_identity_namespace = customer_identity_namespace(catalog_item)
+    search_identity = normalize_oe(acquisition_query)
+    if search_identity is None or search_identity != expected_search_identity:
+        raise EvidenceAccountingError(
+            "ACQUISITION_QUERY_BINDING_ERROR: retained acquisition query does not "
+            "match the catalog identity frozen for this run item"
+        )
     persisted = 0
     rejected = 0
     failed = 0
     persisted_listing_ids: set[str] = set()
+    retained_raw_evidence = _verified_capture_raw_evidence(capture)
     for raw_offer_index, raw_offer in enumerate(offers):
         payload_sha256 = _offer_payload_sha256(raw_offer)
         processed = process_offer_candidate(
@@ -2492,12 +3092,49 @@ async def _persist_payload_observations(
                 capture,
                 source_record_id=source_listing_id,
             )
+            detail_evidence_safe = _detail_evidence_automatic_safe(
+                product,
+                seller_id=seller_id,
+                retained_raw_evidence=retained_raw_evidence,
+            )
+            detail = product.get("detail_evidence")
+            verified_detail_manifest = (
+                {
+                    "source_record_id": str(detail.get("source_url") or ""),
+                    "raw_capture_id": str(capture.id),
+                    "raw_content_sha256": str(
+                        detail.get("content_sha256") or ""
+                    ).casefold(),
+                }
+                if detail_evidence_safe and isinstance(detail, Mapping)
+                else None
+            )
             evidence_source = dict(product)
             if candidate.upstream_comparison_evidence is not None:
                 evidence_source["comparison_evidence"] = dict(
                     candidate.upstream_comparison_evidence
                 )
-            oe_items = extract_oe_evidence(evidence_source, raw_manifest)
+            # Which number actually retrieved this row.  Everything that asks
+            # "was the search identity found here" must ask about that number:
+            # a row off a declared cross does not carry the primary OE, and
+            # checking it against the primary either loses the evidence or
+            # credits it with evidence it never had.
+            offer_search_identity = _offer_search_identity(
+                detail,
+                primary=search_identity,
+                confirmed_crosses=confirmed_crosses,
+                discovery_queries=declared_discovery_queries,
+            )
+            oe_items = extract_oe_evidence(
+                evidence_source,
+                raw_manifest,
+                verified_detail_manifest=verified_detail_manifest,
+            )
+            proposed_crosses = extract_prom_motors_cross_proposals(
+                evidence_source,
+                verified_detail_manifest,
+                search_oe_norm=offer_search_identity,
+            )
             lineage = candidate.acquisition
             effective_retrieval_kind = _persisted_retrieval_kind(raw_offer, candidate)
             # Что именно утверждает источник. Продавцы на странице кода детали
@@ -2520,17 +3157,49 @@ async def _persist_payload_observations(
             # является, поэтому у него все поля пусты: иначе строка выглядит
             # как утверждение площадки, которого никто не делал.
             asserted = source_assertion is not None and (
-                source_assertion.authoritative_for(normalize_oe(catalog_item.oe_norm))
+                source_assertion.authoritative_for(offer_search_identity)
             )
             verification = verify_offer_identity(
-                catalog_item.oe_norm,
+                offer_search_identity,
                 oe_items,
                 confirmed_crosses,
+                proposed_crosses,
                 legacy_without_reenrichment=bool(
                     isinstance(raw_offer, Mapping)
                     and raw_offer.get("legacy_unverified")
                 ),
                 source_assertion=source_assertion,
+                allow_short_numeric_native=(
+                    seed_identity_namespace is IdentityNamespace.MPN
+                ),
+            )
+            verification = namespace_bound_verification(
+                verification,
+                seed_identity_namespace,
+            )
+            # A title/description OE can support discovery and manual review,
+            # but it is not an independent identity assertion for the
+            # persisted pricing cohort.  Require a structured/detail source
+            # or the provenance-bound Prom grouping before automatic
+            # admission; the verifier's broader review semantics stay intact.
+            base_automatic_identity_evidence = automatic_identity_evidence_sufficient(
+                verification,
+                oe_items,
+                # ``asserts_identity`` is only a method-level claim.  The
+                # source assertion must also bind to this query and retained
+                # capture before it can bypass seller-side text evidence.
+                authoritative_identity=bool(asserted),
+                # A candidate MPN/SKU pair is still one seller's namespace;
+                # pricing requires an explicit OE/cross/detail source.
+                require_oe_namespace=True,
+            )
+            automatic_identity_evidence, identity_namespace_reason = (
+                namespace_identity_admission(
+                    seed_namespace=seed_identity_namespace,
+                    verification=verification,
+                    evidence_items=oe_items,
+                    base_automatic_evidence=base_automatic_identity_evidence,
+                )
             )
             parser_contract_verified = bool(
                 str(run.parser_version).strip() == PROM_ADAPTER_VERSION
@@ -2570,6 +3239,111 @@ async def _persist_payload_observations(
                 required_currency="UAH",
                 category=catalog_item.category,
             )
+            if not automatic_identity_evidence:
+                identity_reasons = [
+                    *comparison_evidence.reason_codes,
+                    "OE_AUTOMATIC_IDENTITY_EVIDENCE_INSUFFICIENT",
+                ]
+                if identity_namespace_reason not in {
+                    None,
+                    "IDENTITY_EVIDENCE_INSUFFICIENT",
+                }:
+                    identity_reasons.append(identity_namespace_reason)
+                comparison_evidence = replace(
+                    comparison_evidence,
+                    hard_gate_result=HardGateResult.MANUAL_REVIEW,
+                    reason_codes=tuple(dict.fromkeys(identity_reasons)),
+                )
+            semantic_verdict: CandidateVerdict | None = None
+            semantic_gate_error = semantic_config_error
+            if semantic_selection_config is not None:
+                try:
+                    # Keep two different facts separate.  A retained Prom
+                    # part-code page is an acquisition-level assertion and
+                    # may replace a missing seller-side OE.  A candidate OE
+                    # verified from ordinary search text/fields is evidence
+                    # about the card, not permission to bypass the semantic
+                    # anti-stuffing/description-only boundary.
+                    authoritative_identity = bool(
+                        asserted and seed_identity_namespace is IdentityNamespace.OE
+                    )
+                    verified_oe_identity = bool(
+                        seed_identity_namespace is IdentityNamespace.OE
+                        and verification.status
+                        in {
+                            OeVerificationStatus.VERIFIED_EXACT,
+                            OeVerificationStatus.VERIFIED_CROSS,
+                        }
+                    )
+                    semantic_verdict = _market_semantic_candidate_verdict(
+                        reference=ReferenceItem(
+                            oem=search_identity,
+                            title=str(catalog_item.name or search_identity),
+                            price=catalog_item.current_price,
+                            brand=_optional_string(catalog_item.brand),
+                            category=_optional_string(catalog_item.category),
+                        ),
+                        product=product,
+                        price=candidate.price,
+                        selection_config=semantic_selection_config,
+                        owned_sellers=owned_sellers,
+                        confirmed_crosses=confirmed_crosses,
+                        brand_tiers=brand_tiers,
+                        reference_payload=_catalog_semantic_reference_payload(
+                            catalog_item
+                        ),
+                        # A verified cross needs category-specific physical
+                        # evidence in addition to the base package/unit facts.
+                        # Exact OE still requires the base facts and any
+                        # explicitly asserted seed configuration.
+                        require_pricing_completeness=True,
+                        require_analogue_dimensions=(
+                            verification.status
+                            is OeVerificationStatus.VERIFIED_CROSS
+                        ),
+                        # A Prom part-code page is an explicit marketplace
+                        # grouping.  Ordinary text/search acquisition is not
+                        # an identity assertion and stays fail-closed.
+                        authoritative_identity=authoritative_identity,
+                        verified_oe_identity=verified_oe_identity,
+                    )
+                except Exception as exc:  # noqa: BLE001 - manual-review fallback
+                    semantic_gate_error = (
+                        f"SEMANTIC_GATE_EVALUATION_FAILED:{type(exc).__name__}"
+                    )
+            semantic_gate_details = (
+                semantic_verdict.details.get("semantic_gate")
+                if semantic_verdict is not None
+                and isinstance(semantic_verdict.details, Mapping)
+                and isinstance(semantic_verdict.details.get("semantic_gate"), Mapping)
+                else None
+            )
+            semantic_gate_reason = (
+                str(semantic_gate_details.get("reason") or "")
+                if semantic_gate_details is not None
+                else ""
+            )
+            semantic_gate_allowed = bool(
+                semantic_verdict is not None
+                and semantic_verdict.status is CandidateStatus.PRICING_EVIDENCE
+                and semantic_gate_reason == "OK"
+                and semantic_gate_error is None
+            )
+            if not semantic_gate_allowed:
+                semantic_reason = (
+                    semantic_gate_error
+                    or semantic_gate_reason
+                    or "SEMANTIC_GATE_REVIEW_REQUIRED"
+                )
+                comparison_evidence = replace(
+                    comparison_evidence,
+                    hard_gate_result=HardGateResult.MANUAL_REVIEW,
+                    reason_codes=tuple(
+                        dict.fromkeys(
+                            (*comparison_evidence.reason_codes, semantic_reason)
+                        )
+                    ),
+                )
             url, url_absence_reason = _validated_listing_url(product.get("url"))
             is_owned = seller_id in owned_sellers
             cohort_role = _initial_cohort_role(classification, is_owned=is_owned)
@@ -2579,6 +3353,9 @@ async def _persist_payload_observations(
                     description,
                     source_observation_id=source_listing_id,
                 )
+            ] + [
+                proposal.as_dict(source_observation_id=source_listing_id)
+                for proposal in proposed_crosses
             ]
             seller_verified = bool(
                 seller_id and comparison_evidence.seller_identity.verified
@@ -2592,13 +3369,27 @@ async def _persist_payload_observations(
                 policy.source_confidence_min if policy is not None else Decimal("0.50")
             )
             automatic_eligible = bool(
-                verification.verified
+                # ``automatic_eligible`` describes a candidate that may enter
+                # the target-market pricing cohort, not merely an observation
+                # whose individual fields look complete.  Owned storefronts,
+                # KEMP references, used listings and explicit tier/manual
+                # exclusions are persisted for diagnostics but can never be
+                # marked automatically eligible.
+                not is_owned
+                and cohort_role == CohortRole.TARGET_MARKET
+                and verification.verified
                 and comparison_evidence.hard_gate_result == HardGateResult.PASS
                 and seller_verified
                 and provenance_verified
+                # The listing can discover a candidate, but automatic pricing
+                # now requires its exact product-card bytes. Missing, failed,
+                # not-selected or conflicting detail remains review-only.
+                and detail_evidence_safe
+                and automatic_identity_evidence
                 and currency_raw
                 and currency == "UAH"
                 and source_assessment.value >= source_threshold
+                and semantic_gate_allowed
             )
             selected_cross = next(
                 (
@@ -2614,6 +3405,51 @@ async def _persist_payload_observations(
                 if selected_cross is not None and selected_cross.cross_link_id
                 else None
             )
+            candidate_snapshot = _candidate_review_snapshot(
+                product,
+                raw_capture_id=capture.id,
+                capture_content_sha256=capture.content_sha256,
+                raw_offer_index=candidate.raw_offer_index,
+                raw_offer_sha256=payload_sha256,
+                source_listing_id=source_listing_id,
+            )
+            candidate_snapshot["identity_admission"] = {
+                "automatic_evidence_sufficient": automatic_identity_evidence,
+                "authoritative_identity": bool(
+                    asserted and seed_identity_namespace is IdentityNamespace.OE
+                ),
+                "namespace_version": IDENTITY_NAMESPACE_VERSION,
+                "seed_identity_namespace": seed_identity_namespace.value,
+                "verified_identity_namespace": verified_identity_namespace(
+                    seed_identity_namespace, verification.status
+                ).value,
+                "comparison_identity_key": verification.comparison_identity_key,
+                "verification_status": verification.status.value,
+                "namespace_reason": identity_namespace_reason,
+                "reason": (
+                    None
+                    if automatic_identity_evidence
+                    else (
+                        identity_namespace_reason
+                        or "OE_AUTOMATIC_IDENTITY_EVIDENCE_INSUFFICIENT"
+                    )
+                ),
+            }
+            if semantic_gate_details is not None:
+                candidate_snapshot["semantic_gate"] = dict(semantic_gate_details)
+            elif semantic_gate_error is not None:
+                candidate_snapshot["semantic_gate"] = {
+                    "status": "REFERENCE_ONLY",
+                    "reason": semantic_gate_error,
+                    "gate_version": "unavailable",
+                }
+            semantic_exclusion_codes = []
+            if not semantic_gate_allowed:
+                semantic_exclusion_codes.append(
+                    semantic_gate_error
+                    or semantic_gate_reason
+                    or "SEMANTIC_GATE_REVIEW_REQUIRED"
+                )
             observation = MarketObservation(
                 # Заявление источника — первым классом, вместе с происхождением.
                 # Внутри ``comparison_evidence`` его переживал только
@@ -2654,17 +3490,10 @@ async def _persist_payload_observations(
                 condition_state=condition_assessment.state.value,
                 condition_reason_codes=list(condition_assessment.reason_codes),
                 cross_candidates=cross_candidates,
-                candidate_snapshot=_candidate_review_snapshot(
-                    product,
-                    raw_capture_id=capture.id,
-                    capture_content_sha256=capture.content_sha256,
-                    raw_offer_index=candidate.raw_offer_index,
-                    raw_offer_sha256=payload_sha256,
-                    source_listing_id=source_listing_id,
-                ),
+                candidate_snapshot=candidate_snapshot,
                 brand_raw=brand,
                 matched_oe_norm=verification.verified_matched_oe_norm,
-                search_oe_norm=catalog_item.oe_norm,
+                search_oe_norm=offer_search_identity,
                 extracted_oe_norms=list(verification.extracted_oe_norms),
                 verified_matched_oe_norm=verification.verified_matched_oe_norm,
                 comparison_identity_key=verification.comparison_identity_key,
@@ -2698,7 +3527,7 @@ async def _persist_payload_observations(
                 comparability_hard_gate_result=(
                     comparison_evidence.hard_gate_result.value
                 ),
-                calibration_exclusion_codes=[],
+                calibration_exclusion_codes=semantic_exclusion_codes,
                 seller_identity_verified=seller_verified,
                 source_provenance_verified=provenance_verified,
                 automatic_eligible=automatic_eligible,
@@ -2989,6 +3818,7 @@ async def _persist_comparison(
             observed_at=observed_at,
             source_type="prom_legacy_untraced",
             confirmed_crosses=(),
+            acquisition_query=output.requested_query,
         )
         _validate_offer_accounting(
             accounting,
@@ -3101,6 +3931,7 @@ async def _load_brand_rules(
 
 async def claim_collection_finalization(run_id: UUID, *, task_id: str | None) -> bool:
     """Claim the single run-level calibration barrier once collection is done."""
+    settings = get_settings()
     async with async_session_factory() as session:
         run = await session.scalar(
             select(PricingRun).where(PricingRun.id == run_id).with_for_update()
@@ -3122,7 +3953,7 @@ async def claim_collection_finalization(run_id: UUID, *, task_id: str | None) ->
         )
         if active:
             return False
-        if get_settings().pricing_llm_comparability_mode != "off":
+        if settings.pricing_llm_comparability_mode != "off":
             observation_count = int(
                 await session.scalar(
                     select(func.count(MarketObservation.id))
@@ -3137,6 +3968,7 @@ async def claim_collection_finalization(run_id: UUID, *, task_id: str | None) ->
                 )
                 or 0
             )
+            runtime_identity = current_review_runtime_identity(settings)
             reviewed_count = int(
                 await session.scalar(
                     select(
@@ -3158,6 +3990,18 @@ async def claim_collection_finalization(run_id: UUID, *, task_id: str | None) ->
                     .where(
                         PricingRunItem.pricing_run_id == run_id,
                         PricingRunItem.status == "classified",
+                        CandidateComparabilityReview.contract_version
+                        == runtime_identity["contract_version"],
+                        CandidateComparabilityReview.schema_version
+                        == runtime_identity["schema_version"],
+                        CandidateComparabilityReview.prompt_version
+                        == runtime_identity["prompt_version"],
+                        CandidateComparabilityReview.provider
+                        == runtime_identity["provider"],
+                        CandidateComparabilityReview.model_id
+                        == runtime_identity["model_id"],
+                        CandidateComparabilityReview.model_settings_hash
+                        == runtime_identity["model_settings_hash"],
                     )
                 )
                 or 0
@@ -3408,11 +4252,22 @@ async def _derive_calibration_pairs(
     for item, observation, classification in rows:
         latest.setdefault(observation.id, (item, observation, classification))
     now = datetime.now(UTC)
-    llm_mode = get_settings().pricing_llm_comparability_mode
+    llm_settings = get_settings()
+    llm_mode = llm_settings.pricing_llm_comparability_mode
+    review_required_observation_ids = {
+        observation.id
+        for _item, observation, _classification in latest.values()
+        if _semantic_review_required_for_observation(
+            observation,
+            global_required=llm_mode == "required",
+        )
+    }
     effective_reviews = await load_effective_review_map(
         session,
         list(latest),
         as_of=now,
+        current_runtime_only=bool(review_required_observation_ids),
+        settings=llm_settings,
     )
     grouped: dict[
         tuple[str, str],
@@ -3424,16 +4279,24 @@ async def _derive_calibration_pairs(
     eligible_count = 0
     for item, observation, classification in latest.values():
         semantic_review = effective_reviews.get(observation.id)
-        if llm_mode == "required" and (
+        review_required = observation.id in review_required_observation_ids
+        if review_required and (
             semantic_review is None or not semantic_review.comparable
         ):
-            reason = (
-                "CAL_LLM_COMPARABILITY_MISSING"
-                if semantic_review is None
-                else "CAL_LLM_NOT_COMPARABLE"
-                if semantic_review.verdict.value == "NOT_COMPARABLE"
-                else "CAL_LLM_COMPARABILITY_INSUFFICIENT"
-            )
+            if llm_mode == "required":
+                reason = (
+                    "CAL_LLM_COMPARABILITY_MISSING"
+                    if semantic_review is None
+                    else "CAL_LLM_NOT_COMPARABLE"
+                    if semantic_review.verdict.value == "NOT_COMPARABLE"
+                    else "CAL_LLM_COMPARABILITY_INSUFFICIENT"
+                )
+            else:
+                reason = (
+                    "CAL_CROSS_REVIEW_MISSING"
+                    if semantic_review is None
+                    else "CAL_CROSS_PRICING_NOT_ADMITTED"
+                )
             observation.calibration_exclusion_codes = [reason]
             exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
             pricing_event(
@@ -3492,8 +4355,9 @@ async def _derive_calibration_pairs(
             )
             key = (tier, seller_key)
             current = representatives.get(key)
-            if current is None or (observation.price, observation.id) < (
-                current[1].price,
+            observation_price = effective_observation_price(observation)
+            if current is None or (observation_price, observation.id) < (
+                effective_observation_price(current[1]),
                 current[1].id,
             ):
                 representatives[key] = row
@@ -3510,19 +4374,22 @@ async def _derive_calibration_pairs(
         ]
         if len(direct_kemp_rows) >= 3:
             direct_kemp_center = decimal_median(
-                row[1].price for row in direct_kemp_rows
+                effective_observation_price(row[1]) for row in direct_kemp_rows
             )
             dumping_ids = {
                 row[1].id
                 for row in direct_kemp_rows
-                if row[1].price < direct_kemp_center * policy.kemp_dumping_ratio
+                if effective_observation_price(row[1])
+                < direct_kemp_center * policy.kemp_dumping_ratio
             }
             reference_rows = [
                 row for row in reference_rows if row[1].id not in dumping_ids
             ]
         if not reference_rows:
             continue
-        reference_price = decimal_median(row[1].price for row in reference_rows)
+        reference_price = decimal_median(
+            effective_observation_price(row[1]) for row in reference_rows
+        )
         reference_quality = decimal_median(
             _calibration_quality(row[1], row[2], now, policy) for row in reference_rows
         )
@@ -3543,7 +4410,9 @@ async def _derive_calibration_pairs(
         for tier, tier_rows in sorted(
             tier_groups.items(), key=lambda value: value[0].value
         ):
-            tier_price = decimal_median(row[1].price for row in tier_rows)
+            tier_price = decimal_median(
+                effective_observation_price(row[1]) for row in tier_rows
+            )
             tier_quality = decimal_median(
                 _calibration_quality(row[1], row[2], now, policy) for row in tier_rows
             )
@@ -3603,6 +4472,7 @@ async def _derive_calibration_pairs(
         "exact_oe_groups": len(exact_groups),
         "confirmed_cross_groups": len(confirmed_cross_groups),
         "llm_comparability_mode": llm_mode,
+        "semantic_review_required_observations": len(review_required_observation_ids),
         "llm_reviews_available": len(effective_reviews),
         "llm_positive_reviews": sum(
             review.comparable for review in effective_reviews.values()
@@ -3733,9 +4603,7 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
         # строка каталога дальше не используется: она нужна была только чтобы
         # убедиться, что позиция ещё существует.
         await verify_run_membership(session, run)
-        catalog_item = resolve_bound_execution_item(
-            run, run_item, live_catalog_item
-        )
+        catalog_item = resolve_bound_execution_item(run, run_item, live_catalog_item)
 
         rows = list(
             (
@@ -3762,10 +4630,20 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
         settings = get_settings()
         llm_mode = settings.pricing_llm_comparability_mode
         semantic_review_required = llm_mode == "required"
+        review_required_observation_ids = {
+            observation.id
+            for observation, _classification in latest.values()
+            if _semantic_review_required_for_observation(
+                observation,
+                global_required=semantic_review_required,
+            )
+        }
         effective_reviews = await load_effective_review_map(
             session,
             list(latest),
             as_of=now,
+            current_runtime_only=bool(review_required_observation_ids),
+            settings=settings,
         )
         offers = [
             _domain_offer(
@@ -3773,7 +4651,9 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 classification,
                 now,
                 semantic_review=effective_reviews.get(observation.id),
-                semantic_review_required=semantic_review_required,
+                semantic_review_required=(
+                    observation.id in review_required_observation_ids
+                ),
             )
             for observation, classification in latest.values()
         ]
@@ -3806,6 +4686,12 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 settings=settings,
             )
         context = build_pricing_context(catalog_item, override)
+        identity_missing = not customer_identity_available(catalog_item)
+        if identity_missing:
+            # This is a hard acquisition boundary, not merely weak evidence.
+            # Even a stale or accidentally retained observation must not make
+            # an unidentified customer row priceable.
+            offers = []
         # Политика читается ТОЛЬКО из снимка прогона с пересчётом отпечатка:
         # файл развёртывания — источник для нового предпросмотра, а не для уже
         # принятого расчёта.
@@ -3822,15 +4708,28 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             session,
             run=run,
             category=catalog_item.category,
-            oe_norm=catalog_item.oe_norm,
+            oe_norm=customer_identity_query(catalog_item),
             policy=policy,
+            comparison_identity_keys={
+                observation.comparison_identity_key
+                for observation, _classification in latest.values()
+                if observation.comparison_identity_key
+            },
         )
         result = recommend_price(context, offers, coefficients, policy=policy)
+        if identity_missing:
+            result = replace(
+                result,
+                reasons=tuple(
+                    dict.fromkeys(("CUSTOMER_IDENTITY_MISSING", *result.reasons))
+                ),
+            )
         comparability_activation_verified = bool(
             settings.pricing_comparability_v1_automatic_enabled
-            and activation_artifact_verified(
+            and comparability_activation_artifact_verified(
                 settings.pricing_comparability_activation_artifact,
                 settings.pricing_comparability_activation_sha256,
+                expected_runtime_identity=current_review_runtime_identity(settings),
             )
         )
         customer_policy_trace, advisory_decision = customer_budget_floor_trace(
@@ -3955,6 +4854,10 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
             "llm_comparability": {
                 "mode": llm_mode,
                 "required": semantic_review_required,
+                "required_observation_ids": sorted(
+                    str(observation_id)
+                    for observation_id in review_required_observation_ids
+                ),
                 "reviewed_observation_count": len(effective_reviews),
                 "positive_observation_count": sum(
                     review.comparable for review in effective_reviews.values()
@@ -4316,6 +5219,29 @@ def _widened_match_level_ceiling(
     return ComparabilityMatchLevel.ACCEPTABLE_ANALOGUE.value
 
 
+def _semantic_review_required_for_observation(
+    observation: MarketObservation,
+    *,
+    global_required: bool,
+    traced_required_observation_ids: frozenset[str] | None = None,
+) -> bool:
+    """Return the immutable semantic-review authority for one observation.
+
+    Current calculations and calibration pass ``None`` for the traced set:
+    every verified cross/analogue is fail-closed even when the global provider
+    mode is ``off`` or ``shadow``.  Replay passes the IDs frozen in the trace;
+    an empty set deliberately preserves pre-field historical traces.
+    """
+
+    if global_required:
+        return True
+    if traced_required_observation_ids is not None:
+        return str(observation.id) in traced_required_observation_ids
+    return (
+        observation.oe_verification_status == OeVerificationStatus.VERIFIED_CROSS.value
+    )
+
+
 def _domain_offer(
     observation: MarketObservation,
     classification: ObservationTierClassification,
@@ -4337,16 +5263,52 @@ def _domain_offer(
     condition_unknown = condition_assessment.state.value == "UNKNOWN"
     derived_kemp = normalize_brand(observation.brand_raw) == "KEMP"
     comparison_evidence = comparison_evidence_from_dict(observation.comparison_evidence)
+    semantic_gate_current = semantic_gate_snapshot_is_current(
+        getattr(observation, "candidate_snapshot", None),
+        expected_source_listing_id=getattr(observation, "source_listing_id", None),
+        expected_raw_capture_id=getattr(observation, "raw_capture_id", None),
+        expected_identity_key=getattr(
+            observation, "comparison_identity_key", None
+        ),
+        require_identity_namespace=(
+            getattr(observation, "catalog_item_id", None) is not None
+        ),
+    )
     if semantic_review_required:
         comparison_evidence = apply_effective_review_to_evidence(
             comparison_evidence,
             semantic_review,
         )
+    persisted_admission = bool(
+        getattr(observation, "automatic_eligible", False)
+        and getattr(observation, "comparability_hard_gate_result", "")
+        == HardGateResult.PASS.value
+        and observation.oe_verification_status
+        in {
+            OeVerificationStatus.VERIFIED_EXACT.value,
+            OeVerificationStatus.VERIFIED_CROSS.value,
+        }
+        and getattr(observation, "seller_identity_verified", False) is True
+        and getattr(observation, "source_provenance_verified", False) is True
+        and persisted_identity_fields_consistent(observation)
+        and semantic_gate_current
+    )
+    cohort_admission = bool(
+        not classification.is_owned
+        and not classification.is_kemp
+        and not classification.is_used
+        and not classification.is_dumping
+        and str(classification.cohort_role or "").strip()
+        == CohortRole.TARGET_MARKET.value
+        and not derived_used
+        and not derived_kemp
+        and not condition_unknown
+    )
     return CompetitorOffer(
         observation_id=str(observation.id),
         seller_id=observation.seller_id,
         seller_name=observation.seller_name,
-        price=observation.price,
+        price=effective_observation_price(observation),
         currency=observation.currency,
         currency_raw=observation.currency_raw,
         currency_inferred=observation.currency_inferred,
@@ -4390,6 +5352,16 @@ def _domain_offer(
         semantic_review_confidence=(
             semantic_review.confidence if semantic_review is not None else None
         ),
+        semantic_gate_current=semantic_gate_current,
+            # Older replay/test adapters may expose a lightweight observation
+            # without the persisted admission column.  Missing admission is
+            # not evidence: fail closed instead of allowing a legacy object to
+            # enter a price cohort merely because it lacks the field.
+            # The persisted scalar is only one input.  Recheck the immutable
+            # identity projection and the current cohort role at the pricing
+            # boundary so a stale/hand-built row cannot become a market offer
+            # merely by carrying ``automatic_eligible=true``.
+            automatic_eligible=persisted_admission and cohort_admission,
     )
 
 
@@ -4735,14 +5707,33 @@ def _source_confidence_bucket(value: Decimal) -> str:
 
 
 def _availability(explicit: bool | None, presence: str | None) -> bool | None:
-    if explicit is not None:
-        return explicit
-    value = (presence or "").casefold()
-    if value in {"available", "in_stock", "в наличии", "в наявності"}:
-        return True
-    if value in {"unavailable", "out_of_stock", "нет в наличии"}:
-        return False
-    return None
+    value = " ".join((presence or "").casefold().strip().split())
+    inferred: bool | None = None
+    if value in {
+        "avail",
+        "available",
+        "in_stock",
+        "in stock",
+        "в наличии",
+        "в наявності",
+    }:
+        inferred = True
+    elif value in {
+        "not_avail",
+        "not available",
+        "unavailable",
+        "out_of_stock",
+        "out of stock",
+        "нет в наличии",
+        "немає в наявності",
+    }:
+        inferred = False
+    # Contradictory Apollo fields are parser uncertainty, not a boolean.  A
+    # stale ``isAvailable`` must not silently override the card's presence code
+    # (or vice versa), because either choice can pollute/exclude a price cohort.
+    if explicit is not None and inferred is not None and explicit != inferred:
+        return None
+    return explicit if explicit is not None else inferred
 
 
 def _initial_cohort_role(
@@ -4774,6 +5765,98 @@ def _optional_string(value: Any) -> str | None:
     return normalized or None
 
 
+def _valid_sha256(value: Any) -> bool:
+    text = str(value or "").strip().casefold()
+    return len(text) == 64 and all(
+        character in "0123456789abcdef" for character in text
+    )
+
+
+def _offer_search_identity(
+    detail: object,
+    *,
+    primary: str,
+    confirmed_crosses: tuple[ConfirmedCross, ...],
+    discovery_queries: tuple[str, ...] = (),
+) -> str:
+    """The number that actually retrieved this row, not the run's primary.
+
+    A row found by a declared cross must have its identity verified against
+    that cross; checking it against the primary OE would either reject a
+    genuine widening or credit it with evidence it never had. The widening is
+    admitted only when it is one the run froze as a confirmed cross of this
+    catalog item, so a payload cannot invent one after the fact.
+
+    A retrieval-only key is the other case, and it is not the same one. It was
+    declared, so the acquisition is legitimate and the row is kept — but a
+    public MPN asserts no identity, so it never becomes the search identity.
+    Such a row is still checked against the primary OE: it earns its evidence
+    off the card or it goes to review.
+    """
+
+    if not isinstance(detail, Mapping):
+        return primary
+    raw = str(detail.get("found_by_query") or "").strip()
+    if not raw:
+        return primary
+    widening = normalize_oe(raw)
+    if widening is None or widening == primary:
+        return primary
+    if any(
+        cross.search_oe_norm == primary and cross.candidate_oe_norm == widening
+        for cross in confirmed_crosses
+    ):
+        return widening
+    if widening in {normalize_oe(value) for value in discovery_queries}:
+        return primary
+    raise EvidenceAccountingError(
+        "ACQUISITION_WIDENING_BINDING_ERROR: a retained offer claims a "
+        "number this run declared neither as a confirmed cross nor as a "
+        "retrieval-only discovery key"
+    )
+
+
+def _detail_evidence_automatic_safe(
+    product: Mapping[str, Any],
+    *,
+    seller_id: str,
+    retained_raw_evidence: tuple[Mapping[str, Any], ...] = (),
+) -> bool:
+    """Only an exact card capture present in the retained journal is automatic."""
+
+    detail = product.get("detail_evidence")
+    if not isinstance(detail, Mapping):
+        return False
+    detail_hash = str(detail.get("content_sha256") or "").strip().casefold()
+    detail_url = str(detail.get("source_url") or "").strip()
+    if not (
+        detail.get("schema_version") == PROM_PRODUCT_DETAIL_SCHEMA_VERSION
+        and detail.get("status") == "SUCCESS"
+        and detail.get("selected") is True
+        and _valid_sha256(detail_hash)
+        and detail_url == str(product.get("url") or "").strip()
+        and str(detail.get("product_id") or "").strip()
+        == str(product.get("product_id") or product.get("id") or "").strip()
+        and str(detail.get("seller_id") or "").strip() == seller_id
+    ):
+        return False
+    conflicts = detail.get("conflicts")
+    if isinstance(conflicts, Mapping) and any(
+        str(field).strip().casefold() in {"mpn", "oe_raw", "part_numbers"}
+        for field in conflicts
+    ):
+        # Listing/detail disagreement in a candidate-native identity field is
+        # a real evidence conflict.  Keep the card visible for review, but do
+        # not let the retained listing value make it priceable automatically.
+        return False
+    return any(
+        str(entry.get("request_kind") or "").strip() == "product_page"
+        and str(entry.get("prepared_url") or "").strip() == detail_url
+        and str(entry.get("raw_content_sha256") or "").strip().casefold() == detail_hash
+        for entry in retained_raw_evidence
+    )
+
+
 def _candidate_review_snapshot(
     product: Mapping[str, Any],
     *,
@@ -4790,7 +5873,10 @@ def _candidate_review_snapshot(
         "name",
         "title",
         "sku",
+        "mpn",
+        "part_numbers",
         "model_id",
+        "category",
         "category_id",
         "category_ids",
         "brand",
@@ -4811,6 +5897,7 @@ def _candidate_review_snapshot(
         "condition",
         "package_quantity",
         "characteristics",
+        "detail_evidence",
         "measure_unit",
         "presence",
         "is_available",

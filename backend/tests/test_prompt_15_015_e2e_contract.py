@@ -9,6 +9,7 @@ from types import ModuleType, SimpleNamespace
 import yaml
 
 from marko.e2e.fixture_seed import DEFAULT_FIXTURE, _load_fixture, _target_output
+from marko.services.scraper_contract import ScrapeInput
 from metis.pricing import (
     comparison_evidence_from_dict,
     evaluate_comparison_evidence,
@@ -208,13 +209,18 @@ def test_blocked_evidence_never_claims_unexecuted_e2e() -> None:
 
 def test_replay_fixture_produces_verified_structured_evidence_without_network() -> None:
     fixture, _, fixture_hash = _load_fixture(DEFAULT_FIXTURE)
-    target = SimpleNamespace(
-        query="1K0698151",
+    scrape_input = ScrapeInput.build(
+        "https://prom.ua/ua/p1153738393-radiator-folksvagen-tuareg.html",
+        "1K0698151",
         adapter_version="prom-adapter-v1",
-        original_url="https://fixture.invalid/original",
-        canonical_url="https://fixture.invalid/canonical",
-        product_key="fixture-product",
-        input_hash="0" * 64,
+    )
+    target = SimpleNamespace(
+        query=scrape_input.query,
+        adapter_version=scrape_input.adapter_version,
+        original_url=scrape_input.product_url,
+        canonical_url=scrape_input.canonical_url,
+        product_key=scrape_input.product_key,
+        input_hash=scrape_input.input_hash,
     )
     output = _target_output(target, fixture, fixture_hash)
     records = output.payload["output"]["records"]

@@ -45,6 +45,8 @@ def test_decision_fingerprint_carries_numeric_profile() -> None:
             tier=ProductTier.BUDGET,
             tier_confidence=Decimal("1"),
             source_confidence=Decimal("1"),
+            semantic_gate_current=True,
+            automatic_eligible=True,
             comparison_evidence=verified_comparison_evidence(
                 stable_seller_id=f"seller-{index}",
                 source_record_id=f"obs-{index}",

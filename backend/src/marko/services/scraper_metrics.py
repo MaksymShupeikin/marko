@@ -64,6 +64,7 @@ from marko.services.scraper_scaling import (
     reconcile_items,
 )
 from marko.services.scraper_outbox import OutboxHealth, outbox_health
+from marko.services.market_price import effective_observation_price
 from marko.services.stores import SyncRunNotFoundError
 from marko.services.ai_cost_policy import (
     AiCostPolicyError,
@@ -1337,7 +1338,7 @@ async def _store_storage(
         _json_bytes(
             {
                 "listing_id": str(observation.listing_id),
-                "price": str(observation.price),
+                "price": str(effective_observation_price(observation)),
                 "currency": observation.currency,
                 "is_available": observation.is_available,
                 "observed_at": observation.observed_at.isoformat(),

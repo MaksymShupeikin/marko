@@ -19,8 +19,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import CatalogItem, MarketObservation
+from marko.services.catalog_identity_safety import is_internal_catalog_code
 from marko.services.market_collection import _validated_listing_url
-from marko.services.pricing_runs import list_recommendations
+from marko.services.pricing_runs import (
+    IDENTITY_BLOCKED_RECOMMENDATION_ACTION,
+    customer_identity_query_from_fields,
+    list_recommendations,
+    recommendation_price_identity_allowed,
+)
+from metis.pricing import normalize_oe
 
 
 MAX_RECOMMENDATION_EXPORT_ROWS = 5_000
@@ -162,6 +169,17 @@ def _export_row(
     *,
     source_urls: tuple[str, ...],
 ) -> dict[str, Any]:
+    identity = _export_identity_fields(item)
+    identity_blocked = not recommendation_price_identity_allowed(
+        item, recommendation.action
+    )
+    export_action = "MANUAL_REVIEW" if identity_blocked else recommendation.action
+    export_reason_codes = list(recommendation.reason_codes or [])
+    if (
+        identity_blocked
+        and IDENTITY_BLOCKED_RECOMMENDATION_ACTION not in export_reason_codes
+    ):
+        export_reason_codes.append(IDENTITY_BLOCKED_RECOMMENDATION_ACTION)
     money = lambda value: _format_money(  # noqa: E731
         value,
         currency=recommendation.currency,
@@ -176,21 +194,39 @@ def _export_row(
     )
     if not isinstance(advisory, dict):
         advisory = {}
+    if identity_blocked:
+        # A stale MPN_ONLY recommendation may carry an old customer advisory
+        # price in its trace.  It is still auditable in the database, but an
+        # export is an operational handoff and must be safe by construction.
+        advisory = {}
     return {
         "sku": item.sku,
-        "oe": item.oe_norm,
+        # ``oe`` is reserved for an asserted vehicle/OEM number.  A legacy
+        # MPN_ONLY row may still carry a private KEMP shelf code in
+        # ``CatalogItem.oe_norm``; exporting that value under the OE header
+        # would make a correct search look semantically wrong to the
+        # operator.  The public manufacturer number and retrieval key are
+        # exported separately below.
+        "oe": identity["oe"],
+        "mpn": identity["mpn"],
+        "search_identity": identity["search_identity"],
+        "identity_status": identity["identity_status"],
         "name": item.name,
         "category": item.category,
-        "action": recommendation.action,
+        "action": export_action,
         "current_price": money(recommendation.current_price),
-        "fair_price": money(recommendation.fair_price),
-        "recommended_price": money(recommendation.recommended_price),
+        "fair_price": money(None if identity_blocked else recommendation.fair_price),
+        "recommended_price": money(
+            None if identity_blocked else recommendation.recommended_price
+        ),
         "absolute_recommended_change": money(
-            recommendation.absolute_recommended_change
+            None
+            if identity_blocked
+            else recommendation.absolute_recommended_change
         ),
         "percentage_recommended_change": (
             None
-            if recommendation.percentage_recommended_change is None
+            if identity_blocked or recommendation.percentage_recommended_change is None
             else str(recommendation.percentage_recommended_change)
         ),
         "customer_advisory_action": advisory.get("action", ""),
@@ -205,14 +241,59 @@ def _export_row(
         ),
         "automatic_price_application": (
             "false"
-            if advisory.get("automatic_price_application") is False
+            if identity_blocked
+            or advisory.get("automatic_price_application") is False
             else ""
         ),
         "confidence": str(recommendation.confidence),
         "confidence_grade": recommendation.confidence_grade,
-        "reason_codes": "; ".join(recommendation.reason_codes or []),
+        "reason_codes": "; ".join(export_reason_codes),
         "source_urls": list(source_urls),
         "computed_at": recommendation.computed_at.isoformat(),
+    }
+
+
+def _export_identity_fields(item: CatalogItem) -> dict[str, str]:
+    """Expose identity without relabelling a private code as OE.
+
+    The pricing run already freezes this namespace decision.  Reusing the
+    same pure resolver here keeps CSV/XLSX output from becoming a second,
+    weaker identity implementation.
+    """
+
+    raw_status = getattr(item, "identity_status", None)
+    status = str(raw_status or "UNRESOLVED").strip().upper()
+    # Small in-process test/replay adapters predating ``identity_status`` are
+    # treated as explicit OE only when they omit the field.  Real CatalogItem
+    # rows always carry the persisted status and therefore remain fail-closed
+    # when unresolved.
+    if raw_status is None:
+        status = "OE_CONFIRMED" if getattr(item, "oe_norm", None) else "UNRESOLVED"
+
+    def public(value: Any) -> str:
+        normalized = normalize_oe(str(value or ""))
+        if not normalized or is_internal_catalog_code(normalized):
+            return ""
+        return normalized
+
+    oe = public(getattr(item, "oe_norm", None))
+    mpn = public(getattr(item, "mpn_norm", None))
+    part_numbers = tuple(
+        value
+        for raw in (getattr(item, "part_numbers_norm", None) or ())
+        if (value := public(raw))
+    )
+    search_identity = customer_identity_query_from_fields(
+        identity_status=status,
+        oe_norm=oe,
+        mpn_norm=mpn,
+        part_numbers_norm=part_numbers,
+    )
+    return {
+        "oe": oe if status == "OE_CONFIRMED" else "",
+        "mpn": mpn,
+        "search_identity": search_identity,
+        "identity_status": status,
     }
 
 
@@ -300,6 +381,9 @@ def _headers(*, include_source_columns: bool) -> list[str]:
     headers = [
         "sku",
         "oe",
+        "mpn",
+        "search_identity",
+        "identity_status",
         "name",
         "category",
         "action",

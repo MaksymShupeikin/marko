@@ -472,7 +472,7 @@ def _input_hash(**overrides: str) -> str:
         "model_id": _MODEL,
         "reasoning_effort": _EFFORT,
         "verifier_version": "marko-ai-evidence-verifier-v1",
-        "oe_normalization_version": "oe-extractor-v1",
+        "oe_normalization_version": "oe-extractor-v2",
     }
     identity.update(overrides)
     return AiEvidenceExtraction.build_input_hash(**identity)  # type: ignore[arg-type]
@@ -525,7 +525,7 @@ def _row(
         "max_input_chars": 20_000,
         "target_fields": ["OE_NUMBERS"],
         "verifier_version": "marko-ai-evidence-verifier-v1",
-        "oe_normalization_version": "oe-extractor-v1",
+        "oe_normalization_version": "oe-extractor-v2",
         "mode": "shadow",
         "outcome": "EXTRACTED",
         "status": status,
@@ -1994,7 +1994,11 @@ async def test_populated_0043_downgrade_refuses_to_erase_request_history() -> No
 
         current = _alembic(database, "current")
         assert current.returncode == 0, current.stdout + current.stderr
-        assert "20260802_0043" in current.stdout
+        # Alembic runs the multi-revision downgrade transactionally.  A
+        # refusal in 0043 therefore rolls the whole command back to whichever
+        # revision is the current project head, including later additive
+        # migrations.
+        assert "(head)" in current.stdout
 
         connection = await asyncpg.connect(
             make_url(_async_url(database))
@@ -2052,7 +2056,7 @@ async def test_ai_evidence_migrations_upgrade_downgrade_and_leave_no_drift() -> 
 
         current = _alembic(database, "current")
         assert current.returncode == 0, current.stdout + current.stderr
-        assert "20260802_0043" in current.stdout
+        assert "(head)" in current.stdout
 
         checked = _alembic(database, "check")
         assert checked.returncode == 0, checked.stdout + checked.stderr

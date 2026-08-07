@@ -77,6 +77,8 @@ def _offer(
         tier=tier,
         tier_confidence=Decimal(tier_confidence),
         source_confidence=Decimal("1"),
+        semantic_gate_current=True,
+        automatic_eligible=True,
         is_used=is_used,
         comparison_evidence=verified_comparison_evidence(
             stable_seller_id=seller_id,

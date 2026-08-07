@@ -1,14 +1,10 @@
 """HIGH 7: ``required`` mode must carry a hard provider-call bound.
 
-``shadow`` mode stops once ``pricing_llm_max_confirmed_reviews`` offers are
-confirmed, but ``required`` mode raises that ceiling to the cohort size on
-purpose: ``engine.py`` reads a missing review as
-``MANUAL_LLM_COMPARABILITY_MISSING`` and drops the offer from the evidence
-behind the price.  The consequence was that ``required`` mode had no bound on
-provider calls at all -- acquisition is page-capped, not seller-capped, so a
-prom.ua part-code page keeps a median 81 offers past the gates and every one of
-them cost a call.  ~46k calls per catalogue today; ~376k if the collector cap
-is raised.
+The old shadow-only confirmed-result ceiling could silently hide captured
+candidates.  Comparability-v2 removes that stop, while the durable provider-call
+budget remains the hard bound in every mode.  Acquisition is page-capped, not
+seller-capped, so a prom.ua part-code page can keep a median 81 offers past the
+gates and every paid request must still be accounted for.
 
 ``pricing_llm_max_provider_calls_per_position`` is that bound.  What it must not
 become is a silent downgrade of ``required`` to ``shadow``, so these tests hold
@@ -346,15 +342,10 @@ async def test_budget_declines_are_labelled_as_the_budget(
 
 
 @pytest.mark.asyncio
-async def test_ceiling_declines_are_not_labelled_as_the_budget(
+async def test_legacy_confirmed_ceiling_does_not_truncate_v2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The two stops must stay distinguishable.
-
-    An offer that lost to cheaper confirmed offers is a complete decision; an
-    offer nobody asked about is a hole in the evidence base.  Reporting the
-    second as the first hides exactly what this bound was added to expose.
-    """
+    """Only the explicit call budget may truncate provider dispatch in v2."""
 
     observation_ids = [uuid4() for _ in range(30)]
     judged, declined = _patch_review_calls(monkeypatch)
@@ -373,9 +364,8 @@ async def test_ceiling_declines_are_not_labelled_as_the_budget(
         provider=None,
     )
 
-    assert len(judged) == 6
-    assert declined, "a 30-offer cohort must exceed a ceiling of 6"
-    assert {reason for _observation_id, reason in declined} == {"CONFIRMED_CEILING"}
+    assert judged == observation_ids
+    assert declined == []
 
 
 # --------------------------------------------------------------------------
@@ -501,6 +491,8 @@ def test_a_budget_declined_offer_goes_to_manual_review_not_into_the_price() -> N
         tier=ProductTier.BUDGET,
         tier_confidence=Decimal("0.99"),
         source_confidence=Decimal("1"),
+        semantic_gate_current=True,
+        automatic_eligible=True,
         comparison_evidence=verified_comparison_evidence(
             stable_seller_id="seller-budget",
             source_record_id="obs-budget",

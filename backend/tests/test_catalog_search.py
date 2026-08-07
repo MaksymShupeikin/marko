@@ -89,9 +89,29 @@ def test_identity_condition_ignores_an_empty_identity_set() -> None:
 def test_identity_condition_compares_normalized_article_fields() -> None:
     sql = _sql(listings_repo.listing_identity_condition(("1K0121251",)))
 
-    assert sql.count("'[^A-Z0-9]'") == 5
+    # Prom ``Listing.external_id`` is a card/listing id, never a product
+    # identity.  It must not participate in this query or an unrelated card
+    # whose id equals an OE would be shown as a match.
+    assert sql.count("'[^A-Z0-9]'") == 4
     assert "IN ('1K0121251')" in sql
     assert "LIKE '%%1K0121251%%'" in sql
+
+
+def test_listing_card_id_is_not_used_as_product_identity() -> None:
+    listing = _listing(
+        sku=None,
+        model_id=None,
+        external_id="93818439",
+        raw_data={},
+    )
+    match = catalog_search._listing_match(
+        listing,
+        _store(),
+        identities=("93818439",),
+        reference="93818439",
+    )
+
+    assert match.matched_on == "name"
 
 
 def test_match_reports_the_seller_article_lane() -> None:
@@ -119,6 +139,44 @@ def test_match_reports_an_oe_number_carried_by_the_title() -> None:
 
     assert match.matched_on == "oem"
     assert match.matched_value == "1K0121251"
+
+
+def test_title_oem_fallback_requires_identifier_boundaries() -> None:
+    match = catalog_search._listing_match(
+        _listing(sku=None, name="Колодка 1K01212510 комплект"),
+        _store(),
+        identities=("1K0121251",),
+        reference="1K0121251",
+    )
+
+    assert match.matched_on == "name"
+
+
+def test_short_numeric_title_oem_requires_an_explicit_label() -> None:
+    unlabelled = catalog_search._listing_match(
+        _listing(sku=None, name="Фильтр 1234567 для VW"),
+        _store(),
+        identities=("123456",),
+        reference="123456",
+    )
+    labelled = catalog_search._listing_match(
+        _listing(sku=None, name="Фильтр OE 123456 для VW"),
+        _store(),
+        identities=("123456",),
+        reference="123456",
+    )
+    hash_labelled = catalog_search._listing_match(
+        _listing(sku=None, name="Фильтр #123456 для VW"),
+        _store(),
+        identities=("123456",),
+        reference="123456",
+    )
+
+    assert unlabelled.matched_on == "name"
+    assert labelled.matched_on == "oem"
+    assert labelled.matched_value == "123456"
+    assert hash_labelled.matched_on == "oem"
+    assert hash_labelled.matched_value == "123456"
 
 
 def test_match_flags_a_hit_reached_through_a_confirmed_cross() -> None:
@@ -179,6 +237,54 @@ async def test_cross_store_search_widens_the_query_with_confirmed_crosses(
 
 
 @pytest.mark.asyncio
+async def test_cross_store_identity_lane_discards_normalized_substring_only_rows(
+    monkeypatch,
+) -> None:
+    async def no_crosses(_session, *, workspace_id, reference):
+        return frozenset()
+
+    async def fake_search(
+        _session, *, workspace_id, excluded_store_id, identities, limit
+    ):
+        assert limit >= 4
+        return [
+            (
+                _listing(
+                    sku=None,
+                    name="Колодка 1K01212510 комплект",
+                ),
+                _store(external_id="bad", name="bad"),
+            ),
+            (
+                _listing(
+                    sku=None,
+                    name="Насос 1K0 121 251 для VW",
+                ),
+                _store(external_id="good", name="good"),
+            ),
+        ]
+
+    async def no_market_matches(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(catalog_search, "_confirmed_cross_oems", no_crosses)
+    monkeypatch.setattr(catalog_search, "_verified_market_matches", no_market_matches)
+    monkeypatch.setattr(listings_repo, "search_listings_in_other_stores", fake_search)
+
+    search = await search_other_stores(
+        object(),
+        store_id=uuid4(),
+        workspace_id=uuid4(),
+        query="1K0 121 251",
+        limit=1,
+    )
+
+    assert len(search.matches) == 1
+    assert search.matches[0].store_name == "good"
+    assert search.matches[0].matched_on == "oem"
+
+
+@pytest.mark.asyncio
 async def test_cross_store_search_falls_back_to_wording_without_an_identity(
     monkeypatch,
 ) -> None:
@@ -227,6 +333,38 @@ async def test_cross_store_search_rejects_a_fragment_too_short_to_identify(
     )
 
     assert search.normalized_query == ""
+    assert search.matches == ()
+
+
+@pytest.mark.asyncio
+async def test_identity_query_never_degrades_to_unverified_text_fallback(
+    monkeypatch,
+) -> None:
+    async def no_identity_matches(*_args, **_kwargs):
+        return []
+
+    async def unexpected_text_search(*_args, **_kwargs):
+        raise AssertionError("an identity query must not enter the wording lane")
+
+    monkeypatch.setattr(
+        listings_repo, "search_listings_in_other_stores", no_identity_matches
+    )
+    monkeypatch.setattr(
+        listings_repo,
+        "search_listing_text_in_other_stores",
+        unexpected_text_search,
+    )
+    monkeypatch.setattr(catalog_search, "_confirmed_cross_oems", lambda *_args, **_kwargs: _empty())
+    monkeypatch.setattr(catalog_search, "_verified_market_matches", no_identity_matches)
+
+    search = await search_other_stores(
+        object(),
+        store_id=uuid4(),
+        workspace_id=uuid4(),
+        query="123456",
+    )
+
+    assert search.normalized_query == "123456"
     assert search.matches == ()
 
 
@@ -332,3 +470,45 @@ async def test_cross_store_search_has_a_total_store_name_id_order() -> None:
     assert (
         "ORDER BY marketplace_stores.external_id, listings.name, listings.id" in sql
     )
+
+
+@pytest.mark.asyncio
+async def test_cross_store_search_is_competitor_only() -> None:
+    recorder = _StatementRecorder()
+
+    await listings_repo.search_listings_in_other_stores(
+        recorder,
+        workspace_id=uuid4(),
+        excluded_store_id=uuid4(),
+        identities=("77641543",),
+        limit=24,
+    )
+
+    sql = recorder.compiled()
+    assert "workspace_stores.kind = 'competitor'" in sql
+
+
+@pytest.mark.asyncio
+async def test_verified_market_matches_require_admitted_competitor_evidence() -> None:
+    recorder = _StatementRecorder()
+
+    await catalog_search._verified_market_matches(
+        recorder,
+        workspace_id=uuid4(),
+        identities=("1K0121251",),
+        reference="1K0121251",
+        limit=10,
+    )
+
+    sql = recorder.compiled()
+    assert "market_observations.automatic_eligible IS true" in sql
+    assert "market_observations.comparability_hard_gate_result = 'PASS'" in sql
+    assert "market_observations.seller_identity_verified IS true" in sql
+    assert "market_observations.source_provenance_verified IS true" in sql
+    assert "observation_tier_classifications_1.cohort_role = 'TARGET_MARKET'" in sql
+    assert "observation_tier_classifications_1.is_kemp IS false" in sql
+    assert "observation_tier_classifications_1.is_dumping IS false" in sql
+    assert "observation_tier_classifications_1.exclusion_reason IS NULL" in sql
+    assert "market_observations.source IN" in sql
+    assert "workspace_stores_1.kind = 'owned'" in sql
+    assert "marketplace_stores_1.marketplace = 'prom'" in sql

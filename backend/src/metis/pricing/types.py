@@ -230,6 +230,18 @@ class CompetitorOffer:
     semantic_review_verdict: str | None = None
     semantic_review_match_level: str | None = None
     semantic_review_confidence: Decimal | None = None
+    # Persisted Marko observations set this to ``False`` when the candidate
+    # lacks a current semantic-gate proof.  A caller must explicitly opt in
+    # after supplying a current, hash-bound snapshot; omission is not proof.
+    # This default is deliberately fail-closed for new/replay callers.
+    semantic_gate_current: bool = False
+    # Persisted Marko observations also carry the final admission decision.
+    # Keeping it at the domain boundary prevents a candidate that failed a
+    # collection-time requirement (for example missing detail evidence) from
+    # re-entering the target cohort merely because its denormalized
+    # ComparisonEvidence still happens to be complete. A caller must explicitly
+    # set ``True`` only after the persisted admission contract has been checked.
+    automatic_eligible: bool = False
 
 
 @dataclass(frozen=True, slots=True)

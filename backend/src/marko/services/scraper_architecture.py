@@ -552,12 +552,36 @@ def admit_prom_public_item(
         language = item.metadata.get("language", "ua")
         if not isinstance(language, str):
             raise ValueError("public Prom query metadata.language must be a string")
+        search_context = item.metadata.get("search_context")
+        if search_context is not None and not isinstance(search_context, str):
+            raise ValueError(
+                "public Prom query metadata.search_context must be a string"
+            )
+        declared_widenings = item.metadata.get("fallback_queries")
+        if declared_widenings is not None and not (
+            isinstance(declared_widenings, list)
+            and all(isinstance(value, str) for value in declared_widenings)
+        ):
+            raise ValueError(
+                "public Prom query metadata.fallback_queries must be strings"
+            )
+        declared_discovery = item.metadata.get("discovery_queries")
+        if declared_discovery is not None and not (
+            isinstance(declared_discovery, list)
+            and all(isinstance(value, str) for value in declared_discovery)
+        ):
+            raise ValueError(
+                "public Prom query metadata.discovery_queries must be strings"
+            )
         scrape_input: AcquisitionInput = QueryInput.build(
             item.input_value,
             language=language,
+            search_context=search_context,
+            fallback_queries=declared_widenings,
+            discovery_queries=declared_discovery,
             adapter_version=PROM_ADAPTER_VERSION,
         )
-        canonical_input = scrape_input.query
+        canonical_input = scrape_input.query_key
     elif item.input_kind in {InputKind.URL, InputKind.PRODUCT_SEED}:
         query = item.metadata.get("query")
         if not isinstance(query, str):

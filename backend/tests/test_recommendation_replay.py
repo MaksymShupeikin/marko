@@ -43,6 +43,8 @@ def _pricing_result():
             tier=ProductTier.BUDGET,
             tier_confidence=Decimal("0.95"),
             source_confidence=Decimal("1"),
+            semantic_gate_current=True,
+            automatic_eligible=True,
             currency_raw="UAH",
             comparison_evidence=verified_comparison_evidence(
                 stable_seller_id=f"seller-{index}",
@@ -116,6 +118,19 @@ def test_context_snapshot_rebuilds_frozen_pricing_input() -> None:
     assert context.cost is None
     assert context.below_cost_floor is None
     assert context.below_cost_warning_confirmed is True
+
+
+def test_context_snapshot_missing_urgency_uses_domain_default() -> None:
+    context = context_from_snapshot(
+        {
+            "sku": "SKU-LEGACY",
+            "category": "brakes",
+            "currency": "UAH",
+            "current_price": "800.00",
+        }
+    )
+
+    assert context.urgency == Decimal("0")
 
 
 def test_current_replay_contract_is_v6_and_compares_current_trace() -> None:

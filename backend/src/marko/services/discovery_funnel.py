@@ -66,7 +66,7 @@ def _gate_metrics(
     materialized = list(offers)
     total = len(materialized)
     current_evidence = sum(
-        str(getattr(offer, "selection_status", "")) == "PRICING_EVIDENCE"
+        _effective_status(offer) == "PRICING_EVIDENCE"
         for offer in materialized
     )
     counts = {gate: {"reached": 0, "terminal": 0} for gate in CANDIDATE_GATE_ORDER}
@@ -105,6 +105,29 @@ def _gate_metrics(
             "counterfactual_ceiling_method": "SHORT_CIRCUIT_UPPER_BOUND",
         }
     return result
+
+
+def _effective_status(offer: CatalogDiscoveryOffer | Any) -> str:
+    """Keep discovery rows out of the pricing cohort.
+
+    The funnel measures retrieval and selection ceilings, not persisted
+    market observations.  A pure candidate-selection verdict may be
+    ``PRICING_EVIDENCE`` while it is being evaluated, but a discovery row
+    still lacks the frozen seller/provenance admission required by pricing.
+    """
+
+    status = str(getattr(offer, "selection_status", ""))
+    if status == "PRICING_EVIDENCE":
+        return "REFERENCE_ONLY"
+    return status
+
+
+def _effective_reason(offer: CatalogDiscoveryOffer | Any) -> str:
+    if _effective_status(offer) == "REFERENCE_ONLY" and str(
+        getattr(offer, "selection_status", "")
+    ) == "PRICING_EVIDENCE":
+        return "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE"
+    return str(getattr(offer, "selection_reason", ""))
 
 
 def aggregate_discovery_funnel(
@@ -148,8 +171,8 @@ def aggregate_discovery_funnel(
         category_offers[category].extend(run_offers)
 
     for offer in all_offers:
-        status_counts[str(offer.selection_status)] += 1
-        selection_reasons[str(offer.selection_reason)] += 1
+        status_counts[_effective_status(offer)] += 1
+        selection_reasons[_effective_reason(offer)] += 1
 
     ranked_categories = sorted(
         category_offers,
@@ -166,7 +189,7 @@ def aggregate_discovery_funnel(
             "status_counts": dict(
                 sorted(
                     Counter(
-                        str(offer.selection_status)
+                        _effective_status(offer)
                         for offer in category_offers[category]
                     ).items()
                 )

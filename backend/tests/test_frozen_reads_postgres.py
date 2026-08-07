@@ -153,6 +153,8 @@ async def _seed(*, workspace_id: UUID, batch_id: UUID, item_ids: tuple[UUID, ...
                     name=f"Позиция {index}",
                     category=FROZEN_CATEGORY,
                     brand="KEMP",
+                    identity_status="OE_CONFIRMED",
+                    identity_reason="EXPLICIT_OE_TEST_FIXTURE",
                     product_url=None,
                     current_price=Decimal("800"),
                     currency="UAH",

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import CheckConstraint
 
 from marko.api.schemas.stores import ProductResponse
 from marko.infrastructure.db.models import (
@@ -59,6 +60,96 @@ def test_from_raw_uses_current_product_page_description_keys():
 
     assert plain.description == "OE 1K0121251"
     assert full.description == "OE 6Q0121253"
+
+
+def test_from_raw_normalizes_product_card_attributes_without_inventing_oe():
+    parsed = Product.from_raw(
+        {
+            "id": 5,
+            "sku": "93818439",
+            "identifiers": {"mpn": "93818439"},
+            "category": {"caption": "Радіатори автомобільні"},
+            "attributes": [
+                {
+                    "id": 18009,
+                    "name": "Код запчастини",
+                    "group": "Основні",
+                    "values": [{"value": "93818439, 77643"}],
+                },
+                {
+                    "id": 10006,
+                    "name": "Стан",
+                    "group": "Основні",
+                    "values": [{"value": "Новий"}],
+                },
+                {
+                    "id": 18631,
+                    "name": "Сумісність з моделлю",
+                    "values": [{"value": "Daily"}, {"value": "Daily II"}],
+                },
+                {
+                    "id": 99999,
+                    "name": "Кількість в упаковці",
+                    "values": [{"value": "6 шт."}],
+                },
+            ],
+        }
+    )
+
+    assert parsed.mpn == "93818439"
+    assert parsed.part_numbers == ("93818439", "77643")
+    assert parsed.category == "Радіатори автомобільні"
+    assert parsed.condition == "Новий"
+    assert parsed.package_quantity == 6
+    assert parsed.oe_raw is None
+    assert [
+        item["value"]
+        for item in parsed.characteristics
+        if item["name"] == "Сумісність з моделлю"
+    ] == ["Daily", "Daily II"]
+    assert parsed.characteristics[0]["source_path"] == (
+        "$.attributes[0].values[0].value"
+    )
+
+
+def test_labelled_part_numbers_ignore_unrelated_attributes_and_unlabelled_text():
+    parsed = Product.from_raw(
+        {
+            "id": 6,
+            "name": "Радіатор 77646966",
+            "descriptionPlain": "інший код 999999",
+            "attributes": [
+                {
+                    "name": "Код запчастини",
+                    "values": [{"value": "77646966, 230 588, 230589"}],
+                },
+                {"name": "Рік", "values": [{"value": "2006-2011"}]},
+                {"name": "Розташування", "values": [{"value": "Задній міст"}]},
+            ],
+        }
+    )
+
+    assert parsed.part_numbers == ("77646966", "230 588", "230589")
+
+
+def test_explicit_comparison_evidence_wins_over_product_attributes():
+    parsed = Product.from_raw(
+        {
+            "comparisonEvidence": {"condition": "USED", "packageQuantity": 2},
+            "characteristics": [{"name": "S", "value": "kept"}],
+            "attributes": [
+                {"name": "Стан", "values": [{"value": "Новий"}]},
+                {
+                    "name": "Кількість в упаковці",
+                    "values": [{"value": "6"}],
+                },
+            ],
+        }
+    )
+
+    assert parsed.condition == "USED"
+    assert parsed.package_quantity == 2
+    assert parsed.characteristics == [{"name": "S", "value": "kept"}]
 
 
 def test_field_names_end_with_url():
@@ -119,6 +210,36 @@ def test_market_observation_orm_matches_currency_evidence_migration() -> None:
     assert columns.currency_raw.nullable
     assert not columns.currency_inferred.nullable
     assert columns.currency_inferred.server_default is not None
+
+
+def test_price_boundary_constraints_keep_sale_below_reference() -> None:
+    observation_constraints = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in MarketObservation.__table__.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    offer_constraints = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in CatalogDiscoveryOffer.__table__.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+
+    assert (
+        "ck_market_observation_price_boundaries" in observation_constraints
+    )
+    assert (
+        "ck_market_observation_sale_not_above_reference"
+        in observation_constraints
+    )
+    assert "sale_price <= reference_price" in observation_constraints[
+        "ck_market_observation_sale_not_above_reference"
+    ]
+    assert (
+        "ck_catalog_discovery_offer_sale_not_above_reference" in offer_constraints
+    )
+    assert "sale_price <= reference_price" in offer_constraints[
+        "ck_catalog_discovery_offer_sale_not_above_reference"
+    ]
 
 
 def test_llm_comparability_models_are_auditable_and_append_only_ready() -> None:

@@ -804,6 +804,35 @@ async def test_reviews_cache_feedback_and_finalizer_barrier_are_persisted(
         assert human_cached.cache_hit_review_id == first.review_id
         assert human_cached.verdict is ComparabilityVerdict.NOT_COMPARABLE
 
+        async with async_session_factory() as session:
+            v2_corrected = await add_comparability_feedback(
+                session,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                review_id=cached.review_id,
+                decision="CORRECT",
+                corrected_verdict=None,
+                corrected_match_level=None,
+                corrected_identity_verdict="MATCH",
+                corrected_identity_match_level="EXACT",
+                corrected_pricing_admission="EXCLUDED",
+                confidence=Decimal("1"),
+                reason="Identity matches, but package quantity is not price comparable.",
+                evidence_corrections=[
+                    {
+                        "dimension": "package_quantity",
+                        "outcome": "CONFLICT",
+                        "our_value": "1",
+                        "candidate_value": "2",
+                        "explanation": "The competitor offer is a two-part kit.",
+                        "evidence": [],
+                    }
+                ],
+            )
+        assert v2_corrected.identity_verdict.value == "MATCH"
+        assert v2_corrected.pricing_admission.value == "EXCLUDED"
+        assert v2_corrected.verdict is ComparabilityVerdict.NOT_COMPARABLE
+
         assert (
             await claim_collection_finalization(run_ids[3], task_id="finalizer")
             is False
@@ -947,17 +976,18 @@ async def test_hard_stop_reuse_does_not_record_a_false_cache_hit() -> None:
     reason="set MARKO_RUN_POSTGRES_INTEGRATION=1 with a disposable PostgreSQL database",
 )
 @pytest.mark.asyncio
-async def test_ceiling_leaves_no_unreviewed_tail_and_the_run_can_finalize(
+async def test_v2_legacy_ceiling_does_not_truncate_and_run_can_finalize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A cohort wider than the ceiling must not strand the run.
+    """The retained v1 ceiling is compatibility-only in comparability-v2.
 
     ``claim_collection_finalization`` refuses to finalize while any observation
     of a classified item lacks a review row, and
     ``finalize_pricing_collection_task`` returns 0 without retrying when that
     barrier is unmet.  So an early stop that simply walked away would leave the
-    run stuck short of a terminal state forever.  The ceiling must bound the
-    provider cost without bounding the decisions on record.
+    run stuck short of a terminal state forever.  The v2 walk therefore ignores
+    this legacy positive-result ceiling; the explicit provider-call budget is
+    tested separately below.
     """
 
     workspace_id = uuid4()
@@ -985,9 +1015,8 @@ async def test_ceiling_leaves_no_unreviewed_tail_and_the_run_can_finalize(
             provider=provider,
         )
 
-        # Bounded cost: the dear tail cost no provider call.
-        assert provider.calls == ceiling
-        assert judged == ceiling
+        assert provider.calls == offers
+        assert judged == offers
 
         async with async_session_factory() as session:
             rows = list(
@@ -1006,18 +1035,12 @@ async def test_ceiling_leaves_no_unreviewed_tail_and_the_run_can_finalize(
         assert {row.market_observation_id for row in rows} == set(observation_ids)
 
         skipped = [row for row in rows if row.status == "SKIPPED"]
-        assert len(skipped) == offers - ceiling
-        # Fail-closed: a skipped offer is never eligible evidence.
-        assert all(row.verdict == "INSUFFICIENT_DATA" for row in skipped)
-        assert all(row.match_level == "NOT_APPLICABLE" for row in skipped)
-        assert all(row.decision_source == "HARD_RULE" for row in skipped)
-        assert all(row.cache_hit_review_id is None for row in skipped)
+        assert skipped == []
 
-        # The judged ones are the cheapest, in price order.
         judged_ids = {
             row.market_observation_id for row in rows if row.status != "SKIPPED"
         }
-        assert judged_ids == set(observation_ids[:ceiling])
+        assert judged_ids == set(observation_ids)
 
         # The point of the whole exercise: the run is no longer stranded.
         claimed = await claim_collection_finalization(run_id, task_id="barrier-proof")
@@ -1103,7 +1126,10 @@ async def test_required_mode_provider_budget_bounds_calls_and_still_finalizes(
         assert len(declined) == offers - budget
         # Fail-closed: a declined offer is never eligible evidence.
         assert all(row.verdict == "INSUFFICIENT_DATA" for row in declined)
-        assert all(row.match_level == "NOT_APPLICABLE" for row in declined)
+        assert all(row.match_level == "SUSPICIOUS" for row in declined)
+        assert all(
+            row.identity_match_level == "NOT_APPLICABLE" for row in declined
+        )
         assert all(row.decision_source == "HARD_RULE" for row in declined)
         assert all(row.cache_hit_review_id is None for row in declined)
         # Visible: the bound names itself, and the API surfaces error_code.

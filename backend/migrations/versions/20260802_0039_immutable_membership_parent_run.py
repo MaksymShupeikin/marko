@@ -37,7 +37,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 
 revision: str = "20260802_0039"
@@ -225,6 +225,38 @@ def _reject_misplaced_frozen_membership() -> None:
     на работающей системе.  Такое расхождение — след прежней дыры, и разбирать
     его должен человек, а не миграция.
     """
+
+    if context.is_offline_mode():
+        op.execute(
+            sa.text(
+                """
+                DO $marko_membership_guard$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pricing_run_items AS i
+                        JOIN pricing_runs AS r ON r.id = i.pricing_run_id
+                        CROSS JOIN LATERAL (
+                            SELECT (r.scope_manifest::jsonb -> 'execution'
+                                    -> 'membership' -> 'catalog_item_ids'
+                                    ->> i.membership_position) AS expected
+                        ) AS m
+                        WHERE r.scope_contract_version IS NOT NULL
+                          AND r.scope_contract_version <> 'LEGACY_UNBOUNDED'
+                          AND i.membership_position IS NOT NULL
+                          AND m.expected IS NOT NULL
+                          AND m.expected <> i.catalog_item_id::text
+                    ) THEN
+                        RAISE EXCEPTION
+                            'BLOCKED_MIGRATION_20260802_0039: materialized '
+                            'membership disagrees with its frozen manifest';
+                    END IF;
+                END
+                $marko_membership_guard$
+                """
+            )
+        )
+        return
 
     misplaced = (
         op.get_bind()

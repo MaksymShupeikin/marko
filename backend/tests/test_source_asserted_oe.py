@@ -195,6 +195,7 @@ def _cross(target: str, via: str):
         search_oe_norm=target,
         candidate_oe_norm=via,
         canonical_identity_key=f"cross:{target}:{via}",
+        confidence=Decimal("0.90"),
     )
 
 

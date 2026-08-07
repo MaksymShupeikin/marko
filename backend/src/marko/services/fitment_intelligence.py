@@ -72,6 +72,15 @@ from metis.fitment import (
 from metis.pricing.types import ProductTier
 
 from marko.services.scraper_outbox import enqueue_dispatch, publish_dispatch
+from marko.services.market_price import effective_observation_price
+from marko.services.fitment_source_routing import (
+    FITMENT_CROSS_MIN_CONFIDENCE,
+    claim_names_both_numbers,
+    source_access_policy_allows,
+    source_claim_quality_allows,
+    source_confirmation_policy_allows,
+    source_url_matches_domain,
+)
 
 
 FITMENT_SOURCE_POLICY_VERSION = "fitment-source-policy-v1"
@@ -520,6 +529,30 @@ async def _validate_analysis_scope(
     catalog_item = await session.get(CatalogItem, catalog_item_id)
     if catalog_item is None or catalog_item.workspace_id != workspace_id:
         raise FitmentNotFoundError("catalog item not found")
+    # The fitment API accepts a rich target object (including a supplier
+    # article) because it is also used for human research.  For a confirmed
+    # catalog row, however, the target's original vehicle/OE namespace is not
+    # caller-selectable: it must contain the persisted catalog OE.  Otherwise
+    # a KEMP/private manufacturer number could silently become the identity of
+    # a pricing analysis while all downstream fitment evidence still looks
+    # internally consistent.
+    identity_status = str(
+        getattr(catalog_item, "identity_status", "UNRESOLVED")
+        or "UNRESOLVED"
+    ).strip().upper()
+    if identity_status == "OE_CONFIRMED":
+        catalog_oe = normalize_part_number(
+            str(getattr(catalog_item, "oe_norm", "") or "")
+        )
+        target_oes = {
+            normalized
+            for raw in spec.target_identity.oe_numbers
+            if (normalized := normalize_part_number(str(raw))) is not None
+        }
+        if catalog_oe is None or catalog_oe not in target_oes:
+            raise FitmentIntelligenceError(
+                "fitment target must contain the catalog's confirmed original OE"
+            )
     if pricing_run_id is not None:
         run = await session.get(PricingRun, pricing_run_id)
         if run is None or run.workspace_id != workspace_id:
@@ -802,7 +835,7 @@ async def create_fitment_analysis(
             claims,
         )
         price_unit = normalize_price_unit(
-            Decimal(observation.sale_price or observation.price),
+            effective_observation_price(observation),
             quantity_in_offer=commercial.package_quantity,
             unit_basis=commercial.unit_basis,
         )
@@ -1656,8 +1689,7 @@ async def _resolve_cross_reference_evidence(
         FitmentFeature.CROSS_CONFIRMED.value,
     }
     assessment_ids: set[UUID] = set()
-    tier_a_groups: set[str] = set()
-    tier_b_groups: set[str] = set()
+    confirmation_groups: list[tuple[str, str]] = []
     correlation_groups: set[str] = set()
     for claim, assessment, analysis in rows:
         candidate_article = normalize_part_number(
@@ -1678,16 +1710,43 @@ async def _resolve_cross_reference_evidence(
             )
         assessment_ids.add(assessment.id)
         correlation_groups.add(claim.correlation_group)
-        if claim.source_tier == SourceTier.A.value:
-            tier_a_groups.add(claim.correlation_group)
-        if claim.source_tier == SourceTier.B.value:
-            tier_b_groups.add(claim.correlation_group)
+        confirmation_groups.append((claim.source_tier, claim.correlation_group))
+
+        if relation_status == "source_confirmed" and (
+            not source_claim_quality_allows(
+                statement_status=claim.statement_status,
+                evidence_value=claim.evidence_value,
+                polarity=claim.polarity,
+                source_reliability=claim.source_reliability,
+                extraction_confidence=claim.extraction_confidence,
+                directness=claim.directness,
+                independence_factor=claim.independence_factor,
+            )
+            or analysis.status not in {"completed", "partial"}
+            or assessment.compatibility_status
+            not in {"confirmed_compatible", "likely_compatible"}
+            or not assessment.authoritative_confirmation
+            or bool(assessment.hard_rejections)
+            or claim.source_document_id is None
+            or not str(claim.correlation_group or "").strip()
+        ):
+            raise FitmentIntelligenceError(
+                "source-confirmed cross requires strong persisted source evidence"
+            )
 
     if relation_status == "source_confirmed" and not (
-        tier_a_groups or len(tier_b_groups) >= 2
+        source_confirmation_policy_allows(confirmation_groups)
     ):
         raise FitmentIntelligenceError(
             "source-confirmed cross requires Tier A or two independent Tier B sources"
+        )
+    if relation_status == "source_confirmed":
+        await _validate_current_source_confirmation_documents(
+            session,
+            workspace_id=workspace_id,
+            article=article,
+            oe=oe,
+            rows=rows,
         )
 
     required_review_decision = {
@@ -1755,6 +1814,13 @@ async def record_cross_reference(
         raise FitmentIntelligenceError("article and OE must describe a cross relation")
     if relation_status in {"source_confirmed", "human_confirmed"} and not evidence_ids:
         raise FitmentIntelligenceError("confirmed cross requires evidence")
+    if (
+        relation_status in {"source_confirmed", "human_confirmed"}
+        and confidence < FITMENT_CROSS_MIN_CONFIDENCE
+    ):
+        raise FitmentIntelligenceError(
+            "confirmed cross confidence is below the pricing authority floor"
+        )
     (
         normalized_evidence_ids,
         source_count,
@@ -2173,19 +2239,137 @@ async def _get_source_for_workspace(
 
 
 def _require_source_access(source: FitmentSource) -> None:
-    if source.access_status not in {"PERMITTED", "OWNER_RISK_ACCEPTED"}:
-        raise FitmentSourceBlocked(
-            f"source access is not approved: {source.source_key} ({source.access_status})"
-        )
-    if (
-        not source.access_reference.strip()
-        or source.access_reference == "legacy-unreviewed"
-        or not source.robots_checked
-        or not source.terms_checked
+    if not source_access_policy_allows(
+        access_status=source.access_status,
+        access_reference=source.access_reference,
+        robots_checked=source.robots_checked,
+        terms_checked=source.terms_checked,
     ):
+        if source.access_status not in {"PERMITTED", "OWNER_RISK_ACCEPTED"}:
+            raise FitmentSourceBlocked(
+                f"source access is not approved: {source.source_key} "
+                f"({source.access_status})"
+            )
         raise FitmentSourceBlocked(
             f"source access review is incomplete: {source.source_key}"
         )
+
+
+def _aware_datetime(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+async def _validate_current_source_confirmation_documents(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    article: str,
+    oe: str,
+    rows: Sequence[
+        tuple[FitmentEvidenceClaim, FitmentCandidateAssessment, FitmentAnalysis]
+    ],
+) -> None:
+    """Reject a source confirmation whose live authority chain is stale."""
+
+    document_ids = {claim.source_document_id for claim, _, _ in rows}
+    if None in document_ids:
+        raise FitmentIntelligenceError(
+            "source-confirmed cross requires registered source documents"
+        )
+    document_rows = list(
+        (
+            await session.execute(
+                select(FitmentSourceDocument, FitmentSource)
+                .join(FitmentSource, FitmentSource.id == FitmentSourceDocument.source_id)
+                .where(
+                    FitmentSourceDocument.id.in_(document_ids),
+                    or_(
+                        FitmentSource.workspace_id.is_(None),
+                        FitmentSource.workspace_id == workspace_id,
+                    ),
+                )
+            )
+        ).all()
+    )
+    documents = {document.id: (document, source) for document, source in document_rows}
+    if set(documents) != document_ids:
+        raise FitmentIntelligenceError(
+            "source-confirmed cross has missing or cross-workspace source documents"
+        )
+
+    source_keys = {source.source_key for _, source in document_rows}
+    policies = list(
+        (
+            await session.scalars(
+                select(FitmentSource).where(
+                    FitmentSource.source_key.in_(source_keys),
+                    or_(
+                        FitmentSource.workspace_id.is_(None),
+                        FitmentSource.workspace_id == workspace_id,
+                    ),
+                )
+            )
+        ).all()
+    )
+    current_policy: dict[str, FitmentSource] = {}
+    for policy in policies:
+        previous = current_policy.get(policy.source_key)
+        candidate_key = (
+            policy.workspace_id == workspace_id,
+            _aware_datetime(policy.reviewed_at),
+            _aware_datetime(policy.created_at),
+            str(policy.id),
+        )
+        previous_key = (
+            (
+                previous.workspace_id == workspace_id,
+                _aware_datetime(previous.reviewed_at),
+                _aware_datetime(previous.created_at),
+                str(previous.id),
+            )
+            if previous is not None
+            else None
+        )
+        if previous_key is None or candidate_key > previous_key:
+            current_policy[policy.source_key] = policy
+
+    now = datetime.now(UTC)
+    for claim, _, _ in rows:
+        document, source = documents[claim.source_document_id]
+        policy = current_policy.get(source.source_key)
+        if policy is None:
+            raise FitmentIntelligenceError(
+                "source-confirmed cross has no current source policy"
+            )
+        _require_source_access(policy)
+        expires_at = _aware_datetime(document.expires_at) if document.expires_at else None
+        if expires_at is not None and expires_at <= now:
+            raise FitmentIntelligenceError(
+                "source-confirmed cross uses an expired source document"
+            )
+        if (
+            claim.source_document_sha256 != document.content_sha256
+            or str(claim.source_url or "").strip() != document.source_url.strip()
+            or claim.source_external_id != source.source_key
+            or claim.source_type != source.source_type
+            or claim.source_tier != source.source_tier
+            or claim.source_type != policy.source_type
+            or claim.source_tier != policy.source_tier
+            or not source_url_matches_domain(document.source_url, source.domain)
+            or not source_url_matches_domain(document.source_url, policy.domain)
+            or not (str(document.content_locator or "").strip() or claim.raw_fragment)
+            or not claim_names_both_numbers(
+                claim_value=claim.claim_value,
+                raw_fragment=claim.raw_fragment,
+                article=article,
+                oe=oe,
+            )
+        ):
+            raise FitmentIntelligenceError(
+                "source-confirmed cross source lineage does not match current policy"
+            )
 
 
 async def _authorize_submitted_evidence_batch(

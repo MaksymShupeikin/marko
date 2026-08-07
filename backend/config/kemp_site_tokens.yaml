@@ -1,5 +1,8 @@
 schema_version: metis-kemp-site-tokens-v1
-method_version: kemp-site-tokens-v1
+# v2 adds card-bound title and primary-image provenance to the harvested CSV.
+# Number tokenization remains the same; the version bump invalidates old graph
+# snapshots so a reparse cannot silently use title-less evidence.
+method_version: kemp-site-tokens-v2-card-evidence
 
 # Разбор номеров с карточки товара kemp.ua (WP-1B).
 #
@@ -13,7 +16,7 @@ method_version: kemp-site-tokens-v1
 # Значение одного поля может содержать несколько номеров.
 # Наблюдённые склейки: "713610640/7L0498287", "4017703/04", "55473/MG",
 # "LM67048_LM67010", "94727/51804991".
-value_separators: [",", ";", "/", "_"]
+value_separators: [",", ";", "/", "_", "+"]
 
 limits:
   # Ниже четырёх знаков номера не бывает; "04" — обломок склейки, а не номер.
@@ -23,9 +26,16 @@ limits:
 
 # Внутренний код KEMP. В поле «ОЕ номер» встречается как утечка: замер
 # поймал 776414 и 776769. Такой токен не становится oe_norm никогда (NO_5).
-# Длина 6-8 знаков; настоящие Renault-номера (7701059269, 7700312011)
-# десятизначные и под шаблон не попадают.
-internal_code_pattern: "^776[0-9]{3,5}$"
+# Настоящие Renault-номера (7701059269, 7700312011) начинаются с 770, а не
+# 776, и под частный namespace не попадают.
+# Private KEMP shelf namespace.  The two customer reference books contain
+# 7,253 distinct 776-prefixed keys: lengths 4..9 after normalization, including
+# 21 real keys that the previous {3,5} suffix rule missed (7764, 77641,
+# 776404140, 77641257V).  Live characteristics also append short variant
+# suffixes (77643352C, 77643899VP12).  Precision is safer than treating anything
+# in this private namespace as a public OE/cross, so the entire bounded shape is
+# classified INTERNAL_CODE.
+internal_code_pattern: "^776[0-9A-Z]{1,9}$"
 
 # Формы артикулов поставщиков. Токен такой формы — чужой каталожный номер,
 # в oe_norm не идёт. Перечислены поимённо: список пополняется человеком по

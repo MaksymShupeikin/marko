@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import UTC, datetime
-from decimal import Decimal
 import hashlib
 import json
-from pathlib import Path
 import zlib
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,12 +24,12 @@ from marko.infrastructure.db.session import async_session_factory
 from marko.services.scraper_contract import (
     PROM_OUTPUT_SCHEMA_VERSION,
     ScrapeOutput,
+    build_acquisition_input,
 )
 from metis.pricing import (
     comparison_evidence_to_dict,
     verified_comparison_evidence,
 )
-
 
 FIXTURE_SCHEMA_VERSION = "prompt-15.015-e2e-replay-v1"
 DEFAULT_FIXTURE = Path(__file__).with_name("fixtures") / "pricing_replay_v1.json"
@@ -108,19 +108,22 @@ def _target_output(
         },
     }
     input_kind = str(getattr(target, "input_kind", "product_seed"))
+    scrape_input = build_acquisition_input(
+        input_kind,
+        target.query if input_kind == "query" else target.original_url,
+        query=target.query,
+        language="ua",
+        adapter_version=target.adapter_version,
+    )
+    if scrape_input.input_hash != target.input_hash:
+        raise E2eFixtureError(
+            "Replay target input hash does not match its canonical acquisition input"
+        )
     return ScrapeOutput.from_payload(
         {
             "schema_version": PROM_OUTPUT_SCHEMA_VERSION,
             "adapter_version": target.adapter_version,
-            "input": {
-                "input_kind": input_kind,
-                "product_url": target.original_url,
-                "canonical_url": target.canonical_url,
-                "product_key": target.product_key,
-                "query": target.query,
-                "adapter_version": target.adapter_version,
-                "input_hash": target.input_hash,
-            },
+            "input": scrape_input.as_dict(),
             "output": output_payload,
         }
     )

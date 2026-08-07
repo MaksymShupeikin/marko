@@ -702,7 +702,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
-                'SKU ${recommendation.sku} · OE ${recommendation.oe}',
+                _identityLabel(recommendation),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               Text(
@@ -833,6 +833,13 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
             _MarketEvidenceList(
               future: _evidence!,
               normalizedOffers: recommendation.normalizedOffersById,
+              marketMinimum: recommendation.advisoryMarketMinimum,
+              targetBandLow:
+                  recommendation.advisoryTargetBandLow ??
+                  recommendation.lowerBound,
+              targetBandHigh:
+                  recommendation.advisoryTargetBandHigh ??
+                  recommendation.upperBound,
               onOverride: widget.canAdministerWorkspace && !sessionExpired
                   ? _overrideTier
                   : null,
@@ -856,6 +863,19 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
         ],
       ),
     );
+  }
+
+  String _identityLabel(PricingRecommendation recommendation) {
+    final identity = <String>[];
+    if (recommendation.oe.trim().isNotEmpty) {
+      identity.add('OE ${recommendation.oe}');
+    } else if (recommendation.mpn?.trim().isNotEmpty ?? false) {
+      identity.add('MPN ${recommendation.mpn}');
+    } else if (recommendation.searchIdentity?.trim().isNotEmpty ?? false) {
+      identity.add('Поиск ${recommendation.searchIdentity}');
+    }
+    final suffix = identity.isEmpty ? '' : ' · ${identity.join(' · ')}';
+    return 'SKU ${recommendation.sku}$suffix';
   }
 
   String _priceDecision(BuildContext context, PricingRecommendation item) {
@@ -1174,6 +1194,9 @@ class _MarketEvidenceList extends StatelessWidget {
   const _MarketEvidenceList({
     required this.future,
     required this.normalizedOffers,
+    required this.marketMinimum,
+    required this.targetBandLow,
+    required this.targetBandHigh,
     required this.onOverride,
     required this.onComparabilityFeedback,
     required this.onComparabilityReview,
@@ -1181,6 +1204,9 @@ class _MarketEvidenceList extends StatelessWidget {
 
   final Future<List<RecommendationEvidence>> future;
   final Map<String, Map<String, dynamic>> normalizedOffers;
+  final DecimalValue? marketMinimum;
+  final DecimalValue? targetBandLow;
+  final DecimalValue? targetBandHigh;
   final Future<void> Function(RecommendationEvidence)? onOverride;
   final Future<void> Function(RecommendationEvidence)? onComparabilityFeedback;
   final Future<void> Function(RecommendationEvidence)? onComparabilityReview;
@@ -1258,8 +1284,14 @@ class _MarketEvidenceList extends StatelessWidget {
                     normalized?['multiplier']?.toString() ?? '',
                   ) ??
                   item.multiplier;
-              final coefficientLine =
-                  normalizedPrice != null && multiplier != null
+              final pricingAdmitted =
+                  item.llmReview?.pricingAdmission == 'ADMITTED';
+              final coefficientLine = !pricingAdmitted
+                  ? context.localized(
+                      ru: 'Цена скрыта до ADMITTED',
+                      uk: 'Ціну приховано до ADMITTED',
+                    )
+                  : normalizedPrice != null && multiplier != null
                   ? context.localized(
                       ru:
                           'KEMP-эквивалент: ${_money(normalizedPrice, currency: item.currency)} · '
@@ -1371,6 +1403,10 @@ class _MarketEvidenceList extends StatelessWidget {
                             RecommendationEvidenceDetails(evidence: item),
                             ComparabilityReviewPanel(
                               evidence: item,
+                              normalizedPrice: normalizedPrice,
+                              marketMinimum: marketMinimum,
+                              targetBandLow: targetBandLow,
+                              targetBandHigh: targetBandHigh,
                               onFeedback: onComparabilityFeedback,
                               onReview: onComparabilityReview,
                             ),
@@ -1380,10 +1416,19 @@ class _MarketEvidenceList extends StatelessWidget {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text(
-                            _money(item.price, currency: item.currency),
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
+                          if (pricingAdmitted)
+                            Text(
+                              _money(item.price, currency: item.currency),
+                              style: Theme.of(context).textTheme.titleMedium,
+                            )
+                          else
+                            Text(
+                              context.localized(
+                                ru: 'Цена после ADMITTED',
+                                uk: 'Ціна після ADMITTED',
+                              ),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           Text(
                             coefficientLine,
                             style: Theme.of(context).textTheme.bodySmall,

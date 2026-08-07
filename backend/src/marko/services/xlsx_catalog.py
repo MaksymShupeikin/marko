@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -28,7 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from metis.identifiers import normalize_oem_identifier
 
 from marko.core.config import Settings, backend_config_path, get_settings
-from marko.infrastructure.db.models import CatalogImportBatch, CatalogItem
+from marko.infrastructure.db.models import (
+    CatalogImportBatch,
+    CatalogItem,
+    PricingRecommendation,
+    PricingRun,
+    PricingRunItem,
+)
 from marko.services.catalog_characteristics import (
     CharacteristicsConfig,
     CharacteristicsExtraction,
@@ -44,12 +50,17 @@ from marko.services.cost_privacy import (
     is_raw_cost_label,
     require_server_cost_input_allowed,
 )
+from marko.services.pricing_runs import (
+    IDENTITY_BLOCKED_RECOMMENDATION_ACTION,
+    recommendation_price_identity_allowed,
+)
 
 MAX_XLSX_BYTES = 25 * 1024 * 1024
 MAX_UNCOMPRESSED_XLSX_BYTES = 250 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_COLUMNS = 256
 MAX_ERROR_LOG = 2_000
+CATALOG_ROW_OUTCOMES_CONTRACT_VERSION = "catalog-row-outcomes-v1"
 
 _HEADER_CLEAN_RE = re.compile(r"[^a-zа-яёіїґєԁөү0-9]+", re.IGNORECASE)
 _IDENTIFIER_SPLIT_RE = re.compile(r"[,;|\n\r]+")
@@ -191,7 +202,7 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "manual_priority": ("manual priority", "приоритет", "пріоритет"),
 }
 
-REQUIRED_FIELDS = frozenset({"oe", "name", "category", "price"})
+REQUIRED_FIELDS = frozenset({"name", "category", "price"})
 
 
 class CatalogImportError(ValueError):
@@ -244,6 +255,8 @@ class ParsedCatalogRow:
     applicability_brands: list[str]
     applicability_models: list[str]
     characteristics_raw: dict[str, list[str]]
+    identity_status: str
+    identity_reason: str | None
 
 
 @dataclass(frozen=True)
@@ -254,6 +267,83 @@ class ParsedCatalog:
     total_rows: int
     sensitive_costs: dict[int, Decimal]
     characteristics_report: dict[str, Any]
+
+
+def _canonical_json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def catalog_row_outcomes(parsed: ParsedCatalog) -> list[dict[str, Any]]:
+    """Return one immutable terminal result for every non-empty source row."""
+
+    accepted = {row.source_row: row for row in parsed.rows}
+    issues: dict[int, list[ImportIssue]] = {}
+    for issue in parsed.issues:
+        issues.setdefault(issue.row, []).append(issue)
+    overlap = sorted(set(accepted) & set(issues))
+    if overlap:
+        raise CatalogImportError(
+            f"Catalog row accounting overlap for source rows {overlap[:20]}"
+        )
+    source_rows = sorted(set(accepted) | set(issues))
+    if len(source_rows) != parsed.total_rows:
+        raise CatalogImportError(
+            "Catalog row accounting mismatch: "
+            f"terminal={len(source_rows)}, expected={parsed.total_rows}"
+        )
+    outcomes: list[dict[str, Any]] = []
+    for ordinal, source_row in enumerate(source_rows, start=1):
+        accepted_row = accepted.get(source_row)
+        row_issues = issues.get(source_row, [])
+        identity_missing = bool(
+            accepted_row is not None
+            and accepted_row.identity_status == "UNRESOLVED"
+        )
+        reason_codes = list(dict.fromkeys(issue.code for issue in row_issues))
+        if identity_missing:
+            reason_codes.append("CUSTOMER_IDENTITY_MISSING")
+        if accepted_row is not None and accepted_row.identity_reason == (
+            "NORMALIZED_OE_COLLISION"
+        ):
+            reason_codes.append("NORMALIZED_OE_COLLISION")
+        outcomes.append(
+            {
+                "source_ordinal": ordinal,
+                "source_row": source_row,
+                "terminal_status": (
+                    "IMPORTED"
+                    if accepted_row is not None
+                    else "REJECTED_NOT_IMPORTABLE"
+                ),
+                "sku": accepted_row.sku if accepted_row is not None else None,
+                "oe_norm": accepted_row.oe_norm if accepted_row is not None else None,
+                "identity_status": (
+                    accepted_row.identity_status
+                    if accepted_row is not None
+                    else None
+                ),
+                "matching_terminal_status": (
+                    "NOT_MATCHED_IDENTITY_COLLISION"
+                    if identity_missing
+                    and accepted_row is not None
+                    and accepted_row.identity_reason == "NORMALIZED_OE_COLLISION"
+                    else "NOT_MATCHED_CUSTOMER_IDENTITY_MISSING"
+                    if identity_missing
+                    else "ELIGIBLE_FOR_IDENTITY_REVIEW"
+                    if accepted_row is not None
+                    else "NOT_APPLICABLE_NOT_IMPORTED"
+                ),
+                "reason_codes": reason_codes,
+                "details": [issue.message[:1000] for issue in row_issues],
+            }
+        )
+    return outcomes
 
 
 @dataclass(frozen=True)
@@ -450,6 +540,11 @@ def parse_catalog_xlsx(
             )
         headers = _unique_headers(header_values)
         resolved = resolve_column_mapping(headers, explicit_mapping)
+        oe_column_asserts_identity = _oe_column_asserts_identity(
+            headers,
+            resolved,
+            explicit_mapping=explicit_mapping,
+        )
         config = characteristics_config or load_characteristics_config(
             backend_config_path(get_settings().catalog_characteristics_path)
         )
@@ -473,6 +568,7 @@ def parse_catalog_xlsx(
         seen_skus: set[str] = set()
         seen_oe_rows: dict[str, ParsedCatalogRow] = {}
         blocked_oe_collisions: set[str] = set()
+        identity_collision_rows = 0
         total_rows = 0
         for source_row, values in enumerate(iterator, start=2):
             if source_row - 1 > MAX_ROWS:
@@ -515,6 +611,7 @@ def parse_catalog_xlsx(
                     collected=collected,
                     config=config,
                     columns_balanced=columns.balanced,
+                    oe_column_asserts_identity=oe_column_asserts_identity,
                 )
                 for code in extraction.anomalies:
                     anomaly_counts[code] = anomaly_counts.get(code, 0) + 1
@@ -522,36 +619,51 @@ def parse_catalog_xlsx(
                 if parsed.sku in seen_skus:
                     raise CatalogImportError(f"Дублирующийся SKU: {parsed.sku}")
                 seen_skus.add(parsed.sku)
-                if parsed.oe_norm in blocked_oe_collisions:
-                    issues.append(
-                        ImportIssue(
-                            source_row,
-                            "NORMALIZED_OE_COLLISION",
-                            "OE normalization collision requires manual review",
-                        )
+                if (
+                    parsed.identity_status == "OE_CONFIRMED"
+                    and parsed.oe_norm in blocked_oe_collisions
+                ):
+                    # Preserve the source row for operator review.  A repeated
+                    # normalized OE is not safe identity evidence, but dropping
+                    # the row hides a real customer SKU and makes the import
+                    # less complete.  The UNRESOLVED state is fail-closed at
+                    # every matching/pricing boundary.
+                    parsed = replace(
+                        parsed,
+                        identity_status="UNRESOLVED",
+                        identity_reason="NORMALIZED_OE_COLLISION",
                     )
+                    rows.append(parsed)
+                    identity_collision_rows += 1
+                    if parsed_cost is not None:
+                        sensitive_costs[source_row] = parsed_cost
                     continue
-                previous = seen_oe_rows.get(parsed.oe_norm)
+                previous = (
+                    seen_oe_rows.get(parsed.oe_norm)
+                    if parsed.identity_status == "OE_CONFIRMED"
+                    else None
+                )
                 if previous is not None:
-                    rows.remove(previous)
+                    previous_index = rows.index(previous)
+                    rows[previous_index] = replace(
+                        previous,
+                        identity_status="UNRESOLVED",
+                        identity_reason="NORMALIZED_OE_COLLISION",
+                    )
                     seen_oe_rows.pop(parsed.oe_norm, None)
                     blocked_oe_collisions.add(parsed.oe_norm)
-                    issues.extend(
-                        (
-                            ImportIssue(
-                                previous.source_row,
-                                "NORMALIZED_OE_COLLISION",
-                                "OE normalization collision requires manual review",
-                            ),
-                            ImportIssue(
-                                source_row,
-                                "NORMALIZED_OE_COLLISION",
-                                "OE normalization collision requires manual review",
-                            ),
-                        )
+                    parsed = replace(
+                        parsed,
+                        identity_status="UNRESOLVED",
+                        identity_reason="NORMALIZED_OE_COLLISION",
                     )
+                    rows.append(parsed)
+                    identity_collision_rows += 2
+                    if parsed_cost is not None:
+                        sensitive_costs[source_row] = parsed_cost
                     continue
-                seen_oe_rows[parsed.oe_norm] = parsed
+                if parsed.identity_status == "OE_CONFIRMED":
+                    seen_oe_rows[parsed.oe_norm] = parsed
                 rows.append(parsed)
                 if parsed_cost is not None:
                     sensitive_costs[source_row] = parsed_cost
@@ -589,6 +701,7 @@ def parse_catalog_xlsx(
             "recognized": dict(sorted(recognized_names.items())),
             "unrecognized": dict(sorted(unrecognized_names.items())),
             "anomalies": dict(sorted(anomaly_counts.items())),
+            "identity_collision_rows": identity_collision_rows,
             "rows_with_part_numbers": sum(1 for row in rows if row.part_numbers_norm),
             "part_numbers_total": sum(len(row.part_numbers_norm) for row in rows),
             "rows_with_applicability_brand": sum(
@@ -736,6 +849,10 @@ async def import_catalog_xlsx(
                 "Защищённый импорт себестоимости недоступен"
             ) from exc
     now = datetime.now(UTC)
+    row_outcomes = catalog_row_outcomes(parsed)
+    rejected_row_count = sum(
+        row["terminal_status"] == "REJECTED_NOT_IMPORTABLE" for row in row_outcomes
+    )
     batch = CatalogImportBatch(
         workspace_id=workspace_id,
         filename=filename[:255] or "catalog.xlsx",
@@ -746,8 +863,11 @@ async def import_catalog_xlsx(
         column_mapping=parsed.column_mapping,
         total_rows=parsed.total_rows,
         imported_rows=len(parsed.rows),
-        rejected_rows=len(parsed.issues),
+        rejected_rows=rejected_row_count,
         error_log=[asdict(issue) for issue in parsed.issues[:MAX_ERROR_LOG]],
+        row_outcomes_contract_version=CATALOG_ROW_OUTCOMES_CONTRACT_VERSION,
+        row_outcomes_sha256=_canonical_json_sha256(row_outcomes),
+        row_outcomes=row_outcomes,
         characteristics_report=parsed.characteristics_report,
         started_at=now,
     )
@@ -777,7 +897,11 @@ async def import_catalog_xlsx(
                 settings=selected,
             )
     batch.status = (
-        "failed" if not parsed.rows else "partial" if parsed.issues else "completed"
+        "failed"
+        if not parsed.rows
+        else "partial"
+        if rejected_row_count
+        else "completed"
     )
     batch.finished_at = datetime.now(UTC)
     await session.commit()
@@ -851,6 +975,298 @@ async def get_import_batch(
             CatalogImportBatch.workspace_id == workspace_id,
         )
     )
+
+
+async def build_catalog_terminal_manifest(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    batch_id: UUID,
+    run_id: UUID | None = None,
+) -> dict[str, Any] | None:
+    """Build a tenant-scoped source-row manifest, optionally through replay."""
+
+    batch = await get_import_batch(
+        session,
+        workspace_id=workspace_id,
+        batch_id=batch_id,
+    )
+    if batch is None:
+        return None
+    items = list(
+        (
+            await session.scalars(
+                select(CatalogItem)
+                .where(
+                    CatalogItem.workspace_id == workspace_id,
+                    CatalogItem.import_batch_id == batch.id,
+                )
+                .order_by(CatalogItem.source_row, CatalogItem.id)
+            )
+        ).all()
+    )
+    item_by_source_row = {item.source_row: item for item in items}
+    pricing_run: PricingRun | None = None
+    run_item_by_catalog_item: dict[UUID, PricingRunItem] = {}
+    recommendation_by_run_item: dict[UUID, PricingRecommendation] = {}
+    if run_id is not None:
+        pricing_run = await session.scalar(
+            select(PricingRun).where(
+                PricingRun.id == run_id,
+                PricingRun.workspace_id == workspace_id,
+                PricingRun.import_batch_id == batch.id,
+            )
+        )
+        if pricing_run is None:
+            return None
+        run_items = list(
+            (
+                await session.scalars(
+                    select(PricingRunItem)
+                    .where(PricingRunItem.pricing_run_id == pricing_run.id)
+                    .order_by(PricingRunItem.membership_position, PricingRunItem.id)
+                )
+            ).all()
+        )
+        run_item_by_catalog_item = {
+            run_item.catalog_item_id: run_item for run_item in run_items
+        }
+        if run_items:
+            recommendations = list(
+                (
+                    await session.scalars(
+                        select(PricingRecommendation).where(
+                            PricingRecommendation.pricing_run_item_id.in_(
+                                [run_item.id for run_item in run_items]
+                            )
+                        )
+                    )
+                ).all()
+            )
+            recommendation_by_run_item = {
+                recommendation.pricing_run_item_id: recommendation
+                for recommendation in recommendations
+            }
+
+    contract_version = batch.row_outcomes_contract_version
+    stored_hash = batch.row_outcomes_sha256
+    if contract_version == CATALOG_ROW_OUTCOMES_CONTRACT_VERSION:
+        rows = [dict(row) for row in (batch.row_outcomes or [])]
+        recomputed_hash = _canonical_json_sha256(rows)
+        source = "PINNED_ROW_OUTCOMES"
+        hash_verified = recomputed_hash == stored_hash
+    else:
+        accepted_rows = {
+            item.source_row: {
+                "source_row": item.source_row,
+                "terminal_status": "IMPORTED",
+                "sku": item.sku,
+                "oe_norm": item.oe_norm,
+                "reason_codes": [],
+                "details": [],
+            }
+            for item in items
+        }
+        rejected_rows: dict[int, dict[str, Any]] = {}
+        for raw in batch.error_log or []:
+            if not isinstance(raw, Mapping):
+                continue
+            try:
+                source_row = int(raw.get("row"))
+            except (TypeError, ValueError):
+                continue
+            row = rejected_rows.setdefault(
+                source_row,
+                {
+                    "source_row": source_row,
+                    "terminal_status": "REJECTED_NOT_IMPORTABLE",
+                    "sku": None,
+                    "oe_norm": None,
+                    "reason_codes": [],
+                    "details": [],
+                },
+            )
+            code = str(raw.get("code") or "").strip()
+            message = str(raw.get("message") or "").strip()
+            if code and code not in row["reason_codes"]:
+                row["reason_codes"].append(code)
+            if message:
+                row["details"].append(message[:1000])
+        overlap = set(accepted_rows) & set(rejected_rows)
+        known = {
+            **{key: value for key, value in accepted_rows.items() if key not in overlap},
+            **{key: value for key, value in rejected_rows.items() if key not in overlap},
+        }
+        rows = [
+            {"source_ordinal": ordinal, **known[source_row]}
+            for ordinal, source_row in enumerate(sorted(known), start=1)
+        ]
+        recomputed_hash = _canonical_json_sha256(rows)
+        stored_hash = None
+        source = "LEGACY_RECONSTRUCTED"
+        hash_verified = False
+
+    terminal_statuses = {"IMPORTED", "REJECTED_NOT_IMPORTABLE", "FAILED", "CANCELLED"}
+    ordinals = [row.get("source_ordinal") for row in rows]
+    import_complete = (
+        len(rows) == batch.total_rows
+        and ordinals == list(range(1, batch.total_rows + 1))
+        and len({row.get("source_row") for row in rows}) == len(rows)
+        and all(row.get("terminal_status") in terminal_statuses for row in rows)
+        and all(
+            row.get("terminal_status") != "REJECTED_NOT_IMPORTABLE"
+            or bool(row.get("reason_codes"))
+            for row in rows
+        )
+        and (
+            hash_verified
+            if contract_version == CATALOG_ROW_OUTCOMES_CONTRACT_VERSION
+            else len(items) + batch.rejected_rows == batch.total_rows
+            and len(batch.error_log or []) == batch.rejected_rows
+        )
+    )
+    rendered_rows: list[dict[str, Any]] = []
+    for row in rows:
+        rendered = dict(row)
+        item = item_by_source_row.get(int(row.get("source_row") or 0))
+        rendered["catalog_item_id"] = str(item.id) if item is not None else None
+        if pricing_run is not None:
+            run_item = (
+                run_item_by_catalog_item.get(item.id) if item is not None else None
+            )
+            recommendation = (
+                recommendation_by_run_item.get(run_item.id)
+                if run_item is not None
+                else None
+            )
+            not_imported = row.get("terminal_status") != "IMPORTED"
+            has_terminal_recommendation = bool(
+                run_item is not None
+                and run_item.status in {"calculated", "manual_review"}
+                and recommendation is not None
+            )
+            has_terminal_failure = bool(
+                run_item is not None
+                and run_item.status in {"failed", "cancelled"}
+            )
+            identity_blocked_recommendation = bool(
+                recommendation is not None
+                and not recommendation_price_identity_allowed(
+                    item, recommendation.action
+                )
+            )
+            rendered.update(
+                {
+                    "pricing_run_item_id": (
+                        str(run_item.id) if run_item is not None else None
+                    ),
+                    "pricing_terminal_status": (
+                        run_item.status.upper()
+                        if run_item is not None
+                        else "NOT_APPLICABLE_NOT_IMPORTED"
+                        if not_imported
+                        else "MISSING_RUN_ITEM"
+                    ),
+                    "pricing_terminal": (
+                        has_terminal_recommendation
+                        or has_terminal_failure
+                        or (run_item is None and not_imported)
+                    ),
+                    "pricing_terminal_reason": (
+                        IDENTITY_BLOCKED_RECOMMENDATION_ACTION
+                        if identity_blocked_recommendation
+                        else "RECOMMENDATION_PERSISTED"
+                        if has_terminal_recommendation
+                        else "RUN_ITEM_TERMINAL_FAILURE"
+                        if has_terminal_failure
+                        else "NOT_APPLICABLE_NOT_IMPORTED"
+                        if run_item is None and not_imported
+                        else "RECOMMENDATION_MISSING"
+                        if run_item is not None
+                        and run_item.status in {"calculated", "manual_review"}
+                        else "RUN_ITEM_NON_TERMINAL"
+                        if run_item is not None
+                        else "RUN_ITEM_MISSING"
+                    ),
+                    "pricing_error": run_item.error if run_item is not None else None,
+                    "recommendation_id": (
+                        str(recommendation.id) if recommendation is not None else None
+                    ),
+                    "recommendation_action": (
+                        (
+                            "MANUAL_REVIEW"
+                            if identity_blocked_recommendation
+                            else recommendation.action
+                        )
+                        if recommendation is not None
+                        else None
+                    ),
+                }
+            )
+        rendered_rows.append(rendered)
+    replay_nonterminal_count = (
+        sum(not bool(row.get("pricing_terminal")) for row in rendered_rows)
+        if pricing_run is not None
+        else None
+    )
+    replay_missing_item_count = (
+        sum(
+            row.get("terminal_status") == "IMPORTED"
+            and row.get("pricing_run_item_id") is None
+            for row in rendered_rows
+        )
+        if pricing_run is not None
+        else None
+    )
+    pricing_replay_complete = (
+        pricing_run is not None
+        and pricing_run.status in {"completed", "partial", "failed", "cancelled"}
+        and replay_nonterminal_count == 0
+        and replay_missing_item_count == 0
+        and len(run_item_by_catalog_item) == len(items)
+    )
+    complete = import_complete and (
+        pricing_replay_complete if pricing_run is not None else True
+    )
+    return {
+        "manifest_version": (
+            "catalog-pricing-replay-terminal-manifest-v2"
+            if pricing_run is not None
+            else "catalog-terminal-manifest-v1"
+        ),
+        "batch_id": batch.id,
+        "pricing_run_id": pricing_run.id if pricing_run is not None else None,
+        "pricing_run_status": pricing_run.status if pricing_run is not None else None,
+        "catalog_content_sha256": batch.content_sha256,
+        "row_outcomes_contract_version": contract_version,
+        "source": source,
+        "expected_rows": batch.total_rows,
+        "manifest_rows": len(rows),
+        "import_manifest_complete": import_complete,
+        "pricing_replay_complete": (
+            pricing_replay_complete if pricing_run is not None else None
+        ),
+        "pricing_terminal_rows": (
+            sum(bool(row.get("pricing_terminal")) for row in rendered_rows)
+            if pricing_run is not None
+            else None
+        ),
+        "pricing_nonterminal_rows": replay_nonterminal_count,
+        "pricing_missing_run_items": replay_missing_item_count,
+        "complete": complete,
+        "verification_status": "VERIFIED" if complete else "NOT_PROVEN",
+        "row_outcomes_sha256": stored_hash,
+        "recomputed_sha256": recomputed_hash,
+        "hash_verified": hash_verified,
+        "silent_loss_count": max(0, batch.total_rows - len(rows))
+        + (replay_missing_item_count or 0),
+        "replay_manifest_sha256": (
+            _canonical_json_sha256(rendered_rows)
+            if pricing_run is not None
+            else None
+        ),
+        "rows": rendered_rows,
+    }
 
 
 async def list_import_batches(
@@ -932,6 +1348,7 @@ def _parse_row(
     collected: Mapping[str, Sequence[str]],
     config: CharacteristicsConfig,
     columns_balanced: bool,
+    oe_column_asserts_identity: bool,
 ) -> tuple[ParsedCatalogRow, CharacteristicsExtraction]:
     def get(field: str) -> Any:
         index = mapping.get(field)
@@ -939,17 +1356,24 @@ def _parse_row(
 
     oe_raw = _cell_text(get("oe"))
     oe_norm = normalize_identifier(oe_raw)
-    if len(oe_norm) < 3:
-        raise CatalogImportError("пустой или невалидный OE/OEM")
+    if oe_raw and oe_column_asserts_identity and len(oe_norm) < 3:
+        raise CatalogImportError("невалидный OE/OEM")
     if len(oe_norm) > 255:
         raise CatalogImportError("OE/OEM длиннее 255 символов")
     name = _required_text(get("name"), "название")
     category = _required_text(get("category"), "категория")[:255]
     price = _positive_decimal(get("price"), "цена")
-    sku = _cell_text(get("sku")) or f"OE-{oe_norm}-{source_row}"
+    mpn_raw = _cell_text(get("mpn"))
+    mpn_norm = normalize_identifier(mpn_raw)
+    sku = _cell_text(get("sku")) or (
+        f"OE-{oe_norm}-{source_row}"
+        if oe_norm
+        else f"MPN-{mpn_norm}-{source_row}"
+        if mpn_norm
+        else f"ROW-{source_row}"
+    )
     if len(sku) > 255:
         raise CatalogImportError("SKU длиннее 255 символов")
-    mpn_raw = _cell_text(get("mpn"))
     currency = _normalize_currency(get("currency"))
     stock_qty = _optional_nonnegative_decimal(get("stock_qty"), "остаток")
     stock_age = _optional_nonnegative_decimal(get("stock_age_days"), "возраст запаса")
@@ -987,13 +1411,25 @@ def _parse_row(
         self_numbers=(oe_raw, sku, mpn_raw),
         columns_balanced=columns_balanced,
     )
+    if oe_norm and oe_column_asserts_identity:
+        identity_status = "OE_CONFIRMED"
+        identity_reason = "CUSTOMER_OE_COLUMN"
+    elif mpn_norm:
+        identity_status = "MPN_ONLY"
+        identity_reason = "CUSTOMER_MPN_COLUMN"
+    elif extraction.part_numbers_norm:
+        identity_status = "MPN_ONLY"
+        identity_reason = "CUSTOMER_PART_NUMBER_LIST"
+    else:
+        identity_status = "UNRESOLVED"
+        identity_reason = "CUSTOMER_IDENTITY_MISSING"
     return ParsedCatalogRow(
         source_row=source_row,
         sku=sku,
         oe_raw=oe_raw,
         oe_norm=oe_norm,
         mpn_raw=mpn_raw,
-        mpn_norm=normalize_identifier(mpn_raw),
+        mpn_norm=mpn_norm,
         name=name,
         category=category,
         brand=_optional_text(get("brand"), max_length=255),
@@ -1021,7 +1457,36 @@ def _parse_row(
         applicability_brands=list(extraction.applicability_brands),
         applicability_models=list(extraction.applicability_models),
         characteristics_raw=dict(extraction.characteristics_raw),
+        identity_status=identity_status,
+        identity_reason=identity_reason,
     ), extraction
+
+
+def _oe_column_asserts_identity(
+    headers: Sequence[str],
+    mapping: Mapping[str, int],
+    *,
+    explicit_mapping: Mapping[str, str] | None,
+) -> bool:
+    """Whether the customer/operator explicitly labelled the mapped value as OE.
+
+    Prom's canonical ``Код_товару`` column is deliberately *not* such a claim:
+    the supplied workbook mixes internal KEMP shelf codes and real part numbers
+    in it.  Treating every value as an OE both invents identity and turns
+    repeated internal codes into false normalized-OE collisions.
+    """
+
+    oe_index = mapping.get("oe")
+    if oe_index is None:
+        return False
+    if explicit_mapping is not None and "oe" in explicit_mapping:
+        return True
+    normalized = _normalize_header(headers[oe_index])
+    return bool(
+        re.search(r"(?:^| )(?:oe|oem|ое)(?: |$)", normalized)
+        or "оригинальн" in normalized
+        or "оригінальн" in normalized
+    )
 
 
 def _prom_export_mapping(headers: list[str]) -> dict[str, int]:

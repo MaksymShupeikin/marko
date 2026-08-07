@@ -53,6 +53,39 @@ def test_title_only_cross_is_not_counted_as_exact() -> None:
     assert "NOT_EXACT_CROSS_SKU_OR_OE" in result["reason_codes"]
 
 
+def test_candidate_mpn_is_a_native_cross_identifier() -> None:
+    result = evaluate_cross_discovery_product(
+        _product(sku="SELLER-SKU", identifiers={"mpn": "1K0 121 251"}),
+        cross_oe="1K0121251",
+        owned_seller_ids={"10"},
+    )
+
+    assert result["exact"] is True
+    assert result["discovery_candidate"] is True
+
+
+def test_private_kemp_code_is_not_a_cross_identifier() -> None:
+    result = evaluate_cross_discovery_product(
+        _product(sku="776414", identifiers={"mpn": "776414"}),
+        cross_oe="776414",
+        owned_seller_ids={"10"},
+    )
+
+    assert result["exact"] is False
+    assert "NOT_EXACT_CROSS_SKU_OR_OE" in result["reason_codes"]
+
+
+def test_private_kemp_code_is_not_a_cross_target() -> None:
+    result = evaluate_cross_discovery_product(
+        _product(sku="PUBLIC-123", identifiers={"mpn": "PUBLIC-123"}),
+        cross_oe="776414",
+        owned_seller_ids={"10"},
+    )
+
+    assert result["exact"] is False
+    assert "NOT_EXACT_CROSS_SKU_OR_OE" in result["reason_codes"]
+
+
 def test_normalized_search_snapshot_round_trips_without_losing_evidence() -> None:
     original = _product()
 

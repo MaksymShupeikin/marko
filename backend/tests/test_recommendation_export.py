@@ -146,6 +146,82 @@ def test_export_exposes_gated_customer_target_without_calling_it_automatic() -> 
     assert row["automatic_price_application"] == "false"
 
 
+def test_export_does_not_label_private_kemp_code_as_oe() -> None:
+    recommendation = SimpleNamespace(
+        action="MANUAL_REVIEW",
+        current_price=Decimal("100"),
+        fair_price=None,
+        recommended_price=None,
+        absolute_recommended_change=None,
+        percentage_recommended_change=None,
+        confidence=Decimal("0"),
+        confidence_grade="MANUAL",
+        reason_codes=["IDENTITY_EVIDENCE_INSUFFICIENT"],
+        calculation_trace={},
+        currency="UAH",
+        price_tick=Decimal("1"),
+        price_tick_version="uah-integer-v1",
+        computed_at=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+    item = SimpleNamespace(
+        sku="77641360",
+        oe_norm="77641360",
+        mpn_norm="115",
+        part_numbers_norm=["115070"],
+        identity_status="MPN_ONLY",
+        name="Part",
+        category="Filters",
+    )
+
+    row = _export_row(recommendation, item, source_urls=())
+
+    assert row["oe"] == ""
+    assert row["mpn"] == "115"
+    assert row["search_identity"] == "115070"
+    assert row["identity_status"] == "MPN_ONLY"
+
+
+def test_export_downgrades_legacy_mpn_price_decision_to_manual_review() -> None:
+    recommendation = SimpleNamespace(
+        action="RAISE",
+        current_price=Decimal("1000"),
+        fair_price=Decimal("1200"),
+        recommended_price=Decimal("1100"),
+        absolute_recommended_change=Decimal("100"),
+        percentage_recommended_change=Decimal("0.1"),
+        confidence=Decimal("0.9"),
+        confidence_grade="A",
+        reason_codes=["LEGACY_RECOMMENDATION"],
+        calculation_trace={
+            "advisory_decision": {
+                "action": "RAISE",
+                "recommended_price": "1100",
+            }
+        },
+        currency="UAH",
+        price_tick=Decimal("1"),
+        price_tick_version="uah-integer-v1",
+        computed_at=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+    item = SimpleNamespace(
+        sku="77641360",
+        oe_norm="77641360",
+        mpn_norm="115",
+        part_numbers_norm=["115070"],
+        identity_status="MPN_ONLY",
+        name="Part",
+        category="Filters",
+    )
+
+    row = _export_row(recommendation, item, source_urls=())
+
+    assert row["action"] == "MANUAL_REVIEW"
+    assert row["fair_price"] == ""
+    assert row["recommended_price"] == ""
+    assert row["customer_advisory_price"] == ""
+    assert "CUSTOMER_OE_REQUIRED_FOR_PRICE_RECOMMENDATION" in row["reason_codes"]
+
+
 @pytest.mark.asyncio
 async def test_export_refuses_more_than_the_documented_limit(monkeypatch) -> None:
     async def too_many(*_args, **_kwargs):

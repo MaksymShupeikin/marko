@@ -11,7 +11,7 @@ Revises: 20260802_0041
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 
 revision = "20260802_0042"
@@ -109,26 +109,53 @@ def upgrade() -> None:
         table,
         "max_output_tokens > 0 AND max_input_chars > 0",
     )
-    invalid_cache_sources = (
-        op.get_bind()
-        .execute(
+    if context.is_offline_mode():
+        op.execute(
             sa.text(
-                "SELECT count(*) FROM ai_evidence_extractions AS cached "
-                "LEFT JOIN ai_evidence_extractions AS source "
-                "ON source.id = cached.cache_hit_extraction_id "
-                "WHERE cached.status = 'CACHED' "
-                "AND (source.status IS DISTINCT FROM 'COMPLETED' "
-                "OR jsonb_typeof(source.raw_output::jsonb) IS DISTINCT FROM 'object')"
+                """
+                DO $marko_ai_cache_guard$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM ai_evidence_extractions AS cached
+                        LEFT JOIN ai_evidence_extractions AS source
+                          ON source.id = cached.cache_hit_extraction_id
+                        WHERE cached.status = 'CACHED'
+                          AND (source.status IS DISTINCT FROM 'COMPLETED'
+                               OR jsonb_typeof(source.raw_output::jsonb)
+                                  IS DISTINCT FROM 'object')
+                    ) THEN
+                        RAISE EXCEPTION
+                            'AI_EVIDENCE_CACHE_SOURCE_INVALID: cached rows must '
+                            'reference completed strict extractions';
+                    END IF;
+                END
+                $marko_ai_cache_guard$
+                """
             )
         )
-        .scalar_one()
-    )
-    if int(invalid_cache_sources):
-        raise RuntimeError(
-            "AI_EVIDENCE_CACHE_SOURCE_INVALID: "
-            f"{int(invalid_cache_sources)} cached row(s) do not reference a "
-            "completed strict extraction"
+    else:
+        invalid_cache_sources = (
+            op.get_bind()
+            .execute(
+                sa.text(
+                    "SELECT count(*) FROM ai_evidence_extractions AS cached "
+                    "LEFT JOIN ai_evidence_extractions AS source "
+                    "ON source.id = cached.cache_hit_extraction_id "
+                    "WHERE cached.status = 'CACHED' "
+                    "AND (source.status IS DISTINCT FROM 'COMPLETED' "
+                    "OR jsonb_typeof(source.raw_output::jsonb) "
+                    "IS DISTINCT FROM 'object')"
+                )
+            )
+            .scalar_one()
         )
+        if int(invalid_cache_sources):
+            raise RuntimeError(
+                "AI_EVIDENCE_CACHE_SOURCE_INVALID: "
+                f"{int(invalid_cache_sources)} cached row(s) do not reference a "
+                "completed strict extraction"
+            )
 
     op.execute(
         """

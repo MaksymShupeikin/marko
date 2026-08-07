@@ -32,6 +32,7 @@ catalog-candidate-report = "marko.catalog_candidate_report_cli:main"
 catalog-identity-reparse = "marko.catalog_identity_reparse_cli:main"
 catalog-coverage-measurement = "marko.catalog_coverage_measurement_cli:main"
 brand-review-worksheet = "marko.brand_review_worksheet_cli:main"
+comparability-acceptance = "marko.comparability_acceptance_cli:main"
 
 [dependency-groups]
 dev = [

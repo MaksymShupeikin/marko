@@ -48,7 +48,20 @@ class ScrapeConfig:
     start_page: int = 1
     # Cross-seller comparison knobs.
     max_sellers: int = 10  # cap of distinct sellers in a comparison
+    # How many candidate cards may be fetched, ``0`` meaning every external
+    # row. A separate question from ``max_sellers``: that one decides which
+    # offers may set a price, this one decides how much evidence the gates get
+    # to decide on. While the two shared a knob, ``_detail_priority`` — a guess
+    # made from title and SKU text before any card was read — was final.
+    max_detail_cards: int = 0
     similarity_threshold: float = 0.55  # min fuzzy name score to accept a match
     max_search_pages: int = 3  # search pages to scan while collecting offers
+    # Pages of prom.ua's own part-code listing to walk.  Separate from
+    # ``max_search_pages`` because the two answer different questions: a search
+    # page past the second is mostly noise, while a grouping holds every
+    # seller's offer for one code — 114 for one Touareg radiator on
+    # 2026-07-31 — and truncating it to the search cap discards market, not
+    # noise.  Matches ``prom_motors.DEFAULT_MAX_PAGES``, i.e. 120 offers.
+    max_oe_page_pages: int = 4
     user_agents: tuple[str, ...] = USER_AGENTS
     base_headers: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_HEADERS))

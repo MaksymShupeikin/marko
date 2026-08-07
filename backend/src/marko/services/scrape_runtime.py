@@ -290,6 +290,20 @@ class ScrapeExecutionTrace:
             and (request_kinds is None or request.request_kind in request_kinds)
         )
 
+    def succeeded_requests(
+        self,
+        *,
+        request_kinds: set[str] | None = None,
+    ) -> tuple[LogicalRequestTrace, ...]:
+        """Return completed requests that did produce a retained response."""
+
+        return tuple(
+            request
+            for request in self._completed
+            if request.outcome in {"success", "replayed"}
+            and (request_kinds is None or request.request_kind in request_kinds)
+        )
+
     def close(self) -> None:
         if self._guard is not None:
             self._guard.close()

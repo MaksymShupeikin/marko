@@ -9,17 +9,17 @@ parser internals.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from enum import StrEnum
 import hashlib
 import json
 import re
 import resource
 import sys
 import time
-from typing import Any
 import unicodedata
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -32,6 +32,7 @@ from marko.parsers.prom.exceptions import (
     UnsafeResponse,
 )
 from marko.parsers.prom.gateway import PromGateway
+from marko.services.catalog_identity_safety import is_internal_catalog_code
 from marko.services.collection_guard import CollectionCircuitOpen
 from marko.services.matching import PriceComparison
 from marko.services.offer_processing import (
@@ -53,8 +54,7 @@ from marko.services.scrape_journal import EvidenceIntegrityError
 from marko.services.scrape_runtime import ReplayIntegrityError
 from marko.services.source_access import SourceAccessBlocked
 
-
-PROM_ADAPTER_VERSION = "prom-parser-adapter-v3"
+PROM_ADAPTER_VERSION = "prom-parser-adapter-v5"
 PROM_OUTPUT_SCHEMA_VERSION = "prom-market-acquisition-v2"
 LEGACY_PROM_OUTPUT_SCHEMA_VERSION = "prom-price-comparison-v1"
 
@@ -96,6 +96,7 @@ _HTTP_STATUS_RE = re.compile(r"\bHTTP\s+(?P<status>\d{3})\b", re.IGNORECASE)
 
 class ScraperErrorCode(StrEnum):
     INVALID_INPUT = "invalid_input"
+    CUSTOMER_IDENTITY_MISSING = "customer_identity_missing"
     TIMEOUT = "timeout"
     NETWORK = "network"
     RATE_LIMITED = "rate_limited"
@@ -177,6 +178,77 @@ def canonicalize_prom_product_url(product_url: str | None) -> str:
     )
 
 
+def _normalize_declared_widenings(
+    fallback_queries: Sequence[str] | None,
+    *,
+    primary: str,
+    already_declared: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Canonicalize the cross numbers a run declared as allowed widenings.
+
+    The original vehicle OE remains the market identity. A declared widening
+    must be a public number: a private KEMP shelf code is a join key into the
+    customer's own catalogue and is refused here rather than being quietly
+    dropped, because a caller that offered one has misunderstood which
+    namespace it holds.
+    """
+
+    if not fallback_queries:
+        return ()
+    taken = set(already_declared)
+    declared: list[str] = []
+    for raw in fallback_queries:
+        if not str(raw or "").strip():
+            continue
+        normalized = normalize_prom_query(raw)
+        if is_internal_catalog_code(normalized):
+            raise ScraperBoundaryError(
+                ScraperErrorCode.INVALID_INPUT,
+                "A private KEMP catalog code cannot be declared as a market "
+                "widening; it is a join key, not a public part number",
+                retryable=False,
+            )
+        if normalized == primary or normalized in declared or normalized in taken:
+            continue
+        declared.append(normalized)
+    return tuple(declared)
+
+
+def _declared_widenings_from_payload(
+    payload: Mapping[str, Any], key: str = "fallback_queries"
+) -> tuple[str, ...]:
+    """Read a declared query list back out of a persisted input envelope.
+
+    A payload that is not a list of strings is refused rather than coerced: the
+    hash is rebuilt from this value, so silently reading a malformed envelope
+    as "no widenings declared" would let a tampered one verify.
+    """
+
+    raw = payload.get(key)
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ScraperBoundaryError(
+            ScraperErrorCode.SERIALIZATION,
+            f"Scraper output {key} is invalid",
+            retryable=False,
+        )
+    return tuple(raw)
+
+
+def declared_discovery_queries_from_payload(
+    payload: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Read the retrieval-only keys back out of a persisted input envelope.
+
+    The persistence boundary needs these to tell a legitimate acquisition from
+    an undeclared one; it must not reach into this module's private helper to
+    do it.
+    """
+
+    return _declared_widenings_from_payload(payload, "discovery_queries")
+
+
 def normalize_prom_query(query: str | None) -> str:
     """Normalize a query without ever interpreting it as a URL."""
 
@@ -207,6 +279,14 @@ def normalize_prom_query(query: str | None) -> str:
             retryable=False,
         )
     return normalized
+
+
+def normalize_prom_search_context(value: str | None) -> str | None:
+    """Normalize optional retrieval context without turning it into identity."""
+
+    if not str(value or "").strip():
+        return None
+    return normalize_prom_query(value)
 
 
 @dataclass(frozen=True)
@@ -288,10 +368,22 @@ class QueryInput:
     """Canonical query-only acquisition input for catalog items without URLs."""
 
     query: str
+    search_context: str | None
     language: str
     query_key: str
     adapter_version: str
     input_hash: str
+    #: Confirmed cross numbers this run declared as an allowed widening, in the
+    #: order they may be tried.  The original vehicle OE stays the market
+    #: identity; a cross widens retrieval only when the run froze it here, so
+    #: that "the run declared it" is checkable against the input hash later.
+    fallback_queries: tuple[str, ...] = ()
+    #: Retrieval-only public keys — the row's own MPN, a characteristic part
+    #: number.  They are allowed to *find* offers and never to price them: such
+    #: a number asserts no identity, so a row it retrieved stays discovery /
+    #: manual review.  Kept apart from ``fallback_queries`` because the two
+    #: differ in legal status, not merely in priority.
+    discovery_queries: tuple[str, ...] = ()
     input_kind: str = field(default="query", init=False)
 
     @classmethod
@@ -300,9 +392,25 @@ class QueryInput:
         query: str | None,
         *,
         language: str = "ua",
+        search_context: str | None = None,
+        fallback_queries: Sequence[str] | None = None,
+        discovery_queries: Sequence[str] | None = None,
         adapter_version: str = PROM_ADAPTER_VERSION,
     ) -> QueryInput:
         normalized_query = normalize_prom_query(query)
+        normalized_context = normalize_prom_search_context(search_context)
+        normalized_fallbacks = _normalize_declared_widenings(
+            fallback_queries,
+            primary=normalized_query,
+        )
+        # A number already frozen as a confirmed cross keeps that stronger
+        # status; repeating it here would issue the same query twice and let
+        # the weaker one describe the rows it found.
+        normalized_discovery = _normalize_declared_widenings(
+            discovery_queries,
+            primary=normalized_query,
+            already_declared=normalized_fallbacks,
+        )
         normalized_language = unicodedata.normalize("NFKC", language).strip().casefold()
         if not re.fullmatch(r"[a-z]{2}", normalized_language):
             raise ScraperBoundaryError(
@@ -310,36 +418,68 @@ class QueryInput:
                 "Prom query language must be a two-letter code",
                 retryable=False,
             )
-        query_digest = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
+        key_payload: dict[str, Any] = {"query": normalized_query}
+        if normalized_context is not None:
+            key_payload["search_context"] = normalized_context
+        if normalized_fallbacks:
+            key_payload["fallback_queries"] = list(normalized_fallbacks)
+        if normalized_discovery:
+            key_payload["discovery_queries"] = list(normalized_discovery)
+        query_digest = hashlib.sha256(
+            (
+                json.dumps(
+                    key_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                if len(key_payload) > 1
+                else normalized_query.encode("utf-8")
+            )
+        ).hexdigest()
         query_key = f"prom:query:{normalized_language}:{query_digest}"
+        digest_payload: dict[str, Any] = {
+            "adapter_version": adapter_version,
+            "input_kind": "query",
+            "source": "prom_public",
+            "language": normalized_language,
+            "query": normalized_query,
+        }
+        if normalized_context is not None:
+            digest_payload["search_context"] = normalized_context
+        if normalized_fallbacks:
+            digest_payload["fallback_queries"] = list(normalized_fallbacks)
+        if normalized_discovery:
+            digest_payload["discovery_queries"] = list(normalized_discovery)
         digest_source = json.dumps(
-            {
-                "adapter_version": adapter_version,
-                "input_kind": "query",
-                "source": "prom_public",
-                "language": normalized_language,
-                "query": normalized_query,
-            },
+            digest_payload,
             sort_keys=True,
             separators=(",", ":"),
+            ensure_ascii=False,
         )
         return cls(
             query=normalized_query,
+            search_context=normalized_context,
             language=normalized_language,
             query_key=query_key,
             adapter_version=adapter_version,
             input_hash=hashlib.sha256(digest_source.encode()).hexdigest(),
+            fallback_queries=normalized_fallbacks,
+            discovery_queries=normalized_discovery,
         )
 
-    def as_dict(self) -> dict[str, str | None]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "input_kind": self.input_kind,
             "query": self.query,
+            "search_context": self.search_context,
             "language": self.language,
             "query_key": self.query_key,
             "canonical_url": None,
             "adapter_version": self.adapter_version,
             "input_hash": self.input_hash,
+            "fallback_queries": list(self.fallback_queries),
+            "discovery_queries": list(self.discovery_queries),
         }
 
 
@@ -351,6 +491,9 @@ def build_acquisition_input(
     input_value: str | None,
     *,
     query: str | None = None,
+    search_context: str | None = None,
+    fallback_queries: Sequence[str] | None = None,
+    discovery_queries: Sequence[str] | None = None,
     language: str = "ua",
     adapter_version: str = PROM_ADAPTER_VERSION,
 ) -> AcquisitionInput:
@@ -358,6 +501,9 @@ def build_acquisition_input(
         return QueryInput.build(
             input_value,
             language=language,
+            search_context=search_context,
+            fallback_queries=fallback_queries,
+            discovery_queries=discovery_queries,
             adapter_version=adapter_version,
         )
     if input_kind in {"url", "product_seed"}:
@@ -419,9 +565,9 @@ class ScrapeOutput:
                 f"Comparison cannot be serialized: {exc}",
                 retryable=False,
             ) from exc
-        # ``PriceComparison.as_dict`` intentionally remains unchanged because
-        # it is also a public presentation contract.  The adapter enriches its
-        # frozen output boundary with the identity and availability fields
+        # ``PriceComparison.as_dict`` is a public presentation contract and now
+        # carries the explicit sale/reference price boundary. The adapter still
+        # enriches its frozen output with identity and availability fields
         # required to replay Metis evidence persistence without calling the
         # scraper again.
         offers = comparison_payload.get("offers")
@@ -612,6 +758,65 @@ class ScrapeOutput:
                     "Scraper output input_hash is invalid",
                     retryable=False,
                 )
+            try:
+                rebuilt_input = build_acquisition_input(
+                    str(input_payload.get("input_kind")),
+                    (
+                        str(input_payload.get("query") or "")
+                        if input_payload.get("input_kind") == "query"
+                        else str(
+                            input_payload.get("canonical_url")
+                            or input_payload.get("product_url")
+                            or ""
+                        )
+                    ),
+                    query=str(input_payload.get("query") or ""),
+                    search_context=(
+                        str(input_payload.get("search_context"))
+                        if input_payload.get("search_context") is not None
+                        else None
+                    ),
+                    fallback_queries=_declared_widenings_from_payload(input_payload),
+                    discovery_queries=_declared_widenings_from_payload(
+                        input_payload, "discovery_queries"
+                    ),
+                    language=str(input_payload.get("language") or "ua"),
+                    adapter_version=str(
+                        input_payload.get("adapter_version")
+                        or payload.get("adapter_version")
+                        or PROM_ADAPTER_VERSION
+                    ),
+                )
+            except ScraperBoundaryError as exc:
+                raise ScraperBoundaryError(
+                    ScraperErrorCode.ACQUISITION_CONTRACT,
+                    f"Scraper output input envelope is not canonical ({exc})",
+                    retryable=False,
+                ) from exc
+            if rebuilt_input.input_hash != input_hash:
+                raise ScraperBoundaryError(
+                    ScraperErrorCode.ACQUISITION_CONTRACT,
+                    "Scraper output input_hash does not match its canonical input",
+                    retryable=False,
+                )
+            if input_payload.get("input_kind") == "query":
+                if str(input_payload.get("query_key") or "") != rebuilt_input.query_key:
+                    raise ScraperBoundaryError(
+                        ScraperErrorCode.ACQUISITION_CONTRACT,
+                        "Scraper output query_key does not match its query",
+                        retryable=False,
+                    )
+            elif (
+                str(input_payload.get("canonical_url") or "")
+                != rebuilt_input.canonical_url
+                or str(input_payload.get("product_key") or "")
+                != rebuilt_input.product_key
+            ):
+                raise ScraperBoundaryError(
+                    ScraperErrorCode.ACQUISITION_CONTRACT,
+                    "Scraper output product identity does not match its canonical URL",
+                    retryable=False,
+                )
             records = output_payload.get("records")
             if not isinstance(records, list):
                 raise ScraperBoundaryError(
@@ -721,6 +926,18 @@ class ScrapeOutput:
     @property
     def input_hash(self) -> str | None:
         return str(self.input_payload.get("input_hash") or "").strip() or None
+
+    @property
+    def requested_query(self) -> str | None:
+        """The canonical query bound into the acquisition input envelope.
+
+        This is search intent, not marketplace proof.  In particular a query
+        acquisition may use it as ``search_oe_norm`` while its source lineage
+        still correctly asserts no OE number.
+        """
+
+        value = self.input_payload.get("query")
+        return str(value).strip() or None if isinstance(value, str) else None
 
     @property
     def acquisition_query(self) -> str | None:
@@ -1022,9 +1239,14 @@ class FrozenPromScraperAdapter:
         *,
         gateway_factory: Callable[[ScrapeConfig], Any] | None = None,
         excluded_seller_ids: frozenset[str] = frozenset(),
+        min_independent_sellers: int = 0,
     ) -> None:
         self._config = config or ScrapeConfig()
         self._gateway_factory = gateway_factory or PromGateway
+        # How thin the primary market has to be before a declared cross is
+        # spent. Zero keeps every declared widening unused, which is what a
+        # replay or a diagnostic caller wants.
+        self._min_independent_sellers = max(0, min_independent_sellers)
         # Every storefront of ours, not merely the seed's own seller.  The
         # matcher drops them before ``max_sellers`` is applied; passing them
         # only to the later materialization step left our four prom.ua shops
@@ -1037,13 +1259,38 @@ class FrozenPromScraperAdapter:
         try:
             gateway = self._gateway_factory(self._config)
             if isinstance(scrape_input, QueryInput):
-                products = list(
-                    gateway.search(
-                        scrape_input.query,
-                        lang=scrape_input.language,
-                        strict=True,
+                enriched_search = getattr(gateway, "search_enriched", None)
+                if callable(enriched_search):
+                    kwargs = {
+                        "lang": scrape_input.language,
+                        "strict": True,
+                        "excluded_seller_ids": self._excluded_seller_ids,
+                    }
+                    if scrape_input.search_context is not None:
+                        kwargs["context"] = scrape_input.search_context
+                    if scrape_input.fallback_queries:
+                        kwargs["fallback_queries"] = scrape_input.fallback_queries
+                    if scrape_input.discovery_queries:
+                        kwargs["discovery_queries"] = scrape_input.discovery_queries
+                    # The threshold governs both tiers, so it travels whenever
+                    # either list is declared. Tying it to the crosses alone
+                    # would silently disable the discovery tier on every row
+                    # that has a public MPN and no confirmed cross.
+                    if scrape_input.fallback_queries or scrape_input.discovery_queries:
+                        kwargs["min_independent_sellers"] = (
+                            self._min_independent_sellers
+                        )
+                    products = list(enriched_search(scrape_input.query, **kwargs))
+                else:
+                    # Test/replay gateways predating the additive detail method
+                    # retain the frozen listing-only contract.
+                    products = list(
+                        gateway.search(
+                            scrape_input.query,
+                            lang=scrape_input.language,
+                            strict=True,
+                        )
                     )
-                )
                 if not all(isinstance(product, Product) for product in products):
                     raise ScraperBoundaryError(
                         ScraperErrorCode.SERIALIZATION,

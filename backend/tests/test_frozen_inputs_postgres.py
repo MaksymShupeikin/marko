@@ -177,6 +177,8 @@ async def _seed(*, workspace_id: UUID, batch_id: UUID, item_id: UUID) -> None:
                 name="Позиция с себестоимостью",
                 category="brakes",
                 brand="KEMP",
+                identity_status="OE_CONFIRMED",
+                identity_reason="EXPLICIT_OE_TEST_FIXTURE",
                 product_url=None,
                 current_price=Decimal("800"),
                 currency="UAH",
@@ -839,6 +841,7 @@ async def _persist_through_pipeline(
             brand_confidence={},
             observed_at=datetime.now(UTC),
             source_type="prom_public",
+            acquisition_query=oe,
         )
         await session.commit()
     async with async_session_factory() as session:

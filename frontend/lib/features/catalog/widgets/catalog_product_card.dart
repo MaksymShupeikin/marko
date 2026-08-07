@@ -348,6 +348,7 @@ String _metadata(BuildContext context, CatalogProduct product) {
     if (product.brand != null) product.brand!,
     if (product.sku != null)
       '${context.localized(ru: 'Артикул', uk: 'Артикул')} ${product.sku}',
+    if (product.mpn != null) 'MPN ${product.mpn}',
     '${product.stores.length} ${_storeWord(context, product.stores.length)}',
   ];
   return values.join(' · ');

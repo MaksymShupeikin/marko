@@ -28,7 +28,9 @@ def _enabled() -> bool:
 
 def _dsn(database: str) -> str:
     url = make_url(os.environ["DATABASE_URL"])
-    return f"postgresql://{url.username}:{url.password}@{url.host}:{url.port}/{database}"
+    return (
+        f"postgresql://{url.username}:{url.password}@{url.host}:{url.port}/{database}"
+    )
 
 
 def _async_url(database: str) -> str:
@@ -367,7 +369,9 @@ async def test_0035_refuses_while_a_pre_0035_bounded_run_is_active() -> None:
             await connection.close()
 
         result = _alembic(database, "upgrade", "20260801_0035")
-        assert result.returncode != 0, "миграция обязана отказаться при активном прогоне"
+        assert result.returncode != 0, (
+            "миграция обязана отказаться при активном прогоне"
+        )
         assert "BLOCKED_MIGRATION_20260801_0035" in (result.stdout + result.stderr)
         assert "20260801_0034" in _revision(database)
 
@@ -398,6 +402,119 @@ async def test_0035_proceeds_once_the_run_is_terminal() -> None:
             await connection.close()
         assert _alembic(database, "upgrade", "head").returncode == 0
         assert _head_revision(database) in _revision(database)
+    finally:
+        await _admin(f'DROP DATABASE IF EXISTS "{database}"')
+
+
+@pytest.mark.skipif(not _enabled(), reason="set MARKO_RUN_POSTGRES_INTEGRATION=1")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "anomaly",
+    ("SOURCE_SEMANTIC_CONFLICT", "PUBLIC_NUMBER_SEMANTIC_FANOUT"),
+)
+async def test_0047_downgrade_refuses_to_erase_semantic_conflict(
+    anomaly: str,
+) -> None:
+    """The newer CHECK cannot be removed while a quarantined edge uses it."""
+
+    _require_disposable()
+    database = await _fresh_database("marko_semantic_identity_p15017")
+    try:
+        assert _alembic(database, "upgrade", "head").returncode == 0
+        connection = await asyncpg.connect(_dsn(database))
+        try:
+            ids = await _seed_chain(connection)
+            await connection.execute(
+                "INSERT INTO catalog_identity_links "
+                "(id, workspace_id, catalog_item_id, our_oem_norm, "
+                " extracted_oem_norm, extracted_raw, raw_context, "
+                " extraction_method, validation_status, anomaly, "
+                " method_version, config_sha256) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'REVIEW',$9,$10,$11)",
+                uuid.uuid4(),
+                ids["ws"],
+                ids["item"],
+                "312783",
+                "8E0513033",
+                "8E0 513 033",
+                "rear in v1; front in v2",
+                "KEMP_REFERENCE_MAP_V2",
+                anomaly,
+                "identity-graph-v3",
+                "b" * 64,
+            )
+        finally:
+            await connection.close()
+
+        refused = _alembic(database, "downgrade", "20260804_0046")
+        assert refused.returncode != 0
+        assert anomaly in (refused.stdout + refused.stderr)
+        assert "20260805_0047" in _revision(database)
+
+        connection = await asyncpg.connect(_dsn(database))
+        try:
+            await connection.execute(
+                "DELETE FROM catalog_identity_links "
+                "WHERE anomaly = $1",
+                anomaly,
+            )
+        finally:
+            await connection.close()
+        assert _alembic(database, "downgrade", "20260804_0046").returncode == 0
+        assert "20260804_0046" in _revision(database)
+    finally:
+        await _admin(f'DROP DATABASE IF EXISTS "{database}"')
+
+
+@pytest.mark.skipif(not _enabled(), reason="set MARKO_RUN_POSTGRES_INTEGRATION=1")
+@pytest.mark.asyncio
+async def test_0046_downgrade_refuses_to_erase_stale_quarantine_semantics() -> None:
+    """A downgrade must not strand a value forbidden by the older CHECK."""
+
+    _require_disposable()
+    database = await _fresh_database("marko_stale_identity_p15017")
+    try:
+        assert _alembic(database, "upgrade", "head").returncode == 0
+        connection = await asyncpg.connect(_dsn(database))
+        try:
+            ids = await _seed_chain(connection)
+            await connection.execute(
+                "INSERT INTO catalog_identity_links "
+                "(id, workspace_id, catalog_item_id, our_oem_norm, "
+                " extracted_oem_norm, extracted_raw, raw_context, "
+                " extraction_method, validation_status, anomaly, "
+                " method_version, config_sha256) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'REVIEW',"
+                "'STALE_AFTER_REPARSE',$9,$10)",
+                uuid.uuid4(),
+                ids["ws"],
+                ids["item"],
+                "1K01",
+                "7L6121253C",
+                "7L6 121 253 C",
+                "obsolete source row",
+                "KEMP_REFERENCE_MAP_V2",
+                "identity-graph-v2",
+                "a" * 64,
+            )
+        finally:
+            await connection.close()
+
+        refused = _alembic(database, "downgrade", "20260804_0045")
+        assert refused.returncode != 0
+        assert "STALE_AFTER_REPARSE" in (refused.stdout + refused.stderr)
+        assert "20260804_0046" in _revision(database)
+
+        connection = await asyncpg.connect(_dsn(database))
+        try:
+            await connection.execute(
+                "DELETE FROM catalog_identity_links "
+                "WHERE anomaly = 'STALE_AFTER_REPARSE'"
+            )
+        finally:
+            await connection.close()
+        assert _alembic(database, "downgrade", "20260804_0045").returncode == 0
+        assert "20260804_0045" in _revision(database)
     finally:
         await _admin(f'DROP DATABASE IF EXISTS "{database}"')
 

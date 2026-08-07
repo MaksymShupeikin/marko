@@ -60,6 +60,15 @@ class Anomaly(str, Enum):
     #: newer one is preferred.  Not a conflict: the customer told us which file is
     #: current, so this is a supersession with a known direction.
     OE_SUPERSEDED_BY_NEWER_REFERENCE = "OE_SUPERSEDED_BY_NEWER_REFERENCE"
+    #: Two declared revisions joined by the same private catalogue key describe
+    #: physically incompatible parts (for example left versus right).  The key
+    #: can no longer prove that numbers from those rows belong to one identity.
+    SOURCE_SEMANTIC_CONFLICT = "SOURCE_SEMANTIC_CONFLICT"
+    #: One public number is assigned to structurally incompatible catalog
+    #: identities, including canonical-only graphs with no edge to annotate.
+    PUBLIC_NUMBER_SEMANTIC_FANOUT = "PUBLIC_NUMBER_SEMANTIC_FANOUT"
+    #: Historical edge absent from the latest atomic workspace reparse.
+    STALE_AFTER_REPARSE = "STALE_AFTER_REPARSE"
 
 
 class CanonicalRule(str, Enum):
@@ -174,6 +183,10 @@ class IdentityLink:
 class IdentityGraph:
     canonical: str
     canonical_source: str | None
+    #: Every source that named the anchor, in trust order.  Keeping only the
+    #: first source loses a trusted OE assertion whenever the same number also
+    #: appears in the non-asserting own-export code column.
+    canonical_sources: tuple[str, ...] = ()
     links: tuple[IdentityLink, ...] = ()
     anomalies: tuple[str, ...] = ()
     #: Numbers that were dropped and why — never silent.
@@ -182,7 +195,9 @@ class IdentityGraph:
     @property
     def confirmed_numbers(self) -> tuple[str, ...]:
         return tuple(
-            sorted({link.extracted_oem_norm for link in self.links if link.is_confirmed})
+            sorted(
+                {link.extracted_oem_norm for link in self.links if link.is_confirmed}
+            )
         )
 
     @property
@@ -371,6 +386,23 @@ def load_identity_graph_config(path: str | Path) -> IdentityGraphConfig:
 DISCARD_SELF_REFERENCE = "SELF_REFERENCE"
 DISCARD_EMPTY_AFTER_NORMALIZATION = "EMPTY_AFTER_NORMALIZATION"
 DISCARD_UNKNOWN_SOURCE = "UNKNOWN_SOURCE"
+DISCARD_UNSAFE_PUBLIC_NUMBER_SHAPE = "UNSAFE_PUBLIC_NUMBER_SHAPE"
+
+
+def is_safe_public_number_shape(normalized: str) -> bool:
+    """Whether a normalized value can be a public automotive identifier.
+
+    This is intentionally only a shape guard, not a brand-specific catalogue
+    guess. Genuine identifiers may be short, but a one-character token, an
+    all-zero placeholder or text with no digit is not safe as a global graph
+    node.
+    """
+
+    return bool(
+        len(normalized) >= 2
+        and any(character.isdigit() for character in normalized)
+        and set(normalized) != {"0"}
+    )
 
 
 def _candidates(
@@ -389,6 +421,15 @@ def _candidates(
             normalized = normalize_cross_oem(number)
             if not normalized:
                 discarded[number] = DISCARD_EMPTY_AFTER_NORMALIZATION
+                continue
+            # A public identifier must carry at least one digit.  Bare editor
+            # notes and suffix fragments such as ``MG``, ``L`` or
+            # ``Fiat/Alfa/Lancia`` used to become global graph nodes and could
+            # join unrelated catalogue rows.  Keep short genuine identifiers
+            # such as ``KL2``, ``S5G`` and ``04``: length alone is not evidence
+            # that an automotive part number is invalid.
+            if not is_safe_public_number_shape(normalized):
+                discarded[number] = DISCARD_UNSAFE_PUBLIC_NUMBER_SHAPE
                 continue
             entry = seen.setdefault(
                 normalized,
@@ -507,6 +548,8 @@ def build_identity_graph(
     sources: Sequence[SourceNumbers],
     config: IdentityGraphConfig,
     shared_article_numbers: frozenset[str] = frozenset(),
+    source_semantic_conflict: bool = False,
+    public_number_semantic_fanout: frozenset[str] = frozenset(),
 ) -> IdentityGraph:
     """Turn what every source says about one item into a set of edges.
 
@@ -518,6 +561,16 @@ def build_identity_graph(
     than one internal code.  Edges touching them are flagged rather than
     dropped: the number is real, it just cannot be trusted to identify a single
     part on its own.
+
+    ``source_semantic_conflict`` means that two source revisions joined through
+    the same private key explicitly disagree on a physical identity dimension.
+    Every edge is then retained for audit but downgraded to ``REVIEW``: choosing
+    which revision is right is a domain decision, not a recency tie-break.
+
+    ``public_number_semantic_fanout`` contains exact public numbers assigned to
+    structurally incompatible catalog rows. It also quarantines a graph that
+    contains only that canonical number: no edge exists, but querying the
+    canonical would still mix the incompatible products.
     """
 
     own_norm = normalize_cross_oem(own_code)
@@ -539,6 +592,10 @@ def build_identity_graph(
     has_conflict = _sources_disagree(candidates, config, superseded=superseded)
 
     graph_anomalies: set[str] = set()
+    if source_semantic_conflict:
+        graph_anomalies.add(Anomaly.SOURCE_SEMANTIC_CONFLICT.value)
+    if set(candidates).intersection(public_number_semantic_fanout):
+        graph_anomalies.add(Anomaly.PUBLIC_NUMBER_SEMANTIC_FANOUT.value)
     links: list[IdentityLink] = []
     for number in sorted(candidates):
         if number == canonical:
@@ -556,7 +613,14 @@ def build_identity_graph(
             status = LinkStatus.CONFIRMED
 
         anomaly: str | None = None
-        if number in shared_article_numbers or canonical in shared_article_numbers:
+        if source_semantic_conflict:
+            anomaly = Anomaly.SOURCE_SEMANTIC_CONFLICT.value
+        elif (
+            canonical in public_number_semantic_fanout
+            or number in public_number_semantic_fanout
+        ):
+            anomaly = Anomaly.PUBLIC_NUMBER_SEMANTIC_FANOUT.value
+        elif number in shared_article_numbers or canonical in shared_article_numbers:
             anomaly = Anomaly.SHARED_ARTICLE_FANOUT.value
         elif has_conflict and config.sources[best].asserts_oe:
             anomaly = Anomaly.OE_SOURCE_CONFLICT.value
@@ -587,6 +651,9 @@ def build_identity_graph(
     return IdentityGraph(
         canonical=canonical,
         canonical_source=canonical_source,
+        canonical_sources=tuple(
+            sorted(candidates[canonical]["sources"], key=config.trust_index)
+        ),
         links=tuple(links),
         anomalies=tuple(sorted(graph_anomalies)),
         discarded=MappingProxyType(dict(discarded)),
@@ -607,7 +674,7 @@ def shared_article_numbers(
     for code, articles in articles_by_code.items():
         for article in articles:
             normalized = normalize_cross_oem(article)
-            if normalized:
+            if is_safe_public_number_shape(normalized):
                 owners.setdefault(normalized, set()).add(code)
     return frozenset(
         number for number, codes in owners.items() if len(codes) >= minimum_codes

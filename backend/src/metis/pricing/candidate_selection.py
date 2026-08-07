@@ -97,6 +97,202 @@ class TextMarkers:
     regex: tuple[str, ...] = ()
 
 
+# These defaults are intentionally conservative.  They are not a product
+# taxonomy and must not be used as positive identity proof.  Their only job is
+# to keep an unrecognised Prom category from entering the price cohort when the
+# title is an unmistakably unrelated marketplace item.  The shipped YAML
+# repeats the lists so the active policy is auditable and hash-pinned; the
+# Python defaults preserve backwards compatibility for older/private policy
+# files that predate the semantic domain section.
+_DEFAULT_CATEGORY_DOMAIN_AUTOMOTIVE_MARKERS: Mapping[str, list[str]] = {
+    "words": [
+        "vw",
+        "bmw",
+        "audi",
+        "ford",
+        "kia",
+        "opel",
+        "seat",
+        "fiat",
+        "honda",
+        "mazda",
+        "volvo",
+        "iveco",
+        "isuzu",
+        "toyota",
+        "nissan",
+        "renault",
+        "peugeot",
+        "citroen",
+        "subaru",
+        "suzuki",
+        "hyundai",
+        "mitsubishi",
+        "volkswagen",
+        "мерседес",
+        "фольксваген",
+        "тойота",
+        "авто",
+    ],
+    "prefixes": [
+        "автозапчаст",
+        "запчаст",
+        "автомоб",
+        "радиатор",
+        "амортиз",
+        "термостат",
+        "стартер",
+        "генератор",
+        "насос",
+        "ступиц",
+        "подшип",
+        "колод",
+        "датчик",
+        "фильтр",
+        "ремн",
+        "ролик",
+        "ремкомплект",
+        "замок",
+        "зажиган",
+        "подвес",
+        "рычаг",
+        "тяга",
+        "сайлент",
+        "втул",
+        "проклад",
+        "клапан",
+        "катуш",
+        "форсун",
+        "дроссел",
+        "турбин",
+        "картер",
+        "масл",
+        "сцеплен",
+        "короб",
+        "тормоз",
+        "кузов",
+        "капот",
+        "багажник",
+        "бампер",
+        "фара",
+        "крыл",
+        "двер",
+        "зеркал",
+        "стеклооч",
+        "шкив",
+        "маховик",
+        "шрус",
+        "глуш",
+        "выхлоп",
+        "рул",
+        "гидроусил",
+        "бачок",
+        "сальник",
+        "привод",
+        "полуос",
+        "свеч",
+        "провод",
+        "аккум",
+        "кардан",
+        "патруб",
+        "шланг",
+        "опор",
+    ],
+    "phrases": [
+        "для автомобиля",
+        "для авто",
+        "для двигателя",
+        "для акпп",
+        "для кпп",
+        "для volkswagen",
+        "для toyota",
+    ],
+}
+
+_DEFAULT_CATEGORY_DOMAIN_NON_AUTOMOTIVE_MARKERS: Mapping[str, list[str]] = {
+    "words": [
+        "vitamin",
+        "supplement",
+        "lenovo",
+        "gap",
+    ],
+    "prefixes": [
+        "витамин",
+        "добавк",
+        "коллаген",
+        "нож",
+        "ниж",
+        "лезви",
+        "фотофон",
+        "фотозон",
+        "винилов",
+        "ноутбук",
+        "компьютер",
+        "смартфон",
+        "телефон",
+        "планшет",
+        "клавиатур",
+        "монитор",
+        "наушник",
+        "мебел",
+        "стол",
+        "стул",
+        "шкаф",
+        "диван",
+        "кресл",
+        "одеж",
+        "куртк",
+        "жилет",
+        "футболк",
+        "брюк",
+        "плать",
+        "юбк",
+        "кепк",
+        "балетк",
+        "обув",
+        "шапк",
+        "сумк",
+        "аквариум",
+        "самокат",
+        "велосипед",
+        "беговел",
+        "игруш",
+        "тетрад",
+        "зошит",
+        "пенал",
+        "обои",
+        "маникюр",
+        "медицин",
+        "посуд",
+        "бутыл",
+        "полотен",
+        "краск",
+        "эмал",
+        "мультимед",
+        "адаптер",
+        "переходник",
+        "погруж",
+        "глубин",
+        "глибин",
+        "скважин",
+        "свердлов",
+        "колод",
+    ],
+    "phrases": [
+        "для ноутбука",
+        "для телефона",
+        "для компьютера",
+        "для скважины",
+        "для колодца",
+        "для воды",
+        "насос для воды",
+        "насос для скважины",
+        "насос для колодца",
+        "квадратный виниловый фотофон",
+    ],
+}
+
+
 @dataclass(frozen=True, slots=True)
 class ApplicabilityDictionary:
     year_regex: str
@@ -135,6 +331,14 @@ class CategoryDomainConfig:
     majority_prefix_depth: int
     majority_min_candidates: int
     majority_min_share: Decimal
+    # Semantic markers are a precision guard for category paths that are not
+    # known to be automotive.  They never prove identity; they only reject
+    # explicit non-automotive wording or hold an unconfirmed domain out of the
+    # price cohort.
+    trusted_automotive_ancestors: tuple[tuple[int, ...], ...]
+    automotive_markers: TextMarkers
+    non_automotive_markers: TextMarkers
+    require_semantic_for_unknown: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +411,12 @@ class CandidateItem:
     # Root-to-leaf Prom category ancestry. Compared element-wise as integers;
     # never as text, because ancestor 20 must not match category 208.
     category_path: tuple[int, ...] = ()
+    # Additional candidate-native identifiers, kept separate from the single
+    # legacy ``article_field`` slot.  Prom commonly exposes both a seller SKU
+    # and a manufacturer part number; choosing one with ``sku or mpn`` loses a
+    # valid exact MPN whenever the seller SKU is present but different.
+    # Values are labelled so the verdict explains which namespace matched.
+    article_fields: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -680,16 +890,34 @@ def _gate_category_domain(
 ) -> _GateResult:
     policy = config.category_domain
     path = tuple(candidate.category_path)
+    semantic_text = " ".join(
+        value.strip()
+        for value in (
+            candidate.title,
+            candidate.description or "",
+            candidate.brand or "",
+        )
+        if value and value.strip()
+    )
+    automotive_markers = _matched_markers(
+        semantic_text,
+        policy.automotive_markers,
+    )
+    non_automotive_markers = _matched_markers(
+        semantic_text,
+        policy.non_automotive_markers,
+    )
     details: dict[str, Any] = {
         "category_id": candidate.category_id,
         "category_path": list(path),
+        "semantic_text_markers": {
+            "automotive": automotive_markers,
+            "non_automotive": non_automotive_markers,
+        },
     }
     if not policy.enabled:
         details["mode"] = "DISABLED"
         return _GateResult(details=details)
-    if not path:
-        details["mode"] = "CATEGORY_UNKNOWN"
-        return _GateResult(flag="CATEGORY_UNKNOWN", details=details)
 
     blocked = _first_matching_ancestor(path, policy.blocked_ancestors)
     if blocked is not None:
@@ -701,6 +929,26 @@ def _gate_category_domain(
             details=details,
         )
 
+    # A strong lexical contradiction wins even when Prom misclassified the
+    # category under the automotive root.  This is intentionally a closed,
+    # auditable deny set; broad words such as ``насос`` or ``лампа`` are not in
+    # it because they occur in real vehicle parts as well.
+    if non_automotive_markers:
+        details["mode"] = "SEMANTIC_NON_AUTOMOTIVE"
+        return _GateResult(
+            action=CandidateStatus.REJECTED,
+            reason="CATEGORY_NOT_AUTOPARTS",
+            details=details,
+        )
+
+    if not path:
+        details["mode"] = "CATEGORY_UNKNOWN"
+        # Keep the gate non-terminal when Prom supplied no category.  This
+        # preserves the later OEM gate's diagnostic/identity precedence.  The
+        # acquisition adapters call the semantic pricing gate after the full
+        # chain and turn an unconfirmed domain into REFERENCE_ONLY there.
+        return _GateResult(flag="CATEGORY_UNKNOWN", details=details)
+
     if policy.allowlist_enforced and policy.allowed_ancestors:
         allowed = _first_matching_ancestor(path, policy.allowed_ancestors)
         details["mode"] = "ALLOWLIST"
@@ -711,6 +959,15 @@ def _gate_category_domain(
                 details=details,
             )
         details["matched_ancestor"] = list(allowed)
+        return _GateResult(details=details)
+
+    trusted = _first_matching_ancestor(
+        path,
+        policy.trusted_automotive_ancestors,
+    )
+    if trusted is not None:
+        details["mode"] = "TRUSTED_AUTOMOTIVE_BRANCH"
+        details["matched_ancestor"] = list(trusted)
         return _GateResult(details=details)
 
     if policy.majority_vote_enabled and context is not None and context.is_conclusive:
@@ -726,6 +983,21 @@ def _gate_category_domain(
                 details=details,
             )
         return _GateResult(details=details)
+
+    if automotive_markers:
+        details["mode"] = "SEMANTIC_AUTOMOTIVE_TEXT"
+        return _GateResult(details=details)
+
+    # The path is known but belongs to a branch for which we have no approved
+    # automotive interpretation.  Keep the gate non-terminal so identity
+    # failures still report OEM_NOT_FOUND; the acquisition adapters demote a
+    # completed pricing verdict to REFERENCE_ONLY after all identity gates.
+    if policy.require_semantic_for_unknown:
+        details["mode"] = "CATEGORY_DOMAIN_UNCONFIRMED"
+        return _GateResult(
+            flag="CATEGORY_DOMAIN_UNCONFIRMED",
+            details=details,
+        )
 
     details["mode"] = "NO_ACTIVE_POLICY"
     return _GateResult(details=details)
@@ -772,13 +1044,59 @@ def _gate_remanufactured(
 #: 863.130) and Zelmer 86.3130 (a meat-grinder auger) normalize to the same
 #: string, which is how 115 auger listings reached the observation set.
 #:
-#: This only ever raises a flag.  Rejecting on it would need the golden set to
-#: show what the rule costs in real candidates, and that set does not exist yet.
+#: Unlabelled hits are kept visible but reference-only.  Structured article
+#: fields and explicitly labelled ``art./OE/код`` title evidence remain eligible
+#: for the downstream gates.
 WEAK_NUMERIC_IDENTITY_MAX_DIGITS = 6
 
 #: Evidence kinds that are a substring hit in free text rather than an exact
 #: match of a structured field.  A collision can only enter through these.
 _SUBSTRING_IDENTITY_EVIDENCE = frozenset({"TITLE", "DESCRIPTION"})
+_IDENTIFIER_LABEL_RE = re.compile(
+    r"(?:\b(?:oe|oem|art|article|артикул|арт)\b|"
+    r"\bpart\s+(?:no|number)\b|"
+    r"\bкод\s+(?:запчасти|запчастини|виробника|производителя)\b|[#№])",
+    re.IGNORECASE,
+)
+
+
+def _identifier_pattern(expected: str) -> re.Pattern[str] | None:
+    if not expected:
+        return None
+    pieces = r"[\s./_-]*".join(re.escape(character) for character in expected)
+    return re.compile(
+        rf"(?<![A-Za-zА-Яа-яЇїІіЄєҐґ0-9]){pieces}"
+        rf"(?![A-Za-zА-Яа-яЇїІіЄєҐґ0-9])",
+        re.IGNORECASE,
+    )
+
+
+def _identifier_matches_as_token(
+    text: str | None, expected: str
+) -> tuple[re.Match[str], ...]:
+    pattern = _identifier_pattern(expected)
+    if pattern is None or not text:
+        return ()
+    return tuple(pattern.finditer(text))
+
+
+def _numeric_title_identifier_is_labelled(title: str | None, expected: str) -> bool:
+    """Return whether a short numeric title hit is explicitly labelled.
+
+    ``norm_oem`` intentionally removes punctuation, so a plain substring
+    search cannot distinguish ``940194`` from the same digits embedded in a
+    random SKU. Keep the original title for this one safety decision and
+    accept grouped forms such as ``940 194`` only when a nearby ``арт./OE/код``
+    marker identifies the number as a part identifier.
+    """
+
+    if not title or not expected.isdigit():
+        return False
+    for match in _identifier_matches_as_token(title, expected):
+        before = title[max(0, match.start() - 48) : match.start()]
+        if _IDENTIFIER_LABEL_RE.search(before):
+            return True
+    return False
 
 
 def _gate_oem_identity(
@@ -801,9 +1119,37 @@ def _gate_oem_identity(
     """
 
     if identity_source:
+        expected = norm_oem(our_item.oem)
+        # A Prom part-code page is strong acquisition evidence, but it is not
+        # permission to ignore an explicit native OE reported by the card
+        # itself.  A different MPN is normal for an aftermarket offer; a
+        # different native OE is a contradiction that must be held for review.
+        source_native_oes = tuple(
+            normalized
+            for label, raw_value in candidate.article_fields
+            if label.strip().upper() in {"OE", "OE_RAW"}
+            and (normalized := norm_oem(raw_value))
+        )
+        conflicting_source_oes = tuple(
+            value
+            for value in source_native_oes
+            if expected and value != expected and value not in confirmed_cross_oems
+        )
+        if conflicting_source_oes:
+            return _GateResult(
+                action=CandidateStatus.REFERENCE_ONLY,
+                reason="SOURCE_ASSERTION_OE_CONFLICT",
+                details={
+                    "expected_oem": expected,
+                    "candidate_native_oes": list(source_native_oes),
+                    "conflicting_native_oes": list(conflicting_source_oes),
+                    "evidence": "SOURCE_ASSERTED_CONFLICT",
+                    "identity_asserted_by": identity_source,
+                },
+            )
         return _GateResult(
             details={
-                "expected_oem": norm_oem(our_item.oem),
+                "expected_oem": expected,
                 "article_oem": norm_oem(candidate.article_field) or None,
                 "evidence": "SOURCE_ASSERTED",
                 "identity_asserted_by": identity_source,
@@ -811,17 +1157,84 @@ def _gate_oem_identity(
         )
     expected = norm_oem(our_item.oem)
     article = norm_oem(candidate.article_field)
-    title = norm_oem(candidate.title)
-    description = norm_oem(candidate.description)
+    structured_articles: list[tuple[str, str]] = []
+    if article:
+        structured_articles.append(("ARTICLE_FIELD", article))
+    for label, raw_value in candidate.article_fields:
+        normalized_value = norm_oem(raw_value)
+        if normalized_value:
+            structured_articles.append((str(label).strip() or "STRUCTURED", normalized_value))
+    title = candidate.title
+    description = candidate.description
     evidence: str | None = None
-    if article and article == expected:
-        evidence = "ARTICLE_FIELD"
-    elif expected and expected in title:
-        evidence = "TITLE"
-    elif expected and expected in description:
-        evidence = "DESCRIPTION"
-    elif article and article in confirmed_cross_oems:
-        evidence = "CROSS_TABLE"
+    # Native manufacturer namespaces outrank a seller SKU/article field in
+    # both directions.  A common false-positive shape is:
+    #
+    #   query/our code = 7E5827505A
+    #   candidate SKU  = 7E5827505A
+    #   candidate MPN  = 7E5827505B
+    #
+    # Treating the first equality as proof would price an unrelated listing
+    # whose private SKU happens to copy our code.  Conversely, an exact native
+    # MPN/OE is valid evidence even when the seller's private SKU is different.
+    native_articles = tuple(
+        (label, value)
+        for label, value in structured_articles
+        if label.strip().upper() in {"MPN", "OE", "OE_RAW"}
+    )
+    matching_native = next(
+        ((label, value) for label, value in native_articles if value == expected),
+        None,
+    )
+    matching_structured = matching_native
+    if matching_native is None:
+        conflicting_native = tuple(
+            (label, value)
+            for label, value in native_articles
+            if value != expected and value not in confirmed_cross_oems
+        )
+        if conflicting_native:
+            return _GateResult(
+                action=CandidateStatus.REJECTED,
+                reason="OEM_CONFLICT",
+                details={
+                    "expected_oem": expected,
+                    "article_oem": article or None,
+                    "structured_articles": [
+                        {"namespace": label, "normalized": value}
+                        for label, value in structured_articles
+                    ],
+                    "conflicting_native": [
+                        {"namespace": label, "normalized": value}
+                        for label, value in conflicting_native
+                    ],
+                    "evidence": None,
+                },
+            )
+        matching_structured = next(
+            (
+                (label, value)
+                for label, value in structured_articles
+                if value == expected
+            ),
+            None,
+        )
+    if matching_structured is not None:
+        evidence = matching_structured[0]
+    else:
+        # A marketplace title may list a family of numbers (for example both
+        # sides of a supersession), while the candidate-native MPN/OE field
+        # identifies the actual card as another part.  Structured manufacturer
+        # namespaces outrank copied marketing text; only an explicitly
+        # confirmed cross is allowed to override that conflict.
+        if expected and _identifier_matches_as_token(title, expected):
+            evidence = "TITLE"
+        elif expected and _identifier_matches_as_token(description, expected):
+            evidence = "DESCRIPTION"
+        elif any(
+            value in confirmed_cross_oems for _label, value in structured_articles
+        ):
+            evidence = "CROSS_TABLE"
     if evidence is None:
         return _GateResult(
             action=CandidateStatus.REJECTED,
@@ -829,6 +1242,10 @@ def _gate_oem_identity(
             details={
                 "expected_oem": expected,
                 "article_oem": article or None,
+                "structured_articles": [
+                    {"namespace": label, "normalized": value}
+                    for label, value in structured_articles
+                ],
                 "evidence": None,
             },
         )
@@ -837,13 +1254,39 @@ def _gate_oem_identity(
         and expected.isdigit()
         and len(expected) <= WEAK_NUMERIC_IDENTITY_MAX_DIGITS
     )
+    labelled = weak and _numeric_title_identifier_is_labelled(
+        f"{candidate.title}\n{candidate.description or ''}",
+        expected,
+    )
+    weak = weak and not labelled
+    if weak:
+        return _GateResult(
+            action=CandidateStatus.REFERENCE_ONLY,
+            reason="WEAK_NUMERIC_IDENTITY",
+            flag="WEAK_NUMERIC_IDENTITY",
+            details={
+                "expected_oem": expected,
+                "article_oem": article or None,
+                "structured_articles": [
+                    {"namespace": label, "normalized": value}
+                    for label, value in structured_articles
+                ],
+                "evidence": evidence,
+                "weak_numeric_identity": True,
+                "identifier_context": "UNLABELLED_TITLE_SUBSTRING",
+            },
+        )
     return _GateResult(
-        flag="WEAK_NUMERIC_IDENTITY" if weak else None,
         details={
             "expected_oem": expected,
             "article_oem": article or None,
+            "structured_articles": [
+                {"namespace": label, "normalized": value}
+                for label, value in structured_articles
+            ],
             "evidence": evidence,
-            "weak_numeric_identity": weak,
+            "weak_numeric_identity": False,
+            "identifier_context": "LABELLED_TITLE" if labelled else None,
         },
     )
 
@@ -1473,6 +1916,34 @@ def _category_domain(value: Any) -> CategoryDomainConfig:
         raise CandidateSelectionConfigError(
             "category_domain.allowlist_enforced requires allowed_ancestors"
         )
+    trusted_default = [
+        {
+            "path": [0, 55],
+            "label": "Автозапчастини та аксесуари",
+        }
+    ]
+    trusted = _ancestor_paths(
+        payload.get("trusted_automotive_ancestors", trusted_default),
+        "category_domain.trusted_automotive_ancestors",
+    )
+    semantic = _mapping(
+        payload.get("semantic_markers", {}),
+        "category_domain.semantic_markers",
+    )
+    automotive_markers = _markers(
+        semantic.get(
+            "automotive",
+            _DEFAULT_CATEGORY_DOMAIN_AUTOMOTIVE_MARKERS,
+        ),
+        "category_domain.semantic_markers.automotive",
+    )
+    non_automotive_markers = _markers(
+        semantic.get(
+            "non_automotive",
+            _DEFAULT_CATEGORY_DOMAIN_NON_AUTOMOTIVE_MARKERS,
+        ),
+        "category_domain.semantic_markers.non_automotive",
+    )
     return CategoryDomainConfig(
         enabled=bool(payload.get("enabled", False)),
         blocked_ancestors=blocked,
@@ -1482,6 +1953,12 @@ def _category_domain(value: Any) -> CategoryDomainConfig:
         majority_prefix_depth=depth,
         majority_min_candidates=min_candidates,
         majority_min_share=min_share,
+        trusted_automotive_ancestors=trusted,
+        automotive_markers=automotive_markers,
+        non_automotive_markers=non_automotive_markers,
+        require_semantic_for_unknown=bool(
+            payload.get("require_semantic_for_unknown", True)
+        ),
     )
 
 

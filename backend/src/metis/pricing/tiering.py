@@ -12,7 +12,7 @@ from .types import ConditionState, ProductTier, TierClassification
 
 
 TIER_METHOD_VERSION = "brand-tier-v1"
-CONDITION_METHOD_VERSION = "yuri-v1-condition-v1"
+CONDITION_METHOD_VERSION = "yuri-v1-condition-v3"
 CROSS_CANDIDATE_METHOD_VERSION = "description-cross-candidate-v1"
 
 UNAPPROVED_ENGINEERING_BRAND_TIERS: dict[str, ProductTier] = {
@@ -62,13 +62,16 @@ _CYRILLIC_BRAND_ALIASES: dict[str, str] = {
 _USED_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE | re.UNICODE)
     for pattern in (
-        r"(?<!\w)б\s*/\s*у(?!\w)",
+        r"(?<!\w)б\s*[./\\-]\s*у(?:\s*\.)?(?!\w)",
         r"(?<!\w)бу(?!\w)",
+        r"(?<!\w)b\s*[./\\-]\s*u(?:\s*\.)?(?!\w)",
+        r"(?<=\d)\s+bu(?=\s+_)",
         r"\bбывш(?:ий|ая|ее|ие)?\s+в\s+употреблении\b",
         r"\bвживан\w*\b",
         r"\bуживан\w*\b",
         r"\b(?:розборк|разборк|шрот)\w*\b",
         r"\b(?:used|refurbished|remanufactured)\b",
+        r"\b(?:pre[- ]?owned|second[- ]?hand)\b",
         r"\b(?:відновлен|восстановлен)\w*\b",
     )
 )
@@ -134,7 +137,16 @@ def classify_condition(
         if value and any(pattern.search(value) for pattern in _NEW_PATTERNS)
     )
     explicit = fields["explicit_condition"].casefold().strip()
-    if explicit in {"used", "refurbished", "remanufactured", "б/у", "бу", "вживаний"}:
+    if explicit in {
+        "used",
+        "refurbished",
+        "remanufactured",
+        "б/у",
+        "бу",
+        "b/u",
+        "bu",
+        "вживаний",
+    }:
         used_sources = tuple(dict.fromkeys(used_sources + ("explicit_condition",)))
     if explicit in {"new", "новий", "новая", "новое", "новий товар"}:
         new_sources = tuple(dict.fromkeys(new_sources + ("explicit_condition",)))

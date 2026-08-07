@@ -11,6 +11,7 @@ from marko.infrastructure.db.models import CatalogItem, CatalogItemCostRecord
 from marko.services.xlsx_catalog import (
     CatalogImportError,
     SensitiveCatalogImportBlocked,
+    catalog_row_outcomes,
     import_catalog_xlsx,
     normalize_identifier,
     parse_catalog_xlsx,
@@ -29,6 +30,27 @@ def workbook_bytes(headers, rows):
     workbook.save(stream)
     workbook.close()
     return stream.getvalue()
+
+
+def test_catalog_row_outcomes_account_for_non_contiguous_source_rows() -> None:
+    content = workbook_bytes(
+        ["SKU", "OE", "Name", "Category", "Price"],
+        [
+            ["S-1", "OE-1", "Part", "Filters", 100],
+            [None, None, None, None, None],
+            ["S-2", "OE-2", "Broken", "Filters", "not-a-price"],
+        ],
+    )
+
+    outcomes = catalog_row_outcomes(parse_catalog_xlsx(content))
+
+    assert [(row["source_ordinal"], row["source_row"]) for row in outcomes] == [
+        (1, 2),
+        (2, 4),
+    ]
+    assert outcomes[0]["terminal_status"] == "IMPORTED"
+    assert outcomes[1]["terminal_status"] == "REJECTED_NOT_IMPORTABLE"
+    assert outcomes[1]["reason_codes"] == ["INVALID_ROW"]
 
 
 def test_parses_prom_headers_and_preserves_raw_row():
@@ -72,7 +94,7 @@ def test_parses_prom_headers_and_preserves_raw_row():
     assert row.raw_row["OEM номер"] == "06А 115-105 B"
 
 
-def test_rejects_bad_rows_without_losing_valid_rows():
+def test_imports_missing_identity_as_unresolved_without_losing_valid_rows():
     content = workbook_bytes(
         ["OE", "Name", "Category", "Price"],
         [
@@ -84,8 +106,18 @@ def test_rejects_bad_rows_without_losing_valid_rows():
 
     parsed = parse_catalog_xlsx(content)
 
-    assert [row.oe_norm for row in parsed.rows] == ["ABC001"]
-    assert [issue.row for issue in parsed.issues] == [3, 4]
+    assert [row.oe_norm for row in parsed.rows] == ["ABC001", ""]
+    assert parsed.rows[0].identity_status == "OE_CONFIRMED"
+    assert parsed.rows[1].identity_status == "UNRESOLVED"
+    assert parsed.rows[1].identity_reason == "CUSTOMER_IDENTITY_MISSING"
+    assert [issue.row for issue in parsed.issues] == [4]
+    unresolved_outcome = catalog_row_outcomes(parsed)[1]
+    assert unresolved_outcome["terminal_status"] == "IMPORTED"
+    assert (
+        unresolved_outcome["matching_terminal_status"]
+        == "NOT_MATCHED_CUSTOMER_IDENTITY_MISSING"
+    )
+    assert unresolved_outcome["reason_codes"] == ["CUSTOMER_IDENTITY_MISSING"]
 
 
 def test_explicit_mapping_supports_nonstandard_export():
@@ -180,6 +212,51 @@ def test_canonical_prom_export_uses_unique_product_id_as_sku_and_code_as_oe():
     assert row.is_available is True
     assert row.stock_qty == 22
     assert row.product_url == "https://example.test/p1153724211.html"
+    assert row.identity_status == "MPN_ONLY"
+    assert row.identity_reason == "CUSTOMER_MPN_COLUMN"
+
+
+def test_canonical_prom_code_without_mpn_or_cross_is_not_asserted_as_oe() -> None:
+    content = workbook_bytes(
+        [
+            "Код_товару",
+            "Назва_позиції",
+            "Ціна",
+            "Назва_групи",
+            "Унікальний_ідентифікатор",
+            "Номер_пристрою_(MPN)",
+        ],
+        [["776435", "Шрус Audi 80", 500, "Шруси", "prom-1", None]],
+    )
+
+    row = parse_catalog_xlsx(content).rows[0]
+
+    assert row.oe_norm == "776435"
+    assert row.identity_status == "UNRESOLVED"
+    assert row.identity_reason == "CUSTOMER_IDENTITY_MISSING"
+
+
+def test_ambiguous_prom_codes_do_not_create_false_oe_collisions() -> None:
+    content = workbook_bytes(
+        [
+            "Код_товару",
+            "Назва_позиції",
+            "Ціна",
+            "Назва_групи",
+            "Унікальний_ідентифікатор",
+            "Номер_пристрою_(MPN)",
+        ],
+        [
+            ["776435", "Шрус левый", 500, "Шруси", "prom-1", None],
+            ["776-435", "Шрус правый", 520, "Шруси", "prom-2", None],
+        ],
+    )
+
+    parsed = parse_catalog_xlsx(content)
+
+    assert len(parsed.rows) == 2
+    assert parsed.issues == []
+    assert {row.identity_status for row in parsed.rows} == {"UNRESOLVED"}
 
 
 def test_parses_bulk_manual_sales_context_columns():
@@ -281,7 +358,7 @@ async def test_bulk_cost_is_encrypted_before_persistence() -> None:
 def test_missing_required_columns_is_a_workbook_error():
     content = workbook_bytes(["Name", "Price"], [["Part", 100]])
 
-    with pytest.raises(CatalogImportError, match="category, oe"):
+    with pytest.raises(CatalogImportError, match="category"):
         parse_catalog_xlsx(content)
 
 
@@ -346,7 +423,7 @@ def test_duplicate_sku_is_rejected_as_a_row_error():
     assert "SKU" in parsed.issues[0].message
 
 
-def test_normalized_oe_collision_is_removed_for_manual_review() -> None:
+def test_normalized_oe_collision_is_retained_but_fail_closed_for_manual_review() -> None:
     content = workbook_bytes(
         ["SKU", "OE", "Name", "Category", "Price"],
         [
@@ -357,9 +434,22 @@ def test_normalized_oe_collision_is_removed_for_manual_review() -> None:
 
     parsed = parse_catalog_xlsx(content)
 
-    assert parsed.rows == []
-    assert [issue.row for issue in parsed.issues] == [2, 3]
-    assert {issue.code for issue in parsed.issues} == {"NORMALIZED_OE_COLLISION"}
+    assert [row.sku for row in parsed.rows] == ["one", "two"]
+    assert parsed.issues == []
+    assert all(row.identity_status == "UNRESOLVED" for row in parsed.rows)
+    assert all(
+        row.identity_reason == "NORMALIZED_OE_COLLISION" for row in parsed.rows
+    )
+    assert parsed.characteristics_report["identity_collision_rows"] == 2
+    outcomes = catalog_row_outcomes(parsed)
+    assert all(
+        outcome["matching_terminal_status"] == "NOT_MATCHED_IDENTITY_COLLISION"
+        for outcome in outcomes
+    )
+    assert all(
+        "NORMALIZED_OE_COLLISION" in outcome["reason_codes"]
+        for outcome in outcomes
+    )
 
 
 def test_identifier_and_mapping_json_validation():

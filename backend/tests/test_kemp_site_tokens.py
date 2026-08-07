@@ -63,26 +63,26 @@ def test_glued_values_are_cut_but_punctuation_inside_a_number_is_kept(value, exp
 @pytest.mark.parametrize(
     "raw",
     [
-        "6Q0407621AH",   # VAG,      77641355
-        "7L0498287",     # VAG,      77647561
-        "038109244J",    # VAG,      77642385
-        "06B109243",     # VAG,      77642917
-        "7H0611775",     # VAG,      77643759
-        "357419803",     # VAG,      77642644
-        "0003232885",    # Mercedes, 77645167
-        "6001548102",    # Renault,  77648544
-        "7700312011",    # Renault,  77648476
-        "2140000Q2A",    # Renault,  77648661
-        "6455.EE",       # PSA,      77648504
-        "1301SJ",        # PSA,      7764978
-        "133389",        # PSA,      77645936
-        "9170G3",        # PSA,      77645783
-        "GJ5A28700B",    # Mazda,    77648745
-        "4851080490",    # Toyota,   77648803
-        "55310-4A500",   # Hyundai,  77648775
-        "96316745",      # GM,       77648761
-        "31212634106",   # BMW,      77641349
-        "YC155310FC",    # Ford,     77644156
+        "6Q0407621AH",  # VAG,      77641355
+        "7L0498287",  # VAG,      77647561
+        "038109244J",  # VAG,      77642385
+        "06B109243",  # VAG,      77642917
+        "7H0611775",  # VAG,      77643759
+        "357419803",  # VAG,      77642644
+        "0003232885",  # Mercedes, 77645167
+        "6001548102",  # Renault,  77648544
+        "7700312011",  # Renault,  77648476
+        "2140000Q2A",  # Renault,  77648661
+        "6455.EE",  # PSA,      77648504
+        "1301SJ",  # PSA,      7764978
+        "133389",  # PSA,      77645936
+        "9170G3",  # PSA,      77645783
+        "GJ5A28700B",  # Mazda,    77648745
+        "4851080490",  # Toyota,   77648803
+        "55310-4A500",  # Hyundai,  77648775
+        "96316745",  # GM,       77648761
+        "31212634106",  # BMW,      77641349
+        "YC155310FC",  # Ford,     77644156
     ],
 )
 def test_real_oe_numbers_survive_as_candidates(raw):
@@ -100,7 +100,23 @@ def test_a_candidate_keeps_its_raw_form_for_audit():
 # --------------------------------------------------------------- internal code
 
 
-@pytest.mark.parametrize("raw", ["776414", "776769", "7764112", "77641229"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "7764",
+        "77641",
+        "776414",
+        "776769",
+        "7764112",
+        "77642440",  # live KEMP card: manufacturer/private article code
+        "77641229",
+        "7764 1257",
+        "776404140",
+        "77641257V",
+        "77643352C",
+        "77643899VP12",
+    ],
+)
 def test_internal_codes_never_become_oe(raw):
     token = _classify(raw)
 
@@ -130,6 +146,7 @@ def test_ten_digit_renault_numbers_are_not_mistaken_for_internal_codes(raw):
         ("GN948", "BERU_GLOW_PLUG"),
         ("FT0364", "KK_BRAKE_HOSE"),
         ("OP-ES-0480", "MOOG_JOINT"),
+        ("OP-WP-5571", "MOOG_JOINT"),  # live KEMP card
         ("VO-AX-7157", "MOOG_JOINT"),
         ("CI-BJ-0523", "MOOG_JOINT"),
         ("LM67010", "SKF_BEARING_DESIGNATION"),
@@ -173,7 +190,9 @@ def test_article_already_in_the_reference_map_is_not_news():
 def test_known_article_is_matched_through_its_glued_parts():
     """The map holds ``55473/MG``; the site shows plain ``55473``."""
 
-    assert _classify("55473", known=["55473/MG"]).token_class is TokenClass.KNOWN_ARTICLE
+    assert (
+        _classify("55473", known=["55473/MG"]).token_class is TokenClass.KNOWN_ARTICLE
+    )
 
 
 def test_known_matching_ignores_punctuation_and_case():
@@ -285,7 +304,7 @@ def test_empty_card_yields_nothing_rather_than_failing():
 
 
 def test_shipped_config_loads_and_is_hashed():
-    assert CONFIG.method_version == "kemp-site-tokens-v1"
+    assert CONFIG.method_version == "kemp-site-tokens-v2-card-evidence"
     assert CONFIG.min_length == 4
     assert CONFIG.max_length == 20
     assert CONFIG.source_sha256 is not None
