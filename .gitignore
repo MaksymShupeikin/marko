@@ -50,9 +50,10 @@ build/
 outputs/
 frontend/test/failures/
 
-# Customer source data stays local; only its provenance manifest is versioned.
-backend/data/*
-!backend/data/SOURCES.md
+# Customer source data is versioned deliberately (2026-08-07, private repo):
+# the sha256 table in SOURCES.md is only checkable when the files it pins live
+# in the same commit. Database dumps and local stores stay out through the
+# *.dump / *.db / *.sqlite rules below, which apply here too.
 
 # Local databases and temporary files
 *.db

@@ -1,0 +1,30 @@
+{
+  "extraction_method": "KEMP_SITE",
+  "method_version": "kemp-site-tokens-v2-card-evidence",
+  "token_config_sha256": "36947f32714f177b31749bb3b296cb4c685832f6f54eb7f4f98d4cefc071b351",
+  "reference_map_sha256s": {
+    "kemp_reference_map.csv": "54687209e28a4fc30b42daefdc196b3222ac1dc16dfd705d9807dac52537bbd7",
+    "kemp_oe_map.csv": "cb2b3c667f9efd8fa50e6d600e7076914e867c31e95bf7f6a8955ee24565793a"
+  },
+  "dataset_sha256": "161bc16775c26f77385d0be4adc6b8713310766c916e2ffd2669fb255a9cf39f",
+  "requests_made": 0,
+  "counters": {
+    "positions": 2101,
+    "absent": 576,
+    "ambiguous": 0,
+    "with_candidate": 832,
+    "errors": 0,
+    "cards_read": 3006,
+    "unparsed_cards": 0,
+    "structured_product_matches": 1524,
+    "structured_missing": 4,
+    "structured_mismatches": 1478
+  },
+  "record_counts": {
+    "rows": 3224,
+    "structured_product_matches": 3222,
+    "structured_missing": 2,
+    "structured_mismatches": 0
+  },
+  "rows": 3224
+}
