@@ -57,15 +57,128 @@ multi-query tiers. Полный опрос 1974 `MPN_ONLY`/`UNRESOLVED` на kem
 `OE_CONFIRMED` 5219 / `MPN_ONLY` 1954 / `UNRESOLVED` 20 (reference_codes
 scope). Runtime catalog batch: ~2839 / ~1788 / 36.
 
-Avto.pro (каталог KEMP) → **HTTP 403**. Обход 403 не делаем. Ждём ответа
-владельца: это их прайс (export CSV/API) или чужая выкладка. Даже при
-доступе Avto.pro/Exist = Tier C: не automatic `source_confirmed` /
-`OE_CONFIRMED` без export-as-customer-data или HITL.
+Avto.pro: публичная витрина
+[OPTKiev](https://avto.pro/seller/optkiev/) — **подтверждено владельцем
+2026-08-07: это их кабинет** (Юрий, `optkiev@i.ua`). Профиль seller
+отдаёт HTTP 200; листинг/parts и brand-filter — **403 Azure WAF** для
+автоматического доступа. Обход WAF не делаем.
+
+Следствие: Avto.pro больше не «чужой Tier C сайт», а **customer-owned
+channel**, но identity-данные с него в pipeline **ещё не попали**. Нужна
+**выгрузка из кабинета** (CSV/XLS/API): код KEMP / артикул / OE / бренд —
+как отдельный файл в `backend/data/` с SHA, publisher customer, не HTML-crawl.
+Пока export не передан: ~1974 `MPN_ONLY` остаются закрытыми; multi-query
+Prom на уже известных public keys продолжается. Для Avto.pro добавлен только
+строгий опциональный review-loader (`--avtopro`): WAF/непривязанный URL/чужой
+brand останавливают загрузку, а `AVTOPRO_CARD_OE` остаётся `REVIEW`.
+
+**Parser PR1 (2026-08-07):** pure HTML extractors in
+`metis.pricing.avto_pro` + `config/avto_pro_tokens.yaml` + fixtures
+`tests/fixtures/avto_pro/`. Offline only: seller profile seeds, labelled
+product fields, WAF body → `ExtractionStatus.WAF`. Live harvest CLI and
+identity graph wiring is available only through the strict optional loader;
+product cards still 403 WAF without owner cookie/export. Auto-OE from this
+source remains forbidden.
+
+### OE/OEM coverage implementation (2026-08-08)
+
+The full-catalog report now keeps the two denominators separate:
+
+- `kemp_prom_catalog.xlsx`, sheet `Export Products Sheet`: **4901** catalog
+  rows;
+- reference-code graph universe: **7193** codes with declared identity/cross
+  evidence.
+
+`OWN_STORE_LABELLED_OE` admits only an exact customer-owned Prom product card
+with an explicit original/OE label (`Оригінальні номери`, `Оригинальные номера`,
+`OE/OEM` and exact Cyrillic variants). Each source context retains the label,
+card URL/product id, title, parser contract and response/file SHA-256. Generic
+`Код запчастини`, title/description token scans, listing URLs, decimal/date/
+dimension fragments and short numeric page noise are not admitted; the latter
+are counted as `REJECTED_NOISE`. The source is hash-bound in
+`config/identity_graph.yaml` and yields `REVIEW_OWNER_ASSERTED_OE` until an
+operator accepts the bound pair or an independent confirming source agrees.
+The store-sync path fetches the exact detail card before persisting the listing,
+so the structured field is available for a later identity reparse.
+
+Read-only measurement (no DB write or price publication):
+
+```text
+python -m marko.catalog_identity_reparse_cli plan \
+  --catalog data/kemp_prom_catalog.xlsx \
+  --owner-store /absolute/path/prom_stores_numbers_catalog.csv \
+  --owner-candidates /absolute/path/prom_own_store_oe_candidates.csv \
+  --optkiev-catalog /absolute/path/optkiev_numbers_catalog.csv \
+  --json /tmp/identity-coverage.json
+```
+
+The JSON contains full 4901-row classification (`OE_CONFIRMED`,
+`REVIEW_OWNER_ASSERTED_OE`, `REVIEW_REFERENCE_ONLY`, `MPN_ONLY`, `UNRESOLVED`,
+`REJECTED_NOISE`, `CONFLICT`), source-by-source matrix (publisher, role,
+assertion/status, cards/codes, evidence rows, review/conflict counts,
+overlap/duplicate rate and unique incremental attribution), accepted new OEs,
+review reasons, contradictions, and the independent 7193-code report.
+
+`prom_own_store_oe_candidates.csv` is deliberately not an identity source: it
+is a page-area discovery artifact. The report keeps its exact file SHA, card
+URLs/titles, 135 clean-by-export KEMP codes, deterministic extra-noise split,
+reference-map overlap, structured-owner-field overlap and manual-review rows.
+
+`optkiev_numbers_catalog.csv` is also loaded only as
+`OPTKIEV_NUMBERS_CATALOG_REVIEW`: the Avto.pro seller export is bound to exact
+seller card URLs, but the current file has `oem == номер` on every row and its
+`код_kemp` is not an internal KEMP code in almost all rows. Exact overlaps with
+the 4,901-row catalog and the reference maps are reported, never promoted to
+`OE_CONFIRMED`.
 
 Пока ждём: multi-query на Prom уже в production path
 (`fallback_queries` = confirmed CROSS, `discovery_queries` = public
 MPN/parts; pricing primary остаётся OE). Снимок метрик:
 `.artifacts/coverage_ceiling_baseline_20260807.json`.
+
+### Внешнее подтверждение: spareto.com (2026-08-08)
+
+| Файл | sha256 (16) | Записей | Что это |
+|---|---|---:|---|
+| `spareto_oe_confirmations.csv` | `440f4f129f23191d` | 355 | Подтверждения со страниц `spareto.com/oe/<номер>` |
+
+Это первый источник в `backend/data/`, который **не является данными
+заказчика**, поэтому он и не входит в таблицу вверху файла. spareto —
+независимый европейский каталог: ни наш, ни заказчика, и наших выгрузок он не
+видел. Из-за этого он годится вторым голосом там, где справочник заказчика уже
+назвал номер оригинальным (`identity_graph.py`, правило двух источников), и
+заведён как `SPARETO_OE_PAGE` (`status: REVIEW`, `asserts_oe: true`).
+
+Как получен, по шагам:
+
+1. кандидаты собраны **у себя** — только номера, которые наши же источники с
+   `asserts_oe: true` уже называют оригинальными; кроссы на артикулы чужих
+   брендов в подтверждение не идут;
+2. страницы скачаны честным клиентом: обычный `requests`, свой `User-Agent`,
+   один поток, пауза 2 с, остановка на 403/429. Ни прокси, ни подмены
+   отпечатка, ни stealth — как и во всём проекте;
+3. вердикт считает **наш** разбор заголовка (`marko.services.oe_number_verdict`),
+   а не сам каталог. Заголовок вида `<номер> - <типы детали> OE number by<МАРКИ>`
+   сверяется с нашим названием по типу детали и по марке автомобиля. Номера
+   внутри блока — эхо запроса и доказательством не считаются; нет блока —
+   вердикта нет.
+
+Загрузчик `load_spareto_source` сверяет номер в заголовке и в ссылке с номером
+строки: строка, чья улика снята с **другой** страницы, отбрасывается. Проверка
+уже отбила один склеенный номер (`4A9511115AA14950711`), «очищенный» сторонним
+скриптом и подтверждённый по соседней странице.
+
+Контрольная выборка: 50 строк с заранее известным ответом (25 верных номеров,
+25 подставных) ехали в задании непомеченными — 45 вердиктов, 45 верных, 5
+воздержаний. Оговорка: отсечка «сравниваем только первые три типа детали»
+выбрана, глядя на эти же 50 строк, поэтому 100% — верхняя граница, а не
+ожидание на новых данных. Эти 50 строк как контрольные больше не годятся: они
+лежат в `tests/fixtures/oe_number_verdict_canaries.csv`.
+
+Измеренный эффект на файловом `plan_identity` (без базы): `OE_CONFIRMED`
+5219 → 5397 (открылось 181, закрылось 3, чистый прирост 178). Три закрывшиеся
+позиции — половинки пар кодов с дословно одинаковым названием: один товар
+заведён у заказчика дважды, и общий номер справедливо поймала аномалия.
 
 ### Telegram re-drop 2026-08-06
 

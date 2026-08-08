@@ -74,10 +74,26 @@ ARTICLE = "KEMP_REFERENCE_ARTICLE"
 
 
 def test_the_shipped_config_declares_its_sources_newest_edition_first(config) -> None:
-    assert config.trust_order == (OWN, "OWN_EXPORT_CODE", MAP, MAP_OLD, ARTICLE, SITE)
+    assert config.trust_order == (
+        OWN,
+        "OWN_EXPORT_CODE",
+        MAP,
+        MAP_OLD,
+        ARTICLE,
+        "OWN_STORE_LABELLED_OE",
+        "AVTOPRO_CARD_OE",
+        "AVTOPRO_CARD_CROSS",
+        # Независимый каталог стоит выше карточки kemp.ua: обе связи рождаются
+        # REVIEW, но подписи полей на своём же сайте недостоверны (NO_9), а
+        # чужой каталог о наших полях ничего не знает.
+        "SPARETO_OE_PAGE",
+        SITE,
+    )
     assert config.sources[ARTICLE].asserts_oe is False
     assert config.sources[OWN].status is LinkStatus.CONFIRMED
     assert config.sources[MAP].status is LinkStatus.CONFIRMED
+    assert config.sources["OWN_STORE_LABELLED_OE"].status is LinkStatus.REVIEW
+    assert config.sources["OWN_STORE_LABELLED_OE"].asserts_oe is True
     assert config.sources[SITE].status is LinkStatus.REVIEW
 
 
@@ -101,7 +117,7 @@ def test_anchor_preference_differs_from_status_trust(config) -> None:
 
 def test_config_is_hashed(config) -> None:
     assert len(config.source_sha256) == 64
-    assert config.method_version == "identity-graph-v4"
+    assert config.method_version == "identity-graph-v6"
 
 
 def test_source_semantic_conflict_quarantines_every_edge(config) -> None:

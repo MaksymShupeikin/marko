@@ -67,6 +67,8 @@ def test_runtime_hash_binds_every_identity_implementation_file() -> None:
     assert set(hashes) == {
         "src/metis/pricing/identity_graph.py",
         "src/marko/services/catalog_identity_reparse.py",
+        "src/marko/services/parser_models.py",
+        "src/marko/parsers/prom/gateway.py",
         "src/marko/services/semantic_candidate_features.py",
     }
     assert all(len(value) == 64 for value in hashes.values())

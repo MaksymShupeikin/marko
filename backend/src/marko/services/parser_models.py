@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -113,6 +114,29 @@ _ORIGINAL_OE_ATTRIBUTE_LABELS = frozenset(
         "оригінальнийномер",
         "оригінальнийартикул",
         "номероригіналу",
+        # The set matched bare singular forms only, and the seller's own shop
+        # writes neither.  Measured 2026-08-08 on the customer's Prom
+        # storefront: the block is headed «Оригінальні номери», plural, on 87
+        # of 1317 scraped cards.  kemp.ua writes «ОЕ номер» with Cyrillic
+        # ``О``/``Е`` (verbatim in ``test_kemp_site_harvest.CARD``), which can
+        # never equal the Latin ``oe`` above.  Under both spellings the seller
+        # stated the vehicle number about their own part and the market query
+        # went looking for a supplier code instead.
+        #
+        # Still an exact set rather than a substring rule: «Оригінальний номер
+        # аналога» and «Не оригінальний номер» are not assertions about this
+        # part's OE, and a contains-match would swallow both.
+        "оригінальніномери",
+        "оригинальныеномера",
+        "номериоригіналу",
+        "номераоригинала",
+        "оеномер",
+        "оеномери",
+        "оеномера",
+        "oeномер",
+        "oeномери",
+        "oemномер",
+        "oemномери",
     }
 )
 _PART_NUMBER_SPLIT_RE = re.compile(r"\s*(?:[,;|\n]+|\s+/\s*)\s*")
@@ -355,6 +379,81 @@ def _extract_labelled_part_numbers(characteristics: object) -> tuple[str, ...]:
     return tuple(result)
 
 
+def extract_labelled_original_oe_evidence(
+    characteristics: object,
+) -> tuple[dict[str, str], ...]:
+    """Return provenance for exact original/OE-labelled characteristics.
+
+    The parser receives two shapes for the same card field: the live Prom
+    response is a list of ``{"name", "value", "source_path"}`` objects,
+    while the XLSX importer persists a mapping from the original label to a
+    list of values.  Supporting both shapes here keeps the label contract in
+    one place.  No title, description, generic article field, or substring
+    match is consulted.
+
+    Each returned record is JSON-safe and intentionally retains the exact
+    label and source path so a later identity decision can be replayed and
+    audited against the detail card rather than against page-wide text.
+    """
+
+    rows: list[tuple[str, str, str]] = []
+    if isinstance(characteristics, list):
+        for index, item in enumerate(characteristics):
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("name") or "").strip()
+            value = str(item.get("value") or "").strip()
+            source_path = str(item.get("source_path") or "").strip()
+            if label and value:
+                rows.append(
+                    (
+                        label,
+                        value,
+                        source_path or f"$.characteristics[{index}].value",
+                    )
+                )
+    elif isinstance(characteristics, Mapping):
+        for label_value, raw_values in characteristics.items():
+            label = str(label_value or "").strip()
+            if not label:
+                continue
+            values = raw_values if isinstance(raw_values, list) else [raw_values]
+            for value_index, raw_value in enumerate(values):
+                value = str(raw_value or "").strip()
+                if value:
+                    rows.append(
+                        (
+                            label,
+                            value,
+                            f"$.characteristics[{label!r}][{value_index}]",
+                        )
+                    )
+
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for label, raw, source_path in rows:
+        if _attribute_label(label) not in _ORIGINAL_OE_ATTRIBUTE_LABELS:
+            continue
+        for candidate in _PART_NUMBER_SPLIT_RE.split(raw):
+            value = candidate.strip(" \t\r\n,;|/")
+            if not value or not re.search(
+                r"[0-9A-Za-zА-Яа-яЇїІіЄєҐґ]", value
+            ):
+                continue
+            key = (label.casefold(), value.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(
+                {
+                    "label": label,
+                    "raw": value,
+                    "source_path": source_path,
+                }
+            )
+    return tuple(result)
+
+
 def extract_labelled_original_oe_numbers(characteristics: object) -> tuple[str, ...]:
     """Return values from explicitly original/OE-labelled characteristics.
 
@@ -366,27 +465,7 @@ def extract_labelled_original_oe_numbers(characteristics: object) -> tuple[str, 
     order, de-duplicated case-insensitively, and never guessed from title text.
     """
 
-    if not isinstance(characteristics, list):
-        return ()
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in characteristics:
-        if not isinstance(item, dict):
-            continue
-        if _attribute_label(item.get("name")) not in _ORIGINAL_OE_ATTRIBUTE_LABELS:
-            continue
-        raw = str(item.get("value") or "").strip()
-        if not raw:
-            continue
-        for candidate in _PART_NUMBER_SPLIT_RE.split(raw):
-            value = candidate.strip(" \t\r\n,;|/")
-            if not value or value.casefold() in seen:
-                continue
-            if not re.search(r"[0-9A-Za-zА-Яа-яЇїІіЄєҐґ]", value):
-                continue
-            seen.add(value.casefold())
-            result.append(value)
-    return tuple(result)
+    return tuple(item["raw"] for item in extract_labelled_original_oe_evidence(characteristics))
 
 
 def _positive_integer(value: object) -> int | None:

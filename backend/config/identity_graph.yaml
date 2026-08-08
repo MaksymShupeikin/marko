@@ -9,7 +9,7 @@
 # есть опровержение. Максимум — REVIEW, и тогда на цену она не влияет.
 
 schema_version: metis-identity-graph-v1
-method_version: identity-graph-v4
+method_version: identity-graph-v6
 
 # Источники по убыванию доверия. Порядок не декоративный: он решает, чей номер
 # станет каноническим, и он же задаёт статус связи.
@@ -88,6 +88,51 @@ sources:
     asserts_oe: false
     publisher: kemp_reference_article
     vintage: 1
+  # Explicit «Оригинальные номера» / «Оригінальні номери» / OE/OEM field from
+  # an exact customer-owned Prom product card.  This is a different assertion
+  # from the generic seller code block: the card owner labels the value as the
+  # vehicle manufacturer's number and the ingestion path retains the exact
+  # product URL, product id, label, parser version and response/file hash.
+  # It remains owner-asserted REVIEW evidence until an operator accepts the
+  # bound pair (or an independent confirming source agrees); unbound text never
+  # enters this source.
+  - name: OWN_STORE_LABELLED_OE
+    status: REVIEW
+    asserts_oe: true
+    publisher: kemp_owned_store
+    vintage: 1
+  # Avto.pro is the customer's seller, but its part-card labels have not yet
+  # passed the export/independent-validation gate.  Keep its exact card OE
+  # section as review evidence so it can close gaps without auto-admission.
+  - name: AVTOPRO_CARD_OE
+    status: REVIEW
+    asserts_oe: true
+    publisher: avtopro_optkiev
+    vintage: 1
+  - name: AVTOPRO_CARD_CROSS
+    status: REVIEW
+    asserts_oe: false
+    publisher: avtopro_optkiev_cross
+    vintage: 1
+  # spareto.com — независимый европейский каталог, не наш и не заказчика.
+  # Страница /oe/<номер> отвечает на вопрос «какая деталь носит этот номер»
+  # заголовком «<номер> - <тип детали> OE number by<МАРКИ>». Утверждение именно
+  # про оригинальность, поэтому asserts_oe: true.
+  #
+  # Статус REVIEW, а не CONFIRMED, по двум причинам. Первая: контрольной
+  # выборки на 4646 позиций, как у справочника, здесь нет — проверено 50 строк
+  # (25 верных номеров и 25 подставных), 45 вердиктов, 45 верных. Хорошо, но
+  # это 50, а не 4646. Вторая: вердикт считает наш разбор заголовка
+  # (`oe_number_verdict.py`), а не сам каталог, и ошибка разбора неотличима от
+  # ошибки каталога.
+  #
+  # Эха тут нет: номера мы взяли у себя, но подтверждение — тип детали и список
+  # марок — целиком с их страницы, наших данных spareto не видел.
+  - name: SPARETO_OE_PAGE
+    status: REVIEW
+    asserts_oe: true
+    publisher: spareto
+    vintage: 1
   - name: KEMP_SITE
     status: REVIEW
     asserts_oe: true
@@ -104,6 +149,15 @@ datasets:
   - sha256: cb2b3c667f9efd8fa50e6d600e7076914e867c31e95bf7f6a8955ee24565793a
     source: KEMP_REFERENCE_MAP_V2
     note: "kemp_oe_map.csv, 7743 строки, получен 2026-07-29"
+  - sha256: b175ca578ebeb9953cb2d07ae7076331965081d69ebdbe53f437b13f9ebaaaaa
+    source: OWN_STORE_LABELLED_OE
+    note: "prom_stores_numbers_catalog.csv, exact owner-card OE blocks, 2026-08-08"
+  - sha256: fae4770e0d0b6ff70df32a9382608d11153612f2d0b23e9c3d3c2e1e659c4313
+    source: OWN_STORE_LABELLED_OE
+    note: "prom_stores_numbers_catalog.xlsx, exact owner-card OE blocks, 2026-08-08"
+  - sha256: 440f4f129f23191d557e356afdee80afb810c6f17af7e20c142b656ba7186c28
+    source: SPARETO_OE_PAGE
+    note: "spareto_oe_confirmations.csv, 355 подтверждений со страниц /oe/, 2026-08-08"
 
 # Выбор канонического номера, когда их несколько (обычный случай: 056121113D и
 # 050121113C у одного товара).
@@ -133,6 +187,10 @@ canonical:
     - OWN_EXPORT_CODE
     - OWN_EXPORT_CHARACTERISTIC
     - KEMP_REFERENCE_ARTICLE
+    - OWN_STORE_LABELLED_OE
+    - AVTOPRO_CARD_OE
+    - AVTOPRO_CARD_CROSS
+    - SPARETO_OE_PAGE
     - KEMP_SITE
   # Применяются по порядку, до первого различающего.
   rules:

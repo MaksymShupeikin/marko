@@ -28,8 +28,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 import csv
 from dataclasses import dataclass, field
+import hashlib
+import io
 from pathlib import Path
 import re
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import UUID, uuid4
@@ -72,6 +75,9 @@ from marko.services.semantic_candidate_features import (
     SEMANTIC_FEATURE_EXTRACTOR_VERSION,
     build_semantic_feature_matrix,
 )
+from marko.services.parser_models import (
+    extract_labelled_original_oe_evidence,
+)
 
 SITE_SOURCE = "KEMP_SITE"
 # The site harvest is a customer-owned, medium-trust source.  Bind every row
@@ -80,6 +86,31 @@ SITE_SOURCE = "KEMP_SITE"
 # must not silently acquire KEMP's source standing.
 KEMP_SITE_HOSTS = frozenset({"kemp.ua", "www.kemp.ua"})
 KEMP_SITE_INTERNAL_CODE_RE = re.compile(r"^776[0-9A-Z]{1,9}$")
+#: The aggregator card harvest.  Two sources from one file: the site labels one
+#: block the vehicle maker's numbers and one block analogs, and only the first
+#: is an assertion about this part's OE.  Both are a second publisher, so both
+#: are bound to the host and to the card that carries our code.
+SPARETO_SOURCE = "SPARETO_OE_PAGE"
+AVTOPRO_OE_SOURCE = "AVTOPRO_CARD_OE"
+AVTOPRO_CROSS_SOURCE = "AVTOPRO_CARD_CROSS"
+AVTOPRO_HOSTS = frozenset({"avto.pro", "www.avto.pro"})
+#: ``/part-<article>-<BRAND>-<id>/``.  The article may contain hyphens, so it is
+#: the two trailing segments that are anchored, not the leading one.
+AVTOPRO_CARD_PATH_RE = re.compile(
+    r"/part-(?P<article>.+)-(?P<brand>[A-Za-z0-9_]+)-(?P<id>\d+)"
+)
+#: Only the customer's own brand page states anything about the customer's part.
+AVTOPRO_CARD_BRAND = "KEMP"
+#: ``ExtractedNumber.source_field`` decides what a number may become.  The two
+#: entries here are the two card sections; everything else is refused rather
+#: than defaulted, because both possible defaults are wrong — one loses real
+#: OEs, the other writes a supplier article into the catalogue's OE column.
+AVTOPRO_FIELD_ROLES = MappingProxyType({"oe": "OE", "analog": "CROSS"})
+#: Fields that are genuine output and carry no relation: the card restating the
+#: code we searched for under our own brand.
+AVTOPRO_NON_RELATIONAL_FIELDS = frozenset({"article", "mpn", "brand", ""})
+#: A page that never rendered cannot testify about absence.
+AVTOPRO_BLOCKED_STATUSES = frozenset({"WAF", "PARSE_ERROR", "EMPTY"})
 OWN_EXPORT_SOURCE = "OWN_EXPORT_CHARACTERISTIC"
 #: The supplier article column of the reference book, which names the same part
 #: under another maker's number without claiming it is the vehicle maker's.
@@ -87,6 +118,10 @@ REFERENCE_ARTICLE_SOURCE = "KEMP_REFERENCE_ARTICLE"
 #: The row's own code column, which holds an internal shelf number for some
 #: rows and a real part number for the rest.
 OWN_EXPORT_CODE_SOURCE = "OWN_EXPORT_CODE"
+#: An exact, owner-labelled OE field from a customer-owned Prom product card.
+#: The loader below refuses page-wide text, non-card URLs and non-OE labels, so
+#: this source can be trusted independently of a reference-book match.
+OWN_STORE_LABELLED_OE_SOURCE = "OWN_STORE_LABELLED_OE"
 
 DISCARD_INTERNAL_CATALOG_CODE = "INTERNAL_CATALOG_CODE"
 DISCARD_AMBIGUOUS_INTERNAL_CODES = "AMBIGUOUS_INTERNAL_CATALOG_CODES"
@@ -116,6 +151,18 @@ class SourceIndex:
     #: Source names actually loaded, so a report can say what was consulted
     #: rather than what was configured.
     loaded_sources: tuple[str, ...]
+    #: Exact non-empty codes present in the reference editions.  Keeping this
+    #: separate from ``by_code`` prevents optional Avto.pro evidence from
+    #: changing the 7,193-code denominator.
+    reference_codes: frozenset[str] = frozenset()
+    #: Owner-card evidence keyed by every exact normalized spelling of the
+    #: card's KEMP code (with a leading/trailing ``KEMP`` brand token removed).
+    #: These are catalog-code aliases, not fuzzy joins: plan_identity only
+    #: consults an exact key present in the row's code or explicit part-number
+    #: block.
+    owner_by_code: Mapping[str, tuple[SourceNumbers, ...]] = field(
+        default_factory=dict
+    )
     #: Reference rows whose article is a supplier number rather than an OE.
     #: Counted rather than turned into edges: the reference map is declared as a
     #: source that asserts "this part's OE", and feeding a supplier number
@@ -129,6 +176,11 @@ class SourceIndex:
     #: attributes to a supplier brand.  Refused as an OE and counted, because a
     #: silent refusal at this scale is indistinguishable from a coverage drop.
     supplier_number_claims: int = 0
+    owner_rows_read: int = 0
+    owner_rows_bound: int = 0
+    owner_noise_rows: int = 0
+    owner_cards_bound: int = 0
+    owner_card_ambiguity_codes: int = 0
     #: Same private catalogue key, but source revisions explicitly disagree on
     #: a hard physical identity dimension.  The evidence is retained verbatim;
     #: every resulting graph edge stays REVIEW until a human resolves it.
@@ -177,6 +229,16 @@ class ItemPlan:
     #: a source supplied it. Empty means leave the imported value alone.
     fill_oe_raw: str = ""
     fill_oe_norm: str = ""
+    #: Bound provenance for canonical-only evidence.  A star graph has no edge
+    #: row for its anchor, so callers that persist the plan need this map to
+    #: avoid losing the card URL/label/hash when the owner OE itself wins the
+    #: canonical choice.
+    source_contexts: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    #: Exact customer-card assertions kept outside the identity graph.  They
+    #: are review evidence, not an automatic identity link, so adding a new
+    #: owner export cannot silently downgrade an existing confirmed map result
+    #: or turn a review-only number into a pricing edge.
+    owner_sources: tuple[SourceNumbers, ...] = ()
 
 
 @dataclass(slots=True)
@@ -822,6 +884,95 @@ def load_site_source(path: str | Path) -> tuple[dict[str, SourceNumbers], int]:
     )
 
 
+#: Заголовок страницы spareto вида ``<номер> - <типы> OE number by<МАРКИ>``.
+#: Без него страница ничего не утверждает: «Search results for …» — это ответ
+#: «такого оригинального номера я не знаю», а не подтверждение.
+_SPARETO_HEADLINE = re.compile(
+    r"^\s*(?P<num>[0-9A-Za-z][0-9A-Za-z .\-/]*?)\s*-\s*.+?\s*OE number by",
+    re.S,
+)
+
+
+def _spareto_source_url_binds_number(source_url: str, number: str) -> tuple[bool, bool]:
+    """-> (хост наш, адрес про этот номер).
+
+    Адрес страницы спрашивается по номеру, поэтому связь адреса с номером —
+    единственное, что вообще можно проверить в этой строке, и проверять её
+    обязательно: строка с чужой ссылкой доказывает чужую деталь.
+    """
+
+    parts = urlsplit(source_url.strip())
+    if parts.scheme != "https" or parts.netloc.lower() not in {
+        "spareto.com",
+        "www.spareto.com",
+    }:
+        return False, False
+    segments = [segment for segment in parts.path.split("/") if segment]
+    if len(segments) != 2 or segments[0] != "oe":
+        return False, False
+    return True, normalize_cross_oem(segments[1]) == normalize_cross_oem(number)
+
+
+def load_spareto_source(path: str | Path) -> tuple[dict[str, SourceNumbers], int]:
+    """Прочитать подтверждения spareto, сгруппированные по внутреннему коду.
+
+    Возвращает второе число — сколько строк отброшено как «не подтверждение».
+    Страница без блока ``OE number by`` и наш собственный код 776… в роли OE
+    сюда не попадают ни при каких условиях.
+    """
+
+    source_path = Path(path).expanduser()
+    if not source_path.is_file():
+        raise CatalogIdentityReparseError(
+            f"Spareto confirmations do not exist: {source_path}"
+        )
+    grouped: dict[str, list[str]] = {}
+    contexts: dict[str, str] = {}
+    not_a_confirmation = 0
+    with source_path.open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            code = (row.get("mpn") or "").strip()
+            raw = (row.get("number_raw") or "").strip()
+            if not code or not raw:
+                continue
+            source_url = (row.get("source_url") or "").strip()
+            host_ok, bound = _spareto_source_url_binds_number(source_url, raw)
+            if not host_ok:
+                raise CatalogIdentityReparseError(
+                    "SPARETO_OE_PAGE row has untrusted source_url: "
+                    f"code={code!r}, url={source_url!r}"
+                )
+            if not bound:
+                raise CatalogIdentityReparseError(
+                    "SPARETO_OE_PAGE row has unbound source_url: the page is "
+                    f"about another number: code={code!r}, number={raw!r}, "
+                    f"url={source_url!r}"
+                )
+            headline = (row.get("page_headline") or "").strip()
+            match = _SPARETO_HEADLINE.match(headline)
+            if match is None or normalize_cross_oem(match.group("num")) != normalize_cross_oem(raw):
+                not_a_confirmation += 1
+                continue
+            if KEMP_SITE_INTERNAL_CODE_RE.fullmatch(normalize_cross_oem(raw)):
+                # Наш складской код никогда не является оригинальным номером,
+                # что бы ни показала страница.
+                not_a_confirmation += 1
+                continue
+            grouped.setdefault(code, []).append(raw)
+            contexts.setdefault(code, headline)
+    return (
+        {
+            code: SourceNumbers(
+                extraction_method=SPARETO_SOURCE,
+                numbers=tuple(numbers),
+                raw_context=contexts.get(code, ""),
+            )
+            for code, numbers in grouped.items()
+        },
+        not_a_confirmation,
+    )
+
+
 def _kemp_site_source_url_binds_code(source_url: str, code: str) -> bool:
     """Validate the immutable provenance contract of one harvested card.
 
@@ -874,6 +1025,377 @@ def _kemp_site_media_url_is_safe(source_url: str) -> bool:
     )
 
 
+def load_avtopro_source(
+    path: str | Path,
+) -> tuple[dict[str, SourceNumbers], dict[str, SourceNumbers]]:
+    """Read the harvested avto.pro cards as two sources, not one.
+
+    ``metis.pricing.avto_pro.parse_part_page`` has already done the reading: it
+    takes OE candidates from ``#original-manufacturers`` and analogues from
+    ``#analog-parts`` and tags each number with ``source_field``.  This function
+    only decides what the graph is allowed to do with them, and the answer
+    differs by section.  Returning one merged mapping would hand a Konner
+    article to a source declared to assert OEs — the shape of the ``+276``
+    defect, and the reason ``KEMP_REFERENCE_ARTICLE`` is a separate source from
+    ``KEMP_REFERENCE_MAP``.
+    """
+
+    source_path = Path(path).expanduser()
+    if not source_path.is_file():
+        raise CatalogIdentityReparseError(f"avto.pro cards do not exist: {source_path}")
+    # (role, code) -> numbers / title / url / brands, in the order the card
+    # printed them.  ``dict`` keys stand in for an ordered set.
+    numbers: dict[tuple[str, str], list[str]] = {}
+    titles: dict[tuple[str, str], str] = {}
+    urls: dict[tuple[str, str], str] = {}
+    brands: dict[tuple[str, str], dict[str, None]] = {}
+    with source_path.open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            status = (row.get("extraction_status") or "").strip()
+            if status in AVTOPRO_BLOCKED_STATUSES:
+                # A challenge page yields no numbers, and that is a different
+                # fact from a card that lists none.  Reading it as the latter
+                # records an absence the site never stated.
+                raise CatalogIdentityReparseError(
+                    "AVTOPRO row was captured through a blocked page: "
+                    f"extraction_status={status!r}"
+                )
+            code = (row.get("article_raw") or "").strip()
+            raw = (row.get("number_raw") or "").strip()
+            if not code or not raw:
+                continue
+            source_url = (row.get("product_url") or "").strip()
+            if not avtopro_card_url_binds_code(source_url, code):
+                raise CatalogIdentityReparseError(
+                    "AVTOPRO row has untrusted or unbound source_url: "
+                    f"code={code!r}, url={source_url!r}"
+                )
+            field = (row.get("source_field") or "").strip()
+            if field in AVTOPRO_NON_RELATIONAL_FIELDS:
+                # The card restating the code we searched for.  Real, and it
+                # relates the part to nothing.
+                continue
+            role = AVTOPRO_FIELD_ROLES.get(field)
+            if role is None:
+                raise CatalogIdentityReparseError(
+                    "AVTOPRO row carries an unknown source_field; the parser "
+                    "grew a field this loader has no rule for: "
+                    f"code={code!r}, source_field={field!r}"
+                )
+            normalized = normalize_cross_oem(raw)
+            if not normalized:
+                continue
+            if KEMP_SITE_INTERNAL_CODE_RE.fullmatch(normalized.upper()):
+                # Our own shelf code.  avto.pro prints it as the card's article,
+                # so every card carries at least one.  It is not a public
+                # identifier anywhere, and a graph holding it would send our
+                # warehouse number to Prom as an OE.
+                continue
+            key = (role, code)
+            numbers.setdefault(key, []).append(raw)
+            title = (row.get("title") or "").strip()
+            if title and key not in titles:
+                titles[key] = title
+            if key not in urls:
+                urls[key] = source_url
+            brand = (row.get("number_brand") or "").strip()
+            if brand:
+                brands.setdefault(key, {})[brand] = None
+
+    def collect(role: str, extraction_method: str) -> dict[str, SourceNumbers]:
+        collected: dict[str, SourceNumbers] = {}
+        for (row_role, code), values in numbers.items():
+            if row_role != role:
+                continue
+            key = (row_role, code)
+            context = " | ".join(
+                value
+                for value in (
+                    titles.get(key, ""),
+                    urls.get(key, ""),
+                    (
+                        "brands=" + ", ".join(brands.get(key, {}))
+                        if brands.get(key)
+                        else ""
+                    ),
+                )
+                if value
+            )
+            collected[code] = SourceNumbers(
+                extraction_method=extraction_method,
+                numbers=tuple(values),
+                raw_context=context,
+            )
+        return collected
+
+    return (
+        collect("OE", AVTOPRO_OE_SOURCE),
+        collect("CROSS", AVTOPRO_CROSS_SOURCE),
+    )
+
+
+def avtopro_card_url_binds_code(source_url: str, code: str) -> bool:
+    """Validate the provenance contract of one harvested avto.pro card.
+
+    The aggregator's card URL carries the article and the brand it belongs to
+    (``/part-77642361-KEMP-606/``), so the binding a kemp.ua row gets from its
+    ``search=`` query is available here from the path itself.  Three things are
+    required and each has a way of going wrong on its own: the customer's own
+    internal code shape, so a foreign article cannot enter as a join key; the
+    card's brand, because a Febi card says nothing about our part even when it
+    lists our number; and the host, so an edited CSV cannot lend avto.pro's
+    standing to any page on the internet.
+    """
+
+    if not KEMP_SITE_INTERNAL_CODE_RE.fullmatch(normalize_cross_oem(code.upper())):
+        return False
+    try:
+        parsed = urlsplit(source_url)
+    except ValueError:
+        return False
+    if parsed.scheme.casefold() != "https":
+        return False
+    if (parsed.hostname or "").casefold() not in AVTOPRO_HOSTS:
+        return False
+    match = AVTOPRO_CARD_PATH_RE.fullmatch(parsed.path.rstrip("/"))
+    if match is None:
+        return False
+    if match.group("brand").casefold() != AVTOPRO_CARD_BRAND.casefold():
+        return False
+    return normalize_cross_oem(match.group("article")) == normalize_cross_oem(code)
+
+
+_OWNER_CARD_URL_RE = re.compile(
+    r"^/" r"(?:[a-z]{2}/)?" r"p(?P<product_id>[0-9]+)-[^/?#]+\.html$",
+    re.IGNORECASE,
+)
+def _owner_card_url_is_safe(source_url: str) -> bool:
+    """Accept only an exact HTTPS Prom product-card URL.
+
+    The owner source is deliberately narrower than a general web citation:
+    listing/search URLs and arbitrary Prom pages do not bind a characteristic
+    block to one product, so they cannot confirm an OE.
+    """
+
+    try:
+        parsed = urlsplit(source_url)
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme.casefold() == "https"
+        and (parsed.hostname or "").casefold() in {"prom.ua", "www.prom.ua"}
+        and not parsed.query
+        and not parsed.fragment
+        and _OWNER_CARD_URL_RE.fullmatch(parsed.path.rstrip("/")) is not None
+    )
+
+
+def _owner_code_aliases(raw_code: str) -> tuple[str, ...]:
+    """Return exact catalog-code aliases, stripping only a KEMP brand token."""
+
+    normalized = normalize_cross_oem(raw_code)
+    if not normalized:
+        return ()
+    aliases = [normalized]
+    if normalized.startswith("KEMP") and len(normalized) > len("KEMP"):
+        aliases.append(normalized[len("KEMP") :])
+    if normalized.endswith("KEMP") and len(normalized) > len("KEMP"):
+        aliases.append(normalized[: -len("KEMP")])
+    return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _owner_row_value(row: Mapping[str, object], *names: str) -> str:
+    folded = {
+        str(key or "").strip().casefold(): value for key, value in row.items()
+    }
+    for name in names:
+        value = folded.get(name.casefold())
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _owner_rows(path: Path) -> tuple[bytes, list[dict[str, object]]]:
+    raw = path.read_bytes()
+    if path.suffix.casefold() in {".xlsx", ".xlsm"}:
+        try:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(
+                io.BytesIO(raw), read_only=True, data_only=True
+            )
+            sheet = workbook[workbook.sheetnames[0]]
+            values = list(sheet.iter_rows(values_only=True))
+        except Exception as exc:  # pragma: no cover - openpyxl's concrete errors vary
+            raise CatalogIdentityReparseError(
+                f"Owner store workbook is not readable: {path}"
+            ) from exc
+        if not values:
+            return raw, []
+        headers = [str(value or "").strip() for value in values[0]]
+        return raw, [
+            {headers[index]: value for index, value in enumerate(row) if index < len(headers)}
+            for row in values[1:]
+        ]
+
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise CatalogIdentityReparseError(
+            f"Owner store CSV is not UTF-8: {path}"
+        ) from exc
+    return raw, [dict(row) for row in csv.DictReader(io.StringIO(text))]
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerStoreSourceLoad:
+    entries: Mapping[str, tuple[SourceNumbers, ...]]
+    rows_read: int
+    rows_bound: int
+    noise_rows: int
+    cards_bound: int
+    ambiguous_codes: int
+    source_sha256: str
+
+
+def _owner_number_is_obvious_noise(raw: str, normalized: str) -> bool:
+    """Reject page-token artefacts without imposing a brand-specific whitelist."""
+
+    value = raw.strip()
+    if re.search(r"\d\s*[.,]\s*\d", value):
+        return True
+    if re.search(r"\d{4}\s*[-/]\s*\d{2,4}", value):
+        return True
+    if re.search(r"\d\s*[*xх×]\s*\d", value, re.IGNORECASE):
+        return True
+    # The customer's own shelf/reference namespace is not an OE even when a
+    # scraped card repeats it inside an explicitly labelled block.  Keep the
+    # exact KEMP pattern in the same rejection bucket so it cannot leak into
+    # owner review as a plausible vehicle number.
+    if KEMP_SITE_INTERNAL_CODE_RE.fullmatch(normalized):
+        return True
+    # Purely numeric short fragments are overwhelmingly dates, dimensions,
+    # menu counts or seller text in the scraped export.  Keep alphanumeric
+    # short OEs (04E, A1, KL2) because the graph's general shape guard permits
+    # those genuine identifiers.
+    return normalized.isdigit() and len(normalized) < 5
+
+
+def _load_owner_store_source_with_stats(path: str | Path) -> OwnerStoreSourceLoad:
+    source_path = Path(path).expanduser()
+    if not source_path.is_file():
+        raise CatalogIdentityReparseError(
+            f"Owner store cards do not exist: {source_path}"
+        )
+    raw_file, rows = _owner_rows(source_path)
+    source_sha256 = hashlib.sha256(raw_file).hexdigest()
+    grouped: dict[str, list[SourceNumbers]] = {}
+    seen: set[tuple[str, str, str, str]] = set()
+    rows_bound = 0
+    noise_rows = 0
+    cards: set[str] = set()
+    card_urls_by_code: dict[str, set[str]] = {}
+    for row in rows:
+        code = _owner_row_value(row, "код_kemp", "код kemp", "kemp code")
+        raw_number = _owner_row_value(row, "oem", "номер", "number")
+        label = _owner_row_value(row, "блок", "block", "field", "label")
+        source_url = _owner_row_value(row, "ссылка", "url", "source_url")
+        title = _owner_row_value(row, "название", "title", "name")
+        number_brand = _owner_row_value(
+            row, "бренд_номера", "number_brand", "brand", "manufacturer"
+        )
+        captured_at = _owner_row_value(
+            row, "дата", "date", "captured_at", "timestamp"
+        )
+        screenshot = _owner_row_value(row, "скриншот", "screenshot", "image")
+        if not code or not raw_number:
+            continue
+        # Reuse the exact label parser rather than keeping a second, subtly
+        # different spelling table in the file loader.
+        evidence = extract_labelled_original_oe_evidence(
+            [{"name": label, "value": raw_number}]
+        )
+        if not evidence:
+            continue
+        if not _owner_card_url_is_safe(source_url):
+            raise CatalogIdentityReparseError(
+                "Owner store row has untrusted or unbound product URL: "
+                f"code={code!r}, url={source_url!r}"
+            )
+        rows_bound += 1
+        cards.add(source_url)
+        card_urls_by_code.setdefault(normalize_cross_oem(code), set()).add(source_url)
+        card_match = _OWNER_CARD_URL_RE.fullmatch(urlsplit(source_url).path.rstrip("/"))
+        product_id = card_match.group("product_id") if card_match else ""
+        for item in evidence:
+            normalized = normalize_cross_oem(item["raw"])
+            if not normalized:
+                continue
+            if _owner_number_is_obvious_noise(item["raw"], normalized):
+                noise_rows += 1
+                continue
+            context = " | ".join(
+                value
+                for value in (
+                    f"label={item['label']}",
+                    f"code={code}",
+                    f"source_url={source_url}",
+                    f"product_id={product_id}" if product_id else "",
+                    f"title={title}" if title else "",
+                    f"brand={number_brand}" if number_brand else "",
+                    f"captured_at={captured_at}" if captured_at else "",
+                    f"screenshot={screenshot}" if screenshot else "",
+                    f"raw={item['raw']}",
+                    f"normalized={normalized}",
+                    "publisher=kemp_owned_store",
+                    "source_version=owner-card-export-v1",
+                    "parser_version=owner-card-export-v1",
+                    f"source_file_sha256={source_sha256}",
+                )
+                if value
+            )
+            entry_key = (code, normalized, source_url, item["label"])
+            if entry_key in seen:
+                continue
+            seen.add(entry_key)
+            entry = SourceNumbers(
+                extraction_method=OWN_STORE_LABELLED_OE_SOURCE,
+                numbers=(item["raw"],),
+                raw_context=context,
+            )
+            for alias in _owner_code_aliases(code):
+                grouped.setdefault(alias, []).append(entry)
+        # A bound card with only noise is retained in the counters but emits no
+        # graph source, making the rejection visible in the coverage report.
+    return OwnerStoreSourceLoad(
+        entries={key: tuple(entries) for key, entries in grouped.items()},
+        rows_read=len(rows),
+        rows_bound=rows_bound,
+        noise_rows=noise_rows,
+        cards_bound=len(cards),
+        ambiguous_codes=sum(
+            1 for urls in card_urls_by_code.values() if len(urls) > 1
+        ),
+        source_sha256=source_sha256,
+    )
+
+
+def load_owner_store_source(
+    path: str | Path,
+) -> dict[str, tuple[SourceNumbers, ...]]:
+    """Load exact OE fields from a customer's own Prom card export.
+
+    Only rows whose block is an exact original/OE label are admitted.  The
+    common ``Код запчастини`` block, page text, supplier articles and rows from
+    another host are refused or ignored; a broad token scan would turn dates,
+    dimensions and seller IDs into false OEs.  The returned mapping is keyed by
+    exact code aliases and carries file hash, label, card URL and title in every
+    context for audit/replay.
+    """
+
+    return dict(_load_owner_store_source_with_stats(path).entries)
+
+
 def build_source_index(
     *,
     config: IdentityGraphConfig,
@@ -881,8 +1403,17 @@ def build_source_index(
     tokens: KempSiteTokensConfig,
     reference_paths: Sequence[str | Path] = (),
     site_path: str | Path | None = None,
+    owner_store_paths: Sequence[str | Path] = (),
+    avtopro_paths: Sequence[str | Path] = (),
+    spareto_paths: Sequence[str | Path] = (),
 ) -> SourceIndex:
-    """Merge every file source into one index keyed by internal code."""
+    """Merge every declared file source into one exact-code index.
+
+    Reference/site inputs are keyed by the private reference code.  Owner card
+    exports are keyed by the exact KEMP code printed on the card and are kept in
+    a separate alias map so a public code can be joined without treating a
+    fuzzy title or a transitive cross as identity evidence.
+    """
 
     by_code: dict[str, list[SourceNumbers]] = {}
     articles_by_code: dict[str, list[str]] = {}
@@ -890,8 +1421,15 @@ def build_source_index(
     mpn_only = 0
     without_code = 0
     supplier_number_claims = 0
+    owner_by_code: dict[str, list[SourceNumbers]] = {}
+    owner_rows_read = 0
+    owner_rows_bound = 0
+    owner_noise_rows = 0
+    owner_cards_bound = 0
+    owner_card_ambiguity_codes = 0
 
     editions = [load_reference_edition(path, config=config) for path in reference_paths]
+    reference_codes: frozenset[str] = frozenset()
     for name, _ in editions:
         if loaded.count(name):
             raise CatalogIdentityReparseError(
@@ -945,8 +1483,14 @@ def build_source_index(
                         raw_context=context,
                     )
                 )
-                if REFERENCE_ARTICLE_SOURCE not in loaded:
-                    loaded.append(REFERENCE_ARTICLE_SOURCE)
+            if REFERENCE_ARTICLE_SOURCE not in loaded:
+                loaded.append(REFERENCE_ARTICLE_SOURCE)
+
+    # This is the graph's reference universe: codes that produced at least one
+    # declared identity/cross source.  Rows with an empty OE and empty article
+    # remain counted in ``rows_without_code``/source diagnostics, but must not
+    # inflate a denominator that can never yield a plan.
+    reference_codes = frozenset(by_code)
 
     if site_path is not None:
         loaded.append(SITE_SOURCE)
@@ -964,15 +1508,72 @@ def build_source_index(
                 (*semantic_conflicts.get(code, ()), *conflicts)
             )
 
+    for owner_path in owner_store_paths:
+        owner_load = _load_owner_store_source_with_stats(owner_path)
+        declared_owner_hashes = {
+            digest
+            for digest, source_name in config.datasets.items()
+            if source_name == OWN_STORE_LABELLED_OE_SOURCE
+        }
+        if declared_owner_hashes and owner_load.source_sha256 not in declared_owner_hashes:
+            raise CatalogIdentityReparseError(
+                "Owner store export has an undeclared sha256; refresh the "
+                "identity graph dataset manifest before admitting it: "
+                f"{owner_load.source_sha256}"
+            )
+        owner_entries = owner_load.entries
+        if OWN_STORE_LABELLED_OE_SOURCE not in loaded:
+            loaded.append(OWN_STORE_LABELLED_OE_SOURCE)
+        owner_rows_read += owner_load.rows_read
+        owner_rows_bound += owner_load.rows_bound
+        owner_noise_rows += owner_load.noise_rows
+        owner_cards_bound += owner_load.cards_bound
+        owner_card_ambiguity_codes += owner_load.ambiguous_codes
+        for alias, entries in owner_entries.items():
+            owner_by_code.setdefault(alias, []).extend(entries)
+
+    for avtopro_path in avtopro_paths:
+        avtopro_oe, avtopro_cross = load_avtopro_source(avtopro_path)
+        for source_name, entries_by_code in (
+            (AVTOPRO_OE_SOURCE, avtopro_oe),
+            (AVTOPRO_CROSS_SOURCE, avtopro_cross),
+        ):
+            if source_name not in loaded:
+                loaded.append(source_name)
+            for code, entry in entries_by_code.items():
+                # Avto.pro's loader already validates the private KEMP card
+                # binding.  Keep the source in the same private-code namespace
+                # as the reference/site files; no fuzzy public-code join is
+                # allowed here.
+                by_code.setdefault(code, []).append(entry)
+
+    for spareto_path in spareto_paths:
+        spareto_numbers, spareto_skipped = load_spareto_source(spareto_path)
+        if SPARETO_SOURCE not in loaded:
+            loaded.append(SPARETO_SOURCE)
+        mpn_only += spareto_skipped
+        for code, entry in spareto_numbers.items():
+            by_code.setdefault(code, []).append(entry)
+
     frozen_by_code = {code: tuple(entries) for code, entries in by_code.items()}
+    frozen_owner_by_code = {
+        code: tuple(entries) for code, entries in owner_by_code.items()
+    }
     semantic_fanout_conflicts = public_number_semantic_conflicts(frozen_by_code)
     return SourceIndex(
         by_code=frozen_by_code,
+        owner_by_code=frozen_owner_by_code,
         shared_articles=shared_article_numbers(articles_by_code),
         loaded_sources=tuple(loaded),
+        reference_codes=reference_codes,
         mpn_only_rows=mpn_only,
         rows_without_code=without_code,
         supplier_number_claims=supplier_number_claims,
+        owner_rows_read=owner_rows_read,
+        owner_rows_bound=owner_rows_bound,
+        owner_noise_rows=owner_noise_rows,
+        owner_cards_bound=owner_cards_bound,
+        owner_card_ambiguity_codes=owner_card_ambiguity_codes,
         semantic_conflicts=semantic_conflicts,
         semantic_fanout_conflicts=semantic_fanout_conflicts,
     )
@@ -1014,6 +1615,70 @@ def _own_export_numbers(
     )
 
 
+def _owner_evidence_sources(
+    evidence: Sequence[Mapping[str, Any]],
+) -> tuple[SourceNumbers, ...]:
+    """Convert already-bound owner-card evidence into graph source entries."""
+
+    entries: list[SourceNumbers] = []
+    for item in evidence:
+        raw = str(item.get("raw") or item.get("number") or "").strip()
+        if not raw:
+            continue
+        source_url = str(item.get("source_url") or item.get("url") or "").strip()
+        # Direct characteristics may become an owner REVIEW source only when
+        # the caller proved the exact Prom card binding.  Loader-produced rows
+        # carry a safe source_url; tests/other callers may state the same fact
+        # explicitly with bound=true.  Unbound text is deliberately ignored.
+        if source_url and not _owner_card_url_is_safe(source_url):
+            continue
+        if not source_url and item.get("bound") is not True:
+            continue
+        label = str(item.get("label") or "").strip()
+        source_path = str(item.get("source_path") or "").strip()
+        context = " | ".join(
+            value
+            for value in (
+                f"label={label}" if label else "",
+                f"source_url={source_url}" if source_url else "",
+                f"source_path={source_path}" if source_path else "",
+                f"publisher={item.get('publisher')}"
+                if item.get("publisher")
+                else "",
+                f"source_version={item.get('source_version')}"
+                if item.get("source_version")
+                else "",
+                f"content_sha256={item.get('content_sha256')}"
+                if item.get("content_sha256")
+                else "",
+                f"source_file_sha256={item.get('source_file_sha256')}"
+                if item.get("source_file_sha256")
+                else "",
+                f"parser_version={item.get('parser_version')}"
+                if item.get("parser_version")
+                else "",
+                f"captured_at={item.get('captured_at')}"
+                if item.get("captured_at")
+                else "",
+                f"card_title={item.get('card_title')}"
+                if item.get("card_title")
+                else "",
+                f"card_brand={item.get('card_brand')}"
+                if item.get("card_brand")
+                else "",
+            )
+            if value
+        )
+        entries.append(
+            SourceNumbers(
+                extraction_method=OWN_STORE_LABELLED_OE_SOURCE,
+                numbers=(raw,),
+                raw_context=context,
+            )
+        )
+    return tuple(entries)
+
+
 def plan_identity(
     *,
     own_code: str,
@@ -1023,6 +1688,7 @@ def plan_identity(
     config: IdentityGraphConfig,
     tokens: KempSiteTokensConfig,
     code_raw: str = "",
+    owner_oe_evidence: Sequence[Mapping[str, Any]] = (),
 ) -> ItemPlan:
     """Decide this row's graph, its links and its identity status.
 
@@ -1056,6 +1722,7 @@ def plan_identity(
         lookup_codes.append(internal_codes[0])
 
     sources: list[SourceNumbers] = []
+    owner_sources: list[SourceNumbers] = []
     source_semantic_conflicts = {
         lookup_code: index.semantic_conflicts[lookup_code]
         for lookup_code in lookup_codes
@@ -1075,13 +1742,35 @@ def plan_identity(
             )
         )
 
+    # Customer-owned detail cards are a separate, explicitly OE-labelled
+    # source.  Join only exact code aliases already present in this row — never
+    # by title, substring, shared article or a transitive graph path.
+    owner_lookup_keys: list[str] = []
+    for raw_key in (code, code_raw, *part_numbers_raw):
+        for alias in _owner_code_aliases(str(raw_key)):
+            if alias not in owner_lookup_keys:
+                owner_lookup_keys.append(alias)
+    owner_entries_seen: set[tuple[str, str, str]] = set()
+    for owner_key in owner_lookup_keys:
+        for owner_entry in index.owner_by_code.get(owner_key, ()):
+            entry_key = (
+                owner_entry.extraction_method,
+                owner_entry.raw_context,
+                owner_entry.numbers[0] if owner_entry.numbers else "",
+            )
+            if entry_key in owner_entries_seen:
+                continue
+            owner_entries_seen.add(entry_key)
+            owner_sources.append(owner_entry)
+    owner_sources.extend(_owner_evidence_sources(owner_oe_evidence))
+
     # Preserve every source's reviewer-openable context, not only the graph's
     # preferred context.  The canonical edge is usually the reference-map
     # article, while KEMP_SITE may carry the exact card URL/title/image that
     # corroborates it.  Keeping this as audit metadata avoids changing the
     # identity decision or importing any monetary field into pricing.
     source_contexts_by_number: dict[str, dict[str, str]] = {}
-    for source in sources:
+    for source in (*sources, *owner_sources):
         for raw_number in source.numbers:
             normalized = normalize_cross_oem(raw_number)
             if not normalized:
@@ -1136,6 +1825,7 @@ def plan_identity(
                 "own_code": code,
                 "internal_catalog_codes": list(internal_codes),
                 "reference_lookup_codes": lookup_codes,
+                "owner_lookup_keys": owner_lookup_keys,
                 "canonical_source": graph.canonical_source,
                 "canonical_sources": list(graph.canonical_sources),
                 "graph_anomalies": list(graph.anomalies),
@@ -1175,6 +1865,8 @@ def plan_identity(
         reference_lookup_codes=tuple(lookup_codes),
         fill_oe_raw=fill_raw,
         fill_oe_norm=fill_norm,
+        source_contexts=source_contexts_by_number,
+        owner_sources=tuple(owner_sources),
     )
 
 
@@ -1221,7 +1913,12 @@ def _asserted_numbers(
     found: list[tuple[str, str]] = []
     if (
         graph.canonical
-        and not graph.anomalies
+        # Аномалия на ребре — сомнение в ребре, а не в якоре. Раньше здесь
+        # стояло ``graph.anomalies``, собранное по всему графу, и позиция с
+        # уверенно названным оригиналом оставалась закрытой из-за кросса,
+        # висящего сбоку.  Ребро при этом всё равно не проходит: ниже стоит
+        # ``link.is_confirmed``, а аномальное ребро понижено до REVIEW.
+        and not graph.canonical_anomalies
         and assertion_is_eligible(
             graph.canonical_sources,
             evidence_confirmed=True,
@@ -1342,6 +2039,18 @@ async def reparse_workspace_identity(
             # Prom's own product id in ``sku`` (1153724202), and none of the 4647
             # rows matches a reference code through it. Measured 2026-07-31:
             # ``oe_norm`` matches 550.
+            owner_evidence: tuple[Mapping[str, Any], ...] = ()
+            if _owner_card_url_is_safe(item.product_url or ""):
+                owner_evidence = tuple(
+                    {
+                        **evidence,
+                        "source_url": item.product_url,
+                        "bound": True,
+                    }
+                    for evidence in extract_labelled_original_oe_evidence(
+                        item.characteristics_raw
+                    )
+                )
             plan = plan_identity(
                 own_code=item.oe_norm or "",
                 code_raw=item.oe_raw or "",
@@ -1350,6 +2059,7 @@ async def reparse_workspace_identity(
                 index=index,
                 config=config,
                 tokens=tokens,
+                owner_oe_evidence=owner_evidence,
             )
             _record_plan(report, plan, index, item.oe_norm or "")
             for link in plan.links:
@@ -1410,6 +2120,18 @@ def _apply_item_fields(item: CatalogItem, plan: ItemPlan) -> None:
     if plan.fill_oe_norm:
         item.oe_raw = plan.fill_oe_raw
         item.oe_norm = plan.fill_oe_norm
+    if plan.source_contexts:
+        raw_row = dict(item.raw_row or {})
+        raw_row["identity_provenance"] = {
+            "canonical": plan.graph.canonical,
+            "canonical_sources": list(plan.graph.canonical_sources),
+            "source_contexts": {
+                number: dict(contexts)
+                for number, contexts in plan.source_contexts.items()
+            },
+            "canonical_source": plan.graph.canonical_source,
+        }
+        item.raw_row = raw_row
 
 
 async def _existing_link_keys(
@@ -1482,6 +2204,7 @@ __all__ = [
     "ANOMALY_STALE_AFTER_REPARSE",
     "OWN_EXPORT_CODE_SOURCE",
     "OWN_EXPORT_SOURCE",
+    "OWN_STORE_LABELLED_OE_SOURCE",
     "DISCARD_AMBIGUOUS_INTERNAL_CODES",
     "DISCARD_INTERNAL_CATALOG_CODE",
     "SITE_SOURCE",
@@ -1494,6 +2217,7 @@ __all__ = [
     "build_source_index",
     "load_reference_edition",
     "load_site_source",
+    "load_owner_store_source",
     "supplier_articles_by_code",
     "site_semantic_conflicts",
     "plan_identity",

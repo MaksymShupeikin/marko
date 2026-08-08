@@ -24,7 +24,7 @@ def test_contract_summary_pins_config_tokens_extractor_and_implementation() -> N
 
     contract = _contract_summary(graph, tokens)
 
-    assert contract["identity_graph_method_version"] == "identity-graph-v4"
+    assert contract["identity_graph_method_version"] == "identity-graph-v6"
     assert contract["identity_graph_config_sha256"] == graph.source_sha256
     assert contract["token_config_sha256"] == tokens.source_sha256
     assert (
@@ -34,6 +34,8 @@ def test_contract_summary_pins_config_tokens_extractor_and_implementation() -> N
     assert set(contract["implementation_sha256s"]) == {
         "src/metis/pricing/identity_graph.py",
         "src/marko/services/catalog_identity_reparse.py",
+        "src/marko/services/parser_models.py",
+        "src/marko/parsers/prom/gateway.py",
         "src/marko/services/semantic_candidate_features.py",
     }
     assert contract["runtime_config_sha256"] == identity_runtime_config_sha256(

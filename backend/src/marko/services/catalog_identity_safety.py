@@ -44,6 +44,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _IDENTITY_IMPLEMENTATION_FILES = (
     "src/metis/pricing/identity_graph.py",
     "src/marko/services/catalog_identity_reparse.py",
+    "src/marko/services/parser_models.py",
+    "src/marko/parsers/prom/gateway.py",
     "src/marko/services/semantic_candidate_features.py",
 )
 

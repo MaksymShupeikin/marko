@@ -189,6 +189,13 @@ class IdentityGraph:
     canonical_sources: tuple[str, ...] = ()
     links: tuple[IdentityLink, ...] = ()
     anomalies: tuple[str, ...] = ()
+    #: Подмножество ``anomalies``, ставящее под сомнение именно якорь.
+    #: Аномалия на ребре — это сомнение в ребре: общий артикул поставщика,
+    #: принадлежащий нескольким нашим кодам, не является возражением против
+    #: оригинального номера, который справочник назвал для этой позиции.
+    #: Ворота, пускающие номер в колонку OE, смотрят сюда; ручной разбор —
+    #: по-прежнему в ``anomalies``, оттуда не исчезает ничего.
+    canonical_anomalies: tuple[str, ...] = ()
     #: Numbers that were dropped and why — never silent.
     discarded: Mapping[str, str] = field(default_factory=dict)
 
@@ -596,6 +603,23 @@ def build_identity_graph(
         graph_anomalies.add(Anomaly.SOURCE_SEMANTIC_CONFLICT.value)
     if set(candidates).intersection(public_number_semantic_fanout):
         graph_anomalies.add(Anomaly.PUBLIC_NUMBER_SEMANTIC_FANOUT.value)
+    # Причина у якоря одна и выбирается тем же порядком старшинства, что и у
+    # ребра ниже: читателю нужна главная причина, а не их перечень.
+    canonical_sources = tuple(
+        sorted(candidates[canonical]["sources"], key=config.trust_index)
+    )
+    canonical_anomaly: str | None = None
+    if source_semantic_conflict:
+        canonical_anomaly = Anomaly.SOURCE_SEMANTIC_CONFLICT.value
+    elif canonical in public_number_semantic_fanout:
+        canonical_anomaly = Anomaly.PUBLIC_NUMBER_SEMANTIC_FANOUT.value
+    elif canonical in shared_article_numbers:
+        canonical_anomaly = Anomaly.SHARED_ARTICLE_FANOUT.value
+    elif has_conflict and config.sources[canonical_source].asserts_oe:
+        canonical_anomaly = Anomaly.OE_SOURCE_CONFLICT.value
+    elif all(source in superseded for source in canonical_sources):
+        canonical_anomaly = Anomaly.OE_SUPERSEDED_BY_NEWER_REFERENCE.value
+
     links: list[IdentityLink] = []
     for number in sorted(candidates):
         if number == canonical:
@@ -651,11 +675,25 @@ def build_identity_graph(
     return IdentityGraph(
         canonical=canonical,
         canonical_source=canonical_source,
-        canonical_sources=tuple(
-            sorted(candidates[canonical]["sources"], key=config.trust_index)
-        ),
+        canonical_sources=canonical_sources,
         links=tuple(links),
         anomalies=tuple(sorted(graph_anomalies)),
+        # Пересечение, а не просто причина якоря. Это поле сужает ворота и не
+        # должно их нигде ужесточать: причина, о которой сам граф молчит, не
+        # может закрыть позицию, которая сегодня открыта.
+        #
+        # Такие причины существуют. Граф без рёбер, у которого якорь и есть
+        # общий артикул, аномалию не показывает вовсе: она добавляется только
+        # в цикле по рёбрам, а цикл пуст. Это отдельная дыра
+        # (``PUBLIC_NUMBER_SEMANTIC_FANOUT`` свою проверку для такого случая
+        # имеет, ``SHARED_ARTICLE_FANOUT`` — нет), и закрывать её надо
+        # отдельной правкой с отдельным замером: на живом каталоге она снимает
+        # OE со 163 позиций.
+        canonical_anomalies=tuple(
+            sorted({canonical_anomaly} & graph_anomalies)
+            if canonical_anomaly is not None
+            else ()
+        ),
         discarded=MappingProxyType(dict(discarded)),
     )
 
