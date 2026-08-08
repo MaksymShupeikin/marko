@@ -2,7 +2,10 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from marko.services.offer_identity import (
+    OE_EXTRACTOR_VERSION,
     ConfirmedCross,
     IdentityNamespace,
     IDENTITY_NAMESPACE_VERSION,
@@ -1006,3 +1009,96 @@ def test_mpn_namespace_cannot_be_revived_for_calibration_from_legacy_fields() ->
     )
 
     assert persisted_identity_fields_consistent(legacy) is False
+
+
+# The label a Prom card actually prints over its original numbers.  Measured on
+# the customer's own storefront export of 2026-08-08: 11916 rows across 1316
+# cards sit under «Оригінальні номери», and the same platform serves the Russian
+# and abbreviated spellings.  Every one of these returned no confidence, so the
+# whole characteristic was skipped and the strongest identity a competitor's
+# card carries never became evidence at all.
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Оригінальні номери",
+        "Оригинальные номера",
+        "Оригінальний номер",
+        "Оригинальный номер",
+        "Номер оригіналу",
+        "Номера оригинала",
+        "Оригінальний артикул",
+        # Cyrillic ``ОЕ``.  The set carried Latin ``OE`` + Cyrillic ``НОМЕР``
+        # (codepoints 0x4f 0x45 0x41d…), which a Cyrillic ``ОЕ`` never equals.
+        "ОЕ номер",
+        "OEM номери",
+    ],
+)
+def test_an_original_number_label_is_read_in_the_spellings_prom_prints(label) -> None:
+    """A spelling is not a trust tier.
+
+    Whatever ``OE`` is worth on a candidate card, the same field spelled out in
+    words is worth the same: it is one field under two names.  Changing what an
+    OE-labelled list may do is a separate decision that would apply to ``OE``
+    too.
+    """
+
+    evidence = extract_oe_evidence(
+        {"characteristics": [{"name": label, "value": f"{Q}, {Y}"}]},
+        _manifest(),
+    )
+
+    assert {item.normalized_value for item in evidence} == {Q, Y}
+    assert {item.source_kind for item in evidence} == {
+        OeEvidenceSourceKind.LABELED_CHARACTERISTIC
+    }
+    assert {item.confidence for item in evidence} == {Decimal("0.97")}
+
+
+def test_an_original_number_label_is_not_a_compatible_reference_list() -> None:
+    """«Крос-номери» describes a cross graph and stays behind the confirmed-cross
+    boundary. «Оригінальні номери» names the part itself, like ``OE``."""
+
+    original = extract_oe_evidence(
+        {"characteristics": [{"name": "Оригінальні номери", "value": Q}]},
+        _manifest(),
+    )
+    cross = extract_oe_evidence(
+        {"characteristics": [{"name": "Крос-номери", "value": Q}]},
+        _manifest(),
+    )
+
+    assert original[0].source_kind is OeEvidenceSourceKind.LABELED_CHARACTERISTIC
+    assert cross[0].source_kind is OeEvidenceSourceKind.COMPATIBLE_REFERENCE_LIST
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Не оригінальний номер",
+        "Оригінальний номер аналога",
+        "Сумісні моделі",
+        "Замінник оригіналу",
+    ],
+)
+def test_widening_the_label_set_does_not_swallow_a_qualified_claim(label) -> None:
+    """Exact match, not substring: three of these contain «оригінал» and none
+    of them says this number is the part's original."""
+
+    evidence = extract_oe_evidence(
+        {"characteristics": [{"name": label, "value": Q}]},
+        _manifest(),
+    )
+
+    assert evidence == ()
+
+
+def test_widening_the_label_set_moved_the_extractor_boundary() -> None:
+    """Persisted observations carry the version that produced them.
+
+    ``oe_reenrichment`` sweeps on ``oe_extractor_version != OE_EXTRACTOR_VERSION``
+    (``services/oe_reenrichment.py:539``), so an extractor that now reads a
+    label it used to skip has to move the boundary — otherwise every offer
+    already stored keeps the verdict it got while the field was invisible.
+    """
+
+    assert OE_EXTRACTOR_VERSION == "oe-extractor-v6"

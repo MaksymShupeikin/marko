@@ -46,6 +46,11 @@ class ScrapeConfig:
     )
     max_pages: int = 0
     start_page: int = 1
+    # Owned store syncs need the exact product-card characteristics block for
+    # provenance-bound OE extraction.  Ordinary listing/search callers keep
+    # this off so a discovery page never silently turns into an unbounded card
+    # crawl.
+    enrich_details: bool = False
     # Cross-seller comparison knobs.
     max_sellers: int = 10  # cap of distinct sellers in a comparison
     # How many candidate cards may be fetched, ``0`` meaning every external

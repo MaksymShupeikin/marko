@@ -479,6 +479,11 @@ async def _run_import(
         max_attempts=max(1, settings.store_sync_scraper_http_max_attempts),
         max_pages=claim.page_budget,
         start_page=claim.start_page,
+        # The owned store is the only source whose explicit OE/OEM label can
+        # enter identity.  Fetch its exact product card during sync so the
+        # persisted listing carries the characteristic label, card URL and
+        # response hash; listing-page text remains out of scope.
+        enrich_details=True,
     )
     batch: list[Product] = []
     catalog_pages_fetched = 0

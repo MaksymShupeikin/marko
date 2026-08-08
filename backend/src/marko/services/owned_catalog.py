@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
@@ -25,7 +25,9 @@ from marko.infrastructure.db.models import (
 from marko.parsers.prom.client import HttpClient
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.parser import parse_product_page
+from marko.services.parser_models import extract_labelled_original_oe_evidence
 from marko.services.source_access import require_live_prom_marketplace_collection
+from metis.pricing.crosses import normalize_cross_oem
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,7 @@ class ListingIdentifierEnrichment:
     oe: str | None
     mpn: str | None
     status: str
+    owner_oe_evidence: tuple[dict[str, object], ...] = ()
 
 
 async def list_owned_catalog(
@@ -764,10 +767,16 @@ async def enrich_listing_identifiers(
     if checked_at is not None:
         oe = normalize_oe_value(raw_data.get("oe_raw"))
         mpn = _normalize_optional_text(raw_data.get("mpn"))
+        cached_owner_evidence = tuple(
+            item
+            for item in (raw_data.get("owner_oe_evidence") or ())
+            if isinstance(item, dict)
+        )
         return ListingIdentifierEnrichment(
             oe=oe,
             mpn=mpn,
             status=str(raw_data.get("identifier_enrichment_status") or "CACHED"),
+            owner_oe_evidence=cached_owner_evidence,
         )
 
     require_live_prom_marketplace_collection(settings)
@@ -777,8 +786,36 @@ async def enrich_listing_identifiers(
         listing.url,
         resolved_settings,
     )
-    fetched_oe = normalize_oe_value(product.oe_raw) or extract_labeled_oe(
-        product.name
+    detail_metadata = getattr(product, "detail_evidence", None)
+    fetched_owner_evidence: list[dict[str, object]] = []
+    if isinstance(detail_metadata, dict):
+        fetched_owner_evidence = [
+            item
+            for item in (detail_metadata.get("owner_oe_evidence") or ())
+            if isinstance(item, dict)
+        ]
+    if not fetched_owner_evidence:
+        for evidence in extract_labelled_original_oe_evidence(
+            getattr(product, "characteristics", None)
+        ):
+            normalized = normalize_cross_oem(evidence["raw"])
+            if normalized:
+                fetched_owner_evidence.append(
+                    {
+                        **evidence,
+                        "normalized": normalized,
+                        "source_url": listing.url,
+                        "bound": True,
+                    }
+                )
+    fetched_owner_oe = (
+        str(fetched_owner_evidence[0].get("raw") or "").strip()
+        if fetched_owner_evidence
+        else None
+    )
+    fetched_oe = (
+        normalize_oe_value(product.oe_raw)
+        or fetched_owner_oe
     )
     fetched_mpn = _normalize_optional_text(product.mpn)
     # A detail page can omit a field that an earlier enrichment already
@@ -786,7 +823,11 @@ async def enrich_listing_identifiers(
     # response into a destructive null overwrite.
     oe = fetched_oe or normalize_oe_value(raw_data.get("oe_raw"))
     mpn = fetched_mpn or _normalize_optional_text(raw_data.get("mpn"))
-    status = "IDENTIFIERS_FOUND" if oe or mpn else "NO_IDENTIFIER"
+    status = (
+        "IDENTIFIERS_FOUND"
+        if oe or mpn or fetched_owner_evidence
+        else "NO_IDENTIFIER"
+    )
     detail_fields = {
         "condition": product.condition,
         "package_quantity": product.package_quantity,
@@ -807,10 +848,20 @@ async def enrich_listing_identifiers(
         "identifier_enrichment_status": status,
         "identifier_enrichment_source": "PROM_PRODUCT_DETAIL",
         "identifier_enrichment_url": listing.url,
+        "owner_oe_evidence": fetched_owner_evidence,
+        "owner_oe_evidence_count": len(fetched_owner_evidence),
+        "owner_oe_source": (
+            "OWN_STORE_LABELLED_OE" if fetched_owner_evidence else None
+        ),
     }
     listing.raw_data = enriched
     await session.commit()
-    return ListingIdentifierEnrichment(oe=oe, mpn=mpn, status=status)
+    return ListingIdentifierEnrichment(
+        oe=oe,
+        mpn=mpn,
+        status=status,
+        owner_oe_evidence=tuple(fetched_owner_evidence),
+    )
 
 
 async def _owned_listing(
@@ -843,8 +894,15 @@ def _fetch_listing_oe(url: str, settings: Settings) -> str | None:
     with HttpClient(config) as client:
         html = client.get_html(url)
     seed = parse_product_page(html)
-    return normalize_oe_value(seed.product.oe_raw) or extract_labeled_oe(
-        seed.product.name
+    return normalize_oe_value(seed.product.oe_raw) or next(
+        (
+            evidence["raw"]
+            for evidence in extract_labelled_original_oe_evidence(
+                seed.product.characteristics
+            )
+            if evidence.get("raw")
+        ),
+        None,
     )
 
 
@@ -856,8 +914,30 @@ def _fetch_listing_product(url: str, settings: Settings):
         max_attempts=max(1, settings.pricing_scraper_http_max_attempts),
     )
     with HttpClient(config) as client:
-        html = client.get_html(url)
-    return parse_product_page(html).product
+        document = client.get_document(url)
+    product = parse_product_page(document.text).product
+    # Keep the exact card hash at the parser boundary.  ``enrich_listing_*``
+    # persists it beside the label and URL; a later graph decision can reject
+    # stale or unbound evidence instead of trusting a bare normalized number.
+    detail_evidence = {
+        "schema_version": "prom-product-detail-evidence-v1",
+        "status": "SUCCESS",
+        "selected": True,
+        "source_url": document.request_url,
+        "content_sha256": document.content_sha256,
+        "product_id": product.id,
+        "publisher": "kemp_owned_store",
+        "source_version": "prom-product-detail-evidence-v1",
+        "parser_version": "prom-product-detail-evidence-v1",
+        "captured_at": datetime.now(UTC).isoformat(),
+        "card_title": product.name,
+        "card_brand": product.brand,
+        "card_spec": {
+            "description": product.description,
+            "characteristics": product.characteristics,
+        },
+    }
+    return replace(product, detail_evidence=detail_evidence)
 
 
 def _normalize_optional_text(value: object) -> str | None:
@@ -1058,18 +1138,14 @@ def _catalog_product(
         key=lambda value: (len(normalize_catalog_code(value)), len(value), value),
         default=None,
     )
+    # The listing title is not an OEM field.  Only the structured value already
+    # persisted on the owned listing may populate this identity display field;
+    # a title token remains ordinary text until a detail-card parser binds it.
     oe = next(
         (
             normalized
             for row in rows
             if (normalized := normalize_oe_value(row.oe_raw)) is not None
-        ),
-        None,
-    ) or next(
-        (
-            extracted
-            for row in rows
-            if (extracted := extract_labeled_oe(row.name)) is not None
         ),
         None,
     )
@@ -1157,6 +1233,14 @@ def normalize_oe_value(value: str | None) -> str | None:
 
 
 def extract_labeled_oe(value: str | None) -> str | None:
+    """Legacy display/query helper; never used to populate an OEM field.
+
+    Identity and persisted catalog OE values must come from structured detail
+    evidence.  This parser remains for backwards-compatible text-search tests
+    and callers, but its output is intentionally excluded from aggregation and
+    pricing identity.
+    """
+
     match = _LABELED_OE_RE.search(value or "")
     if match is None:
         return None

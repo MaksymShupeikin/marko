@@ -1,0 +1,149 @@
+# Avto.pro OPTKiev seller extractors (customer-owned channel).
+# Parse-only config: network access is gated separately. Labels on product
+# cards are treated as unreliable for auto-OE (same class as kemp.ua REVIEW).
+
+schema_version: metis-avto-pro-tokens-v1
+method_version: avto-pro-optkiev-v2
+source_key: avto_pro
+default_seller_slug: optkiev
+base_url: "https://avto.pro"
+
+seller_profile:
+  title_selector_title_attr: true
+  product_href_pattern: '/catalog/[^"\\s>]+-m(\\d+)/?'
+  product_group_title_pattern: 'title="([^"]+)"'
+
+product_card:
+  # Label → logical field. Matching is case-insensitive on stripped text.
+  field_labels:
+    brand:
+      - "Бренд"
+      - "Виробник"
+      - "Производитель"
+      - "Brand"
+    article:
+      - "Артикул"
+      - "Артикул продавца"
+      - "Код товару"
+      - "Код товара"
+      - "Article"
+    oe:
+      - "OE"
+      - "OE номер"
+      - "ОЕ номер"
+      - "OEM"
+      - "Оригінальний номер"
+      - "Оригинальный номер"
+    mpn:
+      - "Код производителя"
+      - "Код виробника"
+      - "MPN"
+      - "Номер виробника"
+      - "Номер производителя"
+
+# /part-{code}-{BRAND}-{id}/ pages (live Avto.pro, probe 2026-08-07).
+# OE candidates come from #original-manufacturers tiles only — never from
+# #analog-parts or free-floating /part- links.  Labels stay untrusted for
+# auto-OE confirmation; harvest rows are REVIEW/OE_CANDIDATE material.
+part_page:
+  original_section_id: original-manufacturers
+  analog_section_id: analog-parts
+  # When true, keep only brands listed under oem_brands (after fold).
+  # Brands Avto tags as "original manufacturers" but that are not vehicle
+  # makers (pseudo OEM packaging, etc.) are dropped.
+  filter_by_oem_brand: true
+  # Folded brand keys (NFKC + casefold + strip).  Aliases map alternate
+  # spellings onto the same key before the membership check.
+  oem_brands:
+    - chery
+    - zaz
+    - gm
+    - "general motors"
+    - opel
+    - vag
+    - vw
+    - volkswagen
+    - audi
+    - skoda
+    - seat
+    - porsche
+    - bentley
+    - renault
+    - "renault (rvi)"
+    - nissan
+    - hyundai
+    - kia
+    - toyota
+    - ford
+    - bmw
+    - mercedes
+    - "mercedes-benz"
+    - mercedesbenz
+    - peugeot
+    - citroen
+    - "peugeot/citroen"
+    - fiat
+    - "fiat/alfa/lancia"
+    - mitsubishi
+    - daewoo
+    - chevrolet
+    - lada
+    - vaz
+    - geely
+    - byd
+    - honda
+    - mazda
+    - subaru
+    - suzuki
+    - volvo
+    - landrover
+    - "land rover"
+    - jeep
+    - dodge
+    - chrysler
+    - ssangyong
+    - isuzu
+    - iveco
+    - man
+    - scania
+    - dacia
+    - saab
+    - jaguar
+    - mini
+    - smart
+    - cupra
+    - greatwall
+    - "great wall"
+    - haval
+    - lifan
+    - uaz
+    - gaz
+    - kamaz
+  oem_brand_aliases:
+    "general motors": gm
+    gmotors: gm
+    "mercedes benz": mercedes
+    "mercedes-benz": mercedes
+    mercedesbenz: mercedes
+    "vw": volkswagen
+    vag: volkswagen
+    "renault (rvi)": renault
+    "peugeot/citroen": peugeot
+    "fiat/alfa/lancia": fiat
+    "land rover": landrover
+    "great wall": greatwall
+  # Codes that look like packaging / market SKUs even under an OEM brand.
+  noise_code_substrings:
+    - MARKET
+    - ALLYT
+
+waf:
+  title_markers:
+    - "Azure WAF"
+  body_markers:
+    - "Azure WAF JS Challenge"
+    - "An unexpected error occured"
+
+limits:
+  min_number_length: 3
+  max_number_length: 32

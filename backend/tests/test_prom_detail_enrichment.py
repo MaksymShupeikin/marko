@@ -121,9 +121,9 @@ def test_detail_enrichment_binds_exact_bytes_and_never_overwrites_price() -> Non
                 "name": "Кількість в упаковці",
                 "values": [{"value": "1 шт."}],
             },
-            {
-                "id": 3,
-                "name": "OE",
+                {
+                    "id": 3,
+                    "name": "Оригінальні номери",
                 "values": [{"value": "1086282"}],
             },
         ],
@@ -172,6 +172,12 @@ def test_detail_enrichment_binds_exact_bytes_and_never_overwrites_price() -> Non
     assert enriched.detail_evidence["motors"]["compatible_vehicles"][0][
         "manufacturer"
     ] == "Ford"
+    owner_evidence = enriched.detail_evidence["owner_oe_evidence"][0]
+    assert owner_evidence["publisher"] == "kemp_owned_store"
+    assert owner_evidence["source_version"] == PROM_PRODUCT_DETAIL_SCHEMA_VERSION
+    assert owner_evidence["captured_at"]
+    assert owner_evidence["card_title"] == enriched.name
+    assert "characteristics" in owner_evidence["card_spec"]
 
 
 def test_detail_identity_mismatch_is_explicit_and_merges_nothing() -> None:

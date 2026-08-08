@@ -33,7 +33,11 @@ from marko.services.offer_processing import (
 )
 
 
-OE_EXTRACTOR_VERSION = "oe-extractor-v5"
+# v6 (2026-08-08): the labelled-characteristic reader recognises the spelled-out
+# «Оригінальні номери» / «ОЕ номер» forms a Prom card actually prints.  Every
+# observation stored under v5 saw that field as unlabelled and skipped it, so
+# the boundary moves and ``oe_reenrichment`` re-reads them.
+OE_EXTRACTOR_VERSION = "oe-extractor-v6"
 PROM_MOTORS_CROSS_PROPOSAL_VERSION = "prom-motors-cross-proposal-v1"
 OE_VERIFICATION_THRESHOLD = Decimal("0.90")
 # A short bare number is common in seller stock codes, phone fragments and
@@ -1762,6 +1766,34 @@ def _oe_label_confidence(value: str) -> Decimal | None:
         "OEM",
         "OEMNO",
         "OEНОМЕР",
+        # The same field spelled out.  Measured on a Prom storefront export of
+        # 2026-08-08: 11916 of 12702 harvested numbers sit under «Оригінальні
+        # номери», and every spelling below used to return ``None`` — the whole
+        # characteristic was skipped, so the strongest identity a candidate
+        # card carries never became evidence at all.  ``ОЕ`` here is Cyrillic;
+        # the ``OEНОМЕР`` above is Latin ``OE`` and never equalled it.
+        #
+        # Same tier as ``OE`` deliberately: a spelling is not a trust tier, and
+        # changing what an OE-labelled list may do is a decision that would
+        # apply to ``OE`` as well.  Exact match, never substring — «Не
+        # оригінальний номер» and «Оригінальний номер аналога» are not claims
+        # about this part's original number.
+        "ОЕНОМЕР",
+        "ОЕНОМЕРИ",
+        "ОЕНОМЕРА",
+        "OEНОМЕРИ",
+        "OEMНОМЕР",
+        "OEMНОМЕРИ",
+        "ОРИГІНАЛЬНИЙНОМЕР",
+        "ОРИГІНАЛЬНІНОМЕРИ",
+        "ОРИГИНАЛЬНЫЙНОМЕР",
+        "ОРИГИНАЛЬНЫЕНОМЕРА",
+        "НОМЕРОРИГІНАЛУ",
+        "НОМЕРИОРИГІНАЛУ",
+        "НОМЕРОРИГИНАЛА",
+        "НОМЕРАОРИГИНАЛА",
+        "ОРИГІНАЛЬНИЙАРТИКУЛ",
+        "ОРИГИНАЛЬНЫЙАРТИКУЛ",
         "КРОСНОМЕРИ",
         "КРОССНОМЕРИ",
         "КРОСНОМЕРА",

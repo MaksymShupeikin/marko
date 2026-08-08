@@ -265,6 +265,7 @@ def test_owned_catalog_exposes_and_searches_labeled_oe_number() -> None:
             external_id="3912822",
             sku="61131369611",
             name="Кришка запобіжників BMW 3 E21 OEM 6 1131 36 9611",
+            oe_raw="6 1131 36 9611",
         ),
     ]
 
@@ -277,6 +278,25 @@ def test_owned_catalog_exposes_and_searches_labeled_oe_number() -> None:
 
     assert page.total == 1
     assert page.items[0].oe == "6 1131 36 9611"
+
+
+def test_owned_catalog_does_not_promote_title_oem_text_to_oe() -> None:
+    page = build_owned_catalog_page(
+        [
+            _listing(
+                store_id=STORE_A,
+                external_id="3912822",
+                sku="61131369611",
+                name="Кришка запобіжників BMW 3 E21 OEM 6 1131 36 9611",
+            )
+        ],
+        query="6-1131-36-9611",
+        limit=50,
+        offset=0,
+    )
+
+    assert page.total == 1
+    assert page.items[0].oe is None
 
 
 def test_owned_catalog_uses_original_prom_store_name() -> None:

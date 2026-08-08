@@ -1,6 +1,8 @@
 from dataclasses import replace
 from decimal import Decimal
 
+import pytest
+
 from marko.services.matching import (
     _MAX_QUERY_TOKENS,
     Match,
@@ -380,6 +382,58 @@ def test_build_search_query_prefers_explicit_original_oe_over_private_code_and_m
     )
 
     assert build_search_query(candidate) == "1086282"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        # The customer's own Prom listings label the block in the plural.
+        # Observed on 87 of 1317 scraped storefront cards, 2026-08-08.
+        "Оригінальні номери",
+        "Оригинальные номера",
+        # kemp.ua writes it with Cyrillic ``ОЕ`` — verbatim from the card
+        # markup kept in ``test_kemp_site_harvest.CARD``.  A Cyrillic ``ОЕ``
+        # never equals the Latin ``OE`` already in the label set.
+        "ОЕ номер",
+        "OE номер",
+        "OEM номери",
+    ],
+)
+def test_the_sellers_own_oe_label_is_recognised_in_the_spellings_it_is_written_in(
+    label,
+):
+    """The label set was exact-match on bare singular forms.
+
+    Every spelling here is one the customer's own shop actually uses, and each
+    one fell through to the MPN: the seller stated the vehicle number about
+    their own part and the market query went looking for a supplier code.
+    """
+
+    candidate = product(
+        id=1,
+        name="Термостат Ford Focus",
+        oe="776414",
+        identifiers={"mpn": "KEMP-THERMOSTAT"},
+        attributes=[{"name": label, "values": [{"value": "1086282"}]}],
+    )
+
+    assert build_search_query(candidate) == "1086282"
+
+
+def test_a_negated_or_qualified_original_label_is_still_not_an_oe_assertion():
+    """Widening the set must not turn ``не оригінальний`` into an assertion."""
+
+    candidate = product(
+        id=1,
+        name="Термостат Ford Focus",
+        identifiers={"mpn": "TH652688J"},
+        attributes=[
+            {"name": "Не оригінальний номер", "values": [{"value": "1086282"}]},
+            {"name": "Оригінальний номер аналога", "values": [{"value": "999999"}]},
+        ],
+    )
+
+    assert build_search_query(candidate) == "TH652688J"
 
 
 def test_build_search_query_does_not_promote_generic_article_over_public_mpn():

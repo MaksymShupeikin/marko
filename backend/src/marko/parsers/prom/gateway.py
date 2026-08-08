@@ -6,6 +6,7 @@ import logging
 import math
 import re
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from typing import Any, Iterator
 
 from .config import BASE_URL, ScrapeConfig
@@ -31,9 +32,11 @@ from marko.services.parser_models import (
     Product,
     SeedInfo,
     Seller,
+    extract_labelled_original_oe_evidence,
 )
 from marko.services.catalog_identity_safety import is_internal_catalog_code
 from marko.services.source_access import SourceAccessBlocked
+from metis.pricing.crosses import normalize_cross_oem
 
 from .client import HttpClient
 from .parser import (
@@ -327,6 +330,33 @@ def _detail_metadata(
             "oe_page_id": motors.oe_page_id,
             "oe_page_alias": motors.oe_page_alias,
         }
+    owner_evidence: list[dict[str, Any]] = []
+    captured_at = datetime.now(UTC).isoformat()
+    for evidence in extract_labelled_original_oe_evidence(product.characteristics):
+        normalized = normalize_cross_oem(evidence["raw"])
+        if not normalized:
+            continue
+        owner_evidence.append(
+            {
+                **evidence,
+                "normalized": normalized,
+                "source_url": source_url or product.url,
+                "content_sha256": content_sha256,
+                "parser_version": PROM_PRODUCT_DETAIL_SCHEMA_VERSION,
+                "bound": bool(source_url or product.url),
+                "publisher": "kemp_owned_store",
+                "source_version": PROM_PRODUCT_DETAIL_SCHEMA_VERSION,
+                "captured_at": captured_at,
+                "card_title": product.name,
+                "card_brand": product.brand,
+                "card_spec": {
+                    "description": product.description,
+                    "characteristics": product.characteristics,
+                },
+            }
+        )
+    if owner_evidence:
+        metadata["owner_oe_evidence"] = owner_evidence
     return metadata
 
 
@@ -501,6 +531,10 @@ class PromGateway:
                         continue
                     seen_products.add(identity)
                     new_on_page += 1
+                    if self._config.enrich_details:
+                        product = self._fetch_candidate_detail(
+                            client, product, lang=seller.lang
+                        )
                     yield product
                 if page.products and new_on_page == 0:
                     log.info("Нових товарів немає — зупиняюсь (кінець каталогу).")
@@ -1122,8 +1156,9 @@ class PromGateway:
                     "listing": listing_value,
                     "detail": detail_value,
                 }
+        merged_product = replace(listing, **updates)
         metadata = _detail_metadata(
-            listing,
+            merged_product,
             status="SUCCESS_WITH_CONFLICTS" if conflicts else "SUCCESS",
             selected=True,
             source_url=document.request_url,
@@ -1135,7 +1170,7 @@ class PromGateway:
         # Price, availability, title, images and seller identity intentionally
         # stay at listing time.  The detail page is an evidence enrichment, not
         # a second pricing snapshot that can silently overwrite the cohort.
-        return replace(listing, **updates, detail_evidence=metadata)
+        return replace(merged_product, detail_evidence=metadata)
 
     def _compare_via_oe_page(
         self,
