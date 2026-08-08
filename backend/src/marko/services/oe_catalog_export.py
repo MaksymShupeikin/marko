@@ -19,7 +19,7 @@ round trip for the human rather than for the machine.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 from marko.services.catalog_identity_safety import is_internal_catalog_code
 
@@ -56,6 +56,10 @@ class ExportRow:
     other_numbers: str
     anomalies: str
     evidence_url: str
+    #: Numbers a human may look at, none of them confirmed as original.
+    candidates: str = ""
+    #: Why the OE cell is empty, or what the importer will refuse the row for.
+    no_oe_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,8 @@ IMPORT_HEADERS: tuple[str, ...] = (
     "Другие подтверждённые номера",
     "Аномалии",
     "Ссылка на подтверждение",
+    "Кандидаты (не подтверждены)",
+    "Почему нет OE",
 )
 
 REVIEW_HEADERS: tuple[str, ...] = IMPORT_HEADERS + ("Почему не в импорте",)
@@ -259,34 +265,35 @@ def _import_blocker(row: ExportRow) -> str | None:
     return None
 
 
-def split_confirmed(
-    rows: Sequence[ExportRow], *, brands: Iterable[str]
-) -> tuple[list[ExportRow], list[tuple[ExportRow, str]]]:
-    """Split confirmed rows into what may be imported and what a human reads.
+def resolve_import_row(row: ExportRow, *, brands: Iterable[str]) -> ExportRow:
+    """Decide what this row's OE cell may hold, keeping the row either way.
 
-    Raises rather than filters when the OE column holds something that must
-    never reach Prom: an empty cell means the caller mixed unconfirmed rows in,
-    an internal code means the number is our shelf number.
+    The customer wants the whole catalogue in one table, so a position without a
+    confirmed original number still travels — with an empty OE cell and the
+    reason beside it. The importer reads that as MPN-only material, which is
+    exactly what it is: discovery, not a price key.
+
+    Raises only for the one thing that must never leave: our own shelf code in
+    the OE column.
     """
 
-    brands = frozenset(brands)
-    ready: list[ExportRow] = []
-    review: list[tuple[ExportRow, str]] = []
-    for row in rows:
-        if not row.oe.strip():
-            raise OeCatalogExportError(
-                f"строка {row.sku or row.internal_code}: в колонке OE пусто, "
-                "а сюда попадают только подтверждённые номера"
-            )
-        if is_internal_catalog_code(row.oe):
-            raise OeCatalogExportError(
-                f"строка {row.sku or row.internal_code}: в колонке OE наш "
-                f"внутренний код {row.oe}; в Prom он уйдёт как оригинальный "
-                "номер и не найдёт ничего"
-            )
-        reason = _import_blocker(row) or oe_needs_a_human(row.oe, brands=brands)
-        if reason is None:
-            ready.append(row)
-        else:
-            review.append((row, reason))
-    return ready, review
+    if is_internal_catalog_code(row.oe):
+        raise OeCatalogExportError(
+            f"строка {row.sku or row.internal_code}: в колонке OE наш внутренний "
+            f"код {row.oe}; в Prom он уйдёт как оригинальный номер и не найдёт "
+            "ничего"
+        )
+    if not row.oe.strip():
+        return row
+    reason = oe_needs_a_human(row.oe, brands=brands)
+    if reason is not None:
+        return replace(
+            row,
+            oe="",
+            candidates=candidate_numbers([row.oe, *row.candidates.split(", ")]),
+            no_oe_reason=reason,
+        )
+    blocker = _import_blocker(row)
+    if blocker is not None:
+        return replace(row, no_oe_reason=blocker)
+    return row

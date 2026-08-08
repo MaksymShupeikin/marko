@@ -23,7 +23,7 @@ from marko.services.oe_catalog_export import (
     OeCatalogExportError,
     import_values,
     oe_needs_a_human,
-    split_confirmed,
+    resolve_import_row,
 )
 from marko.services.xlsx_catalog import (
     FIELD_ALIASES,
@@ -53,6 +53,8 @@ def _row(oe: str, **overrides: str) -> ExportRow:
         "other_numbers": "",
         "anomalies": "",
         "evidence_url": "",
+        "candidates": "",
+        "no_oe_reason": "",
     }
     fields.update(overrides)
     return ExportRow(**fields)
@@ -60,43 +62,51 @@ def _row(oe: str, **overrides: str) -> ExportRow:
 
 def test_an_internal_code_in_the_oe_column_stops_the_export() -> None:
     with pytest.raises(OeCatalogExportError) as error:
-        split_confirmed([_row("7764321")], brands=BRANDS)
+        resolve_import_row(_row("7764321"), brands=BRANDS)
 
     assert "7764321" in str(error.value)
 
 
-def test_an_empty_oe_among_confirmed_rows_stops_the_export() -> None:
-    with pytest.raises(OeCatalogExportError):
-        split_confirmed([_row("")], brands=BRANDS)
+def test_a_row_without_a_confirmed_number_travels_with_an_empty_oe() -> None:
+    """Every priced position is in the table; only the OE cell may be empty."""
+
+    resolved = resolve_import_row(
+        _row("", no_oe_reason="оригинальный номер не назван ни одним источником"),
+        brands=BRANDS,
+    )
+
+    assert resolved.oe == ""
+    assert resolved.no_oe_reason
 
 
-def test_a_plain_oem_number_travels_in_the_import_sheet() -> None:
-    ready, review = split_confirmed([_row("058133753D")], brands=BRANDS)
+def test_a_plain_oem_number_keeps_its_place_in_the_oe_column() -> None:
+    resolved = resolve_import_row(_row("058133753D"), brands=BRANDS)
 
-    assert [row.oe for row in ready] == ["058133753D"]
-    assert review == []
-
-
-def test_a_number_too_short_to_be_an_oe_waits_for_a_human() -> None:
-    ready, review = split_confirmed([_row("KL228")], brands=BRANDS)
-
-    assert ready == []
-    assert [row.oe for row, _ in review] == ["KL228"]
-    assert "коротк" in review[0][1].lower()
+    assert resolved.oe == "058133753D"
+    assert resolved.no_oe_reason == ""
 
 
-def test_a_brand_glued_to_the_tail_waits_for_a_human() -> None:
-    ready, review = split_confirmed([_row("191906090PIERBURG")], brands=BRANDS)
+def test_a_number_too_short_to_be_an_oe_moves_out_of_the_oe_column() -> None:
+    resolved = resolve_import_row(_row("KL228"), brands=BRANDS)
 
-    assert ready == []
-    assert "PIERBURG" in review[0][1]
+    assert resolved.oe == ""
+    assert "KL228" in resolved.candidates
+    assert "коротк" in resolved.no_oe_reason.lower()
 
 
-def test_a_number_without_a_digit_waits_for_a_human() -> None:
-    ready, review = split_confirmed([_row("ABCDEFGH")], brands=BRANDS)
+def test_a_brand_glued_to_the_tail_moves_out_of_the_oe_column() -> None:
+    resolved = resolve_import_row(_row("191906090PIERBURG"), brands=BRANDS)
 
-    assert ready == []
-    assert review[0][1]
+    assert resolved.oe == ""
+    assert "PIERBURG" in resolved.no_oe_reason
+    assert "191906090PIERBURG" in resolved.candidates
+
+
+def test_a_number_without_a_digit_moves_out_of_the_oe_column() -> None:
+    resolved = resolve_import_row(_row("ABCDEFGH"), brands=BRANDS)
+
+    assert resolved.oe == ""
+    assert resolved.no_oe_reason
 
 
 def test_the_reason_is_none_only_when_nothing_is_wrong() -> None:
@@ -146,27 +156,29 @@ def test_the_import_sheet_reads_back_through_the_customer_importer(tmp_path) -> 
     sheet.append(list(IMPORT_HEADERS))
     sheet.append(import_values(_row("058133753D", available="+")))
     sheet.append(import_values(_row("357905851D", sku="1153724214", available="")))
+    sheet.append(import_values(_row("", sku="1153724215", available="+")))
     path = tmp_path / "oe.xlsx"
     workbook.save(path)
 
     parsed = parse_catalog_xlsx(path.read_bytes())
 
     assert parsed.issues == []
-    assert [row.oe_raw for row in parsed.rows] == ["058133753D", "357905851D"]
+    assert [row.oe_raw for row in parsed.rows] == ["058133753D", "357905851D", ""]
     assert parsed.column_mapping["oe"] == "OE номер"
     assert parsed.column_mapping["product_url"] == "Ссылка"
     assert parsed.rows[0].current_price == Decimal("3297")
     assert parsed.rows[0].is_available is True
     assert parsed.rows[1].is_available is None
+    assert parsed.rows[2].oe_norm == ""
 
 
-def test_a_row_the_importer_would_refuse_is_not_offered_for_import() -> None:
-    ready, review = split_confirmed(
-        [_row("058133753D", price=""), _row("058133753E", name="")], brands=BRANDS
-    )
+def test_a_row_the_importer_would_refuse_is_named_as_such() -> None:
+    """The row still travels — the customer asked for the whole catalogue."""
 
-    assert ready == []
-    assert len(review) == 2
+    resolved = resolve_import_row(_row("058133753D", price=""), brands=BRANDS)
+
+    assert resolved.oe == "058133753D"
+    assert "цен" in resolved.no_oe_reason.lower()
 
 
 def test_our_shelf_code_is_not_offered_even_as_a_candidate() -> None:

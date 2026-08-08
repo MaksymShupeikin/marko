@@ -32,21 +32,16 @@ from marko.services.catalog_identity_safety import (
     catalog_identity_tokens,
 )
 from marko.services.oe_catalog_export import (
-    BLOCKED_HEADERS,
     CODE_ONLY_HEADERS,
     IMPORT_HEADERS,
-    REVIEW_HEADERS,
-    BlockedRow,
     CodeOnlyRow,
     ExportRow,
-    blocked_values,
     candidate_numbers,
     code_only_values,
     import_values,
     oe_named_by_an_asserting_source,
     rests_only_on_our_own_label,
-    review_values,
-    split_confirmed,
+    resolve_import_row,
 )
 from marko.services.xlsx_catalog import ParsedCatalogRow, parse_catalog_xlsx
 from metis.pricing.crosses import normalize_cross_oem
@@ -223,6 +218,7 @@ def _export_row(
     *,
     oe: str,
     sources: tuple[str, ...],
+    reason: str,
     evidence: dict[str, tuple[str, str]],
     cards: dict[str, str],
 ) -> ExportRow:
@@ -244,6 +240,8 @@ def _export_row(
         other_numbers=_other_numbers(plan, oe),
         anomalies=", ".join(plan.graph.anomalies),
         evidence_url=_evidence_for(code, oe, evidence=evidence, cards=cards),
+        candidates="" if oe else _candidates(plan, row),
+        no_oe_reason=reason,
     )
 
 
@@ -256,23 +254,6 @@ NO_ASSERTED_NUMBER = (
     "номер есть, но оригинальным его не назвал ни один источник, который "
     "вообще утверждает оригинальность"
 )
-
-
-def _blocked_row(
-    plan: ItemPlan, row: ParsedCatalogRow, *, reason: str = ""
-) -> BlockedRow:
-    return BlockedRow(
-        sku=_text(row.sku),
-        name=_text(row.name),
-        category=_text(row.category),
-        price=_text(row.current_price),
-        currency=_text(row.currency),
-        url=_text(row.product_url),
-        internal_code=_internal_code(plan),
-        candidates=_candidates(plan, row),
-        reason=reason or _blocked_reason(plan),
-        anomalies=", ".join(plan.graph.anomalies),
-    )
 
 
 def _sheet(workbook: Workbook, title: str, headers: tuple[str, ...]) -> Any:
@@ -317,8 +298,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     catalog_bytes = catalog_path.read_bytes()
     parsed = parse_catalog_xlsx(catalog_bytes, sheet_name=args.catalog_sheet)
 
-    confirmed: list[ExportRow] = []
-    blocked: list[BlockedRow] = []
+    rows: list[ExportRow] = []
     seen_codes: set[str] = set()
     for row in parsed.rows:
         plan = plan_identity(
@@ -331,28 +311,35 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             tokens=tokens,
         )
         seen_codes.update(plan.internal_catalog_codes)
+        number, sources, reason = "", (), ""
         if plan.identity_status != "OE_CONFIRMED" or not plan.graph.canonical:
-            blocked.append(_blocked_row(plan, row))
-            continue
-        picked = oe_named_by_an_asserting_source(
-            _oe_candidates(plan, config=config), asserting=asserting
-        )
-        if picked is None:
-            # Confirmed by the graph, but the number it anchors on is a supplier
-            # article nobody claimed as original. It is not a price key.
-            blocked.append(_blocked_row(plan, row, reason=NO_ASSERTED_NUMBER))
-            continue
-        number, sources = picked
-        if rests_only_on_our_own_label(sources, asserting=asserting):
-            blocked.append(_blocked_row(plan, row, reason=SELF_LABELLED_ONLY))
-            continue
-        confirmed.append(
-            _export_row(
-                row, plan, oe=number, sources=sources, evidence=evidence, cards=cards
+            reason = _blocked_reason(plan)
+        else:
+            picked = oe_named_by_an_asserting_source(
+                _oe_candidates(plan, config=config), asserting=asserting
+            )
+            if picked is None:
+                # Confirmed by the graph, but the number it anchors on is a
+                # supplier article nobody claimed as original: not a price key.
+                reason = NO_ASSERTED_NUMBER
+            elif rests_only_on_our_own_label(picked[1], asserting=asserting):
+                reason = SELF_LABELLED_ONLY
+            else:
+                number, sources = picked
+        rows.append(
+            resolve_import_row(
+                _export_row(
+                    row,
+                    plan,
+                    oe=number,
+                    sources=sources,
+                    reason=reason,
+                    evidence=evidence,
+                    cards=cards,
+                ),
+                brands=brands,
             )
         )
-
-    ready, review = split_confirmed(confirmed, brands=brands)
 
     code_only: list[CodeOnlyRow] = []
     for code in sorted(index.reference_codes or index.by_code):
@@ -394,29 +381,24 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     workbook.remove(workbook.active)
 
     sheet = _sheet(workbook, "Импорт", IMPORT_HEADERS)
-    for row in ready:
-        sheet.append(import_values(row))
-
-    sheet = _sheet(workbook, "Формат под вопросом", REVIEW_HEADERS)
-    for row, reason in review:
-        sheet.append(review_values(row, reason))
-
-    sheet = _sheet(workbook, "Без OE", BLOCKED_HEADERS)
-    for blocked_row in blocked:
-        sheet.append(blocked_values(blocked_row))
+    for export_row in rows:
+        sheet.append(import_values(export_row))
 
     sheet = _sheet(workbook, "Только код", CODE_ONLY_HEADERS)
     for code_row in code_only:
         sheet.append(code_only_values(code_row))
 
+    with_oe = [export_row for export_row in rows if export_row.oe]
+    without_oe = [export_row for export_row in rows if not export_row.oe]
     summary = {
         "catalog_rows": len(parsed.rows),
-        "import_rows": len(ready),
-        "review_rows": len(review),
-        "blocked_rows": len(blocked),
+        "rows_with_oe": len(with_oe),
+        "rows_without_oe": len(without_oe),
+        "unique_oe": len({export_row.oe for export_row in with_oe}),
         "code_only_rows": len(code_only),
-        "unique_oe_in_import": len({row.oe for row in ready}),
-        "review_reasons": Counter(reason for _, reason in review),
+        "reasons": Counter(
+            export_row.no_oe_reason for export_row in without_oe
+        ).most_common(6),
         "catalog_sha256": hashlib.sha256(catalog_bytes).hexdigest(),
     }
 
@@ -424,21 +406,24 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     for label, value in (
         ("Дата сборки", date.today().isoformat()),
         ("Строк в прайсе заказчика", summary["catalog_rows"]),
-        ("Готово к импорту", summary["import_rows"]),
-        ("Разных оригинальных номеров в импорте", summary["unique_oe_in_import"]),
-        ("Подтверждено, но формат под вопросом", summary["review_rows"]),
-        ("Позиций прайса без подтверждённого номера", summary["blocked_rows"]),
+        ("Из них с оригинальным номером", summary["rows_with_oe"]),
+        ("Разных оригинальных номеров", summary["unique_oe"]),
+        ("Пока без номера", summary["rows_without_oe"]),
         ("Кодов с номером, но без строки в прайсе", summary["code_only_rows"]),
         ("Версия метода", config.method_version),
         ("Отпечаток конфигурации", config.source_sha256),
+        ("Отпечаток прайса", summary["catalog_sha256"]),
     ):
         sheet.append([label, str(value)])
     sheet.append([])
     for line in (
-        "Колонка «OE номер» — только подтверждённый оригинальный номер.",
-        "Неподтверждённые кандидаты лежат на листе «Без OE» и в импорт не идут.",
+        "На листе «Импорт» — весь прайс, все строки.",
+        "«OE номер» заполнен только там, где номер подтверждён и назван "
+        "источником, который утверждает оригинальность.",
+        "Пусто в «OE номер» — позиция идёт в разбор, а не в цены; что смотреть, "
+        "написано в «Кандидаты» и «Почему нет OE».",
         "Наш внутренний код 776… в колонку OE не попадает никогда.",
-        "«Аномалии» — позиция открыта для цен, но у неё есть что посмотреть руками.",
+        "«Аномалии» — номер есть, но у позиции есть что посмотреть руками.",
     ):
         sheet.append([line])
 
