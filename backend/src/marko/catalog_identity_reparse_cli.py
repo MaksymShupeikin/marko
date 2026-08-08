@@ -51,6 +51,10 @@ DEFAULT_BRAND_KINDS = "config/article_brand_kinds.yaml"
 DEFAULT_TOKENS = "config/kemp_site_tokens.yaml"
 DEFAULT_REFERENCES = ("data/kemp_reference_map.csv", "data/kemp_oe_map.csv")
 DEFAULT_SITE = "data/kemp_site_numbers.csv"
+#: Shipped with the repository and pinned by sha256 in identity_graph.yaml, so
+#: it is part of the declared source set rather than an optional extra: leaving
+#: it out silently reports a catalogue 178 codes poorer than the one we ship.
+DEFAULT_SPARETO = "data/spareto_oe_confirmations.csv"
 DEFAULT_CATALOG = "data/kemp_prom_catalog.xlsx"
 
 
@@ -80,6 +84,20 @@ def _parser() -> argparse.ArgumentParser:
             "--no-site",
             action="store_true",
             help="Leave the kemp.ua harvest out entirely",
+        )
+        sub.add_argument(
+            "--spareto",
+            action="append",
+            dest="spareto_paths",
+            help=(
+                "spareto.com /oe/ confirmations; repeatable. Defaults to the "
+                "shipped dataset."
+            ),
+        )
+        sub.add_argument(
+            "--no-spareto",
+            action="store_true",
+            help="Leave the independent catalogue confirmations out entirely",
         )
         sub.add_argument(
             "--catalog",
@@ -153,6 +171,14 @@ def _build_index(args: argparse.Namespace) -> SourceIndex:
     avtopro_paths = [
         resolve_backend_path(path) for path in (args.avtopro_paths or [])
     ]
+    spareto_paths = (
+        []
+        if args.no_spareto
+        else [
+            resolve_backend_path(path)
+            for path in (args.spareto_paths or [DEFAULT_SPARETO])
+        ]
+    )
     index = build_source_index(
         config=config,
         kinds=kinds,
@@ -161,6 +187,7 @@ def _build_index(args: argparse.Namespace) -> SourceIndex:
         site_path=site,
         owner_store_paths=owner_stores,
         avtopro_paths=avtopro_paths,
+        spareto_paths=spareto_paths,
     )
     args.graph_config_loaded = config
     args.tokens_loaded = tokens

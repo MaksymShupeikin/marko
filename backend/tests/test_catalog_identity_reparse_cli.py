@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import marko.catalog_identity_reparse_cli as cli
 from marko.catalog_identity_reparse_cli import _contract_summary
 from marko.services.catalog_identity_safety import (
     identity_runtime_config_sha256,
@@ -41,3 +42,28 @@ def test_contract_summary_pins_config_tokens_extractor_and_implementation() -> N
     assert contract["runtime_config_sha256"] == identity_runtime_config_sha256(
         graph, tokens
     )
+
+
+def test_the_plan_reads_the_shipped_spareto_confirmations_by_default(monkeypatch) -> None:
+    """A dataset that ships in data/ but that nothing loads is not a source.
+
+    The confirmations are pinned by sha256 in identity_graph.yaml and worth 178
+    codes; before this the only way to see them was a hand-written harness.
+    """
+
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli, "build_source_index", _capture)
+
+    cli._build_index(cli._parser().parse_args(["plan"]))
+    assert [Path(str(path)).name for path in captured["spareto_paths"]] == [
+        "spareto_oe_confirmations.csv"
+    ]
+
+    captured.clear()
+    cli._build_index(cli._parser().parse_args(["plan", "--no-spareto"]))
+    assert captured["spareto_paths"] == []
