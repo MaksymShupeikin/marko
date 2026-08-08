@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from marko.services.catalog_competitors import (
+    CatalogCompetitorOffer,
     _catalog_item_match_score,
     _select_unique_best_recommendation,
     build_catalog_competitor_comparison,
@@ -527,3 +528,34 @@ def test_catalog_empty_pricing_result_keeps_discovery_candidates_separate() -> N
     assert result.reference_only_count == 1
     assert result.selection_histogram == {"TIER_UNKNOWN (REVIEW)": 1}
     assert result.unfetched_count == 62
+
+
+def test_catalog_empty_pricing_result_exposes_retained_automatic_candidates() -> None:
+    candidate = CatalogCompetitorOffer(
+        observation_id=uuid4(),
+        seller_id="seller-1",
+        seller_name="Seller 1",
+        title="Схожий товар",
+        url="https://prom.ua/ua/p1-item.html",
+        price=Decimal("499"),
+        currency="UAH",
+        is_available=True,
+        normalized_price=None,
+        tier="unknown",
+        match_confidence=Decimal("0.80"),
+        observed_at=datetime(2026, 8, 8, 9, 0, tzinfo=UTC),
+        hard_gate_result="MANUAL_REVIEW",
+        reason_codes=(
+            "MANUAL_MISSING_OE_PROVENANCE",
+            "MANUAL_MISSING_CONDITION",
+        ),
+    )
+
+    result = empty_catalog_competitor_comparison(
+        candidate_items=(candidate,),
+        collection_status="manual_review",
+    )
+
+    assert result.items == ()
+    assert result.candidate_items == (candidate,)
+    assert result.collection_status == "manual_review"

@@ -190,6 +190,7 @@ SCOPE_MANIFEST_PROVENANCE_SECTION = "provenance"
 # Коды исключения — контракт с бейджами Flutter и с отчётами, менять нельзя.
 SCOPE_EXCLUSION_ITEM_UNAVAILABLE = "ITEM_UNAVAILABLE"
 CONFIRMATION_SOURCE_OPERATOR = "OPERATOR"
+CONFIRMATION_SOURCE_AUTOMATED_MONITORING = "AUTOMATED_MONITORING"
 CONFIRMATION_SOURCE_SYSTEM_REPLAY = "SYSTEM_REPLAY"
 CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY = "E2E_FIXTURE_REPLAY"
 # Источник подтверждения и версия контракта, которыми отмечены строки, созданные
@@ -203,9 +204,10 @@ LEGACY_UNBOUNDED_SCOPE_CONTRACT = "LEGACY_UNBOUNDED"
 RUN_START_LANE_OPERATOR = "OPERATOR"
 RUN_START_LANE_TRUSTED = "TRUSTED"
 ACTOR_TYPE_SERVICE = "service"
-# Только эти два источника вправе стартовать прогон без контракта предпросмотра,
+# Только эти доверенные источники вправе стартовать прогон без контракта предпросмотра,
 # и каждый обязан назвать себя явно — «поля не передали» источником не является.
 TRUSTED_CONFIRMATION_SOURCES = (
+    CONFIRMATION_SOURCE_AUTOMATED_MONITORING,
     CONFIRMATION_SOURCE_SYSTEM_REPLAY,
     CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY,
 )
@@ -3377,13 +3379,10 @@ async def create_pricing_run(
                     1,
                     settings.pricing_collection_max_task_executions,
                 ),
-                deadline_at=datetime.now(UTC)
-                + timedelta(
-                    seconds=max(
-                        1,
-                        settings.pricing_collection_item_deadline_seconds,
-                    )
-                ),
+                # The execution deadline starts when a worker actually claims
+                # this target.  Starting it here makes a large FIFO catalogue
+                # expire while it is still waiting behind earlier products.
+                deadline_at=None,
                 metadata_size_bytes=len(
                     json.dumps(
                         metadata_payload,
@@ -4553,6 +4552,7 @@ __all__ = [
     "CONFIRMATION_SOURCE_E2E_FIXTURE_REPLAY",
     "CONFIRMATION_SOURCE_LEGACY_UNBOUNDED",
     "CONFIRMATION_SOURCE_OPERATOR",
+    "CONFIRMATION_SOURCE_AUTOMATED_MONITORING",
     "CONFIRMATION_SOURCE_SYSTEM_REPLAY",
     "CatalogItemNotFoundError",
     "EXECUTION_POLICY_SNAPSHOT_VERSION",

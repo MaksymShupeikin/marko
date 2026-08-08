@@ -545,8 +545,11 @@ class PromGateway:
     ) -> ListingPage | None:
         params = {"page": page_num} if page_num > 1 else None
         try:
-            html = client.get_html(seller.listing_url, params=params)
-            return parse_listing(html, seller.lang)
+            return client.get_parsed(
+                seller.listing_url,
+                lambda html: parse_listing(html, seller.lang),
+                params=params,
+            )
         except RequestFailed as exc:
             if _is_pagination_end(exc, page_num):
                 log.info(
@@ -1241,8 +1244,11 @@ class PromGateway:
             if page_num > 1:
                 params["page"] = page_num
             try:
-                html = client.get_html(search_url, params=params)
-                page = parse_search(html, lang)
+                page = client.get_parsed(
+                    search_url,
+                    lambda html: parse_search(html, lang),
+                    params=params,
+                )
             except RequestFailed as exc:
                 if _is_pagination_end(exc, page_num):
                     log.info(

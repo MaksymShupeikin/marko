@@ -24,6 +24,7 @@ from marko.worker.tasks.system import (
     healthcheck,
     reconcile_scrape_outbox,
     reconcile_stale_workflows_task,
+    schedule_store_monitoring_task,
 )
 
 
@@ -130,6 +131,44 @@ async def test_store_sync_flushes_partial_batch_before_propagating_page_failure(
     assert [len(batch) for batch in persisted_batches] == [4]
 
 
+@pytest.mark.asyncio
+async def test_store_sync_persists_one_large_batch_per_bounded_page_chunk(
+    monkeypatch,
+) -> None:
+    persisted_batches: list[list[object]] = []
+
+    class LargeGateway:
+        def __init__(self, _config) -> None:
+            pass
+
+        def scrape(self, _url: str, *, strict: bool):
+            assert strict is True
+            yield from (object() for _ in range(150))
+
+    async def fake_persist_progress(_claim, _trace, products) -> int:
+        persisted_batches.append(list(products))
+        return 5
+
+    async def fake_persisted_product_count(_sync_run_id) -> int:
+        return 150
+
+    monkeypatch.setattr(catalog_import, "PromGateway", LargeGateway)
+    monkeypatch.setattr(catalog_import, "_persist_progress", fake_persist_progress)
+    monkeypatch.setattr(
+        catalog_import,
+        "_persisted_product_count",
+        fake_persisted_product_count,
+    )
+
+    result = await catalog_import._run_import(
+        _claim(page_budget=5),
+        ScrapeExecutionTrace(item_kind="store_sync", execution_no=1),
+    )
+
+    assert [len(batch) for batch in persisted_batches] == [150]
+    assert result.catalog_pages_fetched == 5
+
+
 def test_every_worker_task_has_an_explicit_hard_and_soft_time_limit() -> None:
     tasks = (
         import_store_catalog_task,
@@ -143,9 +182,10 @@ def test_every_worker_task_has_an_explicit_hard_and_soft_time_limit() -> None:
         cleanup_scrape_evidence,
         reconcile_scrape_outbox,
         reconcile_stale_workflows_task,
+        schedule_store_monitoring_task,
     )
 
-    assert len(tasks) == 11
+    assert len(tasks) == 12
     assert len({task.name for task in tasks}) == len(tasks)
     for task in tasks:
         assert task.acks_late is True, task.name

@@ -29,6 +29,7 @@ from marko.parsers.prom.exceptions import (
     ParseError,
     ParserSchemaChanged,
     RequestFailed,
+    TransientApolloState,
     UnsafeResponse,
 )
 from marko.parsers.prom.gateway import PromGateway
@@ -103,6 +104,7 @@ class ScraperErrorCode(StrEnum):
     UPSTREAM_3XX = "upstream_3xx"
     UPSTREAM_5XX = "upstream_5xx"
     UPSTREAM_4XX = "upstream_4xx"
+    UPSTREAM_INCOMPLETE = "upstream_incomplete"
     PARSE_CONTRACT = "parse_contract"
     PARSER_SCHEMA_CHANGED = "parser_schema_changed"
     SERIALIZATION = "serialization"
@@ -1186,6 +1188,10 @@ def classify_scraper_exception(exc: Exception) -> ScraperBoundaryError:
             ScraperErrorCode.UNSAFE_RESPONSE,
             str(exc),
             retryable=False,
+        )
+    if isinstance(exc, TransientApolloState):
+        return ScraperBoundaryError(
+            ScraperErrorCode.UPSTREAM_INCOMPLETE, str(exc), retryable=True
         )
     if isinstance(exc, ParserSchemaChanged):
         return ScraperBoundaryError(

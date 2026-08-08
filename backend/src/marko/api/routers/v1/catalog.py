@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -47,6 +48,10 @@ from marko.services.catalog_discovery import (
     collect_catalog_discovery,
 )
 from marko.services.catalog_costs import cost_configuration_map
+from marko.services.attention import (
+    mark_source_monitoring_failed,
+    start_import_monitoring_run,
+)
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.owned_catalog import (
     enrich_listing_identifiers,
@@ -55,6 +60,10 @@ from marko.services.owned_catalog import (
     list_owned_catalog,
 )
 from marko.services.source_access import SourceAccessBlocked
+from marko.services.unified_product_catalog import (
+    get_unified_product,
+    list_unified_products,
+)
 from marko.services.xlsx_catalog import (
     MAX_XLSX_BYTES,
     CatalogImportError,
@@ -66,14 +75,18 @@ from marko.services.xlsx_catalog import (
     parse_mapping_json,
     preview_catalog_xlsx,
 )
+from marko.services.unified_catalog import SOURCE_XLSX, xlsx_source_id
+from marko.worker.celery_app import celery_app
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 @router.get("/competitors", response_model=CatalogCompetitorComparisonResponse)
 async def get_catalog_product_competitors(
     current: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_session)],
+    product_id: Annotated[UUID | None, Query()] = None,
     sku: Annotated[str | None, Query(max_length=255)] = None,
     oe: Annotated[str | None, Query(max_length=255)] = None,
     mpn: Annotated[str | None, Query(max_length=255)] = None,
@@ -82,6 +95,7 @@ async def get_catalog_product_competitors(
     comparison = await list_catalog_competitors(
         session,
         workspace_id=current.workspace_id,
+        product_id=product_id,
         sku=sku,
         oe=oe,
         mpn=mpn,
@@ -133,6 +147,7 @@ async def discover_catalog_product_competitors(
     comparison = await list_catalog_competitors(
         session,
         workspace_id=current.workspace_id,
+        product_id=None,
         sku=payload.sku,
         oe=payload.oe,
         mpn=payload.mpn,
@@ -251,6 +266,48 @@ async def get_owned_catalog_products(
     )
 
 
+@router.get("/unified-products", response_model=OwnedCatalogPageResponse)
+async def get_unified_catalog_products(
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    q: Annotated[str | None, Query(max_length=255)] = None,
+    store_id: Annotated[list[UUID] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 48,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> OwnedCatalogPageResponse:
+    page = await list_unified_products(
+        session,
+        workspace_id=current.workspace_id,
+        query=q,
+        store_ids=frozenset(store_id) if store_id else None,
+        limit=limit,
+        offset=offset,
+    )
+    return OwnedCatalogPageResponse.model_validate(page)
+
+
+@router.get(
+    "/unified-products/{product_id}",
+    response_model=OwnedCatalogProductResponse,
+)
+async def get_unified_catalog_product(
+    product_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> OwnedCatalogProductResponse:
+    product = await get_unified_product(
+        session,
+        workspace_id=current.workspace_id,
+        product_id=product_id,
+    )
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog product not found",
+        )
+    return OwnedCatalogProductResponse.model_validate(product)
+
+
 @router.get("/products/{product_id}", response_model=OwnedCatalogProductResponse)
 async def get_owned_catalog_product_details(
     product_id: str,
@@ -358,6 +415,39 @@ async def upload_catalog(
             sheet_name=sheet_name,
             user_id=current.user.id,
         )
+        try:
+            await start_import_monitoring_run(
+                session,
+                batch=batch,
+                celery_app=celery_app,
+            )
+        except Exception:
+            # The imported catalog is useful even when live Prom collection is
+            # unavailable. Products remain visible in the attention queue and
+            # monitoring can be retried without asking for the file again.
+            failed_batch_id = batch.id
+            failed_workspace_id = batch.workspace_id
+            failed_filename = batch.filename
+            log.exception(
+                "Automatic attention pricing could not be started for import %s",
+                failed_batch_id,
+            )
+            try:
+                await mark_source_monitoring_failed(
+                    session,
+                    workspace_id=failed_workspace_id,
+                    source_kind=SOURCE_XLSX,
+                    source_id=xlsx_source_id(
+                        workspace_id=failed_workspace_id,
+                        filename=failed_filename,
+                    ),
+                )
+                await session.commit()
+            except Exception:
+                log.exception(
+                    "Failed to move import %s from processing to review",
+                    failed_batch_id,
+                )
     except CatalogImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

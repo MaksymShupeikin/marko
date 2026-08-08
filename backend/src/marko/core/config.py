@@ -219,12 +219,25 @@ class Settings(BaseSettings):
     store_sync_scraper_http_timeout_seconds: float = 30.0
     store_sync_scraper_http_max_attempts: int = 4
     store_sync_scraper_pages_per_task: int = Field(default=5, ge=1, le=100)
+    store_sync_persistence_batch_size: int = Field(default=250, ge=25, le=2000)
     store_sync_scraper_total_page_limit: int = Field(
         default=1000,
         ge=1,
         le=10_000,
     )
     store_sync_scraper_max_pages: int = 0
+    store_monitoring_enabled: bool = True
+    store_monitoring_refresh_interval_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86_400,
+    )
+    store_monitoring_scan_interval_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+    )
+    store_monitoring_batch_size: int = Field(default=10, ge=1, le=100)
     store_url_resolver_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     store_url_resolver_max_redirects: int = Field(default=3, ge=0, le=10)
     store_url_resolver_max_response_bytes: int = Field(

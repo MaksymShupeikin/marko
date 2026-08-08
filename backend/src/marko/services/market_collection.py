@@ -335,10 +335,16 @@ def _require_complete_snapshot(
                 )
             continue
         if not isinstance(value, str):
-            raise FrozenBindingError(f"START_SNAPSHOT_CORRUPT: {name} is not a string")
-        # ``mpn_norm`` законно бывает пустым; остальные обязаны нести значение.
-        if name != "mpn_norm" and not value.strip():
-            raise FrozenBindingError(f"START_SNAPSHOT_INCOMPLETE: {name} is empty")
+            raise FrozenBindingError(
+                f"START_SNAPSHOT_CORRUPT: {name} is not a string"
+            )
+        # General Prom catalogs are not automotive-only. Both normalized part
+        # numbers can legitimately be absent; their absence is preserved so
+        # downstream identity gates fail closed instead of inventing an OEM.
+        if name not in {"oe_norm", "mpn_norm"} and not value.strip():
+            raise FrozenBindingError(
+                f"START_SNAPSHOT_INCOMPLETE: {name} is empty"
+            )
 
 
 def _require_snapshot_bindings(
@@ -1313,6 +1319,14 @@ async def _claim_target_item(
                         * 1000
                     ),
                 )
+
+    # A per-item execution budget must not include time spent waiting in the
+    # broker.  Older queued rows may still carry the submission-time deadline,
+    # so reset it on their first real claim as well as for newly-created rows.
+    if target.network_attempts == 0 and target.first_started_at is None:
+        target.deadline_at = now + timedelta(
+            seconds=max(1, get_settings().pricing_collection_item_deadline_seconds)
+        )
 
     deadline_expired = (
         target.deadline_at is not None and _aware_datetime(target.deadline_at) <= now
@@ -5667,6 +5681,17 @@ async def finalize_pricing_run(run_id: UUID) -> None:
                 failed=failed,
                 cancelled=cancelled,
             )
+            # The immutable recommendation remains the audit record; this
+            # projection is the small mutable read model used by the daily UI.
+            from marko.services.attention import (
+                mark_run_attention_failed,
+                project_attention_for_run,
+            )
+
+            if run.status in {"completed", "partial"}:
+                await project_attention_for_run(session, run.id)
+            else:
+                await mark_run_attention_failed(session, run.id)
         elif run.status not in {
             "failed",
             "cancelled",

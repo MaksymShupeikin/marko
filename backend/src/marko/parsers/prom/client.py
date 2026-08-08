@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 import hashlib
+from typing import TypeVar, cast
 
 import requests
 
@@ -17,9 +18,16 @@ from marko.services.scrape_runtime import current_scrape_trace
 from marko.services.source_access import require_live_prom_marketplace_collection
 
 from .config import ScrapeConfig
-from .exceptions import RequestFailed, UnsafeResponse
+from .exceptions import (
+    ParseError,
+    ParserSchemaChanged,
+    RequestFailed,
+    TransientApolloState,
+    UnsafeResponse,
+)
 
 log = logging.getLogger(__name__)
+_ParsedResponse = TypeVar("_ParsedResponse")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +82,32 @@ class HttpClient:
             status_code=int(response.status_code),
         )
 
+    def get_parsed(
+        self,
+        url: str,
+        parser: Callable[[str], _ParsedResponse],
+        params: dict | None = None,
+    ) -> _ParsedResponse:
+        """Fetch and validate one document inside the physical retry boundary.
+
+        Prom intermittently returns a small HTTP-200 SSR shell whose Apollo
+        cache is empty. Parsing inside ``_request`` lets that response consume
+        a retry attempt without advancing catalog pagination or poisoning the
+        replay cache as a successful page.
+        """
+
+        missing = object()
+        parsed: object = missing
+
+        def validate(response: requests.Response) -> None:
+            nonlocal parsed
+            parsed = parser(response.text)
+
+        self._request(url, params, response_validator=validate)
+        if parsed is missing:
+            raise RuntimeError("Response parser completed without a result")
+        return cast(_ParsedResponse, parsed)
+
     def close(self) -> None:
         self._session.close()
 
@@ -83,13 +117,21 @@ class HttpClient:
     def __exit__(self, *_exc) -> None:
         self.close()
 
-    def _request(self, url: str, params: dict | None) -> requests.Response:
+    def _request(
+        self,
+        url: str,
+        params: dict | None,
+        *,
+        response_validator: Callable[[requests.Response], None] | None = None,
+    ) -> requests.Response:
         last_error: Exception | None = None
         trace = current_scrape_trace()
         request_trace = trace.begin_request(url, params) if trace is not None else None
         if trace is not None and request_trace is not None:
             replayed = trace.replay_for(request_trace)
             if replayed is not None:
+                if response_validator is not None:
+                    response_validator(replayed)
                 return replayed
 
         for attempt in range(1, self._config.max_attempts + 1):
@@ -179,21 +221,110 @@ class HttpClient:
                                 status_code=response.status_code,
                             )
                         raise
-                    if trace is not None and request_trace is not None:
-                        trace.record_attempt(
-                            request_trace,
-                            attempt_no=attempt,
-                            outcome="success",
-                            status_code=response.status_code,
-                            latency_ms=round(
-                                (time.perf_counter() - attempt_started) * 1000
-                            ),
-                            local_rate_wait_ms=local_wait_ms,
-                            global_rate_wait_ms=global_wait_ms,
-                        )
-                        trace.finish_success(request_trace, response)
-                    return response
-                if not self._is_retryable_status(response.status_code):
+                    if response_validator is not None:
+                        try:
+                            response_validator(response)
+                        except TransientApolloState as error:
+                            last_error = error
+                            error_category = "upstream_incomplete"
+                            if trace is not None and request_trace is not None:
+                                attempt_trace = trace.record_attempt(
+                                    request_trace,
+                                    attempt_no=attempt,
+                                    outcome="retryable_failure",
+                                    status_code=response.status_code,
+                                    latency_ms=round(
+                                        (time.perf_counter() - attempt_started) * 1000
+                                    ),
+                                    local_rate_wait_ms=local_wait_ms,
+                                    global_rate_wait_ms=global_wait_ms,
+                                    error_category=error_category,
+                                    error_detail=str(error),
+                                )
+                            log.warning(
+                                "Неповний Apollo-документ (спроба %d/%d) для %s",
+                                attempt,
+                                self._config.max_attempts,
+                                response.url,
+                            )
+                            if attempt >= self._config.max_attempts:
+                                if trace is not None and request_trace is not None:
+                                    trace.finish_response_failure(
+                                        request_trace,
+                                        response,
+                                        outcome="retryable_failure",
+                                        error_category=error_category,
+                                        error_detail=str(error),
+                                    )
+                                raise
+                            backoff = self._backoff_seconds(attempt)
+                            if trace is not None and request_trace is not None:
+                                trace.record_backoff(
+                                    request_trace,
+                                    attempt_trace,
+                                    backoff,
+                                )
+                            self._sleep_backoff(backoff)
+                            continue
+                        except ParseError as error:
+                            error_category = (
+                                "parser_schema_changed"
+                                if isinstance(error, ParserSchemaChanged)
+                                else "parse_contract"
+                            )
+                            if trace is not None and request_trace is not None:
+                                trace.record_attempt(
+                                    request_trace,
+                                    attempt_no=attempt,
+                                    outcome="terminal_failure",
+                                    status_code=response.status_code,
+                                    latency_ms=round(
+                                        (time.perf_counter() - attempt_started) * 1000
+                                    ),
+                                    local_rate_wait_ms=local_wait_ms,
+                                    global_rate_wait_ms=global_wait_ms,
+                                    error_category=error_category,
+                                    error_detail=str(error),
+                                )
+                                trace.finish_response_failure(
+                                    request_trace,
+                                    response,
+                                    outcome="terminal_failure",
+                                    error_category=error_category,
+                                    error_detail=str(error),
+                                )
+                            raise
+                        else:
+                            if trace is not None and request_trace is not None:
+                                trace.record_attempt(
+                                    request_trace,
+                                    attempt_no=attempt,
+                                    outcome="success",
+                                    status_code=response.status_code,
+                                    latency_ms=round(
+                                        (time.perf_counter() - attempt_started) * 1000
+                                    ),
+                                    local_rate_wait_ms=local_wait_ms,
+                                    global_rate_wait_ms=global_wait_ms,
+                                )
+                                trace.finish_success(request_trace, response)
+                            return response
+                    else:
+                        if trace is not None and request_trace is not None:
+                            trace.record_attempt(
+                                request_trace,
+                                attempt_no=attempt,
+                                outcome="success",
+                                status_code=response.status_code,
+                                latency_ms=round(
+                                    (time.perf_counter() - attempt_started) * 1000
+                                ),
+                                local_rate_wait_ms=local_wait_ms,
+                                global_rate_wait_ms=global_wait_ms,
+                            )
+                            trace.finish_success(request_trace, response)
+                        return response
+                elif not self._is_retryable_status(response.status_code):
                     try:
                         self._consume_bounded_response(response)
                     except UnsafeResponse as error:

@@ -1,6 +1,10 @@
 import pytest
 
-from marko.parsers.prom.exceptions import ParseError, ParserSchemaChanged
+from marko.parsers.prom.exceptions import (
+    ParseError,
+    ParserSchemaChanged,
+    TransientApolloState,
+)
 from marko.parsers.prom.parser import (
     _extract_apollo_state,
     _slice_balanced_json,
@@ -79,8 +83,13 @@ def test_parse_listing_extracts_products():
 
 
 def test_parse_listing_missing_record_is_schema_change():
-    with pytest.raises(ParserSchemaChanged):
+    with pytest.raises(TransientApolloState):
         parse_listing(html_with_state({"_FAST_CACHE": {}}))
+
+
+def test_parse_listing_empty_root_cache_is_transient():
+    with pytest.raises(TransientApolloState):
+        parse_listing(html_with_state({}))
 
 
 def test_parse_search_explicit_empty_market_is_typed() -> None:

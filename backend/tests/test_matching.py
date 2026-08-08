@@ -12,6 +12,7 @@ from marko.services.matching import (
     build_product_comparison_evidence,
     build_comparison,
     build_search_query,
+    build_search_query_parts,
     laterality_conflict,
     match_offer,
     normalize_tokens,
@@ -635,6 +636,21 @@ def test_opaque_fitment_wording_drift_is_unknown_not_false_conflict() -> None:
         assert evidence.dimensions[dimension].state is EvidenceState.UNKNOWN
 
 
+def test_search_number_ignores_candidate_fields_without_normalized_text():
+    seed = product(id=1, name="Ліхтар садовий")
+    candidate = product(id=2, name="---", sku=None)
+
+    assert (
+        match_offer(
+            seed,
+            candidate,
+            0.55,
+            search_number="ЛІХТАР САДОВИЙ",
+        )
+        is None
+    )
+
+
 # _price_value
 
 
@@ -876,3 +892,24 @@ def test_build_query_never_uses_seller_sku_as_public_identity():
 
     assert query != "1153724202"
     assert "радіатор" in query.casefold()
+
+
+def test_build_query_parts_uses_title_when_part_number_is_absent():
+    query = build_search_query_parts(
+        name="Тактичний ліхтар Police BL 1837 T6 YU227",
+        brand="Bailong",
+        fallback="210236",
+    )
+
+    assert query == "Bailong тактичний ліхтар police bl 1837 t6 yu227"
+
+
+def test_build_query_parts_keeps_mpn_stronger_than_title():
+    query = build_search_query_parts(
+        name="Мультиметр цифровий",
+        brand=None,
+        part_number="DT-830B",
+        fallback="SELLER-42",
+    )
+
+    assert query == "DT-830B"

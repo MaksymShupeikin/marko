@@ -68,6 +68,7 @@ class CatalogController extends AsyncNotifier<CatalogState> {
 
   Future<CatalogCompetitorComparison> loadCompetitors(CatalogProduct product) {
     return _api.listCompetitors(
+      productId: product.id,
       sku: product.sku,
       oe: product.oe,
       mpn: product.mpn,

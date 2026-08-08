@@ -44,6 +44,7 @@ class CatalogCompetitorSection extends StatelessWidget {
           _EmptyCompetitors(
             hasComparison: comparison.hasComparison,
             hasDiscovery: comparison.hasDiscovery,
+            hasCandidates: comparison.candidateItems.isNotEmpty,
           )
         else
           ...comparison.items.map(
@@ -51,10 +52,46 @@ class CatalogCompetitorSection extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 10),
               child: _CompetitorListingCard(
                 offer: offer,
+                includedInComparison: true,
                 onOpen: () => onOpenListing(offer.url),
               ),
             ),
           ),
+        if (comparison.candidateItems.isNotEmpty) ...[
+          const SizedBox(height: 22),
+          Text(
+            context.localized(
+              ru: 'Найдено, но ещё не подтверждено',
+              uk: 'Знайдено, але ще не підтверджено',
+            ),
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 5),
+          Text(
+            context.localized(
+              ru:
+                  'Prom-объявления уже сохранены. Они не влияют на цену, '
+                  'пока идентичность товара и состояние не подтверждены.',
+              uk:
+                  'Prom-оголошення вже збережено. Вони не впливають на ціну, '
+                  'доки тотожність товару та стан не підтверджені.',
+            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.muted),
+          ),
+          const SizedBox(height: 12),
+          ...comparison.candidateItems.map(
+            (offer) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _CompetitorListingCard(
+                offer: offer,
+                includedInComparison: false,
+                onOpen: () => onOpenListing(offer.url),
+              ),
+            ),
+          ),
+        ],
         if (comparison.hasDiscovery) ...[
           const SizedBox(height: 24),
           _DiscoverySection(
@@ -846,9 +883,14 @@ class _SelectionHistogram extends StatelessWidget {
 }
 
 class _CompetitorListingCard extends StatelessWidget {
-  const _CompetitorListingCard({required this.offer, required this.onOpen});
+  const _CompetitorListingCard({
+    required this.offer,
+    required this.includedInComparison,
+    required this.onOpen,
+  });
 
   final CatalogCompetitorOffer offer;
+  final bool includedInComparison;
   final VoidCallback onOpen;
 
   @override
@@ -949,7 +991,10 @@ class _CompetitorListingCard extends StatelessWidget {
                       runSpacing: 6,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        _ComparisonBadge(),
+                        if (includedInComparison)
+                          _ComparisonBadge()
+                        else
+                          _CandidateBadge(offer: offer),
                         if (showsNormalizedPrice)
                           Text(
                             context.localized(
@@ -979,6 +1024,51 @@ class _CompetitorListingCard extends StatelessWidget {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CandidateBadge extends StatelessWidget {
+  const _CandidateBadge({required this.offer});
+
+  final CatalogCompetitorOffer offer;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final missingOe = offer.reasonCodes.contains(
+      'MANUAL_MISSING_OE_PROVENANCE',
+    );
+    final missingCondition = offer.reasonCodes.contains(
+      'MANUAL_MISSING_CONDITION',
+    );
+    final label = missingOe && missingCondition
+        ? context.localized(
+            ru: 'Нужна проверка модели и состояния',
+            uk: 'Потрібна перевірка моделі та стану',
+          )
+        : missingOe
+        ? context.localized(
+            ru: 'Не подтверждена модель товара',
+            uk: 'Не підтверджено модель товару',
+          )
+        : context.localized(
+            ru: 'Требует ручной проверки',
+            uk: 'Потребує ручної перевірки',
+          );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: colors.warning.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: colors.warning,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -1110,10 +1200,12 @@ class _EmptyCompetitors extends StatelessWidget {
   const _EmptyCompetitors({
     required this.hasComparison,
     required this.hasDiscovery,
+    required this.hasCandidates,
   });
 
   final bool hasComparison;
   final bool hasDiscovery;
+  final bool hasCandidates;
 
   @override
   Widget build(BuildContext context) {
@@ -1130,7 +1222,18 @@ class _EmptyCompetitors extends StatelessWidget {
           Icon(Icons.search_off_rounded, color: colors.muted, size: 24),
           const SizedBox(height: 8),
           Text(
-            hasComparison
+            hasCandidates
+                ? context.localized(
+                    ru:
+                        'Подтверждённых конкурентов пока нет. Найденные '
+                        'объявления показаны ниже — для них нужна проверка '
+                        'модели и состояния.',
+                    uk:
+                        'Підтверджених конкурентів поки немає. Знайдені '
+                        'оголошення показані нижче — для них потрібна перевірка '
+                        'моделі та стану.',
+                  )
+                : hasComparison
                 ? context.localized(
                     ru:
                         'В последнем расчёте не осталось подходящих '

@@ -54,6 +54,7 @@ from marko.services.pricing_runs import (
     IDENTITY_BLOCKED_RECOMMENDATION_ACTION,
     recommendation_price_identity_allowed,
 )
+from marko.services.unified_catalog import upsert_xlsx_products
 
 MAX_XLSX_BYTES = 25 * 1024 * 1024
 MAX_UNCOMPRESSED_XLSX_BYTES = 250 * 1024 * 1024
@@ -884,6 +885,7 @@ async def import_catalog_xlsx(
     ]
     session.add_all(items)
     await session.flush()
+    await upsert_xlsx_products(session, batch=batch, items=items)
     for item, row in zip(items, parsed.rows, strict=True):
         cost = parsed.sensitive_costs.get(row.source_row)
         if cost is not None:

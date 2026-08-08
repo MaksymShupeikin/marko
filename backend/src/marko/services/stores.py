@@ -125,6 +125,13 @@ async def _get_or_create_sync_run(
         store_id=store_id,
         workspace_id=workspace_id,
     )
+    # Re-check after taking the same lock used by deletion. A sync request that
+    # observed the link just before deletion must not recreate the catalog.
+    await _get_workspace_store(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+    )
     active = await stores_repo.get_active_sync_run(session, store_id, workspace_id)
     if active is not None:
         active.scrape_deduplicated_submissions += 1
@@ -249,6 +256,11 @@ async def delete_owned_store(
     store_id: UUID,
     workspace_id: UUID,
 ) -> None:
+    await stores_repo.lock_store_sync_scope(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+    )
     deleted = await stores_repo.delete_owned_workspace_store(
         session,
         store_id=store_id,
@@ -256,6 +268,18 @@ async def delete_owned_store(
     )
     if not deleted:
         raise StoreNotFoundError(str(store_id))
+    cancelled_at = datetime.now(UTC)
+    await stores_repo.cancel_active_store_sync_runs(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+        cancelled_at=cancelled_at,
+    )
+    await stores_repo.delete_workspace_store_catalog_products(
+        session,
+        store_id=store_id,
+        workspace_id=workspace_id,
+    )
     await session.commit()
 
 

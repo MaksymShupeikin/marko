@@ -184,6 +184,8 @@ class OwnedCatalogProductResponse(BaseModel):
 
 
 class OwnedCatalogPageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     items: list[OwnedCatalogProductResponse]
     total: int
     catalog_total: int
@@ -210,6 +212,10 @@ class CatalogCompetitorOfferResponse(BaseModel):
     tier: str
     match_confidence: Decimal
     observed_at: datetime
+    automatic_eligible: bool = False
+    hard_gate_result: str = "MANUAL_REVIEW"
+    oe_verification_status: str = "UNKNOWN"
+    reason_codes: list[str] = Field(default_factory=list)
 
 
 class CatalogDiscoveredOfferResponse(BaseModel):
@@ -322,3 +328,5 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     # Same part, level unknown or unconvertible: shown with a link, never
     # priced against.
     reference_only: list[CatalogDiscoveredOfferResponse]
+    candidate_items: list[CatalogCompetitorOfferResponse] = Field(default_factory=list)
+    collection_status: str | None = None

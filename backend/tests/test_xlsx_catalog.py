@@ -302,6 +302,14 @@ class _ImportSession:
     def add_all(self, values) -> None:
         self.added.extend(values)
 
+    async def scalars(self, _statement):
+        class _Rows:
+            @staticmethod
+            def all():
+                return []
+
+        return _Rows()
+
     async def flush(self) -> None:
         for value in self.added:
             if hasattr(value, "id") and value.id is None:

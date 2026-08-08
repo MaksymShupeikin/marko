@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime
 import hashlib
 import uuid
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
+    CatalogProduct,
     Listing,
     MarketplaceStore,
     StoreKind,
     SyncRun,
     SyncStatus,
+    StoreSyncTaskExecution,
     WorkspaceStore,
 )
-
 
 async def get_store_by_id(
     session: AsyncSession, store_id: uuid.UUID, workspace_id: uuid.UUID
@@ -142,6 +144,84 @@ async def delete_owned_workspace_store(
         )
     )
     return result.rowcount > 0
+
+
+async def cancel_active_store_sync_runs(
+    session: AsyncSession,
+    *,
+    store_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    cancelled_at: datetime,
+) -> int:
+    """Fence active imports so a worker cannot recreate removed products."""
+
+    active_conditions = (
+        SyncRun.store_id == store_id,
+        SyncRun.workspace_id == workspace_id,
+        SyncRun.kind == "catalog_import",
+        SyncRun.scrape_state.in_(("queued", "running", "retry_wait")),
+    )
+    result = await session.execute(
+        update(SyncRun)
+        .where(*active_conditions)
+        .values(
+            status=SyncStatus.failed,
+            scrape_state="cancelled",
+            scrape_owner_task_id=None,
+            scrape_lease_expires_at=None,
+            scrape_fencing_token=SyncRun.scrape_fencing_token + 1,
+            error="Store removed from workspace",
+            finished_at=cancelled_at,
+            scrape_checkpoint={
+                "stage": "cancelled",
+                "reason": "store_removed",
+                "at": cancelled_at.isoformat(),
+            },
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount <= 0:
+        return 0
+
+    cancelled_run_ids = select(SyncRun.id).where(
+        SyncRun.store_id == store_id,
+        SyncRun.workspace_id == workspace_id,
+        SyncRun.kind == "catalog_import",
+        SyncRun.scrape_state == "cancelled",
+    )
+    await session.execute(
+        update(StoreSyncTaskExecution)
+        .where(
+            StoreSyncTaskExecution.sync_run_id.in_(cancelled_run_ids),
+            StoreSyncTaskExecution.outcome == "running",
+        )
+        .values(
+            outcome="terminal_failure",
+            error_category="store_removed",
+            error_detail="Store removed from workspace",
+            finished_at=cancelled_at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount
+
+
+async def delete_workspace_store_catalog_products(
+    session: AsyncSession,
+    *,
+    store_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> int:
+    """Delete the workspace-visible store catalog and its cascaded attention."""
+
+    result = await session.execute(
+        delete(CatalogProduct).where(
+            CatalogProduct.workspace_id == workspace_id,
+            CatalogProduct.source_kind == "PROM_STORE",
+            CatalogProduct.source_id == store_id,
+        )
+    )
+    return result.rowcount
 
 
 async def get_active_sync_run(

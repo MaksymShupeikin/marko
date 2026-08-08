@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +9,8 @@ import 'package:marko_client/core/app_theme.dart';
 import 'package:marko_client/core/system_status.dart';
 import 'package:marko_client/features/auth/auth_controller.dart';
 import 'package:marko_client/features/auth/auth_models.dart';
+import 'package:marko_client/features/attention/attention_controller.dart';
+import 'package:marko_client/features/attention/attention_models.dart';
 import 'package:marko_client/features/catalog/catalog_controller.dart';
 import 'package:marko_client/features/catalog/catalog_models.dart';
 import 'package:marko_client/features/dashboard/dashboard_page.dart';
@@ -26,7 +26,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('only Мои магазины remains as the desktop store destination', (
+  testWidgets('desktop navigation follows the three-step daily workflow', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 800);
@@ -36,14 +36,16 @@ void main() {
 
     await tester.pumpWidget(_testApp());
 
-    expect(find.text('Сравнение цен'), findsWidgets);
-    expect(find.text('Магазины'), findsNothing);
-    expect(find.text('Мои магазины'), findsOneWidget);
+    expect(find.text('Требует внимания'), findsWidgets);
+    expect(find.text('Товары'), findsOneWidget);
+    expect(find.text('Источники'), findsOneWidget);
+    expect(find.text('Сравнение цен'), findsNothing);
+    expect(find.text('Обзор'), findsNothing);
 
-    await tester.tap(find.text('Мои магазины'));
+    await tester.tap(find.text('Источники'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Мои магазины'), findsNWidgets(3));
+    expect(find.text('Источники'), findsWidgets);
     expect(find.text('Подключённые'), findsOneWidget);
     expect(find.text('Kemp'), findsOneWidget);
     expect(find.text('Market competitor'), findsNothing);
@@ -60,7 +62,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('four destinations fit in the mobile navigation', (tester) async {
+  testWidgets('three destinations fit in the mobile navigation', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -69,35 +73,20 @@ void main() {
 
     await tester.pumpWidget(_testApp());
 
-    expect(find.text('Магазины'), findsNothing);
-    expect(find.text('Мои магазины'), findsOneWidget);
-    expect(find.text('Обзор'), findsOneWidget);
+    expect(find.text('Требует внимания'), findsOneWidget);
+    expect(find.text('Товары'), findsOneWidget);
+    expect(find.text('Источники'), findsOneWidget);
+    expect(find.text('Обзор'), findsNothing);
     expect(find.bySemanticsLabel(RegExp(r'Выбрать язык')), findsOneWidget);
 
-    await tester.tap(find.text('Мои магазины'));
+    await tester.tap(find.text('Источники'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
     semantics.dispose();
   });
 
-  testWidgets('overview exposes a dedicated loading state', (tester) async {
-    tester.view.physicalSize = const Size(1200, 800);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    await tester.pumpWidget(
-      _testApp(storesControllerBuilder: _LoadingStoresController.new),
-    );
-    await tester.tap(find.text('Обзор'));
-    await tester.pump();
-
-    expect(find.text('Загружаем данные обзора…'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-  });
-
-  testWidgets('overview distinguishes an empty workspace from loading', (
+  testWidgets('tabs switch one IndexedStack without pushing routes', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 800);
@@ -105,42 +94,58 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(
-      _testApp(storesControllerBuilder: _EmptyStoresController.new),
-    );
-    await tester.tap(find.text('Обзор'));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(_testApp(routeNavigation: true));
 
-    expect(find.text('Подключённых магазинов пока нет'), findsOneWidget);
-    expect(find.text('Загружаем данные обзора…'), findsNothing);
-    expect(find.text('0'), findsNothing);
+    IndexedStack stack() => tester.widget<IndexedStack>(
+      find.byKey(const ValueKey('dashboard-indexed-stack')),
+    );
+
+    expect(stack().index, 0);
+    await tester.tap(find.text('Товары'));
+    await tester.pumpAndSettle();
+    expect(stack().index, 1);
+
+    await tester.tap(find.text('Источники'));
+    await tester.pumpAndSettle();
+    expect(stack().index, 2);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('overview error offers a working retry path', (tester) async {
+  testWidgets('deleting a store refreshes mounted catalog and attention tabs', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final attempts = _BuildAttempts();
+    _catalogBuilds = 0;
+    _attentionBuilds = 0;
 
     await tester.pumpWidget(
-      _testApp(storesControllerBuilder: () => _RetryStoresController(attempts)),
+      _testApp(
+        attentionControllerBuilder: _CountingAttentionController.new,
+        catalogControllerBuilder: _CountingCatalogController.new,
+      ),
     );
-    await tester.tap(find.text('Обзор'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Товары'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Источники'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Не удалось загрузить данные обзора.'), findsOneWidget);
-    expect(find.text('Повторить'), findsOneWidget);
-
-    await tester.tap(find.text('Повторить'));
+    expect(_attentionBuilds, 1);
+    expect(_catalogBuilds, 1);
+    await tester.tap(find.byTooltip('Удалить магазин'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-delete-store')));
     await tester.pumpAndSettle();
 
-    expect(attempts.value, 2);
-    expect(find.text('Подключённых магазинов пока нет'), findsOneWidget);
-    expect(find.text('Не удалось загрузить данные обзора.'), findsNothing);
+    expect(_attentionBuilds, 2);
+    expect(_catalogBuilds, 2);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('catalog arrow opens details panel, then price comparison', (
+  testWidgets('product details return to the attention workflow', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 800);
@@ -150,9 +155,9 @@ void main() {
 
     await tester.pumpWidget(_testApp());
 
-    await tester.tap(find.text('Каталог'));
+    await tester.tap(find.text('Товары'));
     await tester.pumpAndSettle();
-    expect(find.text('Каталог Prom.ua'), findsOneWidget);
+    expect(find.text('Товары'), findsWidgets);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byTooltip('Показать конкурентов'));
@@ -162,15 +167,15 @@ void main() {
       find.byKey(const ValueKey('catalog-product-details-sheet')),
       findsOneWidget,
     );
-    expect(find.text('Каталог Prom.ua'), findsOneWidget);
+    expect(find.text('Товары'), findsWidgets);
     expect(find.text('Auto Partner'), findsOneWidget);
     expect(find.text('Kemp'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('catalog-details-compare')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Сравнение цен'), findsNWidgets(3));
-    expect(find.text('Каталог Prom.ua'), findsNothing);
+    expect(find.text('Требует внимания'), findsWidgets);
+    expect(find.text('Цены под контролем'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -187,7 +192,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Каталог Prom.ua'), findsOneWidget);
+    expect(find.text('Товары'), findsWidgets);
     expect(
       find.byKey(const ValueKey('catalog-product-details-sheet')),
       findsOneWidget,
@@ -229,7 +234,7 @@ void main() {
 
     await tester.pumpWidget(_testApp());
 
-    await tester.tap(find.text('Мои магазины'));
+    await tester.tap(find.text('Источники'));
     await tester.pumpAndSettle();
     expect(find.text('Подключённые'), findsOneWidget);
 
@@ -237,7 +242,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // The catalog tab is open and its store filter carries that one store.
-    expect(find.text('Каталог Prom.ua'), findsOneWidget);
+    expect(find.text('Товары'), findsWidgets);
     expect(find.text('Подключённые'), findsNothing);
     expect(
       find.textContaining('Kemp', findRichText: true),
@@ -247,7 +252,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('the store preselection does not survive leaving the catalog', (
+  testWidgets('catalog state survives switching IndexedStack tabs', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 800);
@@ -256,19 +261,19 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(_testApp());
-    await tester.tap(find.text('Мои магазины'));
+    await tester.tap(find.text('Источники'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Kemp'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Kemp', findRichText: true), findsOneWidget);
 
-    await tester.tap(find.text('Обзор'));
+    await tester.tap(find.text('Требует внимания'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Каталог'));
+    await tester.tap(find.text('Товары'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Каталог Prom.ua'), findsOneWidget);
-    expect(find.textContaining('Kemp', findRichText: true), findsNothing);
+    expect(find.text('Товары'), findsWidgets);
+    expect(find.textContaining('Kemp', findRichText: true), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -296,27 +301,27 @@ void main() {
     await tester.tap(find.text('Українська'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Порівняння цін'), findsWidgets);
-    expect(find.text('Мої магазини'), findsOneWidget);
-    expect(find.text('Огляд'), findsOneWidget);
+    expect(find.text('Потребує уваги'), findsWidgets);
+    expect(find.text('Товари'), findsOneWidget);
+    expect(find.text('Джерела'), findsOneWidget);
     expect(find.text('РОБОЧА ОБЛАСТЬ'), findsOneWidget);
     expect(find.text('owner@example.test'), findsOneWidget);
     expect(find.text('Українська'), findsOneWidget);
-    expect(find.text('Рекомендацій поки немає'), findsOneWidget);
+    expect(find.text('Ціни під контролем'), findsOneWidget);
 
-    await tester.tap(find.text('Каталог'));
+    await tester.tap(find.text('Товари'));
     await tester.pumpAndSettle();
     expect(
       find.text('Пошук за OEM/OE, артикулу або назві оголошення'),
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Мої магазини'));
+    await tester.tap(find.text('Джерела'));
     await tester.pumpAndSettle();
     expect(find.text('Підключені'), findsOneWidget);
     expect(find.byTooltip('Видалити магазин'), findsOneWidget);
 
-    await tester.tap(find.text('Огляд'));
+    await tester.tap(find.text('Потребує уваги'));
     await tester.pumpAndSettle();
     expect(find.text('Ціни під контролем'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -325,18 +330,26 @@ void main() {
 
 Widget _testApp({
   StoresController Function()? storesControllerBuilder,
+  AttentionController Function()? attentionControllerBuilder,
+  CatalogController Function()? catalogControllerBuilder,
   RecommendationsController Function()? recommendationsControllerBuilder,
   String? initialCatalogProductId,
   String? initialRecommendationId,
+  bool routeNavigation = false,
 }) {
   return ProviderScope(
     overrides: [
       authControllerProvider.overrideWith(_TestAuthController.new),
+      attentionControllerProvider.overrideWith(
+        attentionControllerBuilder ?? _TestAttentionController.new,
+      ),
       recommendationsControllerProvider.overrideWith(
         recommendationsControllerBuilder ?? _TestRecommendationsController.new,
       ),
       pricingApiProvider.overrideWithValue(_DeepLinkPricingApi()),
-      catalogControllerProvider.overrideWith(_TestCatalogController.new),
+      catalogControllerProvider.overrideWith(
+        catalogControllerBuilder ?? _TestCatalogController.new,
+      ),
       storesControllerProvider.overrideWith(
         storesControllerBuilder ?? _TestStoresController.new,
       ),
@@ -353,6 +366,7 @@ Widget _testApp({
           home: DashboardPage(
             initialCatalogProductId: initialCatalogProductId,
             initialRecommendationId: initialRecommendationId,
+            routeNavigation: routeNavigation,
           ),
         );
       },
@@ -385,6 +399,33 @@ class _TestRecommendationsController extends RecommendationsController {
       queue: 'all',
       sort: 'ABSOLUTE_RECOMMENDED_CHANGE',
     );
+  }
+}
+
+class _TestAttentionController extends AttentionController {
+  @override
+  Future<AttentionState> build() async => const AttentionState(
+    summary: AttentionSummary(
+      total: 0,
+      overpriced: 0,
+      underpriced: 0,
+      inMarket: 0,
+      reviewRequired: 0,
+      noData: 0,
+      processing: 0,
+      updatedAt: null,
+    ),
+    page: AttentionPageResult(items: [], total: 0, limit: 50, offset: 0),
+  );
+}
+
+int _attentionBuilds = 0;
+
+class _CountingAttentionController extends _TestAttentionController {
+  @override
+  Future<AttentionState> build() {
+    _attentionBuilds += 1;
+    return super.build();
   }
 }
 
@@ -534,6 +575,16 @@ class _TestCatalogController extends CatalogController {
   }
 }
 
+int _catalogBuilds = 0;
+
+class _CountingCatalogController extends _TestCatalogController {
+  @override
+  Future<CatalogState> build() {
+    _catalogBuilds += 1;
+    return super.build();
+  }
+}
+
 class _TestStoresController extends StoresController {
   @override
   Future<StoresState> build() async {
@@ -572,32 +623,5 @@ class _TestStoresController extends StoresController {
       ),
     );
     return true;
-  }
-}
-
-class _LoadingStoresController extends StoresController {
-  @override
-  Future<StoresState> build() => Completer<StoresState>().future;
-}
-
-class _EmptyStoresController extends StoresController {
-  @override
-  Future<StoresState> build() async => const StoresState();
-}
-
-class _BuildAttempts {
-  int value = 0;
-}
-
-class _RetryStoresController extends StoresController {
-  _RetryStoresController(this.attempts);
-
-  final _BuildAttempts attempts;
-
-  @override
-  Future<StoresState> build() async {
-    attempts.value += 1;
-    if (attempts.value == 1) throw StateError('synthetic backend failure');
-    return const StoresState();
   }
 }

@@ -71,6 +71,7 @@ CatalogCompetitorComparison _comparison({
   List<CatalogDiscoveredOffer> evidence = const [],
   List<CatalogDiscoveredOffer> reference = const [],
   List<CatalogDiscoveredOffer> discovery = const [],
+  List<CatalogCompetitorOffer> candidates = const [],
   double? recommended,
   List<String> reasons = const [],
 }) {
@@ -96,8 +97,28 @@ CatalogCompetitorComparison _comparison({
     discoveryItems: discovery,
     pricingEvidence: evidence,
     referenceOnly: reference,
+    candidateItems: candidates,
   );
 }
+
+final _automaticCandidate = CatalogCompetitorOffer(
+  observationId: 'candidate-observation',
+  sellerId: 'candidate-seller',
+  sellerName: 'Другой продавец',
+  title: 'Фен VGR V-493 Зелёный',
+  url: 'https://prom.ua/ua/p4-item.html',
+  price: 799,
+  currency: 'UAH',
+  isAvailable: true,
+  normalizedPrice: null,
+  tier: 'unknown',
+  matchConfidence: 0.81,
+  observedAt: DateTime.utc(2026, 8, 8, 9),
+  reasonCodes: const [
+    'MANUAL_MISSING_OE_PROVENANCE',
+    'MANUAL_MISSING_CONDITION',
+  ],
+);
 
 Widget _app(
   CatalogCompetitorComparison comparison, {
@@ -120,6 +141,32 @@ Widget _app(
 }
 
 void main() {
+  testWidgets('automatic run candidates stay visible before verification', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(_comparison(candidates: [_automaticCandidate])),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Найдено, но ещё не подтверждено'), findsOneWidget);
+    expect(
+      find.text(
+        'Подтверждённых конкурентов пока нет. Найденные объявления показаны '
+        'ниже — для них нужна проверка модели и состояния.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'В последнем расчёте не осталось подходящих конкурентных объявлений.',
+      ),
+      findsNothing,
+    );
+    expect(find.text('Фен VGR V-493 Зелёный'), findsOneWidget);
+    expect(find.text('Нужна проверка модели и состояния'), findsOneWidget);
+  });
+
   testWidgets('both outcome blocks are rendered and labelled', (tester) async {
     await tester.pumpWidget(
       _app(_comparison(evidence: [_evidence], reference: [_reference])),

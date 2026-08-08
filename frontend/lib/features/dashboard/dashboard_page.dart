@@ -6,13 +6,14 @@ import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/system_status.dart';
-import '../../core/widgets/marko_button.dart';
 import '../../core/widgets/marko_menu.dart';
 import '../auth/auth_controller.dart';
+import '../attention/attention_controller.dart';
+import '../attention/attention_page.dart';
+import '../catalog/catalog_controller.dart';
+import '../catalog/catalog_import_dialog.dart';
 import '../catalog/catalog_page.dart';
 import '../pricing/recommendations_page.dart';
-import '../stores/store_models.dart';
-import '../stores/stores_controller.dart';
 import '../stores/stores_page.dart';
 
 class DashboardPage extends ConsumerStatefulWidget {
@@ -20,6 +21,7 @@ class DashboardPage extends ConsumerStatefulWidget {
     this.initialTab = 0,
     this.initialCatalogProductId,
     this.initialRecommendationId,
+    this.legacyPricing = false,
     this.routeNavigation = false,
     super.key,
   });
@@ -27,6 +29,7 @@ class DashboardPage extends ConsumerStatefulWidget {
   final int initialTab;
   final String? initialCatalogProductId;
   final String? initialRecommendationId;
+  final bool legacyPricing;
   final bool routeNavigation;
 
   @override
@@ -38,6 +41,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   static const _storesIndex = 2;
 
   late int _selectedIndex;
+  late final Set<int> _visitedTabs;
   String? _catalogStoreId;
 
   @override
@@ -47,7 +51,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         ? _catalogIndex
         : widget.initialRecommendationId != null
         ? 0
-        : widget.initialTab.clamp(0, 3);
+        : widget.initialTab.clamp(0, 2);
+    _visitedTabs = {_selectedIndex};
   }
 
   @override
@@ -57,51 +62,65 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     final language = ref.watch(appLanguageProvider);
     final destinations = <_Destination>[
       _Destination(
-        Icons.price_check_rounded,
-        context.localized(ru: 'Сравнение цен', uk: 'Порівняння цін'),
+        Icons.notification_important_outlined,
+        context.localized(ru: 'Требует внимания', uk: 'Потребує уваги'),
       ),
       _Destination(
         Icons.inventory_2_outlined,
-        context.localized(ru: 'Каталог', uk: 'Каталог'),
+        context.localized(ru: 'Товары', uk: 'Товари'),
       ),
       _Destination(
-        Icons.store_mall_directory_outlined,
-        context.localized(ru: 'Мои магазины', uk: 'Мої магазини'),
-      ),
-      _Destination(
-        Icons.grid_view_rounded,
-        context.localized(ru: 'Обзор', uk: 'Огляд'),
+        Icons.hub_outlined,
+        context.localized(ru: 'Источники', uk: 'Джерела'),
       ),
     ];
-    final content = switch (_selectedIndex) {
-      _catalogIndex => CatalogPage(
-        onOpenPriceComparison: () => _select(0),
-        canAdministerWorkspace: canAdministerWorkspace,
-        initialStoreId: _catalogStoreId,
-        onInitialStoreApplied: _clearCatalogStore,
-        initialProductId: widget.initialCatalogProductId,
-        onOpenProductDeepLink: widget.routeNavigation
-            ? _openCatalogProduct
-            : null,
-      ),
-      _storesIndex => StoresPage(
-        ownedOnly: true,
-        canAdministerWorkspace: canAdministerWorkspace,
-        onOpenStoreCatalog: _openStoreInCatalog,
-      ),
-      3 => _Overview(
-        onOpenStores: () => _select(_storesIndex),
-        canAdministerWorkspace: canAdministerWorkspace,
-      ),
-      _ => RecommendationsPage(
-        onOpenCatalog: () => _select(1),
-        canAdministerWorkspace: canAdministerWorkspace,
-        initialRecommendationId: widget.initialRecommendationId,
-        onOpenRecommendationDeepLink: widget.routeNavigation
-            ? _openRecommendation
-            : null,
-      ),
-    };
+    final content = IndexedStack(
+      key: const ValueKey('dashboard-indexed-stack'),
+      index: _selectedIndex,
+      sizing: StackFit.expand,
+      children: [
+        if (_visitedTabs.contains(0))
+          widget.initialRecommendationId != null || widget.legacyPricing
+              ? RecommendationsPage(
+                  onOpenCatalog: () => _select(_catalogIndex),
+                  canAdministerWorkspace: canAdministerWorkspace,
+                  initialRecommendationId: widget.initialRecommendationId,
+                  onOpenRecommendationDeepLink: widget.routeNavigation
+                      ? _openRecommendation
+                      : null,
+                )
+              : AttentionPage(
+                  onOpenSources: () => _select(_storesIndex),
+                  onOpenRecommendation: _openRecommendation,
+                )
+        else
+          const SizedBox.shrink(),
+        if (_visitedTabs.contains(_catalogIndex))
+          CatalogPage(
+            onOpenPriceComparison: () => _select(0),
+            canAdministerWorkspace: canAdministerWorkspace,
+            initialStoreId: _catalogStoreId,
+            onInitialStoreApplied: _clearCatalogStore,
+            initialProductId: widget.initialCatalogProductId,
+            onOpenProductDeepLink: widget.routeNavigation
+                ? _openCatalogProduct
+                : null,
+          )
+        else
+          const SizedBox.shrink(),
+        if (_visitedTabs.contains(_storesIndex))
+          StoresPage(
+            ownedOnly: true,
+            canAdministerWorkspace: canAdministerWorkspace,
+            onOpenStoreCatalog: _openStoreInCatalog,
+            onImportCatalog: canAdministerWorkspace
+                ? () => _showCatalogImport(canAdministerWorkspace)
+                : null,
+          )
+        else
+          const SizedBox.shrink(),
+      ],
+    );
 
     return Scaffold(
       body: SafeArea(
@@ -153,17 +172,11 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   }
 
   void _select(int index) {
-    if (widget.routeNavigation) {
-      final routeName = switch (index) {
-        1 => 'catalog',
-        2 => 'stores',
-        3 => 'overview',
-        _ => 'pricing',
-      };
-      context.goNamed(routeName);
-      return;
-    }
-    setState(() => _selectedIndex = index);
+    if (index == _selectedIndex) return;
+    setState(() {
+      _visitedTabs.add(index);
+      _selectedIndex = index;
+    });
   }
 
   void _openCatalogProduct(String productId) {
@@ -183,6 +196,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   void _openStoreInCatalog(String storeId) {
     setState(() {
       _catalogStoreId = storeId;
+      _visitedTabs.add(_catalogIndex);
       _selectedIndex = _catalogIndex;
     });
   }
@@ -190,6 +204,17 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   void _clearCatalogStore() {
     if (_catalogStoreId == null) return;
     setState(() => _catalogStoreId = null);
+  }
+
+  void _showCatalogImport(bool canAdministerWorkspace) {
+    showCatalogImportDialog(
+      context: context,
+      canAdministerWorkspace: canAdministerWorkspace,
+      onImported: () {
+        ref.invalidate(catalogControllerProvider);
+        ref.invalidate(attentionControllerProvider);
+      },
+    );
   }
 
   void _selectLanguage(AppLanguage language) =>
@@ -642,423 +667,6 @@ class _MobileNavigation extends StatelessWidget {
           );
         }),
       ),
-    );
-  }
-}
-
-class _Overview extends ConsumerWidget {
-  const _Overview({
-    required this.onOpenStores,
-    required this.canAdministerWorkspace,
-  });
-
-  final VoidCallback onOpenStores;
-  final bool canAdministerWorkspace;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final storesState = ref.watch(storesControllerProvider);
-    final colors = MarkoTheme.of(context);
-
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-      children: [
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1120),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 20,
-                  runSpacing: 16,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          context.localized(
-                            ru: 'Цены под контролем',
-                            uk: 'Ціни під контролем',
-                          ),
-                          style: Theme.of(context).textTheme.headlineMedium,
-                        ),
-                        const SizedBox(height: 7),
-                        Text(
-                          context.localized(
-                            ru: 'Единая картина по магазинам, товарам и конкурентам.',
-                            uk: 'Єдина картина за магазинами, товарами й конкурентами.',
-                          ),
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-                        ),
-                      ],
-                    ),
-                    MarkoButton(
-                      label: context.localized(
-                        ru: 'Подключить магазин',
-                        uk: 'Підключити магазин',
-                      ),
-                      onPressed: canAdministerWorkspace ? onOpenStores : null,
-                      icon: Icons.add_rounded,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 28),
-                storesState.when(
-                  loading: () => const _OverviewLoading(),
-                  error: (_, _) => _OverviewError(
-                    onRetry: () => ref.invalidate(storesControllerProvider),
-                  ),
-                  data: (state) => state.stores.isEmpty
-                      ? const _OverviewEmpty()
-                      : _OverviewMetrics(stores: state.stores),
-                ),
-                const SizedBox(height: 20),
-                MarkoPanel(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        context.localized(
-                          ru: 'Как работает Marko',
-                          uk: 'Як працює Marko',
-                        ),
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        context.localized(
-                          ru: 'Три шага до понятной картины рынка.',
-                          uk: 'Три кроки до зрозумілої картини ринку.',
-                        ),
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-                      ),
-                      const SizedBox(height: 24),
-                      const _WorkflowSteps(),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _OverviewLoading extends StatelessWidget {
-  const _OverviewLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    return MarkoPanel(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(strokeWidth: 2.5),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              context.localized(
-                ru: 'Загружаем данные обзора…',
-                uk: 'Завантажуємо дані огляду…',
-              ),
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _OverviewEmpty extends StatelessWidget {
-  const _OverviewEmpty();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    return MarkoPanel(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-      child: Column(
-        children: [
-          Icon(Icons.storefront_outlined, color: colors.muted, size: 30),
-          const SizedBox(height: 12),
-          Text(
-            context.localized(
-              ru: 'Подключённых магазинов пока нет',
-              uk: 'Підключених магазинів поки немає',
-            ),
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 5),
-          Text(
-            context.localized(
-              ru: 'Подключите магазин, чтобы увидеть сводные показатели.',
-              uk: 'Підключіть магазин, щоб побачити зведені показники.',
-            ),
-            textAlign: TextAlign.center,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: colors.muted),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _OverviewError extends StatelessWidget {
-  const _OverviewError({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return MarkoInlineMessage(
-      message: context.localized(
-        ru: 'Не удалось загрузить данные обзора.',
-        uk: 'Не вдалося завантажити дані огляду.',
-      ),
-      tone: MarkoMessageTone.error,
-      action: TextButton(
-        onPressed: onRetry,
-        child: Text(context.localized(ru: 'Повторить', uk: 'Повторити')),
-      ),
-    );
-  }
-}
-
-class _OverviewMetrics extends StatelessWidget {
-  const _OverviewMetrics({required this.stores});
-
-  final List<StoreSummary> stores;
-
-  @override
-  Widget build(BuildContext context) {
-    final productCount = stores.fold<int>(
-      0,
-      (total, store) => total + store.productCount,
-    );
-    final syncedCount = stores
-        .where((store) => store.lastSyncedAt != null)
-        .length;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 760 ? 3 : 1;
-        final width = columns == 3
-            ? (constraints.maxWidth - 32) / 3
-            : constraints.maxWidth;
-        return Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: [
-            _MetricPanel(
-              width: width,
-              icon: Icons.storefront_outlined,
-              value: stores.length.toString(),
-              label: context.localized(
-                ru: 'Подключено магазинов',
-                uk: 'Підключено магазинів',
-              ),
-            ),
-            _MetricPanel(
-              width: width,
-              icon: Icons.inventory_2_outlined,
-              value: productCount.toString(),
-              label: context.localized(
-                ru: 'Товаров в мониторинге',
-                uk: 'Товарів у моніторингу',
-              ),
-            ),
-            _MetricPanel(
-              width: width,
-              icon: Icons.check_circle_outline_rounded,
-              value: syncedCount.toString(),
-              label: context.localized(
-                ru: 'Синхронизировано',
-                uk: 'Синхронізовано',
-              ),
-              positive: true,
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _MetricPanel extends StatelessWidget {
-  const _MetricPanel({
-    required this.width,
-    required this.icon,
-    required this.value,
-    required this.label,
-    this.positive = false,
-  });
-
-  final double width;
-  final IconData icon;
-  final String value;
-  final String label;
-  final bool positive;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    final accent = positive ? colors.positive : colors.brand;
-    final accentSoft = positive ? colors.positiveSoft : colors.brandSoft;
-    return SizedBox(
-      width: width,
-      child: MarkoPanel(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: accentSoft,
-                borderRadius: BorderRadius.circular(9),
-              ),
-              alignment: Alignment.center,
-              child: Icon(icon, color: accent, size: 20),
-            ),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(value, style: Theme.of(context).textTheme.headlineSmall),
-                  const SizedBox(height: 2),
-                  Text(label, style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _WorkflowSteps extends StatelessWidget {
-  const _WorkflowSteps();
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final horizontal = constraints.maxWidth >= 700;
-        final steps = [
-          _WorkflowStep(
-            number: '01',
-            title: context.localized(
-              ru: 'Подключите магазин',
-              uk: 'Підключіть магазин',
-            ),
-            description: context.localized(
-              ru: 'Добавьте ссылку Prom — каталог импортируется автоматически.',
-              uk: 'Додайте посилання Prom — каталог імпортується автоматично.',
-            ),
-          ),
-          _WorkflowStep(
-            number: '02',
-            title: context.localized(
-              ru: 'Найдите конкурентов',
-              uk: 'Знайдіть конкурентів',
-            ),
-            description: context.localized(
-              ru: 'Marko сопоставит похожие позиции и соберёт цены.',
-              uk: 'Marko зіставить схожі позиції та збере ціни.',
-            ),
-          ),
-          _WorkflowStep(
-            number: '03',
-            title: context.localized(
-              ru: 'Управляйте ценой',
-              uk: 'Керуйте ціною',
-            ),
-            description: context.localized(
-              ru: 'Сравнивайте предложения и замечайте изменения рынка.',
-              uk: 'Порівнюйте пропозиції та помічайте зміни ринку.',
-            ),
-          ),
-        ];
-        if (!horizontal) {
-          return Column(
-            children: [
-              steps[0],
-              SizedBox(height: 22),
-              steps[1],
-              SizedBox(height: 22),
-              steps[2],
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: steps[0]),
-            SizedBox(width: 28),
-            Expanded(child: steps[1]),
-            SizedBox(width: 28),
-            Expanded(child: steps[2]),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _WorkflowStep extends StatelessWidget {
-  const _WorkflowStep({
-    required this.number,
-    required this.title,
-    required this.description,
-  });
-
-  final String number;
-  final String title;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          number,
-          style: Theme.of(
-            context,
-          ).textTheme.labelLarge?.copyWith(color: colors.brand),
-        ),
-        const SizedBox(width: 13),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 5),
-              Text(description, style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

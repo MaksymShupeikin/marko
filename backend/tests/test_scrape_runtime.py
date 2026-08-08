@@ -8,7 +8,8 @@ import requests
 
 from marko.parsers.prom.client import HttpClient
 from marko.parsers.prom.config import ScrapeConfig
-from marko.parsers.prom.exceptions import RequestFailed
+from marko.parsers.prom.exceptions import RequestFailed, TransientApolloState
+from marko.parsers.prom.parser import parse_listing
 from marko.services.scrape_runtime import (
     ReplayEvidence,
     ReplayIntegrityError,
@@ -21,6 +22,8 @@ from marko.services.scraper_contract import (
     classify_scraper_exception,
 )
 from marko.services.source_access import SourceAccessBlocked
+
+from factories import html_with_state, raw_product
 
 
 def _response(
@@ -94,6 +97,76 @@ def test_get_document_hash_is_the_exact_journaled_response_body() -> None:
     assert document.content_sha256 == expected
     assert request.content_sha256 == expected
     assert document.text == body.decode()
+
+
+def test_incomplete_apollo_document_retries_without_advancing_the_page() -> None:
+    incomplete = html_with_state({}).encode()
+    complete = html_with_state(
+        {
+            "_FAST_CACHE": {
+                "CompanyListingQuery({})": {
+                    "result": {
+                        "listing": {
+                            "page": {
+                                "total": 1,
+                                "products": [{"product": raw_product(id=77)}],
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ).encode()
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=2, backoff_factor=0),
+        live_request_gate=_gate_stub,
+    )
+    get = Mock(side_effect=[_response(200, incomplete), _response(200, complete)])
+    client._session.get = get  # noqa: SLF001
+    trace = ScrapeExecutionTrace(item_kind="store_sync", execution_no=1)
+
+    with scrape_execution(trace):
+        page = client.get_parsed(
+            "https://prom.ua/ua/c3878273-youshine.html?page=130",
+            parse_listing,
+        )
+
+    request = trace.drain_completed_requests()[0]
+    assert [product.id for product in page.products] == [77]
+    assert get.call_count == 2
+    assert request.outcome == "success"
+    assert [attempt.outcome for attempt in request.attempts] == [
+        "retryable_failure",
+        "success",
+    ]
+    assert request.attempts[0].error_category == "upstream_incomplete"
+
+
+def test_repeated_incomplete_apollo_document_is_retryable_and_retained() -> None:
+    incomplete = html_with_state({}).encode()
+    client = HttpClient(
+        ScrapeConfig(delay=0, delay_jitter=0, max_attempts=2, backoff_factor=0),
+        live_request_gate=_gate_stub,
+    )
+    get = Mock(side_effect=[_response(200, incomplete), _response(200, incomplete)])
+    client._session.get = get  # noqa: SLF001
+    trace = ScrapeExecutionTrace(item_kind="store_sync", execution_no=1)
+
+    with scrape_execution(trace), pytest.raises(TransientApolloState) as captured:
+        client.get_parsed(
+            "https://prom.ua/ua/c3878273-youshine.html?page=130",
+            parse_listing,
+        )
+
+    boundary = classify_scraper_exception(captured.value)
+    request = trace.drain_completed_requests()[0]
+    assert get.call_count == 2
+    assert (boundary.code, boundary.retryable) == (
+        ScraperErrorCode.UPSTREAM_INCOMPLETE,
+        True,
+    )
+    assert request.outcome == "retryable_failure"
+    assert request.raw_body == incomplete
 
 
 def test_max_attempts_is_total_physical_attempts_not_extra_retries() -> None:

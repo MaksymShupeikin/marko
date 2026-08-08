@@ -21,6 +21,8 @@ import 'package:marko_client/core/widgets/marko_button.dart';
 import 'package:marko_client/features/auth/auth_controller.dart';
 import 'package:marko_client/features/auth/auth_models.dart';
 import 'package:marko_client/features/auth/auth_page.dart';
+import 'package:marko_client/features/attention/attention_controller.dart';
+import 'package:marko_client/features/attention/attention_models.dart';
 import 'package:marko_client/features/catalog/catalog_api.dart';
 import 'package:marko_client/features/catalog/catalog_controller.dart';
 import 'package:marko_client/features/catalog/catalog_models.dart';
@@ -993,6 +995,9 @@ Widget _auditSecondarySurfaceApp({
           authControllerProvider.overrideWith(
             () => _AuditAuthController(_AuditUiState.success, signedIn: true),
           ),
+          attentionControllerProvider.overrideWith(
+            () => _AuditAttentionController(row.state),
+          ),
           recommendationsControllerProvider.overrideWith(
             () => _AuditRecommendationsController(row.state),
           ),
@@ -1247,6 +1252,49 @@ class _AuditRecommendationsController extends RecommendationsController {
   }
 }
 
+class _AuditAttentionController extends AttentionController {
+  _AuditAttentionController(this.auditState);
+
+  final _AuditUiState auditState;
+
+  @override
+  Future<AttentionState> build() async {
+    switch (auditState) {
+      case _AuditUiState.loading:
+        return Completer<AttentionState>().future;
+      case _AuditUiState.error:
+      case _AuditUiState.forbidden:
+        return _auditFailure(auditState);
+      case _AuditUiState.empty:
+        return const AttentionState(
+          summary: _auditAttentionEmptySummary,
+          page: AttentionPageResult(items: [], total: 0, limit: 50, offset: 0),
+        );
+      case _AuditUiState.partial:
+        return AttentionState(
+          summary: _auditAttentionSummary,
+          page: AttentionPageResult(
+            items: [_auditAttentionProduct],
+            total: 30,
+            limit: 50,
+            offset: 0,
+          ),
+          error: 'Получена 1 из 30 оценок',
+        );
+      case _AuditUiState.success:
+        return AttentionState(
+          summary: _auditAttentionSummary,
+          page: AttentionPageResult(
+            items: [_auditAttentionProduct],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          ),
+        );
+    }
+  }
+}
+
 class _AuditStoresController extends StoresController {
   _AuditStoresController(this.auditState);
 
@@ -1304,6 +1352,53 @@ final PricingRecommendation _auditRecommendation =
         reasonCodes: const ['LOW_COVERAGE'],
       ),
     );
+
+const _auditAttentionEmptySummary = AttentionSummary(
+  total: 0,
+  overpriced: 0,
+  underpriced: 0,
+  inMarket: 0,
+  reviewRequired: 0,
+  noData: 0,
+  processing: 0,
+  updatedAt: null,
+);
+
+final _auditAttentionSummary = AttentionSummary(
+  total: 1,
+  overpriced: 1,
+  underpriced: 0,
+  inMarket: 0,
+  reviewRequired: 0,
+  noData: 0,
+  processing: 0,
+  updatedAt: DateTime.utc(2026, 7, 29),
+);
+
+final _auditAttentionProduct = AttentionProduct(
+  productId: 'attention-audit',
+  recommendationId: 'rec-1',
+  name:
+      'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+  sku: 'AUDIT-001',
+  oe: '7E5827505A',
+  brand: 'KEMP',
+  sourceKind: 'PROM_STORE',
+  sourceId: 'store-audit',
+  status: 'OVERPRICED',
+  severity: 20,
+  ourPrice: '1800',
+  marketLow: '1400',
+  marketHigh: '1500',
+  suggestedPrice: '1450',
+  currency: 'UAH',
+  differencePercent: '24.1',
+  confidence: '0.8',
+  evidenceCount: 5,
+  reasonCodes: const ['MARKET_PRICE_LOWER'],
+  marketCheckedAt: DateTime.utc(2026, 7, 29),
+  updatedAt: DateTime.utc(2026, 7, 29),
+);
 
 const _auditStoreOption = CatalogStoreOption(
   storeId: 'store-audit',

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from .exceptions import ParseError, ParserSchemaChanged
+from .exceptions import ParseError, ParserSchemaChanged, TransientApolloState
 from marko.services.parser_models import (
     ListingPage,
     MotorsContext,
@@ -96,6 +96,11 @@ def _products_from_page(page: dict, lang: str) -> list[Product]:
 def _parse_products(html: str, key_prefix: str, lang: str) -> ListingPage:
     """Shared parser for both seller listings and search results."""
     cache = _extract_apollo_state(html)
+    fast_cache = cache.get("_FAST_CACHE")
+    if not cache or (isinstance(fast_cache, dict) and not fast_cache):
+        raise TransientApolloState(
+            "Prom returned an incomplete document with an empty Apollo state"
+        )
     record = _find_cache_record(cache, key_prefix)
     if record is None:
         raise ParserSchemaChanged(f"Expected Apollo record {key_prefix} is absent")

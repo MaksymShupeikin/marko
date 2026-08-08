@@ -46,6 +46,7 @@ celery_app.conf.update(
         "marko.worker.cleanup_scrape_evidence": {"queue": "celery"},
         "marko.worker.reconcile_scrape_outbox": {"queue": "celery"},
         "marko.worker.reconcile_stale_workflows": {"queue": "celery"},
+        "marko.worker.schedule_store_monitoring": {"queue": "celery"},
         "marko.worker.process_fitment_analysis": {"queue": "celery"},
     },
     beat_schedule={
@@ -60,6 +61,10 @@ celery_app.conf.update(
         "reconcile-stale-workflows": {
             "task": "marko.worker.reconcile_stale_workflows",
             "schedule": max(15, settings.workflow_reconcile_interval_seconds),
+        },
+        "schedule-store-monitoring": {
+            "task": "marko.worker.schedule_store_monitoring",
+            "schedule": max(60, settings.store_monitoring_scan_interval_seconds),
         },
     },
 )

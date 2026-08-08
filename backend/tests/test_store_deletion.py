@@ -59,6 +59,11 @@ async def test_delete_owned_store_commits_only_after_a_link_was_deleted() -> Non
         workspace_id=uuid4(),
     )
     assert existing.commit_count == 1
+    assert len(existing.statements) == 5
+
+    product_delete = existing.statements[-1].compile()
+    assert "catalog_products" in str(product_delete)
+    assert "PROM_STORE" in product_delete.params.values()
 
     missing = _RecordingSession(rowcount=0)
     with pytest.raises(stores_service.StoreNotFoundError):
@@ -68,6 +73,7 @@ async def test_delete_owned_store_commits_only_after_a_link_was_deleted() -> Non
             workspace_id=uuid4(),
         )
     assert missing.commit_count == 0
+    assert len(missing.statements) == 2
 
 
 @pytest.mark.asyncio

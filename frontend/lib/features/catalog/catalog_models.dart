@@ -237,6 +237,10 @@ class CatalogCompetitorOffer {
     required this.tier,
     required this.matchConfidence,
     required this.observedAt,
+    this.automaticEligible = false,
+    this.hardGateResult = 'MANUAL_REVIEW',
+    this.oeVerificationStatus = 'UNKNOWN',
+    this.reasonCodes = const [],
   }) : price = DecimalValue.from(price),
        normalizedPrice = DecimalValue.tryParse(normalizedPrice);
 
@@ -254,6 +258,13 @@ class CatalogCompetitorOffer {
       tier: json['tier'] as String,
       matchConfidence: _decimal(json['match_confidence']) ?? 0,
       observedAt: DateTime.parse(json['observed_at'] as String),
+      automaticEligible: json['automatic_eligible'] as bool? ?? false,
+      hardGateResult: json['hard_gate_result'] as String? ?? 'MANUAL_REVIEW',
+      oeVerificationStatus:
+          json['oe_verification_status'] as String? ?? 'UNKNOWN',
+      reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
     );
   }
 
@@ -269,6 +280,10 @@ class CatalogCompetitorOffer {
   final String tier;
   final double matchConfidence;
   final DateTime observedAt;
+  final bool automaticEligible;
+  final String hardGateResult;
+  final String oeVerificationStatus;
+  final List<String> reasonCodes;
 }
 
 class CatalogDiscoveredOffer {
@@ -411,6 +426,8 @@ class CatalogCompetitorComparison {
     this.discoveryItems = const [],
     this.pricingEvidence = const [],
     this.referenceOnly = const [],
+    this.candidateItems = const [],
+    this.collectionStatus,
   }) : currentPrice = DecimalValue.tryParse(currentPrice),
        fairPrice = DecimalValue.tryParse(fairPrice),
        recommendedPrice = DecimalValue.tryParse(recommendedPrice);
@@ -485,6 +502,13 @@ class CatalogCompetitorComparison {
                 CatalogDiscoveredOffer.fromJson(item as Map<String, dynamic>),
           )
           .toList(growable: false),
+      candidateItems: (json['candidate_items'] as List<dynamic>? ?? const [])
+          .map(
+            (item) =>
+                CatalogCompetitorOffer.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
+      collectionStatus: json['collection_status'] as String?,
     );
   }
 
@@ -527,6 +551,8 @@ class CatalogCompetitorComparison {
 
   /// Same part, level unknown or unconvertible: shown, never priced against.
   final List<CatalogDiscoveredOffer> referenceOnly;
+  final List<CatalogCompetitorOffer> candidateItems;
+  final String? collectionStatus;
 
   bool get hasComparison => recommendationId != null;
   bool get hasDiscovery => discoveryRunId != null;

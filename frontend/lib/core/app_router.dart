@@ -23,7 +23,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             initialTab: switch (state.uri.queryParameters['tab']) {
               'catalog' => 1,
               'stores' => 2,
-              'overview' => 3,
               _ => 0,
             },
             routeNavigation: true,
@@ -34,7 +33,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/pricing',
         name: 'pricing',
         builder: (_, _) => const SelectionArea(
-          child: DashboardPage(initialTab: 0, routeNavigation: true),
+          child: DashboardPage(
+            initialTab: 0,
+            legacyPricing: true,
+            routeNavigation: true,
+          ),
         ),
       ),
       GoRoute(
@@ -55,7 +58,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/overview',
         name: 'overview',
         builder: (_, _) => const SelectionArea(
-          child: DashboardPage(initialTab: 3, routeNavigation: true),
+          child: DashboardPage(initialTab: 0, routeNavigation: true),
         ),
       ),
       GoRoute(

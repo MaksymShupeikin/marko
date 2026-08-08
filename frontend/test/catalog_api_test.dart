@@ -47,6 +47,28 @@ void main() {
         client: MockClient((request) async {
           expect(
             request.url.path,
+            '/api/v1/catalog/unified-products/01234567-89ab-cdef-0123-456789abcdef',
+          );
+          return http.Response(jsonEncode(_catalogProductJson), 200);
+        }),
+        baseUrl: 'http://api.test',
+      ),
+    );
+
+    final product = await api.getProduct(
+      '01234567-89ab-cdef-0123-456789abcdef',
+    );
+
+    expect(product.id, 'catalog-product');
+    expect(product.name, 'Product');
+  });
+
+  test('keeps old catalog deep links readable', () async {
+    final api = CatalogApi(
+      ApiClient(
+        client: MockClient((request) async {
+          expect(
+            request.url.path,
             '/api/v1/catalog/products/0123456789abcdef0123456789abcdef',
           );
           return http.Response(jsonEncode(_catalogProductJson), 200);
@@ -55,10 +77,7 @@ void main() {
       ),
     );
 
-    final product = await api.getProduct('0123456789abcdef0123456789abcdef');
-
-    expect(product.id, 'catalog-product');
-    expect(product.name, 'Product');
+    await api.getProduct('0123456789abcdef0123456789abcdef');
   });
 
   test('loads the catalog and sends search plus store filters', () async {
@@ -66,7 +85,7 @@ void main() {
       ApiClient(
         client: MockClient((request) async {
           expect(request.method, 'GET');
-          expect(request.url.path, '/api/v1/catalog/products');
+          expect(request.url.path, '/api/v1/catalog/unified-products');
           expect(request.url.queryParameters['q'], '03-31 402 053');
           expect(request.url.queryParameters['store_id'], 'store-b');
           expect(request.url.queryParameters['limit'], '48');
@@ -102,6 +121,7 @@ void main() {
           client: MockClient((request) async {
             expect(request.method, 'GET');
             expect(request.url.path, '/api/v1/catalog/competitors');
+            expect(request.url.queryParameters['product_id'], 'product-id');
             expect(request.url.queryParameters['sku'], '0331402053');
             expect(request.url.queryParameters['oe'], '6 1131 36 9611');
             expect(request.url.queryParameters['brand'], 'KEMP');
@@ -142,6 +162,7 @@ void main() {
       );
 
       final comparison = await api.listCompetitors(
+        productId: 'product-id',
         sku: '0331402053',
         oe: '6 1131 36 9611',
         brand: 'KEMP',

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from .schemas.errors import error_responses
+from .routers.v1.attention import router as attention_router
 from .routers.v1.auth import router as auth_router
 from .routers.v1.catalog import router as catalog_router
 from .routers.v1.health import router as health_router
@@ -15,6 +16,12 @@ from .routers.v1.pricing import router as pricing_router
 from .routers.v1.stores import router as stores_router
 
 api_router = APIRouter()
+api_router.include_router(
+    attention_router,
+    prefix="/attention",
+    tags=["attention"],
+    responses=error_responses(401, 403, 404, 422, 500, 503),
+)
 api_router.include_router(
     health_router,
     prefix="/health",

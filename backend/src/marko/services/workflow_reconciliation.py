@@ -216,6 +216,38 @@ async def reconcile_stale_workflows(
         counts["catalog_discoveries_failed"] = len(discoveries)
 
     if remaining:
+        recent_pricing_item_activity = (
+            select(PricingRunItem.id)
+            .where(
+                PricingRunItem.pricing_run_id == PricingRun.id,
+                PricingRunItem.updated_at > cutoff,
+            )
+            .exists()
+        )
+        recent_scrape_target_activity = (
+            select(ScrapeTarget.id)
+            .where(
+                ScrapeTarget.pricing_run_id == PricingRun.id,
+                ScrapeTarget.updated_at > cutoff,
+            )
+            .exists()
+        )
+        recent_scrape_attempt_activity = (
+            select(ScrapeAttempt.id)
+            .join(
+                ScrapeTarget,
+                ScrapeAttempt.scrape_target_id == ScrapeTarget.id,
+            )
+            .where(
+                ScrapeTarget.pricing_run_id == PricingRun.id,
+                func.coalesce(
+                    ScrapeAttempt.finished_at,
+                    ScrapeAttempt.started_at,
+                )
+                > cutoff,
+            )
+            .exists()
+        )
         pricing_runs = list(
             (
                 await session.scalars(
@@ -228,6 +260,11 @@ async def reconcile_stale_workflows(
                             PricingRun.created_at,
                         )
                         <= cutoff,
+                        ~or_(
+                            recent_pricing_item_activity,
+                            recent_scrape_target_activity,
+                            recent_scrape_attempt_activity,
+                        ),
                     )
                     .order_by(PricingRun.started_at, PricingRun.id)
                     .limit(remaining)

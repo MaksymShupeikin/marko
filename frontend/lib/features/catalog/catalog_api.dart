@@ -22,8 +22,11 @@ class CatalogApi {
   }
 
   Future<CatalogProduct> getProduct(String productId) async {
+    final legacyIdentity = RegExp(r'^[0-9a-f]{32}$').hasMatch(productId);
     final payload = await _client.getJson(
-      '/api/v1/catalog/products/$productId',
+      legacyIdentity
+          ? '/api/v1/catalog/products/$productId'
+          : '/api/v1/catalog/unified-products/$productId',
     );
     return CatalogProduct.fromJson(payload as Map<String, dynamic>);
   }
@@ -35,7 +38,7 @@ class CatalogApi {
     int limit = 48,
   }) async {
     final payload = await _client.getJson(
-      '/api/v1/catalog/products',
+      '/api/v1/catalog/unified-products',
       queryParameters: {
         if (query.trim().isNotEmpty) 'q': query.trim(),
         if (storeIds != null && storeIds.isNotEmpty) 'store_id': storeIds,
@@ -47,6 +50,7 @@ class CatalogApi {
   }
 
   Future<CatalogCompetitorComparison> listCompetitors({
+    String? productId,
     String? sku,
     String? oe,
     String? mpn,
@@ -54,7 +58,13 @@ class CatalogApi {
   }) async {
     final payload = await _client.getJson(
       '/api/v1/catalog/competitors',
-      queryParameters: {'sku': ?sku, 'oe': ?oe, 'mpn': ?mpn, 'brand': ?brand},
+      queryParameters: {
+        'product_id': ?productId,
+        'sku': ?sku,
+        'oe': ?oe,
+        'mpn': ?mpn,
+        'brand': ?brand,
+      },
     );
     return CatalogCompetitorComparison.fromJson(
       payload as Map<String, dynamic>,

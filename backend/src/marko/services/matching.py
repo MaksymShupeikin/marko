@@ -231,6 +231,28 @@ def _public_identity_norm(value: str | None) -> str | None:
     return normalized
 
 
+def build_search_query_parts(
+    *,
+    name: str | None,
+    brand: str | None = None,
+    part_number: str | None = None,
+    fallback: str | None = None,
+) -> str:
+    """Build a bounded query from public identity or a focused title phrase."""
+
+    if _public_identity_norm(part_number) is not None:
+        return str(part_number).strip()[:255]
+    tokens = normalize_tokens(name)[:_MAX_QUERY_TOKENS]
+    query = " ".join(tokens)
+    brand_text = (brand or "").strip()
+    brand_norm = _norm_brand(brand)
+    if brand_norm and brand_norm not in query.lower():
+        query = f"{brand_text} {query}".strip()
+    if not query:
+        query = " ".join(normalize_tokens(fallback))
+    return query[:255]
+
+
 def build_search_query(product: Product) -> str:
     """Use exact OE/MPN first; only fall back to a focused name/brand phrase.
 

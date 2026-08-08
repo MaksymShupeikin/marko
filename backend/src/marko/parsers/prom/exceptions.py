@@ -117,3 +117,12 @@ class ParseError(RuntimeError):
 
 class ParserSchemaChanged(ParseError):
     """Apollo exists, but the recognized listing/search contract does not."""
+
+
+class TransientApolloState(ParserSchemaChanged):
+    """Prom returned an incomplete SSR shell with an empty Apollo cache.
+
+    This is distinct from a populated cache whose schema no longer matches the
+    parser. The former has been observed intermittently between valid pages and
+    is safe to retry; the latter must remain a fail-closed schema alert.
+    """

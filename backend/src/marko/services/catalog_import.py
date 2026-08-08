@@ -47,11 +47,14 @@ from marko.services.scraper_contract import (
 )
 from marko.services.scraper_outbox import enqueue_dispatch
 from marko.services.source_access import require_live_prom_marketplace_collection
+from marko.services.unified_catalog import (
+    retire_missing_prom_products,
+    upsert_prom_products,
+)
 
 import marko.repositories.listings as listings_repo
 
 
-_BATCH_SIZE = 25
 _PRICE_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
@@ -92,6 +95,7 @@ class StoreSyncClaim:
 class StoreSyncTaskResult:
     persisted_products: int
     continuation_dispatch_id: UUID | None = None
+    completed: bool = False
 
 
 @dataclass(frozen=True)
@@ -165,9 +169,13 @@ async def import_store_catalog(
     trace: ScrapeExecutionTrace | None = None
     try:
         async with async_session_factory() as session:
+            # Forward page chunks never request pages already persisted by an
+            # earlier chunk. Loading and decompressing the whole run on every
+            # normal continuation made a large catalogue O(pages²). Replay is
+            # useful only when Celery retries/redelivers an execution.
             replay_cache = (
                 await load_replay_cache(session, sync_run_id=sync_run_id)
-                if settings.scrape_raw_evidence_replay_enabled
+                if settings.scrape_raw_evidence_replay_enabled and is_redelivery
                 else {}
             )
         trace = ScrapeExecutionTrace(
@@ -207,7 +215,10 @@ async def import_store_catalog(
             return StoreSyncTaskResult(
                 persisted_products=await _persisted_product_count(sync_run_id)
             )
-        return StoreSyncTaskResult(persisted_products=chunk.persisted_products)
+        return StoreSyncTaskResult(
+            persisted_products=chunk.persisted_products,
+            completed=True,
+        )
     except StaleCatalogImportClaim:
         return StoreSyncTaskResult(
             persisted_products=await _persisted_product_count(sync_run_id)
@@ -471,11 +482,12 @@ async def _run_import(
     )
     batch: list[Product] = []
     catalog_pages_fetched = 0
+    persistence_batch_size = settings.store_sync_persistence_batch_size
     with scrape_execution(trace):
         try:
             for product in PromGateway(config).scrape(claim.store_url, strict=True):
                 batch.append(product)
-                if len(batch) >= _BATCH_SIZE:
+                if len(batch) >= persistence_batch_size:
                     catalog_pages_fetched += await _persist_progress(
                         claim,
                         trace,
@@ -531,6 +543,7 @@ async def _persist_progress(
             product_stats = await _persist_batch(
                 session,
                 sync_run_id=claim.sync_run_id,
+                workspace_id=sync_run.workspace_id,
                 store_id=claim.store_id,
                 products=products,
             )
@@ -634,6 +647,7 @@ async def _persist_batch(
     session,
     *,
     sync_run_id: UUID,
+    workspace_id: UUID,
     store_id: UUID,
     products: list[Product],
 ) -> ProductPersistenceStats:
@@ -674,6 +688,7 @@ async def _persist_batch(
     duplicates = 0
     writes = 0
     completeness_sum = Decimal("0")
+    unified_rows: list[tuple[Listing, dict[str, object]]] = []
 
     for product in valid_products:
         external_id = str(product.id)
@@ -717,6 +732,7 @@ async def _persist_batch(
         listing.is_available = product.is_available
         listing.raw_data = payload
         listing.last_seen_at = now
+        unified_rows.append((listing, payload))
 
         session.add(
             StoreSyncProductSnapshot(
@@ -751,6 +767,12 @@ async def _persist_batch(
             writes += 1
 
     await session.flush()
+    await upsert_prom_products(
+        session,
+        workspace_id=workspace_id,
+        store_id=store_id,
+        rows=unified_rows,
+    )
     return ProductPersistenceStats(
         extracted=extracted,
         persisted=persisted,
@@ -813,6 +835,12 @@ async def _finish_success(
         execution.cpu_time_ms = measurement.cpu_time_ms
         execution.memory_peak_bytes = measurement.memory_peak_bytes
         execution.finished_at = now
+        await retire_missing_prom_products(
+            session,
+            workspace_id=sync_run.workspace_id,
+            store_id=claim.store_id,
+            sync_run_id=sync_run.id,
+        )
         await session.commit()
         pricing_event(
             "scrape_items_terminal",
@@ -857,15 +885,9 @@ async def _finish_chunk(
         sync_run.progress_current = chunk.persisted_products
         sync_run.progress_total = None
         sync_run.scrape_products_persisted = chunk.persisted_products
-        sync_run.scrape_evidence_coverage = await evidence_coverage_ratio(
-            session,
-            sync_run_id=claim.sync_run_id,
-            execution_no=claim.execution_no,
-        )
-        sync_run.scrape_raw_evidence_bytes = await retained_raw_evidence_bytes(
-            session,
-            sync_run_id=claim.sync_run_id,
-        )
+        # Exact evidence aggregates are calculated once at terminal success or
+        # failure. Re-scanning all requests/blobs after every forward chunk was
+        # another O(pages²) path and did not affect continuation correctness.
         sync_run.scrape_checkpoint = {
             "stage": "chunk_succeeded",
             "execution_no": claim.execution_no,

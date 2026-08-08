@@ -13,7 +13,12 @@ from marko.services.catalog_import import (
     fail_store_sync_task,
     import_store_catalog,
 )
+from marko.services.attention import (
+    mark_source_monitoring_failed,
+    start_store_monitoring_run,
+)
 from marko.services.scraper_outbox import publish_dispatch
+from marko.services.unified_catalog import SOURCE_PROM_STORE
 from marko.worker.async_runtime import run_async
 from marko.worker.celery_app import celery_app
 
@@ -28,6 +33,26 @@ async def _publish_continuation(dispatch_id: UUID) -> None:
             event_id=dispatch_id,
             celery_app=celery_app,
         )
+
+
+async def _mark_monitoring_failed(sync_run_id: UUID) -> None:
+    async with async_session_factory() as session:
+        from marko.infrastructure.db.models import SyncRun
+
+        sync_run = await session.get(SyncRun, sync_run_id)
+        if (
+            sync_run is None
+            or sync_run.workspace_id is None
+            or sync_run.store_id is None
+        ):
+            return
+        await mark_source_monitoring_failed(
+            session,
+            workspace_id=sync_run.workspace_id,
+            source_kind=SOURCE_PROM_STORE,
+            source_id=sync_run.store_id,
+        )
+        await session.commit()
 
 
 @celery_app.task(
@@ -70,6 +95,34 @@ def import_store_catalog_task(self, sync_run_id: str) -> int:
                     "Immediate store-sync continuation publish failed; "
                     "durable outbox reconciliation will retry"
                 )
+        elif outcome.completed:
+            try:
+                pricing_run_id = run_async(
+                    start_store_monitoring_run(UUID(sync_run_id), celery_app)
+                )
+                if pricing_run_id is None:
+                    log.warning(
+                        "Automatic attention pricing had no eligible products "
+                        "for store sync %s",
+                        sync_run_id,
+                    )
+                    run_async(_mark_monitoring_failed(UUID(sync_run_id)))
+            except Exception:
+                # Store synchronization is already committed. A market run is
+                # follow-up work and must not rewrite a successful source sync
+                # as failed; the attention queue keeps the products visible as
+                # processing/reviewable and an operator can retry collection.
+                log.exception(
+                    "Automatic attention pricing could not be started for store sync %s",
+                    sync_run_id,
+                )
+                try:
+                    run_async(_mark_monitoring_failed(UUID(sync_run_id)))
+                except Exception:
+                    log.exception(
+                        "Failed to move store sync %s from processing to review",
+                        sync_run_id,
+                    )
         return outcome.persisted_products
     except RetryableCatalogImportError as exc:
         if self.request.retries >= self.max_retries:

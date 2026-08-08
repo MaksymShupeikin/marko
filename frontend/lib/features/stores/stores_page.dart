@@ -7,6 +7,8 @@ import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
 import '../../core/widgets/marko_button.dart';
+import '../attention/attention_controller.dart';
+import '../catalog/catalog_controller.dart';
 import 'store_models.dart';
 import 'stores_controller.dart';
 
@@ -15,6 +17,7 @@ class StoresPage extends ConsumerStatefulWidget {
     this.ownedOnly = false,
     this.canAdministerWorkspace = false,
     this.onOpenStoreCatalog,
+    this.onImportCatalog,
     super.key,
   });
 
@@ -24,6 +27,7 @@ class StoresPage extends ConsumerStatefulWidget {
   /// Opens a store inside the dashboard's catalog tab with that store already
   /// selected. Without it the row falls back to the standalone catalog route.
   final void Function(String storeId)? onOpenStoreCatalog;
+  final VoidCallback? onImportCatalog;
 
   @override
   ConsumerState<StoresPage> createState() => _StoresPageState();
@@ -84,6 +88,10 @@ class _StoresPageState extends ConsumerState<StoresPage> {
 
     final deleted = await controller.deleteStore(store);
     if (!deleted || !mounted) return;
+    // Dashboard tabs stay mounted in an IndexedStack. Explicitly reload their
+    // read models so deleted-store products disappear without a page refresh.
+    ref.invalidate(catalogControllerProvider);
+    ref.invalidate(attentionControllerProvider);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -136,7 +144,10 @@ class _StoresPageState extends ConsumerState<StoresPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _PageHeading(ownedOnly: widget.ownedOnly),
+                        _PageHeading(
+                          ownedOnly: widget.ownedOnly,
+                          onImportCatalog: widget.onImportCatalog,
+                        ),
                         const SizedBox(height: 24),
                         if (widget.canAdministerWorkspace)
                           _AddStorePanel(
@@ -252,37 +263,60 @@ class _StoresPageState extends ConsumerState<StoresPage> {
 }
 
 class _PageHeading extends StatelessWidget {
-  const _PageHeading({required this.ownedOnly});
+  const _PageHeading({required this.ownedOnly, required this.onImportCatalog});
 
   final bool ownedOnly;
+  final VoidCallback? onImportCatalog;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 18,
+      runSpacing: 12,
       children: [
-        Text(
-          ownedOnly
-              ? context.localized(ru: 'Мои магазины', uk: 'Мої магазини')
-              : context.localized(ru: 'Магазины Prom', uk: 'Магазини Prom'),
-          style: Theme.of(context).textTheme.headlineMedium,
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                ownedOnly
+                    ? context.localized(ru: 'Источники', uk: 'Джерела')
+                    : context.localized(
+                        ru: 'Магазины Prom',
+                        uk: 'Магазини Prom',
+                      ),
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 7),
+              Text(
+                ownedOnly
+                    ? context.localized(
+                        ru: 'Подключите магазин Prom или загрузите XLSX — товары и проверка цен запустятся автоматически.',
+                        uk: 'Підключіть магазин Prom або завантажте XLSX — товари та перевірка цін запустяться автоматично.',
+                      )
+                    : context.localized(
+                        ru: 'Подключайте каталоги и управляйте их синхронизацией.',
+                        uk: 'Підключайте каталоги та керуйте їх синхронізацією.',
+                      ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: colors.muted),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 7),
-        Text(
-          ownedOnly
-              ? context.localized(
-                  ru: 'Подключайте свои магазины и управляйте синхронизацией каталогов.',
-                  uk: 'Підключайте свої магазини та керуйте синхронізацією каталогів.',
-                )
-              : context.localized(
-                  ru: 'Подключайте каталоги и управляйте их синхронизацией.',
-                  uk: 'Підключайте каталоги та керуйте їх синхронізацією.',
-                ),
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-        ),
+        if (onImportCatalog != null)
+          OutlinedButton.icon(
+            onPressed: onImportCatalog,
+            icon: const Icon(Icons.upload_file_outlined),
+            label: Text(
+              context.localized(ru: 'Загрузить XLSX', uk: 'Завантажити XLSX'),
+            ),
+          ),
       ],
     );
   }

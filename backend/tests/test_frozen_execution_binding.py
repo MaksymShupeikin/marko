@@ -257,6 +257,16 @@ def test_an_empty_manufacturer_number_is_a_legitimate_value() -> None:
     assert resolved.mpn_norm == ""
 
 
+def test_an_empty_oem_number_is_legitimate_for_a_general_product() -> None:
+    """Обычный товар без OEM остаётся без OEM, но не ломает исполнение."""
+
+    resolved = resolve_bound_execution_item(
+        _run(), _run_item(_snapshot(oe_norm="")), _live()
+    )
+
+    assert resolved.oe_norm == ""
+
+
 def test_a_non_integer_source_row_is_corrupt_not_zero() -> None:
     run_item = _run_item(_snapshot(source_row="7"))
 

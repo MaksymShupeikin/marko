@@ -390,7 +390,7 @@ class _CatalogHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                context.localized(ru: 'Каталог Prom.ua', uk: 'Каталог Prom.ua'),
+                context.localized(ru: 'Мои товары', uk: 'Мої товари'),
                 style: Theme.of(context).textTheme.headlineMedium,
               ),
               const SizedBox(height: 7),

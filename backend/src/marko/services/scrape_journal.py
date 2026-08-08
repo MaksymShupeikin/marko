@@ -116,7 +116,14 @@ async def persist_http_traces(
         await session.flush()
         writes += 1
         logical_requests += 1
-        if trace.request_kind == "catalog_page":
+        # A transport-level 200 is not a completed catalog page when semantic
+        # validation rejected its incomplete Apollo document. Counting failed
+        # requests here advances the sync checkpoint and skips the very page a
+        # retry is meant to fetch again.
+        if trace.request_kind == "catalog_page" and trace.outcome in {
+            "success",
+            "replayed",
+        }:
             catalog_pages += 1
         for attempt in trace.attempts:
             session.add(

@@ -14,6 +14,7 @@ KEMP тримає на prom.ua чотири магазини (2847093, 3912822, 
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
@@ -350,6 +351,27 @@ async def test_the_claim_reads_owned_storefronts_before_acquisition_starts() -> 
     )
     assert "workspace_stores" in owned_query
     assert "workspace_stores.kind" in owned_query
+
+
+@pytest.mark.asyncio
+async def test_target_deadline_starts_when_worker_claims_not_while_queued() -> None:
+    run, item, target, catalog_item = _claim_fixtures()
+    target.deadline_at = datetime.now(UTC) - timedelta(minutes=5)
+    session = _RecordingSession([])
+
+    claim = await market_collection._claim_target_item(
+        session,
+        item=item,
+        run=run,
+        catalog_item=catalog_item,
+        target=target,
+        task_id="task-after-long-queue",
+        is_redelivery=False,
+    )
+
+    assert claim.action == "target_collect"
+    assert target.deadline_at is not None
+    assert target.deadline_at > datetime.now(UTC)
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,9 @@ class _PageClient:
             )
         return str(page_number)
 
+    def get_parsed(self, url, parser, params=None):
+        return parser(self.get_html(url, params=params or {}))
+
 
 def _products(start: int, count: int):
     return [product(id=product_id) for product_id in range(start, start + count)]

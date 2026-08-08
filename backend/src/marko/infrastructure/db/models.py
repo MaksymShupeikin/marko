@@ -1214,6 +1214,163 @@ class CatalogItem(TimestampMixin, Base):
     identity_reason: Mapped[str | None] = mapped_column(String(40))
 
 
+class CatalogProduct(TimestampMixin, Base):
+    """Stable workspace product fed by a store listing or an XLSX row.
+
+    ``Listing`` and ``CatalogItem`` remain immutable/source-specific evidence.
+    This row is the current product a person recognises in the UI and therefore
+    survives repeated store synchronisations and replacement XLSX imports.
+    """
+
+    __tablename__ = "catalog_products"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "source_kind",
+            "source_id",
+            "source_product_id",
+            name="uq_catalog_product_source_identity",
+        ),
+        CheckConstraint(
+            "source_kind IN ('PROM_STORE', 'XLSX')",
+            name="ck_catalog_product_source_kind",
+        ),
+        CheckConstraint(
+            "identity_status IN ('VERIFIED_EXACT', 'VERIFIED_CROSS', "
+            "'AMBIGUOUS', 'UNRESOLVED', 'CONFLICT')",
+            name="ck_catalog_product_identity_status",
+        ),
+        CheckConstraint(
+            "current_price IS NULL OR current_price > 0",
+            name="ck_catalog_product_price_positive",
+        ),
+        Index("ix_catalog_product_workspace_status", "workspace_id", "identity_status"),
+        Index("ix_catalog_product_workspace_oe", "workspace_id", "oe_norm"),
+        Index("ix_catalog_product_workspace_name", "workspace_id", "name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    source_kind: Mapped[str] = mapped_column(String(20))
+    # A generic UUID on purpose: for PROM_STORE this is marketplace_stores.id;
+    # for XLSX it is a stable UUID derived from workspace and filename. Source
+    # evidence has its own FK.
+    source_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    source_product_id: Mapped[str] = mapped_column(String(255))
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("listings.id", ondelete="SET NULL"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="SET NULL"), index=True
+    )
+    name: Mapped[str] = mapped_column(Text)
+    sku: Mapped[str | None] = mapped_column(String(255))
+    internal_code: Mapped[str | None] = mapped_column(String(255))
+    oe_raw: Mapped[str | None] = mapped_column(Text)
+    oe_norm: Mapped[str | None] = mapped_column(String(255))
+    mpn_raw: Mapped[str | None] = mapped_column(Text)
+    mpn_norm: Mapped[str | None] = mapped_column(String(255))
+    brand: Mapped[str | None] = mapped_column(String(255))
+    category: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    product_url: Mapped[str | None] = mapped_column(Text)
+    current_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(
+        String(3), default="UAH", server_default="UAH"
+    )
+    is_available: Mapped[bool | None] = mapped_column(Boolean)
+    identity_status: Mapped[str] = mapped_column(
+        String(24), default="UNRESOLVED", server_default="UNRESOLVED"
+    )
+    identity_reason: Mapped[str | None] = mapped_column(String(80))
+    raw_data: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PriceAssessment(Base):
+    """Immutable product-price conclusion built from one pricing execution."""
+
+    __tablename__ = "price_assessments"
+    __table_args__ = (
+        UniqueConstraint("evaluation_key", name="uq_price_assessment_evaluation_key"),
+        CheckConstraint(
+            "status IN ('OVERPRICED', 'UNDERPRICED', 'IN_MARKET', "
+            "'REVIEW_REQUIRED', 'NO_DATA', 'PROCESSING')",
+            name="ck_price_assessment_status",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_price_assessment_confidence",
+        ),
+        Index("ix_price_assessment_product_time", "product_id", "computed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE"), index=True
+    )
+    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pricing_recommendations.id", ondelete="SET NULL"), index=True
+    )
+    evaluation_key: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(24))
+    our_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    market_low: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    market_high: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    suggested_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    difference_percent: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    confidence: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0"), server_default="0"
+    )
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    market_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AttentionItem(TimestampMixin, Base):
+    """Mutable pointer to the latest assessment for the daily attention queue."""
+
+    __tablename__ = "attention_items"
+    __table_args__ = (
+        UniqueConstraint("product_id", name="uq_attention_item_product"),
+        CheckConstraint(
+            "status IN ('OVERPRICED', 'UNDERPRICED', 'IN_MARKET', "
+            "'REVIEW_REQUIRED', 'NO_DATA', 'PROCESSING')",
+            name="ck_attention_item_status",
+        ),
+        CheckConstraint(
+            "review_state IN ('OPEN', 'RESOLVED', 'IGNORED')",
+            name="ck_attention_item_review_state",
+        ),
+        Index("ix_attention_workspace_status", "workspace_id", "status", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE"), index=True
+    )
+    latest_assessment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("price_assessments.id", ondelete="SET NULL"), index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(24), default="PROCESSING", server_default="PROCESSING"
+    )
+    severity: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    review_state: Mapped[str] = mapped_column(
+        String(16), default="OPEN", server_default="OPEN"
+    )
+
+
 class CatalogItemOverride(Base):
     """Append-only operator context layered over an imported catalog row."""
 
@@ -1379,7 +1536,8 @@ class PricingRun(TimestampMixin, Base):
         ),
         CheckConstraint(
             "scope_confirmation_source IN "
-            "('OPERATOR', 'SYSTEM_REPLAY', 'E2E_FIXTURE_REPLAY', 'LEGACY_UNBOUNDED')",
+            "('OPERATOR', 'AUTOMATED_MONITORING', 'SYSTEM_REPLAY', "
+            "'E2E_FIXTURE_REPLAY', 'LEGACY_UNBOUNDED')",
             name="ck_pricing_run_scope_confirmation_source",
         ),
         # Полный каталог, запущенный оператором, обязан нести явное подтверждение.

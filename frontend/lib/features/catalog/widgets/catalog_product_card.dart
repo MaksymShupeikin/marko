@@ -214,7 +214,7 @@ class _CatalogPriceSummary extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            context.localized(ru: 'Цена на Prom.ua', uk: 'Ціна на Prom.ua'),
+            context.localized(ru: 'Текущая цена', uk: 'Поточна ціна'),
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: colors.muted),
