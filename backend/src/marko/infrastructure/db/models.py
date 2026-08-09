@@ -156,6 +156,11 @@ class Listing(TimestampMixin, Base):
         ),
         Index("ix_listings_owned_catalog_sku_norm", "catalog_sku_norm"),
         Index("ix_listings_owned_catalog_oe_norm", "catalog_oe_norm"),
+        Index(
+            "ix_listings_catalog_internal_code_norm",
+            "catalog_internal_code_norm",
+            postgresql_where=text("catalog_internal_code_norm <> ''"),
+        ),
         Index("ix_listings_owned_catalog_name_lower", text("lower(name)")),
         Index("ix_listings_owned_catalog_store_first", "store_id", "name", "id"),
     )
@@ -206,6 +211,20 @@ class Listing(TimestampMixin, Base):
     catalog_model_norm: Mapped[str] = mapped_column(
         Text,
         Computed("public.marko_catalog_normalize(model_id)", persisted=True),
+    )
+    catalog_internal_code_norm: Mapped[str] = mapped_column(
+        Text,
+        Computed(
+            "public.marko_listing_internal_code(raw_data)",
+            persisted=True,
+        ),
+    )
+    catalog_internal_code_count: Mapped[int] = mapped_column(
+        SmallInteger,
+        Computed(
+            "public.marko_listing_internal_code_count(raw_data)",
+            persisted=True,
+        ),
     )
     catalog_brand_norm: Mapped[str] = mapped_column(
         Text,

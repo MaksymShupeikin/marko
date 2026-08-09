@@ -1,0 +1,2929 @@
+{
+  "automatic_identity_admission": 0,
+  "automatic_pricing_admission": 0,
+  "catalog_counts": {
+    "joined_selected_rows": 1617,
+    "master_rows": 4901,
+    "no_oe_rows": 1617,
+    "selected_rows": 1617,
+    "source_rows": 4901
+  },
+  "created_at": "2026-08-09T18:43:46.180986+00:00",
+  "database_writes": 0,
+  "inputs": {
+    "master_workbook": {
+      "path": "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/OE_каталог_2026-08-09.xlsx",
+      "sha256": "f513f0e492ba4897510f1a0bedf937c9468a5fe59db837c256a83c9fe0c3782a"
+    },
+    "source_workbook": {
+      "path": "/Users/leonidpofa/VSCodeHruchevoPY/SaaS/marko/marko — копия/backend/data/kemp_prom_catalog.xlsx",
+      "sha256": "7871f6b20b21d96bbd7b5c2ea8c951c2144a6adec04acac5229261c2172e0e91"
+    }
+  },
+  "live_batches": [
+    {
+      "batch_no": 1,
+      "row_ids": [
+        "1153737421",
+        "2179741467",
+        "1153733987",
+        "1153725623",
+        "1857395212",
+        "3120056427",
+        "1153734875",
+        "1857389349",
+        "1153738616",
+        "1153734877",
+        "1297643486",
+        "3100837679",
+        "1153740475",
+        "1153727602",
+        "1153733346",
+        "3100840858",
+        "1153732171",
+        "1153734903",
+        "1153726640",
+        "1519095370"
+      ]
+    },
+    {
+      "batch_no": 2,
+      "row_ids": [
+        "3120056706",
+        "2741627056",
+        "1153733274",
+        "1153731350",
+        "1230665005",
+        "1153727538",
+        "1153726664",
+        "2741615449",
+        "1153729266",
+        "1230664699",
+        "1153731041",
+        "1153733329",
+        "1153732252",
+        "2179741009",
+        "1153736973",
+        "1153735999",
+        "1153732145",
+        "1895545643",
+        "2179873995",
+        "1153730198"
+      ]
+    },
+    {
+      "batch_no": 3,
+      "row_ids": [
+        "2491081043",
+        "1153726614",
+        "1522312357",
+        "1153733405",
+        "1153729262",
+        "1153731200",
+        "1519095373",
+        "1153729264",
+        "1153736777",
+        "1494998360",
+        "1153732162",
+        "1153738565",
+        "1153727489",
+        "1153737432",
+        "1153730364",
+        "1522312358",
+        "1153729096",
+        "1297656332",
+        "1153729220",
+        "1153734779"
+      ]
+    },
+    {
+      "batch_no": 4,
+      "row_ids": [
+        "1153724289",
+        "3100840764",
+        "1153733253",
+        "1483065870",
+        "1153730243",
+        "2741627042",
+        "1153736082",
+        "1153727519",
+        "1153732256",
+        "1153730376",
+        "1153739675",
+        "1153733370",
+        "1153736778",
+        "1153734146",
+        "2741615999",
+        "1153728527",
+        "1297652484",
+        "1153739560",
+        "1153727561",
+        "1230666227"
+      ]
+    }
+  ],
+  "live_requests": 0,
+  "luna_calls": 0,
+  "rows": [
+    {
+      "category": "4.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "steering_column_switch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153737421-pereklyuchatel-povorotov-sveta.html",
+      "profile_sha256": "b5d4dbd6365c6592940aba9e45a366309935fac233f10e3bb4a7497e436fcd01",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Переключатель поворотов-света Daewo Nexia (без противотуманок)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Перемикач повротів-світла Daewo Nexia (без протитуманок)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "переключатель поворотов daewo nexia",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153737421"
+      },
+      "query_plan_sha256": "721e49452e234d357ac5d38bfaadabcf0b2ed17006c78468325509f5e71651f8",
+      "row_id": "1153737421",
+      "source_image_count": 2,
+      "title": "Переключатель поворотов-света Daewo Nexia (без противотуманок)"
+    },
+    {
+      "category": "4.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2179741467-prikurivatel-sbore-daewoo.html",
+      "profile_sha256": "ee8dc44e2ea22562b6a32602c04b6364a7673b2031e7747e549f9fb6bb75f9a1",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Прикуриватель в сборе Daewoo (Део) Lanos",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Запальничка в зборі Daewoo Lanos",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Прикуриватель в сборе Daewoo Lanos",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "2179741467"
+      },
+      "query_plan_sha256": "c65463d3f1198ead37d01ddf2e6c719b93a2bdd3f0a45720972672ef6b172f85",
+      "row_id": "2179741467",
+      "source_image_count": 1,
+      "title": "Прикуриватель в сборе Daewoo (Део) Lanos"
+    },
+    {
+      "category": "5,2 Охлаждение/нагрев",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "coolant_hose",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733987-patrubok-radiatora-mersedes.html",
+      "profile_sha256": "37a5190933b9ff6790413f525560822ef3468d8294e136128b228665715bf08c",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Патрубок радиатора Мерседес Sprinter 208",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Патрубок радіатора Mercedes Sprinter 208",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "патрубок радиатора mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153733987"
+      },
+      "query_plan_sha256": "81e4223edc14da92ff578f8b4b0d60f6cee81c964fb7f412c386aa3bafdba327",
+      "row_id": "1153733987",
+      "source_image_count": 1,
+      "title": "Патрубок радиатора Мерседес Sprinter 208"
+    },
+    {
+      "category": "2,1 Амортизаторы",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "shock_absorber",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153725623-amortizator-perednij-opel.html",
+      "profile_sha256": "360ecc9afbc6cc8d856506fa1e3096753de6434a79c24d07218e794fb5a5b493",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Амортизатор передній Opel Astra G R газ",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Амортизатор передній Opel (Опель) Astra G R газ",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "амортизатор передній opel astra",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153725623"
+      },
+      "query_plan_sha256": "aa7fba2e7a4c004865be27440f460f39e28928965a8cd8c8760cbb7576a00aa5",
+      "row_id": "1153725623",
+      "source_image_count": 1,
+      "title": "Амортизатор передній Opel Astra G R газ"
+    },
+    {
+      "category": "5,7 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1857395212-opora-pod-zadnyuyu.html",
+      "profile_sha256": "fab18cf8a1e3b5ee80f37f4be0c165b6ce4a92ca9c94bcf79eb005fb7f1e610a",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Опора под заднюю пружину верхняя Mercedes ( Мерседес ) Benz Vito",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Опора під задню пружину верхня Mercedes Benz Vito",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "пружину заднюю mercedes vito",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1857395212"
+      },
+      "query_plan_sha256": "3970e91004f3cf977d53bc5b459071121096fd1ccc3430103bac47905c50b5b4",
+      "row_id": "1857395212",
+      "source_image_count": 2,
+      "title": "Опора под заднюю пружину верхняя Mercedes ( Мерседес ) Benz Vito"
+    },
+    {
+      "category": "8,3 Радиаторы",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "radiator",
+      "product_url": "https://kemp-cs2847093.prom.ua/p3120056427-radiator-renault-kangoo.html",
+      "profile_sha256": "d17b03fc3d63a464e4a120770b712c3b9e92ef7f036cb67c5d38289d960f63e6",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Радиатор Renault Kangoo Clio 1.2 97- 430*378",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Радіатор Renault Kangoo Clio 1.2 97- 430*378",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "радіатор renault clio 1.2 430*378",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "3120056427"
+      },
+      "query_plan_sha256": "86c5a5f00cb2b9208910718f887020fc31744a33019d5d5c4de137bc62940d47",
+      "row_id": "3120056427",
+      "source_image_count": 1,
+      "title": "Радиатор Renault Kangoo Clio 1.2 97- 430*378"
+    },
+    {
+      "category": "5.10 Кузов/Оптика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "mirror",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153734875-vstavka-zerkala-mersedes.html",
+      "profile_sha256": "943f4a1b7ab0833893a0c5f1b528e1b021bb0df117e149d506b73d69096b49dc",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Вставка зеркала Мерседес Sprinte с пласт.и подогревом L",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Вставка дзеркала Mercedes Sprinte з пласт.і підігрівом L",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "вставка зеркала левая mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153734875"
+      },
+      "query_plan_sha256": "a0e8e8caf6f97a27d754962a63e91d51fc0190c46e2a41d3dbce96526e224c12",
+      "row_id": "1153734875",
+      "source_image_count": 1,
+      "title": "Вставка зеркала Мерседес Sprinte с пласт.и подогревом L"
+    },
+    {
+      "category": "2.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "ignition_system",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1857389349-svecha-nakala-opel.html",
+      "profile_sha256": "cf9d8e66e48e71b7818541037473bb90a8be95a271d82012938c99db4749c5ec",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Свеча накала Opel (Опель) Fiat (Фіат) Peugeot (Пежо) Diz.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Свеча накала Opel Fiat (Фіат) Peugeot (Пежо) Diz.",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          },
+          {
+            "query": "свеча накала fiat",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1857389349"
+      },
+      "query_plan_sha256": "cc3b3800fe17545b334e61b4a6c2843690c50699fd6e64c32f5d98af3cc0fcc0",
+      "row_id": "1857389349",
+      "source_image_count": 2,
+      "title": "Свеча накала Opel (Опель) Fiat (Фіат) Peugeot (Пежо) Diz."
+    },
+    {
+      "category": "7,5 Кузов/Оптика/Ручки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "mirror",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153738616-zerkalo-elektro-podogrevom.html",
+      "profile_sha256": "8f56c168f98e558248f7b83fb7d48a53eff32476b41c413237feb122dce1c4a2",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Зеркало электро с подогревом левое (под покраску) Citroen Berlingo 08 12",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Дзеркало електро з підігрівом ліве (під фарбування) Citroen Berlingo 08 12",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "зеркало левое citroen berlingo",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153738616"
+      },
+      "query_plan_sha256": "bb694ad13cc92cdd880d055d2d2707defcfc65d7e202ba78c20d909f6eb7982a",
+      "row_id": "1153738616",
+      "source_image_count": 1,
+      "title": "Зеркало электро с подогревом левое (под покраску) Citroen Berlingo 08 12"
+    },
+    {
+      "category": "5,9 Двигатель",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "filter",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153734877-filtr-vozduha-mersedes.html",
+      "profile_sha256": "5b282a6c32c632f6db9963d4c4ce709db0bbf3005e1ea1c16f2ca4c1aaa36151",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Фильтр воздуха Мерседес Sprinter 906 VW (Фольксваген) LT Crafter 2006-",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Фільтр повітря Mercedes Sprinter 906 VW LT Crafter 2006-",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Фильтр воздуха Мерседес Sprinter 906 VW LT Crafter 2006-",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153734877"
+      },
+      "query_plan_sha256": "4e47f6324e67bc61733e5dad78b88911c93e8e528a523368b0defbccc40f3be8",
+      "row_id": "1153734877",
+      "source_image_count": 1,
+      "title": "Фильтр воздуха Мерседес Sprinter 906 VW (Фольксваген) LT Crafter 2006-"
+    },
+    {
+      "category": "1.11 Тормозн/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "clutch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1297643486-disk-stsepleniya-215h24.html",
+      "profile_sha256": "79d16cdb4cb68c87b37f02fca9730f5e6bf82fa10bc4d2b22e3dbbfde639bf7c",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Диск сцепления 215х24 T2 1.6 D.TD.81-90г, (2сорт)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Диск зчеплення 215х24 T2 1.6 D.TD.81-90г, (2сорт)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "диск сцепления volkswagen 1981-1990 1.6 d 215х24",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1297643486"
+      },
+      "query_plan_sha256": "4fbd3adf06afbc115e453b463bf80c550951e24fd26f6bdd90d6a8833935ab54",
+      "row_id": "1297643486",
+      "source_image_count": 2,
+      "title": "Диск сцепления 215х24 T2 1.6 D.TD.81-90г, (2сорт)"
+    },
+    {
+      "category": "3,2 Охлаждение/нагрев",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "cooling_pump",
+      "product_url": "https://kemp-cs2847093.prom.ua/p3100837679-pompa-ford-escort.html",
+      "profile_sha256": "2ca8b6570f2afb4a1aa6159549b0c29b3df1b5fb69781312f9ee6572bc7e0e65",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Помпа Ford Escort 1.8 д",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "помпа ford escort 1.8",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "3100837679"
+      },
+      "query_plan_sha256": "81feb4feaf44d76fa2b75ecacb20829b8986c3e3e48fc46e478a060d7ec38c71",
+      "row_id": "3100837679",
+      "source_image_count": 1,
+      "title": "Помпа Ford Escort 1.8 д"
+    },
+    {
+      "category": "Корневая группа",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "vehicle_lighting",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153740475-fara-skodf-octavia.html",
+      "profile_sha256": "0c7ce58cd9350f170f2eac016ef8e6d475ed920fc29edf89965a159514e8647d",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Фара Skodf Octavia A5 R (6 pin ) правая",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Фара Skoda Octavia A5 R (6 pin ) права",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "фара правая skoda octavia 6 pin",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153740475"
+      },
+      "query_plan_sha256": "d446c9982a59c5f63c8c9afeff0f4d87f00e9fe2e4418495abbd510fd8aa882b",
+      "row_id": "1153740475",
+      "source_image_count": 4,
+      "title": "Фара Skodf Octavia A5 R (6 pin ) правая"
+    },
+    {
+      "category": "5,9 Двигатель",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "gasket",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153727602-prokladka-golovki-bloka.html",
+      "profile_sha256": "91a36563408ceb59f3f774410aa31407e89fbec771547b94a3ab36123a271d8c",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Прокладка головки блока Mercedes DB OM615",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Прокладка головки блоку DB OM615",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "прокладка головки блока mercedes",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153727602"
+      },
+      "query_plan_sha256": "9c8cac65214427005808b56b8856d616b7d5b53f414d462d1418301188a94fd6",
+      "row_id": "1153727602",
+      "source_image_count": 1,
+      "title": "Прокладка головки блока Mercedes DB OM615"
+    },
+    {
+      "category": "1,9 Двигатель",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "engine_internal",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733346-klapana-vyp-folksvagen.html",
+      "profile_sha256": "dc5fc06ec8d6b59918b82494c02bb4f1bd2e356d6815e01ce6a1070b5fe03af6",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Клапана (вп. вып.) VW (Фольксваген) Audi (Ауді) Skoda 1.8T 20V к-кт.20шт.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Клапана (вп. вип.) VW (Фольксваген) Audi (Ауді) Skoda 1.8 T 20V к-кт.20шт.",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Клапана (вп. вып.) VW Audi Skoda 1.8T 20V к-кт.20шт.",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153733346"
+      },
+      "query_plan_sha256": "c9d4fb8abd99e8d2f57097240db1d04ce4832907eb462d40f3253f3ca0e3551c",
+      "row_id": "1153733346",
+      "source_image_count": 1,
+      "title": "Клапана (вп. вып.) VW (Фольксваген) Audi (Ауді) Skoda 1.8T 20V к-кт.20шт."
+    },
+    {
+      "category": "8,9 Разное",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "sensor",
+      "product_url": "https://kemp-cs2847093.prom.ua/p3100840858-datchik-holostogo-hoda.html",
+      "profile_sha256": "b05f576296703d529b1610719a26e9291052c7d8a52899de667017fd01e34e9f",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Датчик холостого хода Renault Clio Megan Scenic 1.6i",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Датчик холостого ходу Renault Clio Megan Scenic 1.6i",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "датчик холостого хода renault clio 1.6i",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "3100840858"
+      },
+      "query_plan_sha256": "e54c3a76c6b270ec5419d142eb905ccaa6a7ea21c949d4774de2941fbd530812",
+      "row_id": "3100840858",
+      "source_image_count": 1,
+      "title": "Датчик холостого хода Renault Clio Megan Scenic 1.6i"
+    },
+    {
+      "category": "5.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "sensor",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153732171-datchik-chisla-oborotov.html",
+      "profile_sha256": "e63775cb570aaccce963e9da72bc3f615fd76cfa341c491e3ca738b4e2a8b0db",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Датчик числа оборотов Мерседес SprinterTDI-CDI",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Датчик числа обертів Mercedes SprinterTDI-CDI",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "датчик mercedes sprinter cdi",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153732171"
+      },
+      "query_plan_sha256": "a03fd81452a8b0c0c9b8a523656eb2372487c43f8fe53c02a3364232ea0041b7",
+      "row_id": "1153732171",
+      "source_image_count": 1,
+      "title": "Датчик числа оборотов Мерседес SprinterTDI-CDI"
+    },
+    {
+      "category": "1.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "hvac",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153734903-soprotivlenie-ventilyatora-pechki.html",
+      "profile_sha256": "92604665acf18a320005a29c3db8f1062cefcf3f8f67bd34dcc0fd74acdd1342",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Сопротивление вентилятора печки VW (Фольксваген) Golf4 Octavia Sharan Passat B5 AC+",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Опір вентилятора печі VW Golf4 Octavia Sharan Passat B5 AC+",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Сопротивление вентилятора печки VW Golf4 Octavia Sharan Passat B5 AC+",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153734903"
+      },
+      "query_plan_sha256": "4008e9981d0d02d93759332891e24023aa7f00ee3ea364f84ee29ea22e488505",
+      "row_id": "1153734903",
+      "source_image_count": 3,
+      "title": "Сопротивление вентилятора печки VW (Фольксваген) Golf4 Octavia Sharan Passat B5 AC+"
+    },
+    {
+      "category": "3,6 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153726640-vtulka-stabilizatora-pered.html",
+      "profile_sha256": "665f96d3a874a1ac900dbc96436023b72992f031f2c110877e02c69db074b239",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Втулка стабилизатора перед. Ford (Форд) Mondeo 93 --",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Втулка стабілізатора перед. Ford Mondeo 93 --",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Втулка стабилизатора перед. Ford Mondeo 93 --",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153726640"
+      },
+      "query_plan_sha256": "5e28388fab144855304921a12648b60669f4510449352febba4efc14446388b1",
+      "row_id": "1153726640",
+      "source_image_count": 2,
+      "title": "Втулка стабилизатора перед. Ford (Форд) Mondeo 93 --"
+    },
+    {
+      "category": "5,2 Охлаждение/нагрев",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "hvac",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1519095370-soprotivlenie-pechki-mercedes.html",
+      "profile_sha256": "c8108c620944ff0f35524aa2fe3386f09850814da54c9f5f94171d92ecac6604",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Сопротивление печки Mercedes ( Мерседес ) VIANO VITO,MIXTO W639 BOX BUS MPV",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Опір печі MERCEDES VIANO VITO,MIXTO W639 BOX BUS MPV",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "сопротивление печки mercedes vito",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1519095370"
+      },
+      "query_plan_sha256": "802eaf5485886ec1a6f220897854c583c962b799fce7f55a4c59f08bc017ad21",
+      "row_id": "1519095370",
+      "source_image_count": 3,
+      "title": "Сопротивление печки Mercedes ( Мерседес ) VIANO VITO,MIXTO W639 BOX BUS MPV"
+    },
+    {
+      "category": "9 NISSAN",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "radiator",
+      "product_url": "https://kemp-cs2847093.prom.ua/p3120056706-radiator-konditsionera-nissan.html",
+      "profile_sha256": "8e4d450ec17d2d943c97079affc826af3c36a9acd6099da98609a3b32dc4932c",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Радиатор кондиционера Nissan Murano (Z51) 08- с осушителем",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Радіатор кондиціонера Nissan Murano (Z51) 08- з осушувачем",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "радиатор кондиционера nissan с осушителем",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "3120056706"
+      },
+      "query_plan_sha256": "7cd74544da32c8aedf2314c9cc6988333437ec57b1e70ff47f7ba8c7d971bef8",
+      "row_id": "3120056706",
+      "source_image_count": 1,
+      "title": "Радиатор кондиционера Nissan Murano (Z51) 08- с осушителем"
+    },
+    {
+      "category": "5.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "ignition_lock",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2741627056-kontaktnaya-gruppa-razdvizhnoj.html",
+      "profile_sha256": "70c9e527bb096c3e565f8341d874bc8a7d59e8a9b02cb23fb9f74fe93361fdff",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Контактная группа раздвижной двери на двери (новая) Mercedes ( Мерседес ) sprinter w907",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Контактна група зсувної двері на двері (нова) mercedes sprinter w907",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "контактная группа mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "2741627056"
+      },
+      "query_plan_sha256": "cfe1fb1de22fac4924367c1be61585ace1ea167617b78a65f1df0f861c122ba3",
+      "row_id": "2741627056",
+      "source_image_count": 2,
+      "title": "Контактная группа раздвижной двери на двери (новая) Mercedes ( Мерседес ) sprinter w907"
+    },
+    {
+      "category": "3.10 Тормозн/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "brake_vacuum",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733274-vakuumnyj-nasos-tormozov.html",
+      "profile_sha256": "4d60552b67d0224dffbeb9519cb3c6496ff74cc625c081e1d347fbfc2d6125ba",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Вакуумный насос тормозов Ford (Форд) Transit 2.4;TDCI 00-",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Вакуумний насос гальм Ford Transit 2.4;TDCI 00-",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Вакуумный насос тормозов Ford Transit 2.4;TDCI 00-",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153733274"
+      },
+      "query_plan_sha256": "6d488a063538766be7f6aef4dd2bbc6753ce4460dcf6429dcb02295ae9142762",
+      "row_id": "1153733274",
+      "source_image_count": 5,
+      "title": "Вакуумный насос тормозов Ford (Форд) Transit 2.4;TDCI 00-"
+    },
+    {
+      "category": "5,7 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "radiator",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153731350-podushka-radiatora-mersedes.html",
+      "profile_sha256": "fdf234c35c13bcb2d45a5d9260affea57f57afa6896aeefff1bcd84d740416bd",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подушка радиатора, Мерседес 208-410",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Подушка радіатора, Mercedes 208-410",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "радіатора mercedes",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153731350"
+      },
+      "query_plan_sha256": "fff83734c5e8c4a2f15b0b417f1b78f708854f138f02154ea6f3ff73452f2893",
+      "row_id": "1153731350",
+      "source_image_count": 1,
+      "title": "Подушка радиатора, Мерседес 208-410"
+    },
+    {
+      "category": "Корневая группа",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "оригинальный номер не назван ни одним источником",
+      "part_family": "",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1230665005-zaschita.html",
+      "profile_sha256": "0d1b3b5793096e66a0fd870142aae7210002c00d2b11d085aa62b6c1bba51abc",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Защита",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Захист",
+            "source": "SOURCE_UK_TITLE"
+          }
+        ],
+        "row_id": "1230665005"
+      },
+      "query_plan_sha256": "45ae9cfad531034f1a670ecfee0deca6296771df870f2e17b9ab7dad4c5aa46c",
+      "row_id": "1230665005",
+      "source_image_count": 1,
+      "title": "Защита"
+    },
+    {
+      "category": "1.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "оригинальный номер не назван ни одним источником",
+      "part_family": "ignition_system",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153727538-val-tramblera-balansirami.html",
+      "profile_sha256": "2bb6ad7d17886fed3467a75dd4676c56e4cd4b3896927ec713524ecc0cd0be3e",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Вал трамблера с балансирами (вак.) A100 5цил.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Вал трамблера з балансирами (вак.) A100 5цил.",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "вал трамблера audi audi 100",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153727538"
+      },
+      "query_plan_sha256": "b987ee1d0f4bd5e7081f868efe0f7830dfdcf99fdb2074ca639f9d00933503e1",
+      "row_id": "1153727538",
+      "source_image_count": 3,
+      "title": "Вал трамблера с балансирами (вак.) A100 5цил."
+    },
+    {
+      "category": "3,8 Двигатель",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "fuel_system",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153726664-benzonasos-ford-ford.html",
+      "profile_sha256": "32009bf0b94a14f7ccf60c4cc4ea07ff4d4eab9f22e5b631e88b30f1acf80d51",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Бензонасос Ford (Форд) Escort CVH ( 3 выхода ) механический",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Бензонасос Ford Escort CVH ( 3 виходи ) механічний",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Бензонасос Ford Escort CVH ( 3 выхода ) механический",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153726664"
+      },
+      "query_plan_sha256": "67d8d07654cfa019e6ab26b39b28b4840c9fef9a0d21a4ccd77d57ffec5ad94e",
+      "row_id": "1153726664",
+      "source_image_count": 3,
+      "title": "Бензонасос Ford (Форд) Escort CVH ( 3 выхода ) механический"
+    },
+    {
+      "category": "8,9 Разное",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "electrical_switch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2741615449-knopka-vklyucheniya-avarijnogo.html",
+      "profile_sha256": "56eaca9eae2b572f60611ead142343d94322eb13d34efed25449849c497e1cda",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Кнопка включения аварийного сигнала Renault (Рено) Kangoo",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Кнопка включення аварійного сигналу Renault Kangoo",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Кнопка включения аварийного сигнала Renault Kangoo",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "2741615449"
+      },
+      "query_plan_sha256": "d00ca2c927ce847630c9a75ef2357776c2d78ba73497bf573d45d282ffe42ed7",
+      "row_id": "2741615449",
+      "source_image_count": 3,
+      "title": "Кнопка включения аварийного сигнала Renault (Рено) Kangoo"
+    },
+    {
+      "category": "3.10 Тормозн/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "brake_hydraulics",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153729266-shlang-tormoznoj-zadnij.html",
+      "profile_sha256": "a9741669f86d63aec4aa5ba235e30d001c4dffae41ca2fb47372c01d04c2a3a8",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Шланг тормозной задний Ford (Форд) Escort -- 90 - LH",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Шланг гальмівний задній Ford Escort -- 90 - LH",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Шланг тормозной задний Ford Escort -- 90 - LH",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153729266"
+      },
+      "query_plan_sha256": "4a12d1d8466f51f6c0925e6a7f6f2c4df9f580a53a37e9fc94abce4664762cef",
+      "row_id": "1153729266",
+      "source_image_count": 2,
+      "title": "Шланг тормозной задний Ford (Форд) Escort -- 90 - LH"
+    },
+    {
+      "category": "1,2 Охлаждение/нагрев",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: PUBLIC_NUMBER_SEMANTIC_FANOUT",
+      "part_family": "coolant_flange",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1230664699-flansh-datchika-vyh1otvod.html",
+      "profile_sha256": "02d4c8d7d4fce271dc1d255aca7678a780159c9e772392c24a02736757294590",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Фланш датчика (2-вых+1отвод и 1дат) VW (Фольксваген) Passat В3 Golf 1.9D/TD 88-93",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Фланець датчика (2-вих+1відвід і 1дат) VW Passat В3 Golf 1.9D/TD 88-93",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Фланш датчика (2-вых+1отвод и 1дат) VW Passat В3 Golf 1.9D/TD 88-93",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1230664699"
+      },
+      "query_plan_sha256": "21a2b814d0ff66d1711e3df55dfb3fbb96011d3bb52a401941c1281e8169ce59",
+      "row_id": "1230664699",
+      "source_image_count": 3,
+      "title": "Фланш датчика (2-вых+1отвод и 1дат) VW (Фольксваген) Passat В3 Golf 1.9D/TD 88-93"
+    },
+    {
+      "category": "4.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "sensor",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153731041-datchik-ohlazhdayuschej-zhidkosti.html",
+      "profile_sha256": "9d97f420199daecd0edd74fbe72e94c19b0134c3dd4a67fe2bc5971b53a5425d",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Датчик охлаждающей жидкости Chevrolet (Шевроле) Aveo Lacetti Daewoo (Део) Nubira",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Датчик охолоджуючої рідини Chevrolet Aveo Lacetti Daewoo Nubira",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Датчик охлаждающей жидкости Chevrolet (Шевроле) Aveo Lacetti Daewoo Nubira",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153731041"
+      },
+      "query_plan_sha256": "8bcf01bf4a715d30ce58e913c2af168bd0b3f60c09c97833625dab619a786a39",
+      "row_id": "1153731041",
+      "source_image_count": 2,
+      "title": "Датчик охлаждающей жидкости Chevrolet (Шевроле) Aveo Lacetti Daewoo (Део) Nubira"
+    },
+    {
+      "category": "1.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "belt_drive",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733329-shkiv-generatora-folksvagentransporter.html",
+      "profile_sha256": "179daa138f51ffb00b4b0de2cd69b834eb62a8bdf0f89402431d2bd5ddb95154",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Шкив генератора VW (Фольксваген)Transporter T5 Cady3 Crafter TDI Skoda Fabia Octavia TDI CDI",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Шків генератора VWTransporter T5 Cady3 Crafter TDI Skoda Fabia Octavia TDI CDI",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Шкив генератора VW Transporter T5 Cady3 Crafter TDI Skoda Fabia Octavia TDI CDI",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153733329"
+      },
+      "query_plan_sha256": "5a84326a1d6c13def9fd93c27b12d0d3713c7b4fe903d3c38ee35b896be0734f",
+      "row_id": "1153733329",
+      "source_image_count": 2,
+      "title": "Шкив генератора VW (Фольксваген)Transporter T5 Cady3 Crafter TDI Skoda Fabia Octavia TDI CDI"
+    },
+    {
+      "category": "1,9 Двигатель",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "oil_seal",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153732252-salnik-raspredvala-folksvagent4.html",
+      "profile_sha256": "aa5caf9d8b097c6a06750e465db92f0bf3065e9243af1c907f55242c8bfdaa92",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Сальник распредвала VW (Фольксваген)T4 LT 1.9-2.5 D-TDi (32*48**10)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Сальник розподільчого вала VWT4 LT 1.9-2.5 D-TDi (32*48**10)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Сальник распредвала VW T4 LT 1.9-2.5 D-TDi (32*48**10)",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153732252"
+      },
+      "query_plan_sha256": "06153232220e25e40a4778b30c0d561a0dc221595599f9c11ba43e849fac778d",
+      "row_id": "1153732252",
+      "source_image_count": 2,
+      "title": "Сальник распредвала VW (Фольксваген)T4 LT 1.9-2.5 D-TDi (32*48**10)"
+    },
+    {
+      "category": "1.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "lock_cylinder",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2179741009-lichinki-zamka-perednih.html",
+      "profile_sha256": "d98627b85f2c5124a5bbf0680b91318196269f1d62cc32d67993638e4d709e48",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Личинки замка передних дверей левая vw passat b5 (96-05)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Лічинка (серцевина) замка передніх дверей ліва vw passat b5 (96-05)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "личинки замка передних дверей левая передних volkswagen passat passat b5 1996-2005",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "2179741009"
+      },
+      "query_plan_sha256": "33bd55dfd277e4f2f7a7f7f8f10ccc7eba9ee741458832784567e832ce10f30c",
+      "row_id": "2179741009",
+      "source_image_count": 4,
+      "title": "Личинки замка передних дверей левая vw passat b5 (96-05)"
+    },
+    {
+      "category": "5.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "starting_system",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153736973-starter-mercedes-w203.html",
+      "profile_sha256": "458a27ccc007c7329a0f74b9c39b78d33086a13cb220c6be119cb969ecc5d587",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Стартер Mercedes W203 W204 W211 W212 Sprinter (906)OM271",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Стартер Мерседес W203 W204 W211 W212 Sprinter 906)OM271",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "стартер mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153736973"
+      },
+      "query_plan_sha256": "9329fed3459aeb04a3c38bc7b42edf3f07b4101b2fc0a55e281344ca3dacb84d",
+      "row_id": "1153736973",
+      "source_image_count": 4,
+      "title": "Стартер Mercedes W203 W204 W211 W212 Sprinter (906)OM271"
+    },
+    {
+      "category": "1.11 Тормозн/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "brake_friction",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153735999-kolodki-tormoznye-stoyanochnogo.html",
+      "profile_sha256": "43736c41a9f95706cd6b36aadcb1ebaffed16a1971b9cd99b732e2ce63adde53",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Колодки тормозные стояночного тормоза VW (Фольксваген) Transporter T5",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Колодки гальмівні стояночного гальма VW Transporter T5",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Колодки тормозные стояночного тормоза VW Transporter T5",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153735999"
+      },
+      "query_plan_sha256": "bdf908be301ef82f75542e34736d25b792a87066a293b6a7ea6cd816bf6c3394",
+      "row_id": "1153735999",
+      "source_image_count": 1,
+      "title": "Колодки тормозные стояночного тормоза VW (Фольксваген) Transporter T5"
+    },
+    {
+      "category": "4,6 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "оригинальный номер не назван ни одним источником",
+      "part_family": "exhaust_mount",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153732145-podushki-glushnika-daewoo.html",
+      "profile_sha256": "84fcb0afd6a75857f4431234a4b0c10a96323d0126e3c3ced464c25860d6a68a",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подушки глушника Daewoo Lanos комплект (6шт.)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Подушки глушника Daewoo (Део) Lanos комплект (6шт.)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "подушки глушника daewoo lanos комплект daewoo lanos",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153732145"
+      },
+      "query_plan_sha256": "e63970a30ae56cdaf74941ca3acd397d3f922ef534084bacd3f76777f80509c5",
+      "row_id": "1153732145",
+      "source_image_count": 1,
+      "title": "Подушки глушника Daewoo Lanos комплект (6шт.)"
+    },
+    {
+      "category": "5.11 Тормозное/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "clutch_hydraulics",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1895545643-tsilindr-stsepleniya-rabochij.html",
+      "profile_sha256": "bf148b2198b92a34b9ed7785337959e520c76f06ba861ccf31ad0e922db04f07",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Цилиндр сцепления рабочий Мерседес 100",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Циліндр зчеплення робочий Mercedes 100",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "цилиндр сцепления рабочий mercedes",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1895545643"
+      },
+      "query_plan_sha256": "85de471f0a7ff8ca12cee3ca74dbed5baa82b443ec3d0bd6f6324c5b926f3188",
+      "row_id": "1895545643",
+      "source_image_count": 1,
+      "title": "Цилиндр сцепления рабочий Мерседес 100"
+    },
+    {
+      "category": "5.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "steering_column_switch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2179873995-pereklyuchatel-stekloochistitelej-sveta.html",
+      "profile_sha256": "914fbfa5f2e03362e04fd8bfb8093fe833fcc192ba981699efed6a3d47dffd83",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Переключатель стеклоочистителей света поворотов Мерседес Sprinter W906 2006-2016",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Перемикач склоочисників світла поворотів Mercede Sprinter W906 2006-2016",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "переключатель стеклоочистителей света поворотов mercedes-benz sprinter 2006-2016",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "2179873995"
+      },
+      "query_plan_sha256": "775c1d66c0f2853f7eab4966121c0b811b9ceff763e8eac412b3f56a5db181f6",
+      "row_id": "2179873995",
+      "source_image_count": 5,
+      "title": "Переключатель стеклоочистителей света поворотов Мерседес Sprinter W906 2006-2016"
+    },
+    {
+      "category": "5,7 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "shock_absorber",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153730198-vtulka-amortizatora-mercedes.html",
+      "profile_sha256": "fc3e16e7c8fb6400aca0fb350211a0e374f627c85e60102b28ed64dd4bedcc0b",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Втулка амортизатора Mercedes 609-711(зад) (BC1341)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Втулка амортизатора Мерседес 609-711(зад) (BC1341)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "амортизатора mercedes",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153730198"
+      },
+      "query_plan_sha256": "cc5ebd6f65698d57298247b93a08c2cdbfba2374f13cf15096970671ecf19659",
+      "row_id": "1153730198",
+      "source_image_count": 2,
+      "title": "Втулка амортизатора Mercedes 609-711(зад) (BC1341)"
+    },
+    {
+      "category": "7,3 Радиаторы",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "radiator",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2491081043-radiator-fiat-doblo.html",
+      "profile_sha256": "295363b207f870a5bd5282c0c213e003ebb6c12cd58ebb30403b8438d5f92fdd",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Радіатор Fiat Doblo 1.3D-JTD 1.9D-JTD 01- 700*306",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Радіатор Fiat (Фіат) Doblo 1.3D-JTD 1.9D-JTD 01 -> 700*306",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "радіатор fiat doblo 1.3d 700*306 jtd",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "2491081043"
+      },
+      "query_plan_sha256": "1742ce493ad5bb7912e8e51e9147f40af30e5b5ecc2258553a8cc57f9e6b696f",
+      "row_id": "2491081043",
+      "source_image_count": 2,
+      "title": "Радіатор Fiat Doblo 1.3D-JTD 1.9D-JTD 01- 700*306"
+    },
+    {
+      "category": "3,1 Амортизаторы",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "shock_absorber",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153726614-amortizator-zadnij-ford.html",
+      "profile_sha256": "7bad2b5480f1243f281fec1f1fdc3ca788239e6b14fd86166e83aa965b740341",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Амортизатор задний Ford (Форд) Escort 95 --",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Амортизатор задній Ford Escort 95 --",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Амортизатор задний Ford Escort 95 --",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153726614"
+      },
+      "query_plan_sha256": "a8b80a46dc60509ddfa3e242b80ada6a4211b43ebba1ff5119998014cdd9a3b2",
+      "row_id": "1153726614",
+      "source_image_count": 1,
+      "title": "Амортизатор задний Ford (Форд) Escort 95 --"
+    },
+    {
+      "category": "7.10 Разное",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "ignition_lock",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1522312357-zamok-zazhiganiya-peugeot.html",
+      "profile_sha256": "9ca1de5ae7300f7c5402eac3228beac8860c8b1906b1333835881183bcde6a5f",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Замок зажигания Peugeot (Пежо) Partner Citroen Berlingo 02-08",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Замок запалювання Peugeot Partner Citroen Berlingo 02-08",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "замок зажигания citroen berlingo 2002-2008",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1522312357"
+      },
+      "query_plan_sha256": "457db5395496958969f0fa7c97512b74110078d0d0b68e0e30a9deec772fd6b2",
+      "row_id": "1522312357",
+      "source_image_count": 1,
+      "title": "Замок зажигания Peugeot (Пежо) Partner Citroen Berlingo 02-08"
+    },
+    {
+      "category": "8,9 Шрус",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "driveline",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733405-poluos-renault-reno.html",
+      "profile_sha256": "58c63f1f9f17b35cce49e5fcfe7135261ef623c6bc4b41a8a18640c1e4f86f65",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Полуось Renault (Рено) Master 3.0 CDI 2003- R (правая)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Напівось Renault Master 3.0 CDI 2003- R (права)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Полуось Renault Master 3.0 CDI 2003- R (правая)",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153733405"
+      },
+      "query_plan_sha256": "287ecce12446919a0b5806abdc2481356af413a1296bfdb02ef192100b4bd932",
+      "row_id": "1153733405",
+      "source_image_count": 2,
+      "title": "Полуось Renault (Рено) Master 3.0 CDI 2003- R (правая)"
+    },
+    {
+      "category": "5.13 Шрус/Крестовина",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "cv_joint",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153729262-shrus-mercedes-vito.html",
+      "profile_sha256": "f1ef9a521b556fbeea1787a216f52c43e27b4bd7cfcbf8eaaa083e4dec988510",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Шрус Mercedes Vito (638) 108-112 CDI 99-03; ABS:48: 27*36 зовнішн",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Шрус Mercedes ( Мерседес ) Vito (638) 108-112 CDI 99-03; ABS:48: 27*36 зов",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "шрус mercedes vito 99-03 27*36 cdi",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153729262"
+      },
+      "query_plan_sha256": "6cc7b025788367cb4cfda8146b20396025543eda0c1faa8f16f7d1029c2d3456",
+      "row_id": "1153729262",
+      "source_image_count": 2,
+      "title": "Шрус Mercedes Vito (638) 108-112 CDI 99-03; ABS:48: 27*36 зовнішн"
+    },
+    {
+      "category": "5,9 Двигатель",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "belt_drive",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153731200-remen-poliklinovoj-mersedes.html",
+      "profile_sha256": "0d72ec0a7fdb68b4dd6e168d8509aebc3d91d31a4ae4ebab70b7b69b28555216",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Ремень поликлиновой Мерседес Sprinter Vito",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Ремінь поліклиновий Mercedes Sprinter Vito",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "ремень поликлиновой mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153731200"
+      },
+      "query_plan_sha256": "c476a08d13146b9e73c42c14dc3dd0a202dd9191b126f22470c71ec1d167917c",
+      "row_id": "1153731200",
+      "source_image_count": 1,
+      "title": "Ремень поликлиновой Мерседес Sprinter Vito 6PK2205"
+    },
+    {
+      "category": "7,2 Охлаждение/нагрев",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "cooling_fan",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1519095373-motor-radiatora-peugeot.html",
+      "profile_sha256": "b1347f55fecdbdaad8d655ea7b245b1e235476a4c41c1a6e0e4092406cf4455c",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Мотор радиатора Peugeot (Пежо) Partner96-08 Peugeot (Пежо) 306 406 94-04",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Мотор радіатора Peugeot Partner96-08 Peugeot 306 406 94-04",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "мотор радиатора peugeot partner 1996-2008",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1519095373"
+      },
+      "query_plan_sha256": "4ab5337ce428e4d8d60fda7290e0782d2d369211709dbd23e246b66afedf1771",
+      "row_id": "1519095373",
+      "source_image_count": 2,
+      "title": "Мотор радиатора Peugeot (Пежо) Partner96-08 Peugeot (Пежо) 306 406 94-04"
+    },
+    {
+      "category": "7,9 Шрус",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "driveline",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153729264-poluos-peugeot-pezho.html",
+      "profile_sha256": "306500c5f70ef9a20efd92b4d019fa760752ef46405e5e7041b7e50e6b03b710",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Полуось Peugeot (Пежо) Partner Citroen Berlingo 1.0-1.4 96- L",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Півось Peugeot Partner Citroen Berlingo 1.0-1.4 96- L",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "полуось citroen berlingo 1.0",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153729264"
+      },
+      "query_plan_sha256": "ba97cbecba923b50859f795dca5366a0a1a9623f01635882998358e307db3c4f",
+      "row_id": "1153729264",
+      "source_image_count": 2,
+      "title": "Полуось Peugeot (Пежо) Partner Citroen Berlingo 1.0-1.4 96- L"
+    },
+    {
+      "category": "2.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "fuel_system",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153736777-benzonasos-elektro-pogruzhnoj.html",
+      "profile_sha256": "4e96d71e97dbd3e8016eb2362298eeb659675bb19b3666c38026e92275794e16",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Бензонасос электро погружной Opel (Опель) Astra F Vectra B 1.2i-1.6 16V",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Бензонасос електро занурювальний Opel Astra F Vectra B 1.2i-1.6 16V",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Бензонасос электро погружной Opel Astra F Vectra B 1.2i-1.6 16V",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153736777"
+      },
+      "query_plan_sha256": "30d09a4339c1d33a0f501a2961f3fbded2581e2176b2a1a629661352a6659eee",
+      "row_id": "1153736777",
+      "source_image_count": 3,
+      "title": "Бензонасос электро погружной Opel (Опель) Astra F Vectra B 1.2i-1.6 16V"
+    },
+    {
+      "category": "1.10 Кузов/Оптика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "door_lock",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1494998360-zamok-levoj-sdvizhnoj.html",
+      "profile_sha256": "d780f7fd046f61229717cec740730decfa21ff2f9b322049f3b456325e661013",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Замок левой сдвижной двери VW (Фольксваген) T3 (торцевой) L",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Замок лівої зсувної двері VW T3 (торцевой) L",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Замок левой сдвижной двери VW T3 (торцевой) L",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1494998360"
+      },
+      "query_plan_sha256": "8f7770740a5a4888649b9847c6bb405a571ee1a50194625638f719f67e8425af",
+      "row_id": "1494998360",
+      "source_image_count": 2,
+      "title": "Замок левой сдвижной двери VW (Фольксваген) T3 (торцевой) L"
+    },
+    {
+      "category": "2.10 Тормозн/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "clutch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153732162-podshipnik-vyzhimnoj-okadet.html",
+      "profile_sha256": "efbd6588b4189c0ad98c6038ab2d7b6f329606a1e082c16f57acf623582fd332",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подшипник выжимной O.Kadet E.Vectra A..1.6-2.0 Daewoo (Део) Lanos",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Підшипник вижимний O.Kadet E.Vectra A..1.6-2.0 Daewoo Lanos",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Подшипник выжимной O.Kadet E.Vectra A..1.6-2.0 Daewoo Lanos",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153732162"
+      },
+      "query_plan_sha256": "c33c6f5a74a43cc50fbf2ce457f299f3b394eb57a2f166699c20f9cc14a497d0",
+      "row_id": "1153732162",
+      "source_image_count": 2,
+      "title": "Подшипник выжимной O.Kadet E.Vectra A..1.6-2.0 Daewoo (Део) Lanos"
+    },
+    {
+      "category": "7,1 Амортизатор",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "shock_absorber",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153738565-amortizator-zadnij-peugeot.html",
+      "profile_sha256": "a01bc4e465b4968ad81bc61787be9a792b0c6bfbb39851cae55ef1462c1ef237",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Амортизатор задний Peugeot (Пежо) Fiat (Фіат) Scudo Citroen Jumpi 07- (усиленый)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Амортизатор задній Peugeot Fiat Scudo Citroen Jumpi 07- (посилений)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "амортизатор задний citroen scudo",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153738565"
+      },
+      "query_plan_sha256": "42aab9184b556cf4766f90dd0aff773bb1ab9678079efa062be998c18d80c32c",
+      "row_id": "1153738565",
+      "source_image_count": 3,
+      "title": "Амортизатор задний Peugeot (Пежо) Fiat (Фіат) Scudo Citroen Jumpi 07- (усиленый)"
+    },
+    {
+      "category": "8,6 Подвеска",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153727489-pruzhina-perednyaya-renault.html",
+      "profile_sha256": "95d25a9556372ece49d6ffd18a67f1d83c26f730561e2af77a52c90100c4af1a",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Пружина передняя Renault (Рено) Kangoo 1,9D 98 d13h370mm.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Пружина передня Renault Kangoo 1,9D 98 d13h370mm.",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Пружина передняя Renault Kangoo 1,9D 98 d13h370mm.",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153727489"
+      },
+      "query_plan_sha256": "1bcb548fed49be65f00b3226521fadcc48dc28414e187b7698bfe6cfd9a9a2f9",
+      "row_id": "1153727489",
+      "source_image_count": 2,
+      "title": "Пружина передняя Renault (Рено) Kangoo 1,9D 98 d13h370mm."
+    },
+    {
+      "category": "1.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "electrical_switch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153737432-vyklyuchatel-stop-signala.html",
+      "profile_sha256": "787dc41e2d2b4045cbc8e508632e2839d4ea6c9315bba7bf13c0db6fed4715a7",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Выключатель стоп сигнала (лягушка тормозная) VW (Фольксваген)/Audi (Ауді) Skoda 96-.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Вимикач стоп сигналу (жаба гальмівна) VW/Audi Skoda 96-.",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Выключатель стоп сигнала (лягушка тормозная) VW /Audi Skoda 96-.",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153737432"
+      },
+      "query_plan_sha256": "8ebeb37249905a32fb30b9504f097c3342c2854e184035d0dc3fb64d38ac1a7e",
+      "row_id": "1153737432",
+      "source_image_count": 3,
+      "title": "Выключатель стоп сигнала (лягушка тормозная) VW (Фольксваген)/Audi (Ауді) Skoda 96-."
+    },
+    {
+      "category": "4,6 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "oil_seal",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153730364-salniki-poluosi-daewoo.html",
+      "profile_sha256": "8884d5c9975a9bbcb4bbeb86685a147e4a8a1d2da2c64384764fd17c486e8b26",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Сальники полуоси Daewoo (Део) Lanos",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Сальники напівосі Daewoo Lanos",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Сальники полуоси Daewoo Lanos",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153730364"
+      },
+      "query_plan_sha256": "bc2ff7ae8a750e1bb4aae9863f5dfc3b3376d7835513cf4f42e5cf5f37bc3667",
+      "row_id": "1153730364",
+      "source_image_count": 2,
+      "title": "Сальники полуоси Daewoo (Део) Lanos"
+    },
+    {
+      "category": "5.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "electrical_switch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1522312358-vyklyuchatel-stop-signala.html",
+      "profile_sha256": "3afd11b10fca87d26b19eae0b7d363953e26e9316cd0ae4218a2be3a281010d3",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Выключатель стоп сигнала (лягушка тормозная) Mercedes ( Мерседес ) Vito 638 Sprinter 901",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Вимикач стоп сигналу (лягушка гальмівна) Mercedes Vito 638 Sprinter 901",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "выключатель стоп сигнала mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1522312358"
+      },
+      "query_plan_sha256": "0e618136ccce39a5c417ff81ea5e81e85df10317f4e2d36b5897b02101da9881",
+      "row_id": "1522312358",
+      "source_image_count": 2,
+      "title": "Выключатель стоп сигнала (лягушка тормозная) Mercedes ( Мерседес ) Vito 638 Sprinter 901"
+    },
+    {
+      "category": "6 BMW",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153729096-pruzhina-perednya-bmw.html",
+      "profile_sha256": "4e407c5381411f0a72f6ac31af0478256ea4d0fcfd42b8aebea9a3f5f1707eab",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Пружина передня BMW E39 528-540 d14.2h340mm.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Пружина передня BMW (БМВ) E39 528-540 d14.2h340mm.",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "пружина передня bmw",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153729096"
+      },
+      "query_plan_sha256": "4cbac858f1542e3aabe24397a81483ba153237a493540bd8cdfc92d5032c4fbc",
+      "row_id": "1153729096",
+      "source_image_count": 2,
+      "title": "Пружина передня BMW E39 528-540 d14.2h340mm."
+    },
+    {
+      "category": "5.11 Тормозное/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "brake_friction",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1297656332-kolodki-perednie-bez.html",
+      "profile_sha256": "0e43e6acf6c904564037717645622a9725e88348094f79d11e10e04a6e414ded",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Колодки передние без пластин Мерседес Sprinter 96-06 однокатковый",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Колодки передні без пластин Mercedes Sprinter 96-06 однокатковий",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "колодки передние mercedes sprinter 1996-2006",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1297656332"
+      },
+      "query_plan_sha256": "0da650f334908378471b8d5a36470d64150c254f8ef54dd140565b0bf3f070c4",
+      "row_id": "1297656332",
+      "source_image_count": 2,
+      "title": "Колодки передние без пластин Мерседес Sprinter 96-06 однокатковый"
+    },
+    {
+      "category": "4,5 Подвеска",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153729220-pruzhina-zadnyaya-daewoo.html",
+      "profile_sha256": "72dabe5d1e5378e1820c6dc2e05db5aec0731aefec9f0d6c5c5e82fcaa7086c0",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Пружина задняя Daewoo (Део) Lanos 1,4-1,6 16V 97-",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Пружина задня Daewoo Lanos 1,4-1,6 16V 97-",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Пружина задняя Daewoo Lanos 1,4-1,6 16V 97-",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153729220"
+      },
+      "query_plan_sha256": "d2aa838affcef2378b65713545ce48f746c8d67f794f842a55c67c6482558aaf",
+      "row_id": "1153729220",
+      "source_image_count": 1,
+      "title": "Пружина задняя Daewoo (Део) Lanos 1,4-1,6 16V 97-"
+    },
+    {
+      "category": "5,7 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "engine_mount",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153734779-podushka-dvigatelya-mersedes.html",
+      "profile_sha256": "c7eaa635b7350e2821246f9f3f67ecb48b23211569383d5e6b73fb53bbec8247",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подушка двигателя Мерседес Sprinter 2t;3t VW (Фольксваген) LT28-46",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Подушка двигуна Mercedes Sprinter 2t;3t VW LT28-46",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Подушка двигателя Мерседес Sprinter 2t;3t VW LT28-46",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153734779"
+      },
+      "query_plan_sha256": "e1c90c514f6c578bb6275bb3bae976d3cf1b59f6b07e7603fc887cfd375190da",
+      "row_id": "1153734779",
+      "source_image_count": 4,
+      "title": "Подушка двигателя Мерседес Sprinter 2t;3t VW (Фольксваген) LT28-46"
+    },
+    {
+      "category": "1,2 Охлаждение/нагрев",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "hvac",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153724289-motor-pichki-obigrivacha.html",
+      "profile_sha256": "bb5eeb08086b329fe6a3c2aadceac7b64ccd2590c73fc89cda1a20218e1ef354",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Мотор пічки ( обігрівача) Audi-100 84 -91",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Мотор грубки Audi (Ауді)-100 84 -91 Bosch",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "мотор пічки audi audi-100 84 -91",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153724289"
+      },
+      "query_plan_sha256": "bf26bd161e8e4fae819190a94a53e53ae640788a75f377ae87a6fe286f6d3095",
+      "row_id": "1153724289",
+      "source_image_count": 2,
+      "title": "Мотор пічки ( обігрівача) Audi-100 84 -91"
+    },
+    {
+      "category": "2,1 Амортизаторы",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "gas_spring",
+      "product_url": "https://kemp-cs2847093.prom.ua/p3100840764-amortizator-kryshki-bagazhnika.html",
+      "profile_sha256": "52dc254bf1a71011549becf189bcb5ab6e1ae0349a72cc7ec31333a2d4f5485f",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Амортизатор крышки багажника Opel Kadet E Caravan 87-91 700-257 мм 320N",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Амортизатор кришки багажника Opel Kadet E Caravan 87-91 700-257mm 320N",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "амортизатор крышки багажника opel kadet 87-91",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "3100840764"
+      },
+      "query_plan_sha256": "456676dd51fe59bd66e8067fa71c7ade42ec6f38a460dc129d6c31ffb0fabc1c",
+      "row_id": "3100840764",
+      "source_image_count": 1,
+      "title": "Амортизатор крышки багажника Opel Kadet E Caravan 87-91 700-257 мм 320N"
+    },
+    {
+      "category": "8,8 Рулевое",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "steering",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733253-nasos-gidrousilitelya-renault.html",
+      "profile_sha256": "7ed52bfa6dee2efcc82c31714eece39861a84d45ca094480b902391cba4a1e59",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Насос гидроусилителя Renault (Рено) Trafic2 Opel (Опель) Vivaro 01- 1.9;2.0TDI",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Насос гідроусилювача Renault Trafic2 Opel Vivaro 01- 1.9;2.0TDI",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Насос гидроусилителя Renault Trafic2 Opel Vivaro 01- 1.9;2.0TDI",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153733253"
+      },
+      "query_plan_sha256": "abca76cfa705aeef4116c68bce7206b62056eccb114f502060f0d04335d504dc",
+      "row_id": "1153733253",
+      "source_image_count": 5,
+      "title": "Насос гидроусилителя Renault (Рено) Trafic2 Opel (Опель) Vivaro 01- 1.9;2.0TDI"
+    },
+    {
+      "category": "8 Renault",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "оригинальный номер не назван ни одним источником",
+      "part_family": "brake_caliper",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1483065870-suport-zadnij-renault.html",
+      "profile_sha256": "17f1f0bdccd7c00e97e57d9b846e8a242774ceb3fcd57eb323db48259f4224ef",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Супорт задний Renault (Рено) Trafic 2. Opel (Опель) Vivaro 01- R (без скобы)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Супорт задній Renault Trafic 2.Opel Vivaro 01- R (без скоби)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Супорт задний Renault Trafic 2. Opel Vivaro 01- R (без скобы)",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1483065870"
+      },
+      "query_plan_sha256": "20fc5eb3356ed9210f9d77700fa2ed41013728b62815950b679c91fa4939ef0e",
+      "row_id": "1483065870",
+      "source_image_count": 3,
+      "title": "Супорт задний Renault (Рено) Trafic 2. Opel (Опель) Vivaro 01- R (без скобы)"
+    },
+    {
+      "category": "3.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "belt_drive",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153730243-mufta-generatora-obgonnaya.html",
+      "profile_sha256": "9d5975eab9e8c0ee247ca2d135c98676c08cae48f9a919a48a101005183aeae3",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Муфта генератора обгонная Ford (Форд) Transit V184 (шкив)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Муфта генератора обгонна Ford Transit V184 (шків)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Муфта генератора обгонная Ford Transit V184 (шкив)",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153730243"
+      },
+      "query_plan_sha256": "c85206e2797c25cdfdacb0b7ab96c7ea06384dff0474c87c1eda073f3d58c45e",
+      "row_id": "1153730243",
+      "source_image_count": 2,
+      "title": "Муфта генератора обгонная Ford (Форд) Transit V184 (шкив)"
+    },
+    {
+      "category": "2,5 Ручки зеркала",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "door_hardware",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2741627042-ruchka-opel-opel.html",
+      "profile_sha256": "944ef7dc2e526d1cf467fad165945973fedcc3935a19ea0c186c404b33444550",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Ручка Opel (Опель) Meriva 2003-2010 задняя.",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Ручка Opel Meriva 2003-2010 задня.",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Ручка Opel Meriva 2003-2010 задняя.",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "2741627042"
+      },
+      "query_plan_sha256": "4c9f7ac3969d9964a93ec32f965a709efed5eac9cc6299eaa566532c333c592a",
+      "row_id": "2741627042",
+      "source_image_count": 3,
+      "title": "Ручка Opel (Опель) Meriva 2003-2010 задняя."
+    },
+    {
+      "category": "Корневая группа",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "electrical_protection",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153736082-predohranitel-50a-w228.html",
+      "profile_sha256": "37ba18c857b9770d3b34e3480671d85ea4aa3c7d2a421e2675184e95632d60d2",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Предохранитель 50А",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Запобіжник 50А",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "предохранитель",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153736082"
+      },
+      "query_plan_sha256": "80fc35261b12a1eceb370f0e45f64893f88d887c2cf56667ea0029933207e5e2",
+      "row_id": "1153736082",
+      "source_image_count": 2,
+      "title": "Предохранитель 50А W228-C"
+    },
+    {
+      "category": "1.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "cooling_electrical",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153727519-blok-upravleniya-elventilyatora.html",
+      "profile_sha256": "94017d859c7cc1af343451349f8e3206abaa9c6493a25f58bb169afe87186af6",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Блок управления эл.вентилятора VW (Фольксваген)Gol.Pas.Ven. AC+",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Блок управління ел.вентилятора VWGol.Pas.Ven. AC+",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Блок управления эл.вентилятора VW Gol.Pas.Ven. AC+",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153727519"
+      },
+      "query_plan_sha256": "a6f5aa0778ffc7265a8068d6b05d1b456ea7b91136100177071198f68c8587eb",
+      "row_id": "1153727519",
+      "source_image_count": 3,
+      "title": "Блок управления эл.вентилятора VW (Фольксваген)Gol.Pas.Ven. AC+"
+    },
+    {
+      "category": "5.11 Тормозное/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "oil_seal",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153732256-salnik-pervinnogo-valu.html",
+      "profile_sha256": "081dba767d2335cdb45ad16d0683859da4458867a93975b4c2d78afee042d8d1",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Сальник первинного валу КПП Mercedes Sprinter (35*47*8)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Сальник первичнго Валу КПП Sprinter (35*47*8)",
+            "source": "SOURCE_UK_TITLE"
+          }
+        ],
+        "row_id": "1153732256"
+      },
+      "query_plan_sha256": "a63641f6c9997e20870c369f9abb52604b7bb50ad8fd819db9611857a1166504",
+      "row_id": "1153732256",
+      "source_image_count": 2,
+      "title": "Сальник первинного валу КПП Mercedes Sprinter (35*47*8)"
+    },
+    {
+      "category": "4,6 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "engine_mount",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153730376-podushka-dvigatelya-daewoo.html",
+      "profile_sha256": "4fb24e29bcaad0d6db6b92102c234ac7a78dc60c4f95c96abc09a736d9cc3116",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подушка двигателя Daewoo (Део) Lanos задняя",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Подушка двигуна Daewoo Lanos задня",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Подушка двигателя Daewoo Lanos задняя",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153730376"
+      },
+      "query_plan_sha256": "7b450b8c1f54b745c120318a654600ef67e1d7652be17739ee31a35afe272d29",
+      "row_id": "1153730376",
+      "source_image_count": 2,
+      "title": "Подушка двигателя Daewoo (Део) Lanos задняя"
+    },
+    {
+      "category": "7,6 Подвеска",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153739675-pruzhina-perednya-fiat.html",
+      "profile_sha256": "46aa7c91327839cc026bb7579cc9373b2304cd06974f9478606540e6b685342f",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Пружина передня Fiat Ducato Boxer 06-",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Пружина передня Fiat (Фіат) Ducato Boxer 06->",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "пружина передня fiat ducato",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153739675"
+      },
+      "query_plan_sha256": "40266ec157ed9a55ca7a36f7efb9e4e62dbfa5b639c33db6a446db40ac56b573",
+      "row_id": "1153739675",
+      "source_image_count": 2,
+      "title": "Пружина передня Fiat Ducato Boxer 06-"
+    },
+    {
+      "category": "5.13 Шрус/Крестовина",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "driveline",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153733370-krestovina-kardana-mersedes.html",
+      "profile_sha256": "5ebf04be4bddefaac490bbba6ca8244dac79f759ef0e2fd3b2e98b8f7fb8b69e",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Крестовина кардана Мерседес Vario (31*110mm)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Хрестовина карданного вала Mercedes Vario (31*110mm)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "крестовина кардана mercedes 31*110mm",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153733370"
+      },
+      "query_plan_sha256": "0f147976f8827fc5657c5476bcb7704d74a640540b430f9321efdd9f3a148b5a",
+      "row_id": "1153733370",
+      "source_image_count": 1,
+      "title": "Крестовина кардана Мерседес Vario (31*110mm)"
+    },
+    {
+      "category": "5.12 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "washer_system",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153736778-nasos-stekloomyvatelya-mersedes.html",
+      "profile_sha256": "233ae10a7849c3e7aa7d65f30116061775f255775b353ac81abbfd73c3e11ebe",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Насос стеклоомывателя Мерседес T1T2 (601-609)Sprinter (901-904) Vito",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Насос омивача скла Mercedes T1T2 (601-609)Sprinter (901-904) Vito",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "насос стеклоомывателя mercedes sprinter",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153736778"
+      },
+      "query_plan_sha256": "43688079959eca0cb44b4ea4d7a27729b46d458f6dd7fea9c6a308616c8970d7",
+      "row_id": "1153736778",
+      "source_image_count": 3,
+      "title": "Насос стеклоомывателя Мерседес T1T2 (601-609)Sprinter (901-904) Vito"
+    },
+    {
+      "category": "8,7 Подушки/сайленблоки",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "suspension",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153734146-podushka-verhnyaya-opornaya.html",
+      "profile_sha256": "b0361fab0d22dd750c4c7fa43de05626948121e65cad253c844532c49fda7997",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подушка верхняя опорная Renault (Рено) Kangoo Clio2 98- (с подшипником)",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Подушка верхня опорна Renault (Рено) Kangoo Clio2 98->(з підшипником)",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Подушка верхняя опорная Renault Kangoo Clio2 98- (с подшипником)",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153734146"
+      },
+      "query_plan_sha256": "38718bc0c779cce47fcbc3c65c7c26cf382455648aa7a262ab660639ab72e84f",
+      "row_id": "1153734146",
+      "source_image_count": 2,
+      "title": "Подушка верхняя опорная Renault (Рено) Kangoo Clio2 98- (с подшипником)"
+    },
+    {
+      "category": "2.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "steering_column_switch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p2741615999-pereklyuchatel-povorotov-sveta.html",
+      "profile_sha256": "ab3280335887c01940a0eb7582732942ec27da0eb27dbf49693fa07a003d0721",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Переключатель поворотов света Opel (Опель) Astra F G Vectra A B Omega B",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Перемикач повортів світла Opel Astra F G Vectra A B Omega B",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Переключатель поворотов света Opel Astra F G Vectra A B Omega B",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "2741615999"
+      },
+      "query_plan_sha256": "31a3d4fc228b0e527915145d256b0fdba5cb95ee7feb1aece4477305c0a430a0",
+      "row_id": "2741615999",
+      "source_image_count": 3,
+      "title": "Переключатель поворотов света Opel (Опель) Astra F G Vectra A B Omega B"
+    },
+    {
+      "category": "7,8 Рулевое",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "steering",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153728527-nasos-gidrousilitelya-peugeot.html",
+      "profile_sha256": "4526b1aadee9b87a41cfd7301997da0f35dd18a0367ded45a4f44a9061e1aa4e",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Насос гидроусилителя Peugeot (Пежо) Partner 1.9D 96г.-",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Насос гідропідсилювача Peugeot Partner 1.9D 96г.-",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "насос гидроусилителя peugeot partner 1.9d",
+            "source": "FEATURE_EXCERPTS"
+          }
+        ],
+        "row_id": "1153728527"
+      },
+      "query_plan_sha256": "a2ce6a8b35f143f8d2d2f848fa1d7b6c82cc864ac00611cd003f6998718248ae",
+      "row_id": "1153728527",
+      "source_image_count": 5,
+      "title": "Насос гидроусилителя Peugeot (Пежо) Partner 1.9D 96г.-"
+    },
+    {
+      "category": "4.10 Тормозное/сцепление",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "clutch",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1297652484-disk-stsepleniya-215h24.html",
+      "profile_sha256": "1dc4c5360e77ede24698429f0751df460fb55469058804799a0b6a0e7a5c984f",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Диск сцепления 215х24 O.V.1.8.20 O.K. Daewoo (Део) Lanos 1.6 16V Nexia 1.5 16V",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Диск зчеплення 215х24 O.V.1.8.20 O.K.Daewoo Lanos 1.6 16V Nexia 1.5 16V",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Диск сцепления 215х24 O.V.1.8.20 O.K. Daewoo Lanos 1.6 16V Nexia 1.5 16V",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1297652484"
+      },
+      "query_plan_sha256": "ea0b1e88ef3e2d3eca53b1aca4b6bfe33dbcb9dfd7108924d7fac558a61dcc06",
+      "row_id": "1297652484",
+      "source_image_count": 2,
+      "title": "Диск сцепления 215х24 O.V.1.8.20 O.K. Daewoo (Део) Lanos 1.6 16V Nexia 1.5 16V"
+    },
+    {
+      "category": "1,4 Подшипники / Ступицы",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: SHARED_ARTICLE_FANOUT",
+      "part_family": "wheel_end",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153739560-podshipnik-stupitsy-zadnej.html",
+      "profile_sha256": "ac5d1f0c9c7b95cb8fc1e8fce837c70175956f6d2dd359f9d475ba03641436bc",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Подшипник ступицы задней Audi (Ауді) Q7 VW (Фольксваген) Touareg 03- 51*96*50 ABS",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Підшипник маточини задньої Audi Q7 VW Touareg 03- 51*96*50 ABS",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Подшипник ступицы задней Audi Q7 VW Touareg 03- 51*96*50 ABS",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153739560"
+      },
+      "query_plan_sha256": "9d4971abfef5413238223f8c593540b4e01a5e525946292cd27236296902806b",
+      "row_id": "1153739560",
+      "source_image_count": 3,
+      "title": "Подшипник ступицы задней Audi (Ауді) Q7 VW (Фольксваген) Touareg 03- 51*96*50 ABS"
+    },
+    {
+      "category": "3.11 Электрика",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но ни один источник не назвал его оригинальным",
+      "part_family": "electrical_charging",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1153727561-generator-ford-ford.html",
+      "profile_sha256": "e0e6ab779e079011a70194cb0e157e7581ff8b4a02983ae3ffa818f042388801",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Генератор Ford (Форд) Transit с вакумом ( LUCAS )",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Генератор Ford Transit з вакумом ( LUCAS )",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Генератор Ford Transit с вакумом ( LUCAS )",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1153727561"
+      },
+      "query_plan_sha256": "fc8a0196b6d63c9fd0fe44f76a2d1194fd89c8bc5ff4cc54354e5b84f45ebc65",
+      "row_id": "1153727561",
+      "source_image_count": 4,
+      "title": "Генератор Ford (Форд) Transit с вакумом ( LUCAS )"
+    },
+    {
+      "category": "1.13 Шрус",
+      "characteristics_available": true,
+      "description_available": true,
+      "no_oe_reason": "номер есть, но сомнение в самом номере: PUBLIC_NUMBER_SEMANTIC_FANOUT",
+      "part_family": "driveline",
+      "product_url": "https://kemp-cs2847093.prom.ua/p1230666227-val-privodnoj-25tdivw.html",
+      "profile_sha256": "7e397183e2e641fb2ed3d41ea3de448fbebc27294ef2cf6f9b591c9f686888bd",
+      "query_plan": {
+        "confirmed_oe_available": false,
+        "contract_version": "semantic-discovery-without-oe-v1",
+        "identifiers_used_for_retrieval": [],
+        "planner_version": "semantic-query-plan-v1",
+        "positive_retrieval_is_identity_proof": false,
+        "queries": [
+          {
+            "query": "Вал приводной 2,5TDIVW (Фольксваген) T5",
+            "source": "MASTER_TITLE"
+          },
+          {
+            "query": "Вал приводний 2,5TDIVW T5",
+            "source": "SOURCE_UK_TITLE"
+          },
+          {
+            "query": "Вал приводной 2,5TDIVW T5",
+            "source": "TITLE_WITHOUT_BRAND_TRANSLITERATIONS"
+          }
+        ],
+        "row_id": "1230666227"
+      },
+      "query_plan_sha256": "41db5f4e678c1b96b6337f2b3a4889535097e4bc69eacc6e76d59f2b0ccb75a7",
+      "row_id": "1230666227",
+      "source_image_count": 2,
+      "title": "Вал приводной 2,5TDIVW (Фольксваген) T5"
+    }
+  ],
+  "sample_manifest_sha256": "4e73a5ac6f6c8b90ba5a90fcd1da903263809c117e9f5369fabe8f84b3be47bf",
+  "schema_version": "semantic-discovery-without-oe-sample-v1",
+  "selection": {
+    "algorithm": "category-part-family-round-robin-sha256-v1",
+    "mandatory_row_ids": [
+      "1230665005",
+      "2179741467"
+    ],
+    "population": 1617,
+    "sample_size": 80,
+    "selection_seed_sha256": "dada50436980344c00b22aa567bd41ee5004fe538a0472ed20c0ca1a502c326b"
+  }
+}

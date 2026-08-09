@@ -46,3 +46,7 @@ def test_complete_offline_upgrade_sql_keeps_the_active_run_guard() -> None:
     assert "BLOCKED_MIGRATION_20260805_0048" in completed.stdout
     assert "ck_market_observation_sale_not_above_reference" in completed.stdout
     assert "ck_catalog_discovery_offer_sale_not_above_reference" in completed.stdout
+    assert "20260809_0050" in completed.stdout
+    assert "marko_oem_join_key" in completed.stdout
+    assert "marko_listing_internal_codes" in completed.stdout
+    assert "ix_listings_catalog_internal_code_norm" in completed.stdout
