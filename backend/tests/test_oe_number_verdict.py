@@ -119,3 +119,95 @@ def test_the_canary_set_is_mostly_answered_not_mostly_dodged() -> None:
     rows = _canary_rows()
     answered = [r for r in rows if verdict(r["name"], r["number"], r["headline"])[0] != "НЕ НАЙДЕНО"]
     assert len(answered) >= 40, f"ответов только {len(answered)} из {len(rows)}"
+
+
+# Дырки словаря, найденные на этапе 7. Каждая — языковой факт: как деталь
+# называется у нас и как её называет каталог. Это не подгонка под ответ:
+# «радиатор печки» — это heat exchanger независимо от того, что показала
+# страница.
+
+
+def test_the_heater_core_is_a_heat_exchanger() -> None:
+    assert verdict(
+        "Радиатор печки  Daewoo (Део) Lanos (плоские соты)",
+        "96231949",
+        "96231949 - Heat exchanger OE number by CHEVROLET, DAEWOO, GENERAL MOTORS",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_the_air_conditioning_radiator_is_a_condenser() -> None:
+    assert verdict(
+        "Радиатор кондиционера Renault Kangoo Nissan Kubistar",
+        "8200221131",
+        "8200221131 - Condenser OE number by NISSAN, RENAULT",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_the_caliper_may_be_spelled_the_ukrainian_way() -> None:
+    assert verdict(
+        "Супорт задний  Renault Trafic 2.Opel Vivaro",
+        "7701056166",
+        "7701056166 - Repair kit, brake caliper, piston OE number by DACIA, RENAULT",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_piston_rings_are_a_piston_ring_kit() -> None:
+    assert verdict(
+        "Кольца поршней VW (Фольксваген) Golf 81,0",
+        "037198151",
+        "037198151 - Piston ring kit OE number by AUDI, CUPRA, VW",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_the_starter_drive_is_a_pinion() -> None:
+    assert verdict(
+        "Бендикс VW Golf 2/VW Passat В3 1,9D/1,9TD",
+        "02A911335B",
+        "02A911335B - Pinion OE number by AUDI, SEAT, SKODA, VAG, VW",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_the_expansion_tank_and_its_cap_are_known_words() -> None:
+    assert verdict(
+        "Бачок розширювальний Audi A6 2.0-3.2 04->",
+        "025121321B",
+        "025121321B - Sealing cap, expansion tank, cap OE number by AUDI, VW",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_a_latin_letter_inside_a_russian_word_does_not_hide_the_part() -> None:
+    """«Крышкa» — последняя буква латинская. В данных заказчика это бывает."""
+
+    assert verdict(
+        "Крышкa расширительного бачка VW (Фольксваген) Golf",
+        "171121321D",
+        "171121321D - Sealing cap, expansion tank, closure OE number by AUDI, VW",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_a_brake_disc_against_an_intercooler_is_a_refusal() -> None:
+    """Номер из справочника оказался чужим: диск против интеркулера Honda."""
+
+    assert verdict(
+        "Диск тормозной задний MB Vito",
+        "197106A0A01",
+        "197106A0A01 - Intercooler OE number by HONDA",
+    )[0] == "ОПРОВЕРГНУТ"
+
+
+def test_a_parts_brand_in_the_maker_block_is_not_an_objection() -> None:
+    """SACHS не выпускает автомобили: сказать по нему, чья это машина, нечем."""
+
+    assert verdict(
+        "Амортизатор задний MB Sprinter (906) 46-",
+        "314608",
+        "314 608 - Shock absorber OE number by SACHS",
+    )[0] == "ПОДТВЕРЖДЁН"
+
+
+def test_a_real_car_maker_beside_a_parts_brand_still_objects() -> None:
+    assert verdict(
+        "Амортизатор задний Renault Kangoo 08->",
+        "344709",
+        "344709 - Shock absorber OE number by CHEVROLET, OPEL, SACHS",
+    )[0] == "ОПРОВЕРГНУТ"

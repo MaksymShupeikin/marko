@@ -45,7 +45,7 @@ PART_TYPES: dict[str, tuple[str, ...]] = {
     "підшипник": ("bearing", "wheel bearing"),
     "пружина": ("spring",),
     "амортизатор": ("shock absorber", "damper"),
-    "бендикс": ("freewheel gear", "starter"),
+    "бендикс": ("freewheel gear", "starter", "pinion"),
     "вкладыш": ("bearing shell", "big end bearing", "crankshaft bearing"),
     "помпа": ("water pump",),
     "термостат": ("thermostat",),
@@ -99,6 +99,28 @@ PART_TYPES: dict[str, tuple[str, ...]] = {
     "тросик": ("cable",),
     "успокоитель": ("guide", "rail", "tensioner"),
     "натяжитель": ("tensioner",),
+    "радиатор печки": ("heat exchanger", "heater"),
+    "радіатор пічки": ("heat exchanger", "heater"),
+    "радиатор кондиционера": ("condenser",),
+    "радіатор кондиціонера": ("condenser",),
+    "радиатор интеркулер": ("intercooler", "charge air cooler"),
+    "интеркулер": ("intercooler", "charge air cooler"),
+    "кольца поршней": ("piston ring",),
+    "кольца поршневые": ("piston ring",),
+    "кільця поршневі": ("piston ring",),
+    "супорт": ("caliper",),
+    "диск тормозной": ("brake disc", "brake rotor"),
+    "диск гальмівний": ("brake disc", "brake rotor"),
+    "подушка кпп": ("mounting", "engine mount", "transmission mount"),
+    "опора кпп": ("mounting", "transmission mount"),
+    "гидрокомпенсатор": ("tappet", "rocker"),
+    "гідрокомпенсатор": ("tappet", "rocker"),
+    "фланец": ("flange", "joint", "stub axle"),
+    "флянец": ("flange", "joint", "stub axle"),
+    "фланш": ("flange", "coolant flange"),
+    "бачок": ("expansion tank", "water tank", "tank"),
+    "бачек": ("expansion tank", "water tank", "tank"),
+    "селектор": ("selector", "gear lever", "shift"),
     "распредвал": ("camshaft",),
     "коленвал": ("crankshaft",),
 }
@@ -167,6 +189,36 @@ MAKE_GROUPS: tuple[frozenset[str], ...] = (
 )
 
 
+#: Латинские буквы, неотличимые на глаз от кириллических. В названиях заказчика
+#: они встречаются посреди русского слова — «Крышкa» с латинской «a». Слово от
+#: этого не меняется, а поиск по словарю ломается.
+_CONFUSABLE = str.maketrans(
+    "aAeEoOpPcCxXyYkKmMTHB",
+    "аАеЕоОрРсСхХуУкКмМТНВ",
+)
+_CYRILLIC = re.compile(r"[а-яёіїєґ]", re.IGNORECASE)
+
+
+def fold_confusable_letters(name: str) -> str:
+    """Свести латинские буквы к кириллическим там, где вокруг кириллица.
+
+    Только там: «VW Golf» рядом с русскими словами трогать нельзя, иначе марка
+    превратится в бессмыслицу. Правило узкое — буква между двумя русскими.
+    """
+
+    letters = list(name or "")
+    for index, letter in enumerate(letters):
+        if letter.translate(_CONFUSABLE) == letter:
+            continue
+        before = letters[index - 1] if index else ""
+        after = letters[index + 1] if index + 1 < len(letters) else ""
+        if _CYRILLIC.match(before or "") and _CYRILLIC.match(after or ""):
+            letters[index] = letter.translate(_CONFUSABLE)
+        elif _CYRILLIC.match(before or "") and not (after or "").isalpha():
+            letters[index] = letter.translate(_CONFUSABLE)
+    return "".join(letters)
+
+
 def our_makes(name: str) -> set[str]:
     low = re.sub(r"[^0-9a-zа-яёіїєA-ZА-Я\- ]", " ", (name or "").lower())
     words = set(re.split(r"[ \-]+", low))
@@ -200,7 +252,7 @@ def _norm(value: str) -> str:
 
 
 def our_part_types(name: str) -> set[str]:
-    low = (name or "").lower()
+    low = fold_confusable_letters((name or "").lower())
     return {key for key in PART_TYPES if key in low}
 
 
@@ -243,10 +295,15 @@ def verdict(name: str, number: str, headline: str) -> tuple[str, str]:
         for m in re.split(r"[,/]", match.group("makers"))
         if m.strip()
     }
+    # Возражает только автопроизводитель. Каталог иногда пишет в этот блок
+    # производителя запчасти — SACHS амортизаторы делает, автомобили нет, и
+    # сказать по нему, чья это машина, нечем. Молчание — не возражение.
+    known_makes = set(CAR_MAKES.values()) | {m for g in MAKE_GROUPS for m in g}
+    page_car_makes = page_makes & known_makes
     mine = our_makes(name)
-    if mine and page_makes and not (_expand(mine) & _expand(page_makes)):
+    if mine and page_car_makes and not (_expand(mine) & _expand(page_car_makes)):
         return (
             "ОПРОВЕРГНУТ",
-            f"машина другая: {sorted(page_makes)[:4]} != {sorted(mine)}",
+            f"машина другая: {sorted(page_car_makes)[:4]} != {sorted(mine)}",
         )
     return "ПОДТВЕРЖДЁН", f"{hit} -> {match.group('types')[:50]}"

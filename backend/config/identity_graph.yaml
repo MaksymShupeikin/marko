@@ -155,9 +155,9 @@ datasets:
   - sha256: fae4770e0d0b6ff70df32a9382608d11153612f2d0b23e9c3d3c2e1e659c4313
     source: OWN_STORE_LABELLED_OE
     note: "prom_stores_numbers_catalog.xlsx, exact owner-card OE blocks, 2026-08-08"
-  - sha256: 440f4f129f23191d557e356afdee80afb810c6f17af7e20c142b656ba7186c28
+  - sha256: a7de4af8865c122b6d77e95d374fa5b25a7bff31c764bac83d43c49c7a417992
     source: SPARETO_OE_PAGE
-    note: "spareto_oe_confirmations.csv, 355 подтверждений со страниц /oe/, 2026-08-08"
+    note: "spareto_oe_confirmations.csv, 443 подтверждения со страниц /oe/, 2026-08-09"
 
 # Выбор канонического номера, когда их несколько (обычный случай: 056121113D и
 # 050121113C у одного товара).
