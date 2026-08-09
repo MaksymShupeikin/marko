@@ -126,6 +126,8 @@ def _row() -> ParsedCatalogRow:
         oe_norm="77649999",
         mpn_raw="",
         mpn_norm="",
+        internal_code_raw="",
+        internal_code_norm="",
         name="Амортизатор VW",
         category="Амортизатори",
         brand="KEMP",

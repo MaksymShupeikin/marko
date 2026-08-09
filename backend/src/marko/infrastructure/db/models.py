@@ -1155,6 +1155,15 @@ class CatalogItem(TimestampMixin, Base):
     oe_norm: Mapped[str] = mapped_column(String(255), index=True)
     mpn_raw: Mapped[str] = mapped_column(Text, default="", server_default="")
     mpn_norm: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    #: Наш собственный код позиции. По нему каталог связывается с тем, что
+    #: напарсено с витрины: артикул принадлежит площадке, OE — детали, и только
+    #: этот код принадлежит нам. Индексируется, потому что связь идёт по нему.
+    internal_code_raw: Mapped[str] = mapped_column(
+        Text, default="", server_default=""
+    )
+    internal_code_norm: Mapped[str] = mapped_column(
+        String(255), default="", server_default="", index=True
+    )
     name: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(255), index=True)
     brand: Mapped[str | None] = mapped_column(String(255))

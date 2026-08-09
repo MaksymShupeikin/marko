@@ -45,6 +45,7 @@ from marko.services.catalog_characteristics import (
     normalize_characteristic_name,
 )
 from marko.services.catalog_costs import add_encrypted_cost_record
+from marko.services.catalog_identity_safety import is_internal_catalog_code
 from marko.services.cost_privacy import (
     CostPrivacyMode,
     is_raw_cost_label,
@@ -91,6 +92,18 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "номер запчастини",
     ),
     "mpn": ("mpn", "manufacturer part number", "номер производителя"),
+    # Наш собственный код позиции (776…). По нему каталог связывается с тем,
+    # что напарсено с витрины: у карточки Prom он напечатан в характеристике
+    # «Код запчастини», у нас лежит в справочнике. Ни артикул продавца, ни OE
+    # этой роли не выполняют — первый принадлежит площадке, второй детали.
+    "internal_code": (
+        "внутренний код",
+        "внутрішній код",
+        "код kemp",
+        "код кемп",
+        "код запчасти",
+        "код запчастини",
+    ),
     "name": (
         "name",
         "title",
@@ -229,6 +242,11 @@ class ParsedCatalogRow:
     oe_norm: str
     mpn_raw: str
     mpn_norm: str
+    #: Наш внутренний код позиции, как он написан в файле и после нормализации.
+    #: ``internal_code_norm`` пуст, если в колонке оказался не наш код: связывать
+    #: каталог с витриной по чужому номеру — значит соединить разные позиции.
+    internal_code_raw: str
+    internal_code_norm: str
     name: str
     category: str
     brand: str | None
@@ -666,6 +684,17 @@ def parse_catalog_xlsx(
                 if parsed.identity_status == "OE_CONFIRMED":
                     seen_oe_rows[parsed.oe_norm] = parsed
                 rows.append(parsed)
+                if parsed.internal_code_raw and not parsed.internal_code_norm:
+                    # Строку не роняем: она годная, просто по внутреннему коду
+                    # не свяжется. Молчать нельзя — это выглядело бы как связь.
+                    issues.append(
+                        ImportIssue(
+                            source_row,
+                            "INTERNAL_CODE_IGNORED",
+                            "внутренний код не распознан как наш: "
+                            f"{parsed.internal_code_raw}",
+                        )
+                    )
                 if parsed_cost is not None:
                     sensitive_costs[source_row] = parsed_cost
             except SensitiveCatalogImportBlocked:
@@ -1367,6 +1396,12 @@ def _parse_row(
     price = _positive_decimal(get("price"), "цена")
     mpn_raw = _cell_text(get("mpn"))
     mpn_norm = normalize_identifier(mpn_raw)
+    internal_code_raw = _cell_text(get("internal_code"))
+    internal_code_norm = (
+        normalize_identifier(internal_code_raw)
+        if is_internal_catalog_code(internal_code_raw)
+        else ""
+    )
     sku = _cell_text(get("sku")) or (
         f"OE-{oe_norm}-{source_row}"
         if oe_norm
@@ -1432,6 +1467,8 @@ def _parse_row(
         oe_norm=oe_norm,
         mpn_raw=mpn_raw,
         mpn_norm=mpn_norm,
+        internal_code_raw=internal_code_raw,
+        internal_code_norm=internal_code_norm,
         name=name,
         category=category,
         brand=_optional_text(get("brand"), max_length=255),

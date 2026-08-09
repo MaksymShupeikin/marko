@@ -237,3 +237,46 @@ def test_a_number_only_our_own_card_calls_original_is_not_a_price_key() -> None:
     assert not rests_only_on_our_own_label(
         ("KEMP_REFERENCE_MAP_V2", "KEMP_SITE"), asserting=asserting
     )
+
+
+def test_the_importer_reads_the_internal_code_column(tmp_path) -> None:
+    """Наш код KEMP — это то, чем позиция связывается с напарсенной витриной.
+
+    До этого он доезжал до базы только внутри сырой строки: колонки, по которой
+    можно искать и соединять, не существовало, и связь каталог ↔ витрина шла по
+    бренду с артикулом. 3767 строк из 4901 несут этот код и ждали, чтобы его
+    прочитали.
+    """
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(list(IMPORT_HEADERS))
+    sheet.append(import_values(_row("058133753D")))
+    path = tmp_path / "oe.xlsx"
+    workbook.save(path)
+
+    parsed = parse_catalog_xlsx(path.read_bytes())
+
+    assert parsed.column_mapping["internal_code"] == "Внутренний код"
+    assert parsed.rows[0].internal_code_raw == "7764321"
+    assert parsed.rows[0].internal_code_norm == "7764321"
+
+
+def test_a_number_that_is_not_our_shelf_code_is_refused_as_one(tmp_path) -> None:
+    """В эту колонку принимается только внутренний код, а не любой номер.
+
+    Иначе связь каталога с витриной пойдёт по чужому номеру и соединит разные
+    позиции.
+    """
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(list(IMPORT_HEADERS))
+    sheet.append(import_values(_row("058133753D", internal_code="058133753D")))
+    path = tmp_path / "oe.xlsx"
+    workbook.save(path)
+
+    parsed = parse_catalog_xlsx(path.read_bytes())
+
+    assert parsed.rows[0].internal_code_norm == ""
+    assert any("внутренн" in issue.message.lower() for issue in parsed.issues)
