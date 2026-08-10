@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
+    PricingRunItem,
     ScrapeEvidenceBlob,
     ScrapeHttpRequest,
     ScrapeTarget,
@@ -25,6 +26,13 @@ from marko.services.scraper_contract import (
     PROM_OUTPUT_SCHEMA_VERSION,
     ScrapeOutput,
     build_acquisition_input,
+)
+from marko.services.pricing_runs import (
+    customer_search_context,
+    declared_widenings,
+    frozen_catalog_item_from_snapshot,
+    retrieval_only_queries,
+    verified_start_snapshot,
 )
 from metis.pricing import (
     comparison_evidence_to_dict,
@@ -51,7 +59,11 @@ def _load_fixture(path: Path) -> tuple[dict, bytes, str]:
 
 
 def _target_output(
-    target: ScrapeTarget, fixture: dict, fixture_hash: str
+    target: ScrapeTarget,
+    fixture: dict,
+    fixture_hash: str,
+    *,
+    run_item: PricingRunItem | None = None,
 ) -> ScrapeOutput:
     records: list[dict] = []
     for index, value in enumerate(fixture["offers"]):
@@ -108,10 +120,28 @@ def _target_output(
         },
     }
     input_kind = str(getattr(target, "input_kind", "product_seed"))
+    catalog_item = None
+    if input_kind == "query":
+        if run_item is None:
+            raise E2eFixtureError(
+                "Query replay requires the frozen run item that defined its input"
+            )
+        catalog_item = frozen_catalog_item_from_snapshot(
+            verified_start_snapshot(run_item)
+        )
     scrape_input = build_acquisition_input(
         input_kind,
         target.query if input_kind == "query" else target.original_url,
         query=target.query,
+        search_context=(
+            customer_search_context(catalog_item) if catalog_item is not None else None
+        ),
+        fallback_queries=(
+            declared_widenings(catalog_item) if catalog_item is not None else None
+        ),
+        discovery_queries=(
+            retrieval_only_queries(catalog_item) if catalog_item is not None else None
+        ),
         language="ua",
         adapter_version=target.adapter_version,
     )
@@ -162,6 +192,27 @@ async def seed_fixture_replay(
             if max_targets < 1:
                 raise E2eFixtureError("max_targets must be positive")
             targets = targets[:max_targets]
+        run_items = list(
+            (
+                await session.scalars(
+                    select(PricingRunItem)
+                    .where(
+                        PricingRunItem.pricing_run_id == run_id,
+                        PricingRunItem.scrape_target_id.in_(
+                            [target.id for target in targets]
+                        ),
+                    )
+                    .order_by(PricingRunItem.membership_position)
+                )
+            ).all()
+        )
+        run_item_by_target: dict[UUID, PricingRunItem] = {}
+        for run_item in run_items:
+            run_item_by_target.setdefault(run_item.scrape_target_id, run_item)
+        if len(run_item_by_target) != len(targets):
+            raise E2eFixtureError(
+                "Every replay target must be bound to a frozen run item"
+            )
         blob = await session.scalar(
             select(ScrapeEvidenceBlob).where(
                 ScrapeEvidenceBlob.content_sha256 == fixture_hash
@@ -179,7 +230,12 @@ async def seed_fixture_replay(
             session.add(blob)
             await session.flush()
         for target in targets:
-            output = _target_output(target, fixture, fixture_hash)
+            output = _target_output(
+                target,
+                fixture,
+                fixture_hash,
+                run_item=run_item_by_target[target.id],
+            )
             request = await session.scalar(
                 select(ScrapeHttpRequest).where(
                     ScrapeHttpRequest.scrape_target_id == target.id,

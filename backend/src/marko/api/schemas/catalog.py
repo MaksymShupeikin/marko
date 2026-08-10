@@ -4,10 +4,28 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class CatalogDataEvidenceResponse(BaseModel):
+    """Provenance of customer catalog evidence, never an identity override."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[
+        "OE_CONFIRMED", "MPN_ONLY", "CANDIDATE_REVIEW", "NO_OE_REVIEW"
+    ] = "NO_OE_REVIEW"
+    review_only: bool = True
+    internal_code: str | None = None
+    oe_sources: list[str] = Field(default_factory=list)
+    evidence_url: str | None = None
+    confirmed_cross_numbers: list[str] = Field(default_factory=list)
+    candidate_numbers: list[str] = Field(default_factory=list)
+    anomalies: list[str] = Field(default_factory=list)
+    no_oe_reason: str | None = None
 
 
 class CatalogImportResponse(BaseModel):
@@ -111,6 +129,9 @@ class CatalogItemResponse(BaseModel):
     mpn_norm: str
     search_identity: str | None = None
     identity_status: str = "UNRESOLVED"
+    catalog_data_evidence: CatalogDataEvidenceResponse = Field(
+        default_factory=CatalogDataEvidenceResponse
+    )
     name: str
     category: str
     brand: str | None

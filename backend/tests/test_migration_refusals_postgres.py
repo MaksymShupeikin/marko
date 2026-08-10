@@ -449,7 +449,10 @@ async def test_0047_downgrade_refuses_to_erase_semantic_conflict(
         refused = _alembic(database, "downgrade", "20260804_0046")
         assert refused.returncode != 0
         assert anomaly in (refused.stdout + refused.stderr)
-        assert "20260805_0047" in _revision(database)
+        # A failed transactional downgrade from a mergepoint leaves the
+        # database at the single shipped head; it no longer reports each
+        # ancestor revision separately.
+        assert _head_revision(database) in _revision(database)
 
         connection = await asyncpg.connect(_dsn(database))
         try:
@@ -503,7 +506,7 @@ async def test_0046_downgrade_refuses_to_erase_stale_quarantine_semantics() -> N
         refused = _alembic(database, "downgrade", "20260804_0045")
         assert refused.returncode != 0
         assert "STALE_AFTER_REPARSE" in (refused.stdout + refused.stderr)
-        assert "20260804_0046" in _revision(database)
+        assert _head_revision(database) in _revision(database)
 
         connection = await asyncpg.connect(_dsn(database))
         try:

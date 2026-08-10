@@ -18,6 +18,94 @@ List<String> _requiredStringList(Map<String, dynamic> json, String field) {
   return value.map((item) => item.toString()).toList(growable: false);
 }
 
+class CatalogDataEvidence {
+  const CatalogDataEvidence({
+    required this.status,
+    required this.reviewOnly,
+    required this.internalCode,
+    required this.oeSources,
+    required this.evidenceUrl,
+    required this.confirmedCrossNumbers,
+    required this.candidateNumbers,
+    required this.anomalies,
+    required this.noOeReason,
+  });
+
+  const CatalogDataEvidence.empty()
+    : status = 'NO_OE_REVIEW',
+      reviewOnly = true,
+      internalCode = null,
+      oeSources = const [],
+      evidenceUrl = null,
+      confirmedCrossNumbers = const [],
+      candidateNumbers = const [],
+      anomalies = const [],
+      noOeReason = null;
+
+  factory CatalogDataEvidence.fromJson(
+    dynamic raw, {
+    String? legacyIdentityStatus,
+  }) {
+    if (raw is! Map) {
+      if (legacyIdentityStatus?.toUpperCase() == 'OE_CONFIRMED') {
+        return const CatalogDataEvidence(
+          status: 'OE_CONFIRMED',
+          reviewOnly: false,
+          internalCode: null,
+          oeSources: [],
+          evidenceUrl: null,
+          confirmedCrossNumbers: [],
+          candidateNumbers: [],
+          anomalies: [],
+          noOeReason: null,
+        );
+      }
+      if (legacyIdentityStatus?.toUpperCase() == 'MPN_ONLY') {
+        return const CatalogDataEvidence(
+          status: 'MPN_ONLY',
+          reviewOnly: true,
+          internalCode: null,
+          oeSources: [],
+          evidenceUrl: null,
+          confirmedCrossNumbers: [],
+          candidateNumbers: [],
+          anomalies: [],
+          noOeReason: null,
+        );
+      }
+      return const CatalogDataEvidence.empty();
+    }
+    final json = Map<String, dynamic>.from(raw);
+    List<String> values(String key) {
+      final value = json[key];
+      if (value is! List) return const [];
+      return value.map((item) => item.toString()).toList(growable: false);
+    }
+
+    return CatalogDataEvidence(
+      status: json['status']?.toString() ?? 'NO_OE_REVIEW',
+      reviewOnly: json['review_only'] as bool? ?? true,
+      internalCode: json['internal_code']?.toString(),
+      oeSources: values('oe_sources'),
+      evidenceUrl: json['evidence_url']?.toString(),
+      confirmedCrossNumbers: values('confirmed_cross_numbers'),
+      candidateNumbers: values('candidate_numbers'),
+      anomalies: values('anomalies'),
+      noOeReason: json['no_oe_reason']?.toString(),
+    );
+  }
+
+  final String status;
+  final bool reviewOnly;
+  final String? internalCode;
+  final List<String> oeSources;
+  final String? evidenceUrl;
+  final List<String> confirmedCrossNumbers;
+  final List<String> candidateNumbers;
+  final List<String> anomalies;
+  final String? noOeReason;
+}
+
 class PricingRecommendation {
   PricingRecommendation({
     required this.id,
@@ -29,6 +117,7 @@ class PricingRecommendation {
     this.mpn,
     this.searchIdentity,
     this.identityStatus = 'UNRESOLVED',
+    this.catalogDataEvidence = const CatalogDataEvidence.empty(),
     required this.name,
     required this.category,
     required this.stockStatus,
@@ -109,6 +198,10 @@ class PricingRecommendation {
       mpn: json['mpn_norm'] as String?,
       searchIdentity: json['search_identity'] as String?,
       identityStatus: json['identity_status']?.toString() ?? 'UNRESOLVED',
+      catalogDataEvidence: CatalogDataEvidence.fromJson(
+        json['catalog_data_evidence'],
+        legacyIdentityStatus: json['identity_status']?.toString(),
+      ),
       name: json['name'] as String,
       category: json['category'] as String,
       stockStatus: json['stock_status'] as String,
@@ -196,6 +289,7 @@ class PricingRecommendation {
   final String? mpn;
   final String? searchIdentity;
   final String identityStatus;
+  final CatalogDataEvidence catalogDataEvidence;
   final String name;
   final String category;
   final String stockStatus;

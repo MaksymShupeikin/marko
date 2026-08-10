@@ -59,8 +59,9 @@ def test_the_unique_index_is_reached_on_a_clean_database() -> None:
 @pytest.mark.skipif(not _enabled(), reason="set MARKO_RUN_POSTGRES_INTEGRATION=1")
 def test_the_cycle_is_reversible() -> None:
     _require_disposable()
-    # Шаг от текущей головы, а не до фиксированной ревизии: цепочка растёт, и
-    # спуск через чужие миграции проверяет не то, что этот тест утверждает.
-    assert _alembic("upgrade", "head").returncode == 0
-    assert _alembic("downgrade", "-1").returncode == 0
+    # Проверяем именно миграцию уникального request_key. От merge-head шаг
+    # ``-1`` неоднозначен по определению Alembic и тестировал бы только форму
+    # графа, а не обратимость 0037.
+    assert _alembic("downgrade", "20260801_0036").returncode == 0
+    assert _alembic("upgrade", "20260801_0037").returncode == 0
     assert _alembic("upgrade", "head").returncode == 0

@@ -245,6 +245,28 @@ void main() {
     expect(item.identityStatus, 'MPN_ONLY');
   });
 
+  test('parses catalog evidence without promoting candidate numbers to OE', () {
+    final evidence = CatalogDataEvidence.fromJson({
+      'status': 'CANDIDATE_REVIEW',
+      'review_only': true,
+      'internal_code': '77643',
+      'oe_sources': ['OWN_EXPORT_CODE', 'KEMP_REFERENCE_MAP_V2'],
+      'evidence_url': 'https://example.test/confirm',
+      'confirmed_cross_numbers': ['93818439'],
+      'candidate_numbers': ['93818440'],
+      'anomalies': ['SHARED_ARTICLE_FANOUT'],
+      'no_oe_reason': 'нужна независимая проверка',
+    });
+
+    expect(evidence.status, 'CANDIDATE_REVIEW');
+    expect(evidence.reviewOnly, isTrue);
+    expect(evidence.internalCode, '77643');
+    expect(evidence.oeSources, ['OWN_EXPORT_CODE', 'KEMP_REFERENCE_MAP_V2']);
+    expect(evidence.confirmedCrossNumbers, ['93818439']);
+    expect(evidence.candidateNumbers, ['93818440']);
+    expect(evidence.noOeReason, 'нужна независимая проверка');
+  });
+
   test('parses the gated budget-floor target as a non-applying advisory', () {
     final item = PricingRecommendation.fromJson({
       'id': 'recommendation-id',

@@ -451,7 +451,11 @@ async def test_02_query_replay_materialization_and_redelivery_are_idempotent(
                     sku="SKU-QUERY-ONLY-SECOND",
                     oe_raw="1K0 121 251",
                     oe_norm="1K0121251",
-                    name="Second item sharing the same query",
+                        # Keep the retrieval context identical as well as the
+                        # OE: the canonical query input deliberately hashes
+                        # both, so only truly identical acquisitions share a
+                        # target.
+                        name="Query-only brake pad",
                     category="brakes",
                     brand="KEMP",
                     identity_status="OE_CONFIRMED",
@@ -678,15 +682,25 @@ async def test_02_query_replay_materialization_and_redelivery_are_idempotent(
             await session.commit()
             assert pairs == []
             assert persisted_run.calibration_accounting["observations_considered"] == 16
-            assert persisted_run.calibration_accounting["eligible_observations"] == 15
-            assert persisted_run.calibration_accounting["excluded_observations"] == 1
+            # The E2E fixture intentionally leaves category-domain policy
+            # unapproved. Exact OE evidence is preserved, but fail-closed
+            # calibration must exclude every observation rather than treating
+            # the replay fixture as production admission evidence.
+            assert persisted_run.calibration_accounting["eligible_observations"] == 0
+            assert persisted_run.calibration_accounting["excluded_observations"] == 16
             assert persisted_run.calibration_accounting[
                 "exclusion_counts_by_reason"
-            ] == {"CAL_NOT_AUTOMATIC_ELIGIBLE": 1}
+            ] == {
+                "CAL_HARD_GATE_NOT_PASS": 16,
+                "CAL_NOT_AUTOMATIC_ELIGIBLE": 16,
+                "CAL_SEMANTIC_GATE_NOT_PASS": 16,
+            }
             excluded = await session.get(MarketObservation, calibration_excluded_id)
             assert excluded is not None
             assert excluded.calibration_exclusion_codes == [
-                "CAL_NOT_AUTOMATIC_ELIGIBLE"
+                "CAL_NOT_AUTOMATIC_ELIGIBLE",
+                "CAL_HARD_GATE_NOT_PASS",
+                "CAL_SEMANTIC_GATE_NOT_PASS",
             ]
 
             await session.execute(

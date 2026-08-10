@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from marko.api.schemas.catalog import CatalogDataEvidenceResponse
 from metis.pricing import (
     CoefficientModel,
     CohortRole,
@@ -321,6 +322,9 @@ class RecommendationResponse(BaseModel):
     mpn_norm: str | None = None
     search_identity: str | None = None
     identity_status: str = "UNRESOLVED"
+    catalog_data_evidence: CatalogDataEvidenceResponse = Field(
+        default_factory=CatalogDataEvidenceResponse
+    )
     name: str
     category: str
     stock_status: str

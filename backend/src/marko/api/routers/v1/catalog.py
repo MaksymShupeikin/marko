@@ -48,6 +48,7 @@ from marko.services.catalog_discovery import (
     collect_catalog_discovery,
 )
 from marko.services.catalog_costs import cost_configuration_map
+from marko.services.catalog_data_evidence import catalog_data_evidence
 from marko.services.attention import (
     mark_source_monitoring_failed,
     start_import_monitoring_run,
@@ -577,6 +578,7 @@ def _catalog_item_response(
             "mpn_norm",
             "search_identity",
             "identity_status",
+            "catalog_data_evidence",
         }
     }
     return CatalogItemResponse(
@@ -585,6 +587,7 @@ def _catalog_item_response(
         mpn_norm=identity["mpn"],
         search_identity=identity["search_identity"] or None,
         identity_status=identity["identity_status"],
+        catalog_data_evidence=catalog_data_evidence(item).as_dict(),
         cost_configured=cost_configured,
         cost_privacy_mode=get_settings().cost_privacy_mode,
         raw_row=privacy_safe_mapping(item.raw_row),

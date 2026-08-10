@@ -22,6 +22,7 @@ from marko.infrastructure.db.models import (
     OfferProcessingOutcome,
 )
 from marko.services.catalog_costs import get_latest_cost_record
+from marko.services.catalog_data_evidence import catalog_data_evidence
 from marko.api.schemas.pricing import (
     AiEvidenceExtractionResponse,
     AiEvidenceFieldResponse,
@@ -1448,6 +1449,7 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
         mpn_norm=identity["mpn"] or None,
         search_identity=identity["search_identity"] or None,
         identity_status=identity["identity_status"],
+        catalog_data_evidence=catalog_data_evidence(item).as_dict(),
         name=item.name,
         category=item.category,
         stock_status=recommendation.context_snapshot.get(

@@ -127,6 +127,7 @@ from marko.services.pricing_runs import (
     customer_identity_available,
     customer_identity_query,
     customer_search_context,
+    declared_widenings,
     frozen_catalog_item_from_snapshot,
     get_latest_override,
     load_run_execution_policy,
@@ -135,6 +136,7 @@ from marko.services.pricing_runs import (
     persist_run_calibration_pairs,
     require_activated_run_policy,
     resolve_execution_override,
+    retrieval_only_queries,
     run_is_bounded,
     uses_frozen_start_inputs,
     verified_start_snapshot,
@@ -1380,6 +1382,16 @@ async def _claim_target_item(
             query=target.query,
             search_context=(
                 customer_search_context(catalog_item)
+                if target.input_kind == "query"
+                else None
+            ),
+            fallback_queries=(
+                declared_widenings(catalog_item)
+                if target.input_kind == "query"
+                else None
+            ),
+            discovery_queries=(
+                retrieval_only_queries(catalog_item)
                 if target.input_kind == "query"
                 else None
             ),
