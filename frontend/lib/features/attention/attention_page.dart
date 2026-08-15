@@ -8,6 +8,7 @@ import '../../core/app_theme.dart';
 import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
+import '../../core/widgets/marko_skeleton.dart';
 import 'attention_controller.dart';
 import 'attention_models.dart';
 
@@ -41,7 +42,7 @@ class _AttentionPageState extends ConsumerState<AttentionPage> {
     final asyncState = ref.watch(attentionControllerProvider);
     final controller = ref.read(attentionControllerProvider.notifier);
     return asyncState.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => const MarkoQueueSkeleton(),
       error: (error, _) => SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: MarkoAsyncErrorView(

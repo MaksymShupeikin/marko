@@ -26,19 +26,24 @@ double _contrastRatio(Color foreground, Color background) {
 }
 
 void main() {
-  test('warning and error inline text satisfy WCAG AA contrast', () {
-    final colors = MarkoTheme.light;
-    final pairs = <String, (Color, Color)>{
-      'warning': (colors.warning, colors.warningSoft),
-      'error': (colors.negative, colors.negativeSoft),
-    };
-
-    for (final MapEntry(key: name, value: pair) in pairs.entries) {
-      expect(
-        _contrastRatio(pair.$1, pair.$2),
-        greaterThanOrEqualTo(4.5),
-        reason: '$name inline text must satisfy WCAG AA 4.5:1',
-      );
+  test('semantic text on tinted surfaces satisfies WCAG AA contrast', () {
+    for (final theme in [MarkoTheme.light, MarkoTheme.dark]) {
+      final pairs = <String, (Color, Color)>{
+        'ink/canvas': (theme.ink, theme.canvas),
+        'ink/surface': (theme.ink, theme.surface),
+        'muted/surface': (theme.muted, theme.surface),
+        'brand/brandSoft': (theme.brand, theme.brandSoft),
+        'positive/positiveSoft': (theme.positive, theme.positiveSoft),
+        'warning/warningSoft': (theme.warning, theme.warningSoft),
+        'error/errorSoft': (theme.negative, theme.negativeSoft),
+      };
+      for (final MapEntry(key: name, value: pair) in pairs.entries) {
+        expect(
+          _contrastRatio(pair.$1, pair.$2),
+          greaterThanOrEqualTo(4.5),
+          reason: '${theme == MarkoTheme.light ? 'light' : 'dark'} $name',
+        );
+      }
     }
   });
 

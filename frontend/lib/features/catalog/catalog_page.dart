@@ -3,11 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:go_router/go_router.dart';
+
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
 import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_menu.dart';
+import '../../core/widgets/marko_skeleton.dart';
 import 'catalog_controller.dart';
 import 'catalog_import_dialog.dart';
 import 'catalog_models.dart';
@@ -19,6 +22,7 @@ class CatalogPage extends ConsumerStatefulWidget {
     required this.onOpenPriceComparison,
     this.canAdministerWorkspace = false,
     this.initialStoreId,
+    this.initialQuery,
     this.onInitialStoreApplied,
     this.initialProductId,
     this.onOpenProductDeepLink,
@@ -31,6 +35,7 @@ class CatalogPage extends ConsumerStatefulWidget {
   /// Store to preselect in the filter, set when the operator opened this page
   /// by tapping that store in "Мои магазины".
   final String? initialStoreId;
+  final String? initialQuery;
 
   /// Reported once the preselection has been applied, so the caller can drop
   /// it and leave the filter under the operator's control from then on.
@@ -52,6 +57,7 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
 
   String? _appliedStoreId;
   String? _appliedProductId;
+  String? _appliedQuery;
 
   @override
   void dispose() {
@@ -72,6 +78,17 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
       unawaited(
         ref.read(catalogControllerProvider.notifier).selectStores({storeId}),
       );
+    });
+  }
+
+  void _applyInitialQuery() {
+    final query = widget.initialQuery;
+    if (query == null || query == _appliedQuery) return;
+    _appliedQuery = query;
+    _searchController.text = query;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(ref.read(catalogControllerProvider.notifier).search(query));
     });
   }
 
@@ -98,7 +115,7 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
   Widget build(BuildContext context) {
     final asyncState = ref.watch(catalogControllerProvider);
     return asyncState.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => const MarkoQueueSkeleton(),
       error: (error, _) => MarkoAsyncErrorView(
         error: error,
         forbiddenResourceRu: 'каталогу товаров',
@@ -107,6 +124,7 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
       ),
       data: (state) {
         _applyInitialStore();
+        _applyInitialQuery();
         _applyInitialProduct(state);
         return _CatalogContent(
           state: state,
@@ -143,6 +161,16 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
   void _searchNow(String query) {
     _searchDebounce?.cancel();
     ref.read(catalogControllerProvider.notifier).search(query);
+    final router = GoRouter.maybeOf(context);
+    if (router == null) return;
+    final uri = GoRouterState.of(context).uri;
+    final next = Map<String, String>.from(uri.queryParameters);
+    if (query.trim().isEmpty) {
+      next.remove('q');
+    } else {
+      next['q'] = query.trim();
+    }
+    router.go(uri.replace(queryParameters: next).toString());
   }
 
   void _clearSearch() {

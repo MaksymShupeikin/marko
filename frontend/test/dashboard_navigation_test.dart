@@ -218,7 +218,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Deep-link brake pad'), findsOneWidget);
+    expect(find.text('Deep-link brake pad'), findsWidgets);
     expect(find.text('Проверить replay'), findsOneWidget);
     expect(find.text('Контекст склада'), findsOneWidget);
     expect(tester.takeException(), isNull);

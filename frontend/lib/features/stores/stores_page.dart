@@ -7,6 +7,7 @@ import '../../core/app_theme.dart';
 import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
+import '../../core/widgets/marko_skeleton.dart';
 import '../../core/widgets/marko_button.dart';
 import '../attention/attention_controller.dart';
 import '../catalog/catalog_controller.dart';
@@ -121,7 +122,7 @@ class _StoresPageState extends ConsumerState<StoresPage> {
     return GestureDetector(
       onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
       child: asyncState.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const MarkoQueueSkeleton(),
         error: (error, _) => MarkoAsyncErrorView(
           error: error,
           forbiddenResourceRu: 'разделу магазинов',

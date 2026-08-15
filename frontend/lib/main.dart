@@ -9,6 +9,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/app_language.dart';
 import 'core/app_router.dart';
 import 'core/app_theme.dart';
+import 'core/app_theme_mode.dart';
 import 'core/api_client.dart';
 import 'core/client_error_reporter.dart';
 import 'core/environment.dart';
@@ -102,6 +103,7 @@ class _ConfigurationErrorApp extends StatelessWidget {
       title: 'Marko',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
       home: SelectionArea(
         child: Scaffold(
           body: Center(
@@ -135,6 +137,7 @@ class MarkoApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     final language = ref.watch(appLanguageProvider);
+    final themeMode = ref.watch(appThemeModeProvider);
     final reporter = ClientErrorReporter.instance;
     reporter.attachTransport((event) async {
       await ref
@@ -147,6 +150,8 @@ class MarkoApp extends ConsumerWidget {
         title: 'Marko',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        themeMode: themeMode,
         locale: language.locale,
         supportedLocales: AppLanguage.values
             .map((item) => item.locale)
@@ -159,6 +164,8 @@ class MarkoApp extends ConsumerWidget {
       title: 'Marko',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: themeMode,
       locale: language.locale,
       supportedLocales: AppLanguage.values
           .map((item) => item.locale)

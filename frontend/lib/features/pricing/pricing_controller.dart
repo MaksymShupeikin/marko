@@ -17,6 +17,8 @@ class RecommendationsState {
     this.deepLinkUnavailable = false,
     this.newerRunAvailable = false,
     this.sessionExpired = false,
+    this.selectedIds = const {},
+    this.batchBusy = false,
     this.error,
   });
 
@@ -41,6 +43,8 @@ class RecommendationsState {
   /// It is not an error string: nothing the operator can read fixes it, and
   /// only a fresh sign-in does.
   final bool sessionExpired;
+  final Set<String> selectedIds;
+  final bool batchBusy;
   final String? error;
 
   RecommendationsState copyWith({
@@ -55,6 +59,8 @@ class RecommendationsState {
     bool? deepLinkUnavailable,
     bool? newerRunAvailable,
     bool? sessionExpired,
+    Set<String>? selectedIds,
+    bool? batchBusy,
     String? error,
     bool clearError = false,
   }) {
@@ -69,6 +75,8 @@ class RecommendationsState {
       deepLinkUnavailable: deepLinkUnavailable ?? this.deepLinkUnavailable,
       newerRunAvailable: newerRunAvailable ?? this.newerRunAvailable,
       sessionExpired: sessionExpired ?? this.sessionExpired,
+      selectedIds: selectedIds ?? this.selectedIds,
+      batchBusy: batchBusy ?? this.batchBusy,
       error: clearError ? null : error ?? this.error,
     );
   }
@@ -76,8 +84,86 @@ class RecommendationsState {
 
 class RecommendationsController extends AsyncNotifier<RecommendationsState> {
   int _requestGeneration = 0;
+  final Map<String, Future<List<RecommendationEvidence>>> _evidence = {};
 
   PricingApi get _api => ref.read(pricingApiProvider);
+
+  Future<List<RecommendationEvidence>> evidenceFor(String recommendationId) {
+    return _evidence.putIfAbsent(recommendationId, () async {
+      try {
+        return await _api.getEvidence(recommendationId);
+      } catch (error) {
+        ref.classifySessionExpiry(error);
+        rethrow;
+      }
+    });
+  }
+
+  void refreshEvidence(String recommendationId) {
+    _evidence.remove(recommendationId);
+  }
+
+  void toggleSelected(String id) {
+    final current = state.value;
+    if (current == null) return;
+    final next = Set<String>.from(current.selectedIds);
+    if (!next.add(id)) next.remove(id);
+    state = AsyncData(current.copyWith(selectedIds: next));
+  }
+
+  void clearSelection() {
+    final current = state.value;
+    if (current == null || current.selectedIds.isEmpty) return;
+    state = AsyncData(current.copyWith(selectedIds: const {}));
+  }
+
+  void selectVisible() {
+    final current = state.value;
+    if (current == null) return;
+    state = AsyncData(
+      current.copyWith(
+        selectedIds: current.page.items.map((item) => item.id).toSet(),
+      ),
+    );
+  }
+
+  Future<({int accepted, int failed})> recordDecisionsBatch({
+    required String decision,
+    required Map<String, dynamic> values,
+  }) async {
+    final current = state.value;
+    if (current == null || current.selectedIds.isEmpty) {
+      return (accepted: 0, failed: 0);
+    }
+    state = AsyncData(current.copyWith(batchBusy: true));
+    final remaining = Set<String>.from(current.selectedIds);
+    var accepted = 0;
+    for (final id in current.selectedIds) {
+      try {
+        await _api.recordDecision(id, values);
+        remaining.remove(id);
+        accepted += 1;
+      } catch (error) {
+        if (ref.classifySessionExpiry(error)) {
+          final latest = state.value ?? current;
+          state = AsyncData(
+            latest.copyWith(
+              batchBusy: false,
+              selectedIds: remaining,
+              sessionExpired: true,
+              clearError: true,
+            ),
+          );
+          return (accepted: accepted, failed: remaining.length);
+        }
+      }
+    }
+    final latest = state.value ?? current;
+    state = AsyncData(
+      latest.copyWith(batchBusy: false, selectedIds: remaining),
+    );
+    return (accepted: accepted, failed: remaining.length);
+  }
 
   /// Single funnel for every failure that lands while a page is already on
   /// screen.

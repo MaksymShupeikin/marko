@@ -2,11 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/attention/attention_controller.dart';
+import '../features/attention/attention_page.dart';
 import '../features/auth/auth_controller.dart';
 import '../features/auth/auth_models.dart';
 import '../features/auth/auth_page.dart';
+import '../features/catalog/catalog_controller.dart';
+import '../features/catalog/catalog_import_dialog.dart';
+import '../features/catalog/catalog_page.dart';
 import '../features/dashboard/dashboard_page.dart';
+import '../features/pricing/recommendations_page.dart';
 import '../features/stores/store_products_page.dart';
+import '../features/stores/stores_page.dart';
 import 'client_error_reporter.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -15,51 +22,94 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     refreshListenable: authRefresh,
     observers: [ClientTelemetryNavigatorObserver(ClientErrorReporter.instance)],
     routes: [
-      GoRoute(
-        path: '/',
-        name: 'dashboard',
-        builder: (_, state) => SelectionArea(
-          child: DashboardPage(
-            initialTab: switch (state.uri.queryParameters['tab']) {
-              'catalog' => 1,
-              'stores' => 2,
-              _ => 0,
-            },
-            routeNavigation: true,
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) {
+          return SelectionArea(
+            child: WorkspaceShell(navigationShell: navigationShell),
+          );
+        },
+        redirect: (context, state) {
+          if (state.uri.path != '/') return null;
+          return switch (state.uri.queryParameters['tab']) {
+            'catalog' => '/catalog',
+            'stores' => '/stores',
+            _ => null,
+          };
+        },
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/',
+                name: 'dashboard',
+                builder: (context, state) => _attentionBranch(ref),
+              ),
+              GoRoute(
+                path: '/overview',
+                name: 'overview',
+                builder: (context, state) => _attentionBranch(ref),
+              ),
+              GoRoute(
+                path: '/pricing',
+                name: 'pricing',
+                builder: (context, state) => _recommendationsBranch(
+                  ref,
+                  queue: state.uri.queryParameters['queue'],
+                  sort: state.uri.queryParameters['sort'],
+                  action: state.uri.queryParameters['action'],
+                ),
+                routes: [
+                  GoRoute(
+                    path: 'recommendations/:recommendationId',
+                    name: 'pricing-recommendation',
+                    builder: (context, state) => _recommendationsBranch(
+                      ref,
+                      recommendationId:
+                          state.pathParameters['recommendationId'],
+                      queue: state.uri.queryParameters['queue'],
+                      sort: state.uri.queryParameters['sort'],
+                      action: state.uri.queryParameters['action'],
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ),
-      ),
-      GoRoute(
-        path: '/pricing',
-        name: 'pricing',
-        builder: (_, _) => const SelectionArea(
-          child: DashboardPage(
-            initialTab: 0,
-            legacyPricing: true,
-            routeNavigation: true,
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/catalog',
+                name: 'catalog',
+                builder: (context, state) => _catalogBranch(
+                  ref,
+                  storeId: state.uri.queryParameters['store'],
+                  query: state.uri.queryParameters['q'],
+                ),
+                routes: [
+                  GoRoute(
+                    path: 'products/:productId',
+                    name: 'catalog-product',
+                    builder: (context, state) => _catalogBranch(
+                      ref,
+                      productId: state.pathParameters['productId'],
+                      storeId: state.uri.queryParameters['store'],
+                      query: state.uri.queryParameters['q'],
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ),
-      ),
-      GoRoute(
-        path: '/catalog',
-        name: 'catalog',
-        builder: (_, _) => const SelectionArea(
-          child: DashboardPage(initialTab: 1, routeNavigation: true),
-        ),
-      ),
-      GoRoute(
-        path: '/stores',
-        name: 'stores',
-        builder: (_, _) => const SelectionArea(
-          child: DashboardPage(initialTab: 2, routeNavigation: true),
-        ),
-      ),
-      GoRoute(
-        path: '/overview',
-        name: 'overview',
-        builder: (_, _) => const SelectionArea(
-          child: DashboardPage(initialTab: 0, routeNavigation: true),
-        ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/stores',
+                name: 'stores',
+                builder: (context, state) => _storesBranch(ref),
+              ),
+            ],
+          ),
+        ],
       ),
       GoRoute(
         path: '/login',
@@ -76,27 +126,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
         ),
       ),
-      GoRoute(
-        path: '/catalog/products/:productId',
-        name: 'catalog-product',
-        builder: (_, state) => SelectionArea(
-          child: DashboardPage(
-            initialCatalogProductId: state.pathParameters['productId'] ?? '',
-            routeNavigation: true,
-          ),
-        ),
-      ),
-      GoRoute(
-        path: '/pricing/recommendations/:recommendationId',
-        name: 'pricing-recommendation',
-        builder: (_, state) => SelectionArea(
-          child: DashboardPage(
-            initialRecommendationId:
-                state.pathParameters['recommendationId'] ?? '',
-            routeNavigation: true,
-          ),
-        ),
-      ),
     ],
     redirect: (_, state) {
       return authRedirectTarget(
@@ -108,6 +137,108 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   ref.onDispose(router.dispose);
   return router;
 });
+
+Widget _attentionBranch(Ref ref) {
+  return _WorkspacePage(
+    builder: (canAdminister) => AttentionPage(
+      onOpenSources: () => ref.read(appRouterProvider).go('/stores'),
+      onOpenRecommendation: (id) => ref
+          .read(appRouterProvider)
+          .goNamed(
+            'pricing-recommendation',
+            pathParameters: {'recommendationId': id},
+          ),
+    ),
+  );
+}
+
+Widget _recommendationsBranch(
+  Ref ref, {
+  String? recommendationId,
+  String? queue,
+  String? sort,
+  String? action,
+}) {
+  return _WorkspacePage(
+    builder: (canAdminister) => RecommendationsPage(
+      canAdministerWorkspace: canAdminister,
+      initialRecommendationId: recommendationId,
+      initialQueue: queue,
+      initialSort: sort,
+      initialAction: action,
+      onOpenCatalog: () => ref.read(appRouterProvider).go('/catalog'),
+      onOpenRecommendationDeepLink: (id) => ref
+          .read(appRouterProvider)
+          .goNamed(
+            'pricing-recommendation',
+            pathParameters: {'recommendationId': id},
+          ),
+    ),
+  );
+}
+
+Widget _catalogBranch(
+  Ref ref, {
+  String? productId,
+  String? storeId,
+  String? query,
+}) {
+  return _WorkspacePage(
+    builder: (canAdminister) => CatalogPage(
+      canAdministerWorkspace: canAdminister,
+      initialStoreId: storeId,
+      initialQuery: query,
+      initialProductId: productId,
+      onOpenPriceComparison: () => ref.read(appRouterProvider).go('/pricing'),
+      onOpenProductDeepLink: (id) => ref
+          .read(appRouterProvider)
+          .goNamed('catalog-product', pathParameters: {'productId': id}),
+    ),
+  );
+}
+
+Widget _storesBranch(Ref ref) {
+  return _WorkspacePage(
+    builder: (canAdminister) => StoresPage(
+      ownedOnly: true,
+      canAdministerWorkspace: canAdminister,
+      onOpenStoreCatalog: (storeId) =>
+          ref.read(appRouterProvider).go('/catalog?store=$storeId'),
+      onImportCatalog: canAdminister
+          ? () {
+              final context = ref
+                  .read(appRouterProvider)
+                  .routerDelegate
+                  .navigatorKey
+                  .currentContext;
+              if (context == null) return;
+              showCatalogImportDialog(
+                context: context,
+                canAdministerWorkspace: true,
+                onImported: () {
+                  ref.invalidate(catalogControllerProvider);
+                  ref.invalidate(attentionControllerProvider);
+                },
+              );
+            }
+          : null,
+    ),
+  );
+}
+
+class _WorkspacePage extends ConsumerWidget {
+  const _WorkspacePage({required this.builder});
+
+  final Widget Function(bool canAdminister) builder;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final canAdminister =
+        ref.watch(authControllerProvider).value?.user?.canAdministerWorkspace ??
+        false;
+    return builder(canAdminister);
+  }
+}
 
 final _authRouterRefreshProvider = Provider<_AuthRouterRefresh>((ref) {
   final refresh = _AuthRouterRefresh();

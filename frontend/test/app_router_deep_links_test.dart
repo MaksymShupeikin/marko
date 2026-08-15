@@ -64,7 +64,7 @@ void main() {
       await container.read(authControllerProvider.future);
 
       final router = container.read(appRouterProvider);
-      final routes = router.configuration.routes.whereType<GoRoute>().toList();
+      final routes = _namedGoRoutes(router.configuration.routes).toList();
 
       expect(
         routes.singleWhere((route) => route.name == 'pricing').path,
@@ -83,17 +83,39 @@ void main() {
         '/overview',
       );
       expect(
-        routes.singleWhere((route) => route.name == 'catalog-product').path,
-        '/catalog/products/:productId',
+        router.namedLocation(
+          'catalog-product',
+          pathParameters: {'productId': 'product-1'},
+        ),
+        '/catalog/products/product-1',
       );
       expect(
-        routes
-            .singleWhere((route) => route.name == 'pricing-recommendation')
-            .path,
-        '/pricing/recommendations/:recommendationId',
+        router.namedLocation(
+          'pricing-recommendation',
+          pathParameters: {'recommendationId': 'rec-1'},
+        ),
+        '/pricing/recommendations/rec-1',
       );
     },
   );
+}
+
+Iterable<GoRoute> _namedGoRoutes(List<RouteBase> routes) sync* {
+  for (final route in routes) {
+    switch (route) {
+      case GoRoute():
+        yield route;
+        yield* _namedGoRoutes(route.routes);
+      case StatefulShellRoute():
+        for (final branch in route.branches) {
+          yield* _namedGoRoutes(branch.routes);
+        }
+      case ShellRoute():
+        yield* _namedGoRoutes(route.routes);
+      default:
+        break;
+    }
+  }
 }
 
 class _SignedInAuthController extends AuthController {

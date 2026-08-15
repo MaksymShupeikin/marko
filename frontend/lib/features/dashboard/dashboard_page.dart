@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/app_theme_mode.dart';
 import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/system_status.dart';
@@ -62,16 +63,16 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     final user = ref.watch(authControllerProvider).value?.user;
     final canAdministerWorkspace = user?.canAdministerWorkspace ?? false;
     final language = ref.watch(appLanguageProvider);
-    final destinations = <_Destination>[
-      _Destination(
+    final destinations = <DashboardDestination>[
+      DashboardDestination(
         Icons.notification_important_outlined,
         context.localized(ru: 'Требует внимания', uk: 'Потребує уваги'),
       ),
-      _Destination(
+      DashboardDestination(
         Icons.inventory_2_outlined,
         context.localized(ru: 'Товары', uk: 'Товари'),
       ),
-      _Destination(
+      DashboardDestination(
         Icons.hub_outlined,
         context.localized(ru: 'Источники', uk: 'Джерела'),
       ),
@@ -124,55 +125,15 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
       ],
     );
 
-    return Scaffold(
-      body: MarkoAtmosphere(
-        beams: true,
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 900;
-              if (wide) {
-                return Row(
-                  children: [
-                    _Sidebar(
-                      destinations: destinations,
-                      selectedIndex: _selectedIndex,
-                      email: user?.email,
-                      language: language,
-                      onSelected: _select,
-                      onLanguageSelected: _selectLanguage,
-                      onLogout: _logout,
-                    ),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _PageBar(title: destinations[_selectedIndex].label),
-                          Expanded(child: content),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              }
-              return Column(
-                children: [
-                  _MobileHeader(
-                    language: language,
-                    onLanguageSelected: _selectLanguage,
-                    onLogout: _logout,
-                  ),
-                  Expanded(child: content),
-                  _MobileNavigation(
-                    destinations: destinations,
-                    selectedIndex: _selectedIndex,
-                    onSelected: _select,
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
+    return MarkoWorkspaceChrome(
+      destinations: destinations,
+      selectedIndex: _selectedIndex,
+      email: user?.email,
+      language: language,
+      onSelected: _select,
+      onLanguageSelected: _selectLanguage,
+      onLogout: _logout,
+      child: content,
     );
   }
 
@@ -228,8 +189,125 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   void _logout() => ref.read(authControllerProvider.notifier).logout();
 }
 
-class _Destination {
-  const _Destination(this.icon, this.label);
+class MarkoWorkspaceChrome extends ConsumerWidget {
+  const MarkoWorkspaceChrome({
+    required this.destinations,
+    required this.selectedIndex,
+    required this.email,
+    required this.language,
+    required this.onSelected,
+    required this.onLanguageSelected,
+    required this.onLogout,
+    required this.child,
+    super.key,
+  });
+
+  final List<DashboardDestination> destinations;
+  final int selectedIndex;
+  final String? email;
+  final AppLanguage language;
+  final ValueChanged<int> onSelected;
+  final ValueChanged<AppLanguage> onLanguageSelected;
+  final VoidCallback onLogout;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      body: MarkoAtmosphere(
+        beams: true,
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= MarkoBreakpoints.medium;
+              if (wide) {
+                return Row(
+                  children: [
+                    _Sidebar(
+                      destinations: destinations,
+                      selectedIndex: selectedIndex,
+                      email: email,
+                      language: language,
+                      onSelected: onSelected,
+                      onLanguageSelected: onLanguageSelected,
+                      onLogout: onLogout,
+                    ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          _PageBar(title: destinations[selectedIndex].label),
+                          Expanded(child: child),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  _MobileHeader(
+                    language: language,
+                    onLanguageSelected: onLanguageSelected,
+                    onLogout: onLogout,
+                  ),
+                  Expanded(child: child),
+                  _MobileNavigation(
+                    destinations: destinations,
+                    selectedIndex: selectedIndex,
+                    onSelected: onSelected,
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class WorkspaceShell extends ConsumerWidget {
+  const WorkspaceShell({required this.navigationShell, super.key});
+
+  final StatefulNavigationShell navigationShell;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(authControllerProvider).value?.user;
+    final language = ref.watch(appLanguageProvider);
+    final destinations = <DashboardDestination>[
+      DashboardDestination(
+        Icons.notification_important_outlined,
+        context.localized(ru: 'Требует внимания', uk: 'Потребує уваги'),
+      ),
+      DashboardDestination(
+        Icons.inventory_2_outlined,
+        context.localized(ru: 'Товары', uk: 'Товари'),
+      ),
+      DashboardDestination(
+        Icons.hub_outlined,
+        context.localized(ru: 'Источники', uk: 'Джерела'),
+      ),
+    ];
+    return MarkoWorkspaceChrome(
+      destinations: destinations,
+      selectedIndex: navigationShell.currentIndex,
+      email: user?.email,
+      language: language,
+      onSelected: (index) => navigationShell.goBranch(index),
+      onLanguageSelected: (value) =>
+          ref.read(appLanguageProvider.notifier).select(value),
+      onLogout: () => ref.read(authControllerProvider.notifier).logout(),
+      child: KeyedSubtree(
+        key: const ValueKey('dashboard-indexed-stack'),
+        child: navigationShell,
+      ),
+    );
+  }
+}
+
+class DashboardDestination {
+  const DashboardDestination(this.icon, this.label);
 
   final IconData icon;
   final String label;
@@ -246,7 +324,7 @@ class _Sidebar extends StatelessWidget {
     required this.onLogout,
   });
 
-  final List<_Destination> destinations;
+  final List<DashboardDestination> destinations;
   final int selectedIndex;
   final String? email;
   final AppLanguage language;
@@ -295,9 +373,15 @@ class _Sidebar extends StatelessWidget {
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-                  child: _LanguageSelector(
-                    language: language,
-                    onSelected: onLanguageSelected,
+                  child: Column(
+                    children: [
+                      _LanguageSelector(
+                        language: language,
+                        onSelected: onLanguageSelected,
+                      ),
+                      const SizedBox(height: MarkoSpacing.xs),
+                      const _ThemeModeButton(),
+                    ],
                   ),
                 ),
                 Divider(color: colors.border),
@@ -441,6 +525,34 @@ class _LanguageSelector extends StatelessWidget {
   }
 }
 
+class _ThemeModeButton extends ConsumerWidget {
+  const _ThemeModeButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(appThemeModeProvider);
+    final (icon, label) = switch (mode) {
+      ThemeMode.light => (
+        Icons.light_mode_outlined,
+        context.localized(ru: 'Светлая тема', uk: 'Світла тема'),
+      ),
+      ThemeMode.dark => (
+        Icons.dark_mode_outlined,
+        context.localized(ru: 'Тёмная тема', uk: 'Темна тема'),
+      ),
+      ThemeMode.system => (
+        Icons.contrast_rounded,
+        context.localized(ru: 'Как в системе', uk: 'Як у системі'),
+      ),
+    };
+    return OutlinedButton.icon(
+      onPressed: () => ref.read(appThemeModeProvider.notifier).cycle(),
+      icon: Icon(icon, size: 18),
+      label: Text(label),
+    );
+  }
+}
+
 class _SidebarItem extends StatelessWidget {
   const _SidebarItem({
     required this.destination,
@@ -448,7 +560,7 @@ class _SidebarItem extends StatelessWidget {
     required this.onTap,
   });
 
-  final _Destination destination;
+  final DashboardDestination destination;
   final bool selected;
   final VoidCallback onTap;
 
@@ -624,7 +736,7 @@ class _MobileNavigation extends StatelessWidget {
     required this.onSelected,
   });
 
-  final List<_Destination> destinations;
+  final List<DashboardDestination> destinations;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
 

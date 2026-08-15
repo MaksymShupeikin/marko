@@ -38,6 +38,24 @@ class MarkoTheme extends ThemeExtension<MarkoTheme> {
     panelRadius: 12,
   );
 
+  static const dark = MarkoTheme(
+    canvas: Color(0xFF111413),
+    surface: Color(0xFF1A1E1C),
+    surfaceMuted: Color(0xFF242927),
+    ink: Color(0xFFF3F5F2),
+    muted: Color(0xFFA4ADA8),
+    border: Color(0xFF323834),
+    brand: Color(0xFF8AA0F5),
+    brandSoft: Color(0xFF1E2744),
+    positive: Color(0xFF5FD4A2),
+    positiveSoft: Color(0xFF163528),
+    negative: Color(0xFFF3B4B4),
+    negativeSoft: Color(0xFF3A1C1C),
+    warning: Color(0xFFE8C07A),
+    warningSoft: Color(0xFF3A2C12),
+    panelRadius: 12,
+  );
+
   final Color canvas;
   final Color surface;
   final Color surfaceMuted;
@@ -118,18 +136,41 @@ class MarkoTheme extends ThemeExtension<MarkoTheme> {
   }
 }
 
+abstract final class MarkoSpacing {
+  static const double xxs = 4;
+  static const double xs = 8;
+  static const double sm = 12;
+  static const double md = 16;
+  static const double lg = 24;
+  static const double xl = 32;
+}
+
+abstract final class MarkoBreakpoints {
+  static const double compact = 680;
+  static const double medium = 900;
+  static const double wide = 1120;
+
+  static bool isCompact(double width) => width < compact;
+  static bool isWide(double width) => width >= wide;
+}
+
 abstract final class AppTheme {
-  static ThemeData get light {
-    final colors = MarkoTheme.light;
-    final colorScheme = ColorScheme.light(
+  static ThemeData get light => _build(MarkoTheme.light, Brightness.light);
+
+  static ThemeData get dark => _build(MarkoTheme.dark, Brightness.dark);
+
+  static ThemeData _build(MarkoTheme colors, Brightness brightness) {
+    final onBrand = brightness == Brightness.dark ? colors.ink : Colors.white;
+    final colorScheme = ColorScheme(
+      brightness: brightness,
       primary: colors.brand,
-      onPrimary: Colors.white,
+      onPrimary: onBrand,
       primaryContainer: colors.brandSoft,
       onPrimaryContainer: colors.ink,
       secondary: colors.ink,
-      onSecondary: Colors.white,
+      onSecondary: colors.surface,
       error: colors.negative,
-      onError: Colors.white,
+      onError: colors.surface,
       errorContainer: colors.negativeSoft,
       onErrorContainer: colors.negative,
       surface: colors.surface,
@@ -213,7 +254,7 @@ abstract final class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.light,
+      brightness: brightness,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: colors.canvas,
       canvasColor: colors.canvas,
