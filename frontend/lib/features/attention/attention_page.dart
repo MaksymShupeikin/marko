@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
 import 'attention_controller.dart';
@@ -199,42 +200,44 @@ class _Header extends StatelessWidget {
         summary.underpriced +
         summary.reviewRequired +
         summary.noData;
-    return Wrap(
-      alignment: WrapAlignment.spaceBetween,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 16,
-      runSpacing: 12,
-      children: [
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                problemCount == 0
-                    ? context.localized(
-                        ru: 'Цены под контролем',
-                        uk: 'Ціни під контролем',
-                      )
-                    : _attentionTitle(context, problemCount),
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-              const SizedBox(height: 7),
-              Text(
-                _freshness(context, summary.updatedAt),
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-              ),
-            ],
+    return MarkoFadeUp(
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 16,
+        runSpacing: 12,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  problemCount == 0
+                      ? context.localized(
+                          ru: 'Цены под контролем',
+                          uk: 'Ціни під контролем',
+                        )
+                      : _attentionTitle(context, problemCount),
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  _freshness(context, summary.updatedAt),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: colors.muted),
+                ),
+              ],
+            ),
           ),
-        ),
-        IconButton.outlined(
-          tooltip: context.localized(ru: 'Обновить', uk: 'Оновити'),
-          onPressed: refreshing ? null : onRefresh,
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
+          IconButton.outlined(
+            tooltip: context.localized(ru: 'Обновить', uk: 'Оновити'),
+            onPressed: refreshing ? null : onRefresh,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -325,6 +328,8 @@ class _AttentionCard extends StatelessWidget {
     final style = _statusStyle(context, colors, item.status);
     return MarkoPanel(
       padding: const EdgeInsets.all(16),
+      interactive: true,
+      onTap: onOpen,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 700;

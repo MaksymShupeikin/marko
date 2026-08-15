@@ -12,7 +12,9 @@ import 'core/app_theme.dart';
 import 'core/api_client.dart';
 import 'core/client_error_reporter.dart';
 import 'core/environment.dart';
+import 'core/marko_motion.dart';
 import 'core/marko_ui.dart';
+import 'core/widgets/marko_atmosphere.dart';
 import 'features/auth/auth_controller.dart';
 
 void main() {
@@ -172,17 +174,20 @@ class _AppLoading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          MarkoWordmark(),
-          SizedBox(height: 24),
-          SizedBox.square(
-            dimension: 22,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ],
+    return const MarkoAtmosphere(
+      beams: true,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MarkoFadeUp(child: MarkoWordmark()),
+            SizedBox(height: 24),
+            SizedBox.square(
+              dimension: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
+        ),
       ),
     );
   }

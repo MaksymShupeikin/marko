@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
 import '../../core/widgets/marko_button.dart';
@@ -271,53 +272,55 @@ class _PageHeading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    return Wrap(
-      alignment: WrapAlignment.spaceBetween,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 18,
-      runSpacing: 12,
-      children: [
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                ownedOnly
-                    ? context.localized(ru: 'Источники', uk: 'Джерела')
-                    : context.localized(
-                        ru: 'Магазины Prom',
-                        uk: 'Магазини Prom',
-                      ),
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-              const SizedBox(height: 7),
-              Text(
-                ownedOnly
-                    ? context.localized(
-                        ru: 'Подключите магазин Prom или загрузите XLSX — товары и проверка цен запустятся автоматически.',
-                        uk: 'Підключіть магазин Prom або завантажте XLSX — товари та перевірка цін запустяться автоматично.',
-                      )
-                    : context.localized(
-                        ru: 'Подключайте каталоги и управляйте их синхронизацией.',
-                        uk: 'Підключайте каталоги та керуйте їх синхронізацією.',
-                      ),
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: colors.muted),
-              ),
-            ],
-          ),
-        ),
-        if (onImportCatalog != null)
-          OutlinedButton.icon(
-            onPressed: onImportCatalog,
-            icon: const Icon(Icons.upload_file_outlined),
-            label: Text(
-              context.localized(ru: 'Загрузить XLSX', uk: 'Завантажити XLSX'),
+    return MarkoFadeUp(
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 18,
+        runSpacing: 12,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  ownedOnly
+                      ? context.localized(ru: 'Источники', uk: 'Джерела')
+                      : context.localized(
+                          ru: 'Магазины Prom',
+                          uk: 'Магазини Prom',
+                        ),
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  ownedOnly
+                      ? context.localized(
+                          ru: 'Подключите магазин Prom или загрузите XLSX — товары и проверка цен запустятся автоматически.',
+                          uk: 'Підключіть магазин Prom або завантажте XLSX — товари та перевірка цін запустяться автоматично.',
+                        )
+                      : context.localized(
+                          ru: 'Подключайте каталоги и управляйте их синхронизацией.',
+                          uk: 'Підключайте каталоги та керуйте їх синхронізацією.',
+                        ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: colors.muted),
+                ),
+              ],
             ),
           ),
-      ],
+          if (onImportCatalog != null)
+            OutlinedButton.icon(
+              onPressed: onImportCatalog,
+              icon: const Icon(Icons.upload_file_outlined),
+              label: Text(
+                context.localized(ru: 'Загрузить XLSX', uk: 'Завантажити XLSX'),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/app_language.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/widgets/marko_cached_image.dart';
+import '../../../core/widgets/marko_spotlight.dart';
 import '../store_models.dart';
 
 class ProductCard extends StatefulWidget {
@@ -56,37 +57,40 @@ class _ProductCardState extends State<ProductCard> {
                 ),
               ],
             ),
-            child: RepaintBoundary(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AspectRatio(
-                    aspectRatio: 1,
-                    child: ColoredBox(
-                      color: colors.surfaceMuted,
-                      child: MarkoCachedImage(
-                        imageUrl: product.imageUrl,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: colors.ink,
-                        border: Border(
-                          top: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.10),
-                          ),
+            child: MarkoSpotlight(
+              borderRadius: radius,
+              child: RepaintBoundary(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AspectRatio(
+                      aspectRatio: 1,
+                      child: ColoredBox(
+                        color: colors.surfaceMuted,
+                        child: MarkoCachedImage(
+                          imageUrl: product.imageUrl,
+                          fit: BoxFit.cover,
                         ),
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 13),
-                        child: _CardDetails(product: product),
+                    ),
+                    Expanded(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colors.ink,
+                          border: Border(
+                            top: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 12, 14, 13),
+                          child: _CardDetails(product: product),
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

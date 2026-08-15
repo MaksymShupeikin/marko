@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_menu.dart';
 import 'catalog_controller.dart';
@@ -231,10 +232,12 @@ class _CatalogContent extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _CatalogHeader(
-                  canImport: canAdministerWorkspace,
-                  onImport: onImport,
-                  onRefresh: onRefresh,
+                MarkoFadeUp(
+                  child: _CatalogHeader(
+                    canImport: canAdministerWorkspace,
+                    onImport: onImport,
+                    onRefresh: onRefresh,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 TextField(

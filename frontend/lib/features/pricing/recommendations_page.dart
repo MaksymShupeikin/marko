@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api_client.dart';
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/presentation_formatters.dart';
 import '../../core/session_expiry.dart';
@@ -148,62 +149,64 @@ class _RecommendationsContent extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 16,
-                  runSpacing: 14,
-                  children: [
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 720),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                MarkoFadeUp(
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 16,
+                    runSpacing: 14,
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 720),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              context.localized(
+                                ru: 'Сравнение цен',
+                                uk: 'Порівняння цін',
+                              ),
+                              style: Theme.of(context).textTheme.headlineMedium,
+                            ),
+                            const SizedBox(height: 7),
+                            Text(
+                              context.localized(
+                                ru: 'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
+                                uk: 'Спочатку показані найбільші рекомендовані зміни. Ціна на Prom.ua не змінюється автоматично.',
+                              ),
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: colors.muted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
                         children: [
-                          Text(
-                            context.localized(
-                              ru: 'Сравнение цен',
-                              uk: 'Порівняння цін',
-                            ),
-                            style: Theme.of(context).textTheme.headlineMedium,
+                          RecommendationExportButton(
+                            queue: state.queue,
+                            sort: state.sort,
+                            action: state.actionFilter,
+                            // The file must be the calculation on screen, not
+                            // whichever run happens to be newest when the
+                            // download is requested.
+                            runId: state.runId,
                           ),
-                          const SizedBox(height: 7),
-                          Text(
-                            context.localized(
-                              ru: 'По умолчанию сначала показаны самые большие рекомендуемые изменения. Цена на Prom.ua не меняется автоматически.',
-                              uk: 'Спочатку показані найбільші рекомендовані зміни. Ціна на Prom.ua не змінюється автоматично.',
+                          IconButton.outlined(
+                            tooltip: context.localized(
+                              ru: 'Обновить',
+                              uk: 'Оновити',
                             ),
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(color: colors.muted),
+                            // Repeating the request with a token the backend
+                            // already rejected can only fail again.
+                            onPressed: sessionExpired ? null : onRefresh,
+                            icon: const Icon(Icons.refresh_rounded),
                           ),
                         ],
                       ),
-                    ),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        RecommendationExportButton(
-                          queue: state.queue,
-                          sort: state.sort,
-                          action: state.actionFilter,
-                          // The file must be the calculation on screen, not
-                          // whichever run happens to be newest when the
-                          // download is requested.
-                          runId: state.runId,
-                        ),
-                        IconButton.outlined(
-                          tooltip: context.localized(
-                            ru: 'Обновить',
-                            uk: 'Оновити',
-                          ),
-                          // Repeating the request with a token the backend
-                          // already rejected can only fail again.
-                          onPressed: sessionExpired ? null : onRefresh,
-                          icon: const Icon(Icons.refresh_rounded),
-                        ),
-                      ],
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 22),
                 PricingRunPanel(
@@ -636,6 +639,7 @@ class _RecommendationCardState extends ConsumerState<_RecommendationCard> {
         : (colors.muted, colors.surfaceMuted, Icons.horizontal_rule_rounded);
     return MarkoPanel(
       padding: EdgeInsets.zero,
+      interactive: true,
       child: ExpansionTile(
         initiallyExpanded: widget.initiallyExpanded,
         onExpansionChanged: (expanded) {

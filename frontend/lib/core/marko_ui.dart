@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'api_client.dart';
 import 'app_language.dart';
 import 'app_theme.dart';
+import 'marko_motion.dart';
 import 'session_expiry.dart';
+import 'widgets/marko_spotlight.dart';
 
 class MarkoWordmark extends StatelessWidget {
   const MarkoWordmark({this.compact = false, this.inverse = false, super.key});
@@ -29,6 +31,14 @@ class MarkoWordmark extends StatelessWidget {
             border: inverse
                 ? Border.all(color: Colors.white.withValues(alpha: 0.14))
                 : null,
+            boxShadow: [
+              if (inverse)
+                BoxShadow(
+                  color: colors.brand.withValues(alpha: 0.35),
+                  blurRadius: 16,
+                  spreadRadius: -2,
+                ),
+            ],
           ),
           alignment: Alignment.center,
           child: Icon(
@@ -63,6 +73,7 @@ class MarkoPanel extends StatelessWidget {
     this.color,
     this.borderColor,
     this.onTap,
+    this.interactive = false,
     super.key,
   });
 
@@ -71,13 +82,14 @@ class MarkoPanel extends StatelessWidget {
   final Color? color;
   final Color? borderColor;
   final VoidCallback? onTap;
+  final bool interactive;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final radius = BorderRadius.circular(colors.panelRadius);
     final content = Padding(padding: padding, child: child);
-    return DecoratedBox(
+    Widget panel = DecoratedBox(
       decoration: BoxDecoration(
         color: color ?? colors.surface,
         borderRadius: radius,
@@ -94,6 +106,13 @@ class MarkoPanel extends StatelessWidget {
               ),
             ),
     );
+    if (interactive) {
+      panel = MarkoHoverLift(
+        borderRadius: radius,
+        child: MarkoSpotlight(borderRadius: radius, child: panel),
+      );
+    }
+    return panel;
   }
 }
 

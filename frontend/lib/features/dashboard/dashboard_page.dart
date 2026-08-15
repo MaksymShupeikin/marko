@@ -4,8 +4,10 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_language.dart';
 import '../../core/app_theme.dart';
+import '../../core/marko_motion.dart';
 import '../../core/marko_ui.dart';
 import '../../core/system_status.dart';
+import '../../core/widgets/marko_atmosphere.dart';
 import '../../core/widgets/marko_menu.dart';
 import '../auth/auth_controller.dart';
 import '../attention/attention_controller.dart';
@@ -123,49 +125,52 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     );
 
     return Scaffold(
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 900;
-            if (wide) {
-              return Row(
+      body: MarkoAtmosphere(
+        beams: true,
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 900;
+              if (wide) {
+                return Row(
+                  children: [
+                    _Sidebar(
+                      destinations: destinations,
+                      selectedIndex: _selectedIndex,
+                      email: user?.email,
+                      language: language,
+                      onSelected: _select,
+                      onLanguageSelected: _selectLanguage,
+                      onLogout: _logout,
+                    ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          _PageBar(title: destinations[_selectedIndex].label),
+                          Expanded(child: content),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return Column(
                 children: [
-                  _Sidebar(
-                    destinations: destinations,
-                    selectedIndex: _selectedIndex,
-                    email: user?.email,
+                  _MobileHeader(
                     language: language,
-                    onSelected: _select,
                     onLanguageSelected: _selectLanguage,
                     onLogout: _logout,
                   ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        _PageBar(title: destinations[_selectedIndex].label),
-                        Expanded(child: content),
-                      ],
-                    ),
+                  Expanded(child: content),
+                  _MobileNavigation(
+                    destinations: destinations,
+                    selectedIndex: _selectedIndex,
+                    onSelected: _select,
                   ),
                 ],
               );
-            }
-            return Column(
-              children: [
-                _MobileHeader(
-                  language: language,
-                  onLanguageSelected: _selectLanguage,
-                  onLogout: _logout,
-                ),
-                Expanded(child: content),
-                _MobileNavigation(
-                  destinations: destinations,
-                  selectedIndex: _selectedIndex,
-                  onSelected: _select,
-                ),
-              ],
-            );
-          },
+            },
+          ),
         ),
       ),
     );
@@ -452,34 +457,43 @@ class _SidebarItem extends StatelessWidget {
     final colors = MarkoTheme.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-      child: Material(
-        color: selected ? colors.brandSoft : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: onTap,
+      child: AnimatedContainer(
+        duration: MarkoMotion.hover,
+        curve: MarkoMotion.hoverCurve,
+        decoration: BoxDecoration(
+          color: selected ? colors.brandSoft : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-            child: Row(
-              children: [
-                Icon(
-                  destination.icon,
-                  size: 19,
-                  color: selected ? colors.brand : colors.muted,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    destination.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: selected ? colors.brand : colors.ink,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              child: Row(
+                children: [
+                  Icon(
+                    destination.icon,
+                    size: 19,
+                    color: selected ? colors.brand : colors.muted,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      destination.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: selected ? colors.brand : colors.ink,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -540,14 +554,7 @@ class _PageBar extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: foreground,
-                    shape: BoxShape.circle,
-                  ),
-                ),
+                MarkoStatusPulse(color: foreground),
                 const SizedBox(width: 7),
                 Text(
                   label,
@@ -643,10 +650,22 @@ class _MobileNavigation extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      item.icon,
-                      size: 20,
-                      color: selected ? colors.brand : colors.muted,
+                    AnimatedContainer(
+                      duration: MarkoMotion.hover,
+                      curve: MarkoMotion.hoverCurve,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected ? colors.brandSoft : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        item.icon,
+                        size: 20,
+                        color: selected ? colors.brand : colors.muted,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(

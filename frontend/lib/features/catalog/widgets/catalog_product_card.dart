@@ -29,6 +29,7 @@ class CatalogProductCard extends StatelessWidget {
     final card = MarkoPanel(
       key: ValueKey('catalog-product-card-${product.id}'),
       padding: EdgeInsets.zero,
+      interactive: true,
       onTap: listingUrl == null ? null : () => _openListing(listingUrl),
       child: IntrinsicHeight(
         child: Row(
