@@ -26,6 +26,7 @@ from marko.infrastructure.db.models import (
     CatalogIdentityLink,
     CatalogImportBatch,
     CatalogItem,
+    CatalogKempLinkResolution,
     CatalogItemCostRecord,
     CatalogItemOverride,
     CrossLink,
@@ -687,6 +688,15 @@ class ScopeCandidate:
     applicability_brands: tuple[str, ...] = ()
     applicability_models: tuple[str, ...] = ()
     characteristics_raw: Mapping[str, Any] = field(default_factory=dict)
+    # The unit the customer sells one of. A Prom export keeps it as a top-level
+    # column, so it never reached execution through ``characteristics_raw`` and
+    # the seed side of ``unit_basis`` compared UNKNOWN against a candidate that
+    # stated its own. Resolved once here so the frozen snapshot carries it and
+    # a later catalog edit cannot change a running review.
+    measure_unit: str | None = None
+    internal_code_raw: str = ""
+    internal_code_norm: str = ""
+    kemp_link_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,6 +716,15 @@ class PricingRunScopeEstimate:
     worst_case_duration_seconds: int
     network_eligible_items: int = 0
     identity_blocked_items: int = 0
+    oem_items: int = 0
+    no_oem_items: int = 0
+    kemp_linked_items: int = 0
+    kemp_unlinked_items: int = 0
+    kemp_ambiguous_items: int = 0
+    expected_prom_queries: int = 0
+    luna_item_limit: int = 0
+    max_provider_calls: int = 0
+    estimated_ai_cost: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -737,6 +756,59 @@ class PricingRunScope:
 MIN_PUBLIC_QUERY_NUMBER_LENGTH = 4
 
 
+_MEASURE_UNIT_LABELS = (
+    "одиниц",
+    "единиц",
+    "measure unit",
+    "unit of measure",
+    "unit basis",
+)
+# Prom names the unit of every *characteristic* with the same word
+# (``Одиниця_виміру_Характеристики#7``).  Those describe a characteristic, not
+# what the customer sells one of, and must never be read as the listing unit.
+_MEASURE_UNIT_EXCLUDED = ("характеристик", "characteristic")
+
+
+def resolve_catalog_measure_unit(item: CatalogItem) -> str | None:
+    """The unit the customer's own listing is priced in.
+
+    An execution input, so it is resolved once at scope time and frozen into the
+    run-item snapshot: reading it live during a review would be exactly the
+    drift the snapshot exists to prevent.
+
+    The feature extractor already aliases these labels, but only reaches what
+    sits under ``characteristics``.  A Prom export keeps ``Одиниця_виміру`` as a
+    top-level column, so it lands in ``raw_row`` and never arrived at the
+    comparison matrix -- leaving the seed side of ``unit_basis`` UNKNOWN against
+    a candidate that stated its own in nine cases out of nine, and blocking
+    every admission to a price cohort.
+    """
+
+    for source in (
+        getattr(item, "characteristics_raw", None),
+        getattr(item, "raw_row", None),
+    ):
+        if not isinstance(source, Mapping):
+            continue
+        for key, value in source.items():
+            label = str(key).replace("_", " ").strip().casefold()
+            if any(marker in label for marker in _MEASURE_UNIT_EXCLUDED):
+                continue
+            if not any(marker in label for marker in _MEASURE_UNIT_LABELS):
+                continue
+            first = (
+                value[0]
+                if isinstance(value, Sequence)
+                and not isinstance(value, str | bytes | bytearray)
+                and value
+                else value
+            )
+            text = str(first or "").strip()
+            if text:
+                return text
+    return None
+
+
 def customer_identity_query_from_fields(
     *,
     identity_status: str | None,
@@ -751,6 +823,7 @@ def customer_identity_query_from_fields(
     discovery path from reintroducing the old ``oe_norm``-first behavior for
     rows whose ``oe_norm`` is actually a private KEMP shelf code.
     """
+
     def public(value: str | None) -> str:
         normalized = str(value or "").strip()
         return (
@@ -784,9 +857,7 @@ def customer_identity_query_from_fields(
     oe = public(oe_norm)
     mpn = public(mpn_norm)
     part_numbers = tuple(
-        number
-        for value in part_numbers_norm
-        if (number := public(value))
+        number for value in part_numbers_norm if (number := public(value))
     )
     if status == "OE_CONFIRMED":
         # An explicit OE namespace is a contract, not a preference order.  If
@@ -1062,6 +1133,7 @@ def scope_execution_manifest(
     requested_item_ids: Sequence[UUID],
     catalog_item_ids: Sequence[UUID],
     exclusions: Sequence[ScopeExclusion],
+    no_oe_limits: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Исполняемый раздел манифеста: всё, что определяет, ЧТО будет исполнено.
 
@@ -1087,7 +1159,7 @@ def scope_execution_manifest(
         # Ограниченная область перечисляет членство целиком: именно её повтор
         # обязан воспроизвести позиция-в-позицию, а не «весь каталог».
         membership["catalog_item_ids"] = [str(value) for value in catalog_item_ids]
-    return {
+    result = {
         "contract_version": PRICING_RUN_SCOPE_CONTRACT_VERSION,
         "scope_mode": scope_mode,
         "workspace_id": str(workspace_id),
@@ -1103,6 +1175,9 @@ def scope_execution_manifest(
             "counts_by_reason_code": _exclusion_counts(exclusions),
         },
     }
+    if no_oe_limits is not None:
+        result["no_oe_discovery"] = dict(no_oe_limits)
+    return result
 
 
 def _exclusion_counts(exclusions: Sequence[ScopeExclusion]) -> dict[str, int]:
@@ -1184,6 +1259,18 @@ def build_pricing_run_scope(
     unique_inputs = len(
         {scope_input_key(candidate) for candidate in network_candidates}
     )
+    no_oem_candidates = [
+        candidate for candidate in items if not customer_identity_available(candidate)
+    ]
+    ambiguous_statuses = {
+        "AMBIGUOUS_LISTING_INTERNAL_CODES",
+        "DUPLICATE_CATALOG_INTERNAL_CODE",
+    }
+    no_oe_item_limit = int(getattr(settings, "pricing_no_oe_max_items", 20))
+    no_oe_provider_limit = int(
+        getattr(settings, "pricing_no_oe_max_provider_calls", 10)
+    )
+    no_oe_enabled = bool(getattr(settings, "pricing_no_oe_discovery_enabled", False))
     estimate = PricingRunScopeEstimate(
         requested_items=len(selected),
         eligible_items=len(items),
@@ -1195,6 +1282,25 @@ def build_pricing_run_scope(
         ),
         network_eligible_items=len(network_candidates),
         identity_blocked_items=len(items) - len(network_candidates),
+        oem_items=len(network_candidates),
+        no_oem_items=len(no_oem_candidates),
+        kemp_linked_items=sum(
+            candidate.kemp_link_status == "LINKED_OWNED_LISTING_GROUP"
+            for candidate in items
+        ),
+        kemp_unlinked_items=sum(
+            candidate.kemp_link_status
+            not in {"LINKED_OWNED_LISTING_GROUP", *ambiguous_statuses}
+            for candidate in items
+        ),
+        kemp_ambiguous_items=sum(
+            candidate.kemp_link_status in ambiguous_statuses for candidate in items
+        ),
+        expected_prom_queries=len(items),
+        luna_item_limit=no_oe_item_limit,
+        max_provider_calls=(
+            min(len(no_oem_candidates), no_oe_item_limit) * no_oe_provider_limit
+        ),
     )
     snapshot_hash = catalog_snapshot_fingerprint(catalog_candidates)
     truncated = len(exclusions) > SCOPE_EXCLUSION_SAMPLE_LIMIT
@@ -1211,6 +1317,16 @@ def build_pricing_run_scope(
         requested_item_ids=requested,
         catalog_item_ids=[candidate.catalog_item_id for candidate in items],
         exclusions=exclusions,
+        no_oe_limits={
+            "feature_enabled": no_oe_enabled,
+            "max_items": no_oe_item_limit,
+            "max_provider_calls_per_item": no_oe_provider_limit,
+            "model": getattr(settings, "pricing_llm_model", "gpt-5.6-luna"),
+            "reasoning_effort": getattr(
+                settings, "pricing_llm_reasoning_effort", "xhigh"
+            ),
+            "provider": getattr(settings, "pricing_llm_provider", "openai_responses"),
+        },
     )
     manifest: dict[str, Any] = {
         "contract_version": PRICING_RUN_SCOPE_CONTRACT_VERSION,
@@ -1339,7 +1455,25 @@ async def load_scope_candidates(
     ).all()
     item_ids = [item.id for item, _, _, _ in rows]
     links_by_item: dict[UUID, list[dict[str, Any]]] = {}
+    kemp_status_by_item: dict[UUID, str] = {}
     if item_ids:
+        kemp_resolutions = list(
+            (
+                await session.scalars(
+                    select(CatalogKempLinkResolution)
+                    .where(CatalogKempLinkResolution.catalog_item_id.in_(item_ids))
+                    .order_by(
+                        CatalogKempLinkResolution.catalog_item_id,
+                        CatalogKempLinkResolution.created_at.desc(),
+                        CatalogKempLinkResolution.id.desc(),
+                    )
+                )
+            ).all()
+        )
+        for resolution in kemp_resolutions:
+            kemp_status_by_item.setdefault(
+                resolution.catalog_item_id, resolution.status
+            )
         identity_links = list(
             (
                 await session.scalars(
@@ -1376,6 +1510,9 @@ async def load_scope_candidates(
             oe_raw=item.oe_raw,
             mpn_norm=item.mpn_norm,
             mpn_raw=item.mpn_raw,
+            internal_code_raw=item.internal_code_raw,
+            internal_code_norm=item.internal_code_norm,
+            kemp_link_status=kemp_status_by_item.get(item.id),
             name=item.name,
             brand=item.brand,
             category=item.category,
@@ -1401,6 +1538,7 @@ async def load_scope_candidates(
             applicability_brands=tuple(item.applicability_brands or ()),
             applicability_models=tuple(item.applicability_models or ()),
             characteristics_raw=dict(item.characteristics_raw or {}),
+            measure_unit=resolve_catalog_measure_unit(item),
             identity_reason=item.identity_reason,
             confirmed_identity_links=tuple(links_by_item.get(item.id, ())),
             override_id=override.id if override is not None else None,
@@ -2550,6 +2688,9 @@ def _catalog_item_snapshot(candidate: ScopeCandidate) -> dict[str, Any]:
         "oe_raw": candidate.oe_raw,
         "mpn_norm": candidate.mpn_norm,
         "mpn_raw": candidate.mpn_raw,
+        "internal_code_raw": candidate.internal_code_raw,
+        "internal_code_norm": candidate.internal_code_norm,
+        "kemp_link_status": candidate.kemp_link_status,
         "name": candidate.name,
         "brand": candidate.brand,
         "category": candidate.category,
@@ -2565,6 +2706,7 @@ def _catalog_item_snapshot(candidate: ScopeCandidate) -> dict[str, Any]:
         "applicability_brands": list(candidate.applicability_brands),
         "applicability_models": list(candidate.applicability_models),
         "characteristics_raw": _json_safe(dict(candidate.characteristics_raw)),
+        "measure_unit": candidate.measure_unit,
         "confirmed_identity_links": [
             _json_safe(dict(link)) for link in candidate.confirmed_identity_links
         ],
@@ -2670,6 +2812,7 @@ class FrozenCatalogItem:
     applicability_brands: tuple[str, ...] = ()
     applicability_models: tuple[str, ...] = ()
     characteristics_raw: Mapping[str, Any] = field(default_factory=dict)
+    measure_unit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2859,6 +3002,13 @@ def frozen_catalog_item_from_snapshot(
             dict(snapshot.get("characteristics_raw") or {})
             if isinstance(snapshot.get("characteristics_raw"), Mapping)
             else {}
+        ),
+        # Absent from snapshots frozen before this field existed, which simply
+        # leaves the seed unit UNKNOWN as it already was -- never a failure.
+        measure_unit=(
+            str(snapshot["measure_unit"]).strip() or None
+            if snapshot.get("measure_unit") is not None
+            else None
         ),
     )
 
@@ -3205,9 +3355,7 @@ async def create_pricing_run(
                         else {
                             "language": "ua",
                             "search_context": search_context,
-                            "fallback_queries": list(
-                                declared_widenings(catalog_item)
-                            ),
+                            "fallback_queries": list(declared_widenings(catalog_item)),
                             "discovery_queries": list(
                                 retrieval_only_queries(catalog_item)
                             ),
@@ -3409,12 +3557,27 @@ async def create_pricing_run(
     await session.flush()
 
     run_items: list[PricingRunItem] = []
+    no_oe_started = 0
     for membership_position, catalog_item in enumerate(catalog_items):
         snapshot = _start_snapshot(
             catalog_item,
             frozen_at=frozen_at,
             membership_position=membership_position,
         )
+        identity_available = customer_identity_available(catalog_item)
+        item_status = "queued"
+        checkpoint = None
+        if settings.pricing_no_oe_discovery_enabled and not identity_available:
+            if no_oe_started < settings.pricing_no_oe_max_items:
+                item_status = "discovering"
+                no_oe_started += 1
+            else:
+                item_status = "manual_review"
+                checkpoint = {
+                    "stage": "no_oe_budget_excluded",
+                    "reason": "NO_OE_ITEM_LIMIT_EXHAUSTED",
+                    "max_items": settings.pricing_no_oe_max_items,
+                }
         run_items.append(
             PricingRunItem(
                 pricing_run_id=run.id,
@@ -3422,7 +3585,7 @@ async def create_pricing_run(
                 scrape_target_id=targets_by_hash[
                     target_hash_by_item[catalog_item.catalog_item_id]
                 ].id,
-                status="queued",
+                status=item_status,
                 idempotency_key=f"{run.id}:{catalog_item.catalog_item_id}",
                 # Входы на момент старта: расчёт обязан читать именно их.
                 catalog_item_override_id=catalog_item.override_id,
@@ -3430,6 +3593,8 @@ async def create_pricing_run(
                 start_snapshot=snapshot,
                 start_snapshot_hash=start_snapshot_fingerprint(snapshot),
                 membership_position=membership_position,
+                checkpoint=checkpoint,
+                finished_at=(frozen_at if item_status == "manual_review" else None),
             )
         )
     session.add_all(run_items)
@@ -4174,9 +4339,7 @@ async def list_recommendations(
     # were the original part identity.
     identity_scope_condition = or_(
         CatalogItem.identity_status == "OE_CONFIRMED",
-        PricingRecommendation.action.in_(
-            ("MANUAL_REVIEW", "INSUFFICIENT_DATA")
-        ),
+        PricingRecommendation.action.in_(("MANUAL_REVIEW", "INSUFFICIENT_DATA")),
     )
     scope_conditions = [
         PricingRecommendation.pricing_run_id == run_id,

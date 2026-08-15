@@ -10,6 +10,7 @@ import '../../core/session_expiry.dart';
 import '../catalog/catalog_import_api.dart';
 import '../catalog/catalog_import_models.dart';
 import 'pricing_api.dart';
+import 'pricing_discovery_review_dialog.dart';
 import 'pricing_models.dart';
 import 'pricing_run_attempt_store.dart';
 
@@ -40,7 +41,7 @@ Future<PricingRunSummary> pollPricingRun({
   for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
     last = await fetch(runId);
     onUpdate(last);
-    if (last.isFinished) return last;
+    if (last.isFinished || last.status == 'awaiting_review') return last;
     if (attempt < maxAttempts) {
       await delay(wait);
       final doubled = wait * 2;
@@ -279,6 +280,20 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
                 'але не зіставлятимуться.',
           )
         : '';
+    final branches = context.localized(
+      ru:
+          ' OEM: ${scope.oemItems}; no-OEM: ${scope.noOemItems}. '
+          'KEMP linked/unlinked/ambiguous: ${scope.kempLinkedItems}/'
+          '${scope.kempUnlinkedItems}/${scope.kempAmbiguousItems}. '
+          'Prom-запросов до ${scope.expectedPromQueries}; Luna items до '
+          '${scope.lunaItemLimit}, provider calls до ${scope.maxProviderCalls}.',
+      uk:
+          ' OEM: ${scope.oemItems}; no-OEM: ${scope.noOemItems}. '
+          'KEMP linked/unlinked/ambiguous: ${scope.kempLinkedItems}/'
+          '${scope.kempUnlinkedItems}/${scope.kempAmbiguousItems}. '
+          'Prom-запитів до ${scope.expectedPromQueries}; Luna items до '
+          '${scope.lunaItemLimit}, provider calls до ${scope.maxProviderCalls}.',
+    );
     // Числа берутся из предпросмотра именно этой области, а не из доли
     // полного каталога: сколько позиций пригодно, знает только сервер.
     final confirmed = await _confirm(
@@ -287,13 +302,13 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
       bodyRu:
           'Область: ${choice.confirmationName(context)}. '
           'Строк в контуре: ${scope.eligibleItems}; к рыночному сопоставлению '
-          'допущено: ${scope.networkEligibleItems}.$excluded$identityBlocked '
+          'допущено: ${scope.networkEligibleItems}.$branches$excluded$identityBlocked '
           'В худшем случае это займёт около ${scope.worstCaseMinutes} мин. '
           'Расчёт не меняет цены на Prom.ua автоматически.',
       bodyUk:
           'Область: ${choice.confirmationName(context)}. '
           'Рядків у контурі: ${scope.eligibleItems}; до ринкового зіставлення '
-          'допущено: ${scope.networkEligibleItems}.$excluded$identityBlocked '
+          'допущено: ${scope.networkEligibleItems}.$branches$excluded$identityBlocked '
           'У найгіршому разі це триватиме близько ${scope.worstCaseMinutes} хв. '
           'Розрахунок не змінює ціни на Prom.ua автоматично.',
       actionRu: 'Запустить',
@@ -453,6 +468,22 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
     _ensurePolling(cancelled);
   }
 
+  Future<void> _openDiscoveryReview() async {
+    final run = _active;
+    if (run == null || run.status != 'awaiting_review' || _mutating) return;
+    final updated = await showPricingDiscoveryReviewDialog(
+      context: context,
+      api: _pricing,
+      run: run,
+    );
+    if (updated == null || !mounted) return;
+    setState(() {
+      _active = updated;
+      _runs = [updated, ..._runs.where((item) => item.id != updated.id)];
+    });
+    _ensurePolling(updated);
+  }
+
   Future<bool> _confirm({
     required String titleRu,
     required String titleUk,
@@ -557,6 +588,23 @@ class _PricingRunPanelState extends ConsumerState<PricingRunPanel> {
                     .map((batch) => batch.filename)
                     .firstOrNull,
               ),
+            if (_active?.status == 'awaiting_review' &&
+                widget.canAdministerWorkspace) ...[
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                key: const ValueKey('pricing-discovery-review-open'),
+                onPressed: _mutating || sessionExpired
+                    ? null
+                    : _openDiscoveryReview,
+                icon: const Icon(Icons.fact_check_outlined),
+                label: Text(
+                  context.localized(
+                    ru: 'Проверить найденные цены',
+                    uk: 'Перевірити знайдені ціни',
+                  ),
+                ),
+              ),
+            ],
             if (_reportLoading) ...[
               const SizedBox(height: 8),
               const LinearProgressIndicator(),
@@ -961,6 +1009,10 @@ String _runStatusLabel(BuildContext context, String status) => switch (status) {
     ru: 'Считаем рекомендации',
     uk: 'Рахуємо рекомендації',
   ),
+  'awaiting_review' => context.localized(
+    ru: 'Ожидает подтверждения найденных цен',
+    uk: 'Очікує підтвердження знайдених цін',
+  ),
   'running' => context.localized(
     ru: 'Расчёт выполняется',
     uk: 'Розрахунок виконується',
@@ -992,6 +1044,7 @@ IconData _runStatusIcon(String status) => switch (status) {
   'partial' => Icons.warning_amber_rounded,
   'cancelled' => Icons.cancel_outlined,
   'failed' => Icons.error_outline_rounded,
+  'awaiting_review' => Icons.fact_check_outlined,
   'running' ||
   'collecting' ||
   'classifying' ||

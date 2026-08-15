@@ -16,6 +16,7 @@ from marko.services.xlsx_catalog import (
     normalize_identifier,
     parse_catalog_xlsx,
     parse_mapping_json,
+    parse_reference_only_sheet,
     preview_catalog_xlsx,
 )
 
@@ -30,6 +31,60 @@ def workbook_bytes(headers, rows):
     workbook.save(stream)
     workbook.close()
     return stream.getvalue()
+
+
+def workbook_with_reference_sheet() -> bytes:
+    stream = BytesIO()
+    workbook = Workbook()
+    primary = workbook.active
+    primary.title = "Импорт"
+    primary.append(["SKU", "OE", "Name", "Category", "Price"])
+    primary.append(["S-1", "OE-1", "Part", "Filters", 100])
+    reference = workbook.create_sheet("Только код")
+    reference.append(
+        [
+            "Внутренний код",
+            "Оригинальный номер",
+            "Название по справочнику",
+            "Источники OE",
+            "Другие подтверждённые номера",
+            "Аномалии",
+            "Ссылка на подтверждение",
+        ]
+    )
+    reference.append(
+        [
+            "776А1",
+            "06А 115-105 B",
+            "Фильтр",
+            "supplier; public catalog",
+            "06A115105B, 06A115105C",
+            None,
+            "https://evidence.test/item",
+        ]
+    )
+    reference.append(["bad", "X-2", "Reference only", None, None, None, None])
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def test_reference_sheet_is_identity_evidence_only() -> None:
+    content = workbook_with_reference_sheet()
+
+    primary = parse_catalog_xlsx(content)
+    references = parse_reference_only_sheet(content)
+
+    assert primary.total_rows == 1
+    assert len(primary.rows) == 1
+    assert len(references) == 2
+    assert references[0]["internal_code_raw"] == "776А1"
+    assert references[0]["internal_code_norm"] == "776A1"
+    assert references[0]["confirmed_numbers"] == ["06A115105B", "06A115105C"]
+    assert references[0]["content_sha256"]
+    assert references[1]["internal_code_norm"] == ""
+    assert references[1]["anomalies"] == ["INVALID_INTERNAL_CODE"]
+    assert "price" not in references[0]
 
 
 def test_catalog_row_outcomes_account_for_non_contiguous_source_rows() -> None:
@@ -431,7 +486,9 @@ def test_duplicate_sku_is_rejected_as_a_row_error():
     assert "SKU" in parsed.issues[0].message
 
 
-def test_normalized_oe_collision_is_retained_but_fail_closed_for_manual_review() -> None:
+def test_normalized_oe_collision_is_retained_but_fail_closed_for_manual_review() -> (
+    None
+):
     content = workbook_bytes(
         ["SKU", "OE", "Name", "Category", "Price"],
         [
@@ -445,9 +502,7 @@ def test_normalized_oe_collision_is_retained_but_fail_closed_for_manual_review()
     assert [row.sku for row in parsed.rows] == ["one", "two"]
     assert parsed.issues == []
     assert all(row.identity_status == "UNRESOLVED" for row in parsed.rows)
-    assert all(
-        row.identity_reason == "NORMALIZED_OE_COLLISION" for row in parsed.rows
-    )
+    assert all(row.identity_reason == "NORMALIZED_OE_COLLISION" for row in parsed.rows)
     assert parsed.characteristics_report["identity_collision_rows"] == 2
     outcomes = catalog_row_outcomes(parsed)
     assert all(
@@ -455,8 +510,7 @@ def test_normalized_oe_collision_is_retained_but_fail_closed_for_manual_review()
         for outcome in outcomes
     )
     assert all(
-        "NORMALIZED_OE_COLLISION" in outcome["reason_codes"]
-        for outcome in outcomes
+        "NORMALIZED_OE_COLLISION" in outcome["reason_codes"] for outcome in outcomes
     )
 
 

@@ -8,6 +8,7 @@ all and could not tell a thin market from a page cap.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 import hashlib
 import json
 
@@ -131,3 +132,25 @@ def test_the_cap_is_named_only_when_it_actually_bound(
     )
 
     assert reason == expected
+
+
+def test_a_code_group_expansion_does_not_push_the_ratio_out_of_range() -> None:
+    """The part-code lane adds offers found off an OE page, not off the results.
+
+    Measured live on 2026-08-14: a search reported 195 and the run held 266
+    candidates, so the raw quotient was 1.364103.  ``coverage_ratio`` is
+    constrained to [0, 1], so the discovery run failed to persist with a
+    CheckViolationError and Celery retried it forever.
+    """
+
+    unfetched, ratio, reason = coverage_summary(
+        reported_total=195,
+        retrieved_count=266,
+        request_count=7,
+        search_page_limit=10,
+    )
+
+    assert ratio is not None
+    assert Decimal(0) <= ratio <= Decimal(1)
+    assert unfetched == 0
+    assert reason == "RESULT_SET_EXPANDED_BEYOND_REPORTED"

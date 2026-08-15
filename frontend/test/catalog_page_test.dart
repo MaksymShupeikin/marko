@@ -25,7 +25,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Поиск по OEM/OE, артикулу или названию объявления'),
+      find.text('Поиск по KEMP, OEM/OE, MPN, SKU или названию'),
       findsOneWidget,
     );
     expect(find.text('Загрузить XLSX'), findsNothing);
@@ -189,7 +189,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Пошук за OEM/OE, артикулу або назві оголошення'),
+      find.text('Пошук за KEMP, OEM/OE, MPN, SKU або назвою'),
       findsOneWidget,
     );
     expect(find.text('Товари'), findsOneWidget);

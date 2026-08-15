@@ -1,4 +1,4 @@
-"""Owner-approved 2026-07-30 budget-segment pricing contract."""
+"""Owner-approved fixed-five-percent budget-floor pricing contract."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 from metis.pricing import (
+    CohortRole,
     CompetitorOffer,
+    ExcludedOffer,
     PricingPolicy,
     ProductPricingContext,
     ProductTier,
@@ -91,6 +93,8 @@ def _offer(
 def _engine_result(
     current: str,
     offers: list[CompetitorOffer],
+    *,
+    seller_groups: dict[str, str] | None = None,
 ):
     return recommend_price(
         ProductPricingContext(
@@ -107,12 +111,13 @@ def _engine_result(
             version="pricing-v2",
             raise_policy=BUDGET_POLICY,
         ),
+        seller_groups=seller_groups,
     )
 
 
 def test_active_strategy_is_owner_approved_budget_floor() -> None:
     assert BUDGET_POLICY.strategy is RaiseStrategy.BUDGET_FLOOR
-    assert BUDGET_POLICY.minimum_discount == Decimal("0.02")
+    assert BUDGET_POLICY.minimum_discount == Decimal("0.05")
     assert BUDGET_POLICY.maximum_discount == Decimal("0.05")
     assert BUDGET_POLICY.psychological_step == Decimal("1")
     assert BUDGET_POLICY.tier_agnostic
@@ -144,7 +149,10 @@ def test_run_policy_snapshot_records_every_raise_policy_field() -> None:
     assert persisted["strategy"] == "budget_floor"
     assert persisted["method_version"] == "raise-policy-v2"
     assert persisted["source_sha256"] == BUDGET_POLICY.source_sha256
-    assert persisted["owner_decision_reference"] == "customer-reply-2026-07-30"
+    assert (
+        persisted["owner_decision_reference"]
+        == "customer-reply-2026-08-12-fixed-five-percent"
+    )
     # Именно те поля, которых прежде не было — и которые решают, куда встанет
     # рекомендация.
     assert persisted["target_quantile"] == str(BUDGET_POLICY.target_quantile)
@@ -184,8 +192,8 @@ def test_budget_floor_raises_to_high_end_of_customer_band() -> None:
     assert decision.outcome is RaiseOutcome.RAISE
     assert decision.fair_price == Decimal("1000")
     assert decision.target_band_low == Decimal("950.00")
-    assert decision.target_band_high == Decimal("980.00")
-    assert decision.recommended_price == Decimal("980")
+    assert decision.target_band_high == Decimal("950.00")
+    assert decision.recommended_price == Decimal("950")
     assert decision.is_actionable
 
 
@@ -193,11 +201,13 @@ def test_budget_floor_lowers_to_high_end_of_customer_band() -> None:
     decision = _budget_decision("1200")
 
     assert decision.outcome is RaiseOutcome.LOWER
-    assert decision.recommended_price == Decimal("980")
+    assert decision.recommended_price == Decimal("950")
     assert decision.is_actionable
 
 
-def test_engine_keeps_large_lowering_as_a_non_applying_operator_recommendation() -> None:
+def test_engine_keeps_large_lowering_as_a_non_applying_operator_recommendation() -> (
+    None
+):
     offers = [
         _offer(index, price, tier=ProductTier.BUDGET)
         for index, price in enumerate(("1000", "1200", "1400", "1600", "1800"))
@@ -206,14 +216,68 @@ def test_engine_keeps_large_lowering_as_a_non_applying_operator_recommendation()
     result = _engine_result("3000", offers)
 
     assert result.action is RecommendationAction.LOWER
-    assert result.recommended_price == Decimal("980")
+    assert result.recommended_price == Decimal("950")
     assert result.lower_bound == Decimal("950.00")
-    assert result.upper_bound == Decimal("980.00")
+    assert result.upper_bound == Decimal("950.00")
+    assert "FLOOR_RESTS_ON_ONE_SELLER" in result.reasons
+
+
+def test_related_sellers_do_not_corroborate_the_floor() -> None:
+    # Два магазина одной сферы по 300 выглядят как подтверждённый минимум,
+    # но независимого подтверждения здесь нет: вторая цена — тот же продавец.
+    decision = decide_raise(
+        current_price=Decimal("700"),
+        prices=[Decimal("300"), Decimal("300"), Decimal("1200")],
+        stock_status=StockStatus.FRESH,
+        policy=BUDGET_POLICY,
+        sellers=["seller-a", "seller-b", "seller-c"],
+        seller_groups={"seller-b": "seller-a"},
+    )
+
+    assert "FLOOR_RESTS_ON_ONE_SELLER" in decision.flags
+    assert "FLOOR_CORROBORATION_BY_RELATED_SELLERS" in decision.flags
+    # Цель не сдвинулась: тот же минимум, та же формула.
+    assert decision.fair_price == Decimal("300")
+    # Понижение на одинокий оторванный минимум уходит на проверку.
+    assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
+    assert "FLOOR_MATERIALLY_BELOW_NEXT_SELLER" in decision.reasons
+
+
+def test_independent_sellers_still_corroborate_the_floor() -> None:
+    decision = decide_raise(
+        current_price=Decimal("700"),
+        prices=[Decimal("300"), Decimal("300"), Decimal("1200")],
+        stock_status=StockStatus.FRESH,
+        policy=BUDGET_POLICY,
+        sellers=["seller-a", "seller-b", "seller-c"],
+        seller_groups={"seller-x": "seller-y"},
+    )
+
+    assert "FLOOR_RESTS_ON_ONE_SELLER" not in decision.flags
+    assert "FLOOR_CORROBORATION_BY_RELATED_SELLERS" not in decision.flags
+    assert decision.outcome is RaiseOutcome.LOWER
+    assert decision.recommended_price == Decimal("285")
+
+
+def test_engine_collapses_related_sellers_for_floor_corroboration() -> None:
+    offers = [
+        _offer(0, "300", tier=ProductTier.BUDGET),
+        _offer(1, "300", tier=ProductTier.BUDGET),
+        _offer(2, "1200", tier=ProductTier.BUDGET),
+    ]
+
+    result = _engine_result(
+        "700",
+        offers,
+        seller_groups={"seller-1": "seller-0"},
+    )
+
+    assert "FLOOR_CORROBORATION_BY_RELATED_SELLERS" in result.reasons
     assert "FLOOR_RESTS_ON_ONE_SELLER" in result.reasons
 
 
 def test_budget_floor_holds_price_already_inside_customer_band() -> None:
-    decision = _budget_decision("970")
+    decision = _budget_decision("950")
 
     assert decision.outcome is RaiseOutcome.TARGET_BAND
     assert decision.recommended_price is None
@@ -224,9 +288,9 @@ def test_budget_floor_does_not_suppress_a_small_move_into_the_customer_band() ->
     decision = _budget_decision("990")
 
     assert decision.outcome is RaiseOutcome.LOWER
-    assert decision.recommended_price == Decimal("980")
+    assert decision.recommended_price == Decimal("950")
     assert decision.target_band_low == Decimal("950.00")
-    assert decision.target_band_high == Decimal("980.00")
+    assert decision.target_band_high == Decimal("950.00")
 
 
 @pytest.mark.parametrize(
@@ -248,7 +312,7 @@ def test_budget_floor_ignores_stock_and_cost_for_price_direction(
     )
 
     assert decision.outcome is RaiseOutcome.LOWER
-    assert decision.recommended_price == Decimal("980")
+    assert decision.recommended_price == Decimal("950")
     assert "RECOMMENDATION_BELOW_COST_FLOOR" not in decision.reasons
     assert "STOCK_AND_COST_IGNORED_BY_OWNER_POLICY" in decision.reasons
 
@@ -263,11 +327,13 @@ def test_budget_floor_abstains_when_rounding_cannot_stay_inside_band() -> None:
     assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
     assert decision.recommended_price is None
     assert decision.target_band_low == Decimal("95.00")
-    assert decision.target_band_high == Decimal("98.00")
+    assert decision.target_band_high == Decimal("95.00")
     assert decision.reasons[-1] == "NO_PRICE_TICK_WITHIN_CUSTOMER_BAND"
 
 
-def test_engine_ignores_brand_tier_and_coefficients_but_keeps_verified_matching() -> None:
+def test_engine_ignores_brand_tier_and_coefficients_but_keeps_verified_matching() -> (
+    None
+):
     offers = [
         _offer(0, "1000", tier=ProductTier.UNKNOWN),
         _offer(1, "1200", tier=ProductTier.OEM),
@@ -279,10 +345,10 @@ def test_engine_ignores_brand_tier_and_coefficients_but_keeps_verified_matching(
     result = _engine_result("800", offers)
 
     assert result.action is RecommendationAction.RAISE
-    assert result.recommended_price == Decimal("980")
+    assert result.recommended_price == Decimal("950")
     assert result.fair_price == Decimal("1000")
     assert result.lower_bound == Decimal("950.00")
-    assert result.upper_bound == Decimal("980.00")
+    assert result.upper_bound == Decimal("950.00")
     assert result.outlier_method == "owner_minimum_raw"
     assert len(result.outlier_method) <= 24
     assert not {
@@ -305,11 +371,13 @@ def test_engine_uses_cheapest_original_when_only_original_offers_exist() -> None
     result = _engine_result("800", offers)
 
     assert result.action is RecommendationAction.RAISE
-    assert result.recommended_price == Decimal("980")
+    assert result.recommended_price == Decimal("950")
     assert result.fair_price == Decimal("1000")
 
 
-def test_engine_preserves_verified_cheapest_offer_instead_of_outlier_filtering() -> None:
+def test_engine_preserves_verified_cheapest_offer_instead_of_outlier_filtering() -> (
+    None
+):
     """No offer is filtered out — but a cut off a lone floor is not automatic.
 
     500 against a cohort at 1000–1030 is both shapes at once: a shop clearing
@@ -326,7 +394,7 @@ def test_engine_preserves_verified_cheapest_offer_instead_of_outlier_filtering()
     result = _engine_result("600", offers)
 
     assert result.action is RecommendationAction.MANUAL_REVIEW
-    assert "CUT_FROM_ISOLATED_FLOOR" in result.reasons
+    assert "FLOOR_MATERIALLY_BELOW_NEXT_SELLER" in result.reasons
     # The point of the original test still holds: nothing was cleaned away, and
     # the cheapest verified offer is still what the target was measured from.
     assert result.outlier_count == 0
@@ -367,10 +435,10 @@ def test_engine_and_advisory_use_the_same_plausible_minimum() -> None:
     )
 
     assert result.action is RecommendationAction.RAISE
-    assert result.recommended_price == Decimal("1176")
+    assert result.recommended_price == Decimal("1140")
     assert result.fair_price == Decimal("1200")
     assert result.lower_bound == Decimal("1140.00")
-    assert result.upper_bound == Decimal("1176.00")
+    assert result.upper_bound == Decimal("1140.00")
     assert "IMPLAUSIBLE_EXCLUDED_FROM_TARGET" in result.reasons
     assert policy_trace is not None
     assert policy_trace["excluded_implausible_count"] == 1
@@ -378,7 +446,7 @@ def test_engine_and_advisory_use_the_same_plausible_minimum() -> None:
     assert advisory is not None
     assert advisory["minimum_comparable_price"] == "1200"
     assert advisory["target_band_low"] == "1140.00"
-    assert advisory["target_band_high"] == "1176.00"
+    assert advisory["target_band_high"] == "1140.00"
 
 
 def test_engine_surfaces_an_all_placeholder_market_without_a_price_target() -> None:
@@ -437,7 +505,7 @@ def test_engine_still_rejects_used_offer_before_selecting_minimum() -> None:
     result = _engine_result("800", offers)
 
     assert result.action is RecommendationAction.RAISE
-    assert result.recommended_price == Decimal("980")
+    assert result.recommended_price == Decimal("950")
     assert any(item.reason == "USED_OR_REFURBISHED" for item in result.excluded)
 
 
@@ -470,13 +538,19 @@ def test_gated_automatic_result_becomes_explicit_non_applying_advisory() -> None
         "status": "COMPARABILITY_REVIEW_REQUIRED",
         "action": "RAISE",
         "current_price": "800",
-        "recommended_price": "980",
-        "absolute_change": "180",
-        "percentage_change": "0.225",
+        "recommended_price": "950",
+        "absolute_change": "150",
+        "percentage_change": "0.1875",
         "minimum_comparable_price": "1000",
         "target_band_low": "950.00",
-        "target_band_high": "980.00",
+        "target_band_high": "950.00",
         "automatic_price_application": False,
+        "operator_cost_warning": (
+            "Before accepting the recommendation, account for procurement, "
+            "Prom commission, payment fees, taxes, packaging, delivery, returns, "
+            "warranty, and the minimum acceptable margin. These expenses do not "
+            "change the competitor-minus-5-percent formula automatically."
+        ),
         "reason": "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED",
     }
 
@@ -498,6 +572,112 @@ def test_verified_release_has_normal_result_without_duplicate_advisory() -> None
     assert advisory is None
 
 
+def test_no_cohort_visible_offers_yield_incomplete_evidence_advisory() -> None:
+    """Canary path: 7 raw offers, zero admitted, operator still sees min − 5%."""
+
+    result = _engine_result("679", [])
+    result = replace(
+        result,
+        action=RecommendationAction.INSUFFICIENT_DATA,
+        recommended_price=None,
+        fair_price=None,
+        lower_bound=None,
+        upper_bound=None,
+        automatic_eligible=False,
+        reasons=("TOO_FEW_COMPETITORS",),
+        evidence=(),
+        excluded=(
+            ExcludedOffer(
+                observation_id="obs-used",
+                reason="USED_OR_REFURBISHED",
+                seller_id="seller-used",
+                raw_price=Decimal("300"),
+                cohort_role=CohortRole.USED_REJECTED,
+            ),
+            ExcludedOffer(
+                observation_id="obs-hard",
+                reason="PRICE_ON_REQUEST",
+                seller_id="seller-hard",
+                raw_price=Decimal("200"),
+                cohort_role=CohortRole.HARD_REJECTED,
+            ),
+            ExcludedOffer(
+                observation_id="obs-1",
+                reason="MANUAL_MISSING_CONDITION",
+                seller_id="seller-1",
+                raw_price=Decimal("739"),
+                cohort_role=CohortRole.MANUAL_REVIEW,
+            ),
+            ExcludedOffer(
+                observation_id="obs-2",
+                reason="SEMANTIC_PRICING_EVIDENCE_INCOMPLETE",
+                seller_id="seller-2",
+                raw_price=Decimal("850"),
+                cohort_role=CohortRole.MANUAL_REVIEW,
+            ),
+            ExcludedOffer(
+                observation_id="obs-3",
+                reason="MANUAL_MISSING_PACKAGE_QUANTITY",
+                seller_id="seller-3",
+                raw_price=Decimal("910"),
+                cohort_role=CohortRole.MANUAL_REVIEW,
+            ),
+        ),
+        unknown_hard_fields=("condition", "package_quantity", "unit_basis"),
+    )
+
+    _policy_trace, advisory = customer_budget_floor_trace(
+        policy=BUDGET_POLICY,
+        result=result,
+        comparability_activation_verified=False,
+    )
+
+    assert result.recommended_price is None
+    assert advisory is not None
+    assert advisory["status"] == "INCOMPLETE_EVIDENCE_REVIEW_REQUIRED"
+    assert advisory["reason"] == "ADVISORY_FROM_UNVERIFIED_VISIBLE_OFFERS"
+    assert advisory["automatic_price_application"] is False
+    assert advisory["minimum_comparable_price"] == "739"
+    assert advisory["recommended_price"] == "702"
+    assert advisory["action"] == "RAISE"
+    assert advisory["basis_offer_count"] == 3
+    assert advisory["basis_independent_sellers"] == 3
+    assert "condition" in advisory["missing_pricing_dimensions"]
+    assert advisory["check_package_unit"] is True
+    assert "operator_cost_warning" in advisory
+
+
+def test_radiator_motor_visible_minimum_rounds_down_to_owner_formula() -> None:
+    result = _engine_result("962", [])
+    result = replace(
+        result,
+        action=RecommendationAction.INSUFFICIENT_DATA,
+        recommended_price=None,
+        automatic_eligible=False,
+        reasons=("TOO_FEW_COMPETITORS",),
+        evidence=(),
+        excluded=(
+            ExcludedOffer(
+                observation_id="obs-rad",
+                reason="MANUAL_MISSING_CONDITION",
+                seller_id="seller-rad",
+                raw_price=Decimal("1150"),
+                cohort_role=CohortRole.MANUAL_REVIEW,
+            ),
+        ),
+    )
+
+    _policy_trace, advisory = customer_budget_floor_trace(
+        policy=BUDGET_POLICY,
+        result=result,
+        comparability_activation_verified=False,
+    )
+
+    assert advisory is not None
+    assert advisory["minimum_comparable_price"] == "1150"
+    assert advisory["recommended_price"] == "1092"
+
+
 def test_comparability_gate_keeps_advisory_math_but_blocks_auto_action() -> None:
     offers = [
         _offer(index, price, tier=ProductTier.UNKNOWN)
@@ -510,7 +690,7 @@ def test_comparability_gate_keeps_advisory_math_but_blocks_auto_action() -> None
     )
 
     assert automatic.action is RecommendationAction.RAISE
-    assert automatic.recommended_price == Decimal("980")
+    assert automatic.recommended_price == Decimal("950")
     assert gated.action is RecommendationAction.MANUAL_REVIEW
     assert gated.recommended_price is None
     assert not gated.automatic_eligible

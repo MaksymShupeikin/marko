@@ -86,9 +86,7 @@ async def upsert_prom_products(
         product.oe_raw = raw_oe
         product.oe_norm = oe_norm
         product.mpn_raw = _text(payload.get("mpn_raw") or payload.get("mpn"))
-        product.mpn_norm = (
-            normalize_oem_identifier(product.mpn_raw or "") or None
-        )
+        product.mpn_norm = normalize_oem_identifier(product.mpn_raw or "") or None
         product.brand = listing.brand
         product.category = _category(payload)
         product.description = _text(payload.get("description"))
@@ -98,9 +96,7 @@ async def upsert_prom_products(
         product.is_available = listing.is_available
         product.identity_status = "UNRESOLVED"
         product.identity_reason = (
-            "PROM_EXPLICIT_OE_REQUIRES_VERIFICATION"
-            if oe_norm
-            else "PROM_OE_NOT_FOUND"
+            "PROM_EXPLICIT_OE_REQUIRES_VERIFICATION" if oe_norm else "PROM_OE_NOT_FOUND"
         )
         product.raw_data = payload
         product.source_updated_at = now
@@ -182,7 +178,10 @@ async def upsert_xlsx_products(
         product.catalog_item_id = item.id
         product.name = item.name
         product.sku = item.sku
-        product.internal_code = item.sku
+        # ``sku`` is the Prom/export row identifier.  The private KEMP join
+        # key has its own audited column and must never be reconstructed from
+        # SKU (or exposed later as an OE/query token).
+        product.internal_code = item.internal_code_norm or None
         product.oe_raw = item.oe_raw or None
         product.oe_norm = item.oe_norm or None
         product.mpn_raw = item.mpn_raw or None
@@ -195,9 +194,7 @@ async def upsert_xlsx_products(
         product.currency = item.currency
         product.is_available = item.is_available
         product.identity_status = (
-            "VERIFIED_EXACT"
-            if item.identity_status == "OE_CONFIRMED"
-            else "UNRESOLVED"
+            "VERIFIED_EXACT" if item.identity_status == "OE_CONFIRMED" else "UNRESOLVED"
         )
         product.identity_reason = item.identity_reason or "XLSX_IDENTITY_UNRESOLVED"
         product.raw_data = item.raw_row or {}
@@ -251,9 +248,7 @@ async def _ensure_attention_items(
                 product_id=product.id,
                 status=status,
                 severity=(
-                    0
-                    if unavailable
-                    else 50 if status == "REVIEW_REQUIRED" else 0
+                    0 if unavailable else 50 if status == "REVIEW_REQUIRED" else 0
                 ),
                 review_state="RESOLVED" if unavailable else "OPEN",
             )

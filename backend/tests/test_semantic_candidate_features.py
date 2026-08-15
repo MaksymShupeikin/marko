@@ -1909,6 +1909,78 @@ def test_characteristic_labels_supply_package_and_unit_basis() -> None:
     assert features["unit_basis"].values == ("piece",)
 
 
+def test_a_per_piece_listing_is_a_listing_of_one_piece() -> None:
+    """Owner decision 2026-08-15: ``unit_basis = piece`` means quantity 1.
+
+    Neither the catalogue nor the marketplace ever states a pack size, so while
+    ``package_quantity`` is a required pricing dimension nothing can ever be
+    admitted to a price.  The unit basis already carries what the requirement
+    protects: both sides quoted per piece.
+    """
+
+    features = extract_semantic_features({"title": "Сальник клапана", "measure_unit": "шт."})
+
+    assert features["unit_basis"].values == ("piece",)
+    assert features["package_quantity"].values == ("1",)
+
+
+def test_the_inference_reaches_a_unit_stated_only_as_a_characteristic() -> None:
+    features = extract_semantic_features(
+        {"title": "Сальник клапана", "characteristics": {"Одиниця виміру": ["шт."]}}
+    )
+
+    assert features["package_quantity"].values == ("1",)
+
+
+def test_a_kit_or_pair_is_never_inferred_to_be_one_piece() -> None:
+    """The guard that keeps a four-piece kit from being priced as one part."""
+
+    for title, expected_unit in (
+        ("Комплект підшипників VW LT", "set"),
+        ("Пара підшипників VW LT", "pair"),
+    ):
+        features = extract_semantic_features({"title": title, "measure_unit": "шт."})
+
+        assert features["unit_basis"].values == (expected_unit,)
+        assert features["package_quantity"].values == ()
+
+
+def test_an_explicit_pack_size_is_never_overwritten_by_the_inference() -> None:
+    features = extract_semantic_features({"title": "Підшипник 4 шт.", "measure_unit": "шт."})
+
+    assert features["package_quantity"].values == ("4",)
+
+
+def test_a_listing_with_no_unit_basis_stays_unknown() -> None:
+    """Silence must stay silence: an unstated unit cannot become quantity 1."""
+
+    features = extract_semantic_features({"title": "Підшипник вискомуфти VW LT"})
+
+    assert features["unit_basis"].values == ()
+    assert features["package_quantity"].values == ()
+
+
+def test_the_three_pricing_dimensions_match_when_both_sides_state_them() -> None:
+    """The whole point: this is what admission to a price cohort requires."""
+
+    comparisons = build_semantic_feature_matrix(
+        {
+            "name": "Подшипник ролика промеж (термомуфты) Audi-100 91-97",
+            "brand": "KEMP",
+            "measure_unit": "шт.",
+            "characteristics": {"Стан": ["Новий"]},
+        },
+        {
+            "title": "Підшипник вискомуфти VW LT/Crafter 2.5TDI",
+            "measure_unit": "шт.",
+            "condition": "Новий",
+        },
+    )["comparisons"]
+
+    for dimension in ("condition", "package_quantity", "unit_basis"):
+        assert comparisons[dimension]["state"] == "MATCH", dimension
+
+
 def test_compact_catalogue_years_are_normalized_and_compared() -> None:
     overlap = _matrix(
         "Радиатор Ford 95-00",

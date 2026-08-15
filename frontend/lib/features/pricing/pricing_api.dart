@@ -118,6 +118,44 @@ class PricingApi {
     return PricingRunSummary.fromJson(payload as Map<String, dynamic>);
   }
 
+  Future<PricingDiscoveryReviewQueue> getDiscoveryReviews(String runId) async {
+    final payload = await _client.getJson(
+      '/api/v1/pricing/runs/$runId/discovery-reviews',
+    );
+    return PricingDiscoveryReviewQueue.fromJson(
+      payload as Map<String, dynamic>,
+    );
+  }
+
+  Future<void> decideDiscoveryOffer({
+    required String runId,
+    required PricingDiscoveryReviewOffer offer,
+    required String decision,
+    required String reason,
+  }) async {
+    await _client.postJson(
+      '/api/v1/pricing/runs/$runId/discovery-offers/${offer.offerId}/decision',
+      body: {
+        'decision': decision,
+        'reason': reason,
+        'expected_offer_sha256': offer.offerSha256,
+        'idempotency_key':
+            'ui:$runId:${offer.offerId}:$decision:${DateTime.now().microsecondsSinceEpoch}',
+      },
+    );
+  }
+
+  Future<PricingRunSummary> resumeRun(
+    String runId,
+    String reviewSnapshotHash,
+  ) async {
+    final payload = await _client.postJson(
+      '/api/v1/pricing/runs/$runId/resume',
+      body: {'review_snapshot_hash': reviewSnapshotHash},
+    );
+    return PricingRunSummary.fromJson(payload as Map<String, dynamic>);
+  }
+
   Future<BinaryDownload> exportRecommendations({
     required String format,
     required String queue,

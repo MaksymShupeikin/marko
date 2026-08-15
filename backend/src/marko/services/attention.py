@@ -561,7 +561,17 @@ def _assessment_values(
     trace = trace if isinstance(trace, dict) else {}
     advisory = trace.get("advisory_decision")
     advisory = advisory if isinstance(advisory, dict) else {}
-    action = str(advisory.get("action") or recommendation.action)
+    advisory_status = str(advisory.get("status") or "")
+    # Comparability-gated rail already computed RAISE/LOWER. Incomplete
+    # evidence only has an operator hint: keep REVIEW_REQUIRED, never
+    # promote the hint into UNDERPRICED/OVERPRICED.
+    inherit_advisory_action = (
+        advisory_status != "INCOMPLETE_EVIDENCE_REVIEW_REQUIRED"
+    )
+    action = str(
+        (advisory.get("action") if inherit_advisory_action else None)
+        or recommendation.action
+    )
     suggested = recommendation.recommended_price or _decimal(
         advisory.get("recommended_price")
     )
@@ -590,11 +600,12 @@ def _assessment_values(
         "HOLD": "IN_MARKET",
     }.get(action)
     if status is None:
-        status = (
-            "NO_DATA"
-            if recommendation.verified_seller_count == 0
-            else "REVIEW_REQUIRED"
-        )
+        if advisory_status == "INCOMPLETE_EVIDENCE_REVIEW_REQUIRED":
+            status = "REVIEW_REQUIRED"
+        elif recommendation.verified_seller_count == 0:
+            status = "NO_DATA"
+        else:
+            status = "REVIEW_REQUIRED"
     difference = None
     if product.current_price is not None and suggested not in (None, Decimal("0")):
         difference = ((product.current_price - suggested) / suggested) * Decimal("100")

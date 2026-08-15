@@ -155,6 +155,18 @@ async def test_materialization_persists_one_terminal_outcome_per_raw_element(
                 if isinstance(value, MarketObservation) and value.id is None:
                     value.id = uuid4()
 
+        def begin_nested(self):
+            session = self
+
+            class _Nested:
+                async def __aenter__(self) -> FakeSession:
+                    return session
+
+                async def __aexit__(self, *_exc: object) -> None:
+                    return None
+
+            return _Nested()
+
     raw_evidence = [
         {
             "logical_request_id": str(uuid4()),

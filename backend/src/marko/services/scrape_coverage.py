@@ -22,15 +22,28 @@ def coverage_summary(
     search_page_limit: int,
 ) -> tuple[int, Decimal | None, str]:
     unfetched_count = max(0, (reported_total or retrieved_count) - retrieved_count)
+    # A run may legitimately hold more candidates than the search reported: the
+    # part-code group lane adds offers found off an OE page rather than off the
+    # result set.  The ratio answers "how much of the reported set did we read",
+    # so those additions belong in ``retrieved_count`` but not in this quotient
+    # -- and the column is constrained to [0, 1].  Left unclamped it raised a
+    # CheckViolationError that failed the whole discovery run, which then
+    # retried forever.  Cap the quotient and let the reason carry the fact.
+    expanded_beyond_reported = (
+        reported_total is not None and retrieved_count > reported_total
+    )
     coverage_ratio = (
-        (Decimal(retrieved_count) / Decimal(reported_total)).quantize(
-            Decimal("0.000001")
-        )
+        min(
+            Decimal(retrieved_count) / Decimal(reported_total),
+            Decimal(1),
+        ).quantize(Decimal("0.000001"))
         if reported_total is not None and reported_total > 0
         else None
     )
     if reported_total is None:
         reason = "PROM_TOTAL_UNKNOWN"
+    elif expanded_beyond_reported:
+        reason = "RESULT_SET_EXPANDED_BEYOND_REPORTED"
     elif unfetched_count and request_count >= search_page_limit:
         reason = "SEARCH_PAGE_HARD_CAP"
     elif unfetched_count:

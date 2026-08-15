@@ -27,7 +27,7 @@ from metis.pricing.types import StockStatus
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = BACKEND_ROOT / "config" / "raise_policy.yaml"
 # The legacy arithmetic suite exercises the still-supported balanced strategy.
-# The deployment default is tested separately because Yuri's 2026-07-30
+# The deployment default is tested separately because the owner's active
 # decision intentionally changed it to the tier-agnostic budget-floor strategy.
 POLICY = load_raise_policy(POLICY_PATH, strategy="balanced")
 DEPLOYMENT_POLICY = load_raise_policy(POLICY_PATH)
@@ -325,7 +325,7 @@ def test_dead_stock_is_not_handled_here() -> None:
 def test_policy_file_defaults_to_customer_budget_floor() -> None:
     assert DEPLOYMENT_POLICY.strategy is RaiseStrategy.BUDGET_FLOOR
     assert DEPLOYMENT_POLICY.target_quantile == Decimal("0")
-    assert DEPLOYMENT_POLICY.minimum_discount == Decimal("0.02")
+    assert DEPLOYMENT_POLICY.minimum_discount == Decimal("0.05")
     assert DEPLOYMENT_POLICY.maximum_discount == Decimal("0.05")
     assert DEPLOYMENT_POLICY.psychological_step == Decimal("1")
     assert DEPLOYMENT_POLICY.tier_agnostic
@@ -334,7 +334,7 @@ def test_policy_file_defaults_to_customer_budget_floor() -> None:
     assert DEPLOYMENT_POLICY.ignore_cost_floor
     assert (
         DEPLOYMENT_POLICY.owner_decision_reference
-        == "customer-reply-2026-07-30"
+        == "customer-reply-2026-08-12-fixed-five-percent"
     )
     assert DEPLOYMENT_POLICY.source_sha256 is not None
 

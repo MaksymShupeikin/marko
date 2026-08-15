@@ -98,6 +98,15 @@ class PricingRunScopeEstimateResponse(BaseModel):
     worst_case_duration_seconds: int
     network_eligible_items: int = 0
     identity_blocked_items: int = 0
+    oem_items: int = 0
+    no_oem_items: int = 0
+    kemp_linked_items: int = 0
+    kemp_unlinked_items: int = 0
+    kemp_ambiguous_items: int = 0
+    expected_prom_queries: int = 0
+    luna_item_limit: int = 0
+    max_provider_calls: int = 0
+    estimated_ai_cost: dict[str, Any] | None = None
 
 
 class PricingRunScopeExclusionResponse(BaseModel):
@@ -168,6 +177,71 @@ class PricingRunResponse(BaseModel):
     scope_manifest: dict[str, Any]
     idempotency_key: str | None
     scope_frozen_at: datetime | None
+    review_snapshot_hash: str | None = None
+    review_frozen_at: datetime | None = None
+
+
+class PricingDiscoveryDecisionRequest(BaseModel):
+    decision: Literal["APPROVE", "REJECT"]
+    reason: str = Field(min_length=1, max_length=2000)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    expected_offer_sha256: str = Field(pattern=SHA256_HEX_PATTERN)
+
+
+class PricingDiscoveryDecisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    pricing_run_id: UUID
+    pricing_run_item_id: UUID
+    catalog_discovery_offer_id: UUID
+    decision: str
+    actor_id: str
+    reason: str
+    offer_sha256: str
+    price: Decimal
+    currency: str
+    seller_id: str
+    created_at: datetime
+
+
+class PricingDiscoveryReviewOfferResponse(BaseModel):
+    offer_id: UUID
+    run_item_id: UUID
+    catalog_item_id: UUID
+    source_name: str
+    source_sku: str
+    source_internal_code: str | None
+    candidate_title: str
+    candidate_url: str
+    seller_id: str
+    seller_name: str
+    price: Decimal
+    currency: str
+    measure_unit: str | None
+    is_available: bool | None
+    offer_sha256: str
+    luna_review_id: UUID
+    luna_verdict: str
+    luna_rationale: str
+    evidence_references: list[Any]
+    conflicts: list[Any]
+    decision: str | None = None
+    decision_reason: str | None = None
+    decision_id: UUID | None = None
+    decision_actor_id: str | None = None
+    decision_created_at: datetime | None = None
+
+
+class PricingDiscoveryReviewPageResponse(BaseModel):
+    run_id: UUID
+    run_status: str
+    review_snapshot_hash: str
+    items: list[PricingDiscoveryReviewOfferResponse]
+
+
+class PricingRunResumeRequest(BaseModel):
+    review_snapshot_hash: str = Field(pattern=SHA256_HEX_PATTERN)
 
 
 class PricingRunPageResponse(BaseModel):
@@ -878,7 +952,9 @@ class TierCoefficientInput(BaseModel):
     def validate_calibration_evidence(self) -> TierCoefficientInput:
         if self.effective_sample_size > Decimal(self.sample_size):
             raise ValueError("effective_sample_size cannot exceed sample_size")
-        interval_supplied = self.interval_low is not None or self.interval_high is not None
+        interval_supplied = (
+            self.interval_low is not None or self.interval_high is not None
+        )
         if interval_supplied and (
             self.interval_low is None or self.interval_high is None
         ):
@@ -890,13 +966,17 @@ class TierCoefficientInput(BaseModel):
                 raise ValueError("multiplier must lie inside the coefficient interval")
         if self.validated:
             if self.sample_size <= 0 or self.effective_sample_size <= 0:
-                raise ValueError("validated coefficient requires positive sample support")
+                raise ValueError(
+                    "validated coefficient requires positive sample support"
+                )
             if self.confidence <= 0:
                 raise ValueError("validated coefficient requires positive confidence")
             if self.interval_low is None or self.interval_high is None:
                 raise ValueError("validated coefficient requires a complete interval")
             if self.validation_reasons:
-                raise ValueError("validated coefficient cannot carry validation failures")
+                raise ValueError(
+                    "validated coefficient cannot carry validation failures"
+                )
         return self
 
     def to_domain(self) -> TierCoefficient:

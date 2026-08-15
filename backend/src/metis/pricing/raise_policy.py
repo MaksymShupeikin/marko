@@ -5,17 +5,18 @@ so every value here is comparable by construction. Two policy families remain
 available:
 
 * the legacy quantile strategies retain their raise-only safety behaviour;
-* ``budget_floor`` implements Yuri's 2026-07-30 decision: use the cheapest
+* ``budget_floor`` implements the owner's 2026-08-12 decision: use the cheapest
   verified comparable offer irrespective of brand tier, and position our price
-  2–5% below it in either direction.
+  exactly 5% below it in either direction.
 
-Rounding always goes down. In budget-floor mode a rounded target outside the
-owner-approved band is withheld rather than silently violating that band.
+Rounding always goes down.  For the fixed-five-percent rule the normal sub-unit
+rounding remainder is allowed; a coarse tick that would move the price by more
+than one currency unit is withheld rather than silently changing the policy.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -25,7 +26,7 @@ from typing import Any
 
 import yaml
 
-from .statistics import iqr_fences, percentile, round_down_to_tick
+from .statistics import percentile, round_down_to_tick
 from .types import StockStatus
 
 RAISE_POLICY_SCHEMA_VERSION = "metis-raise-policy-v2"
@@ -82,6 +83,12 @@ FLAG_FLOOR_RESTS_ON_ONE_SELLER = "FLOOR_RESTS_ON_ONE_SELLER"
 #: Seller identity did not reach this call, so corroboration could not run.
 #: Reported rather than assumed: the resulting target may rest on one listing.
 FLAG_FLOOR_CORROBORATION_UNAVAILABLE = "FLOOR_CORROBORATION_UNAVAILABLE"
+#: Raw seller ids suggested a corroborated floor, but the corroborating sellers
+#: collapse into one affiliated sphere once seller-relation records are
+#: applied.  Two shops of the same owner are one market signal, not two.
+FLAG_FLOOR_CORROBORATION_BY_RELATED_SELLERS = (
+    "FLOOR_CORROBORATION_BY_RELATED_SELLERS"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +122,10 @@ class RaisePolicy:
     # single listing decides the recommendation; the quantile strategies never
     # consult this because a quantile is already corroborated by construction.
     floor_corroboration_sellers: int = 1
+    # A literal, non-statistical guard for a lone suspicious floor.  If the
+    # cheapest price is below this share of the next independent seller, the
+    # calculation is shown but requires review.  Zero disables the guard.
+    floor_gap_review_ratio: Decimal = ZERO
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +219,9 @@ class RaiseDecision:
             ),
             "excluded_implausible_count": self.excluded_implausible_count,
             "plausibility_floor": (
-                None if self.plausibility_floor is None else str(self.plausibility_floor)
+                None
+                if self.plausibility_floor is None
+                else str(self.plausibility_floor)
             ),
         }
 
@@ -318,6 +331,27 @@ def corroborated_floor(
     return None
 
 
+def _apply_seller_groups(
+    pairs: Sequence[tuple[Decimal, str | None]],
+    seller_groups: Mapping[str, str] | None,
+) -> tuple[tuple[Decimal, str | None], ...]:
+    """Collapse affiliated sellers into their shared corroboration sphere.
+
+    The mapping rewrites only the seller key; the price and its place in the
+    evidence stay untouched.  A seller absent from the mapping keeps its own
+    id, so a deployment without seller-relation records behaves exactly as
+    before.  Only the budget-floor strategy consults the result: a quantile
+    never needed seller identity at all.
+    """
+
+    if not seller_groups:
+        return tuple(pairs)
+    return tuple(
+        (price, None if seller is None else seller_groups.get(seller, seller))
+        for price, seller in pairs
+    )
+
+
 def grade_confidence(basis: RaiseBasis, policy: RaisePolicy) -> RaiseConfidence:
     """Grade the basis on size and spread, with strictly-less-than thresholds.
 
@@ -346,6 +380,7 @@ def decide_raise(
     policy: RaisePolicy,
     cost_floor: Decimal | None = None,
     sellers: Sequence[str | None] | None = None,
+    seller_groups: Mapping[str, str] | None = None,
 ) -> RaiseDecision:
     """Decide whether to propose a higher price, and which one.
 
@@ -354,6 +389,11 @@ def decide_raise(
 
     ``sellers`` is positional against ``prices`` and is only consulted by the
     budget-floor strategy, which refuses to let one listing be the market.
+
+    ``seller_groups`` maps a raw seller id onto the shared sphere it belongs
+    to (own/related/possibly-related storefronts).  Only budget-floor
+    corroboration consults it: two sellers inside one sphere are one
+    independent signal, not two.  The target itself never moves.
     """
 
     flags: list[str] = []
@@ -398,6 +438,7 @@ def decide_raise(
             current_price=current_price,
             basis=basis,
             policy=policy,
+            seller_groups=seller_groups,
         )
 
     fair = percentile(basis.prices, policy.target_quantile)
@@ -498,27 +539,30 @@ def decide_raise(
     )
 
 
-#: Below three prices there is no cohort for a floor to be isolated from, and
-#: the shipped ``min_evidence`` already refuses to act on fewer than three.
-_MIN_COHORT_FOR_ISOLATION = 3
-
-
-def _floor_is_isolated(
+def _floor_has_material_gap(
     eligible: Sequence[tuple[Decimal, str | None]],
+    *,
+    ratio: Decimal,
 ) -> bool:
-    """Whether the cheapest eligible price sits apart from the rest of the offers.
+    """Whether one cheapest seller is materially below the next seller.
 
-    Tukey's lower fence, computed from this cohort alone. It is not a threshold
-    anyone chose and it does not reference our own price — a floor is isolated
-    only relative to the other offers for the same part, which is the shape a
-    matching error takes and a genuinely cheap competitor does not.
+    This is deliberately ordinary arithmetic rather than IQR/MAD/outlier
+    statistics: cheapest / next independent seller < the explicit policy
+    ratio.  Equal low prices from two sellers corroborate the floor.
     """
 
-    if len(eligible) < _MIN_COHORT_FOR_ISOLATION:
+    if ratio <= ZERO or len(eligible) < 2:
         return False
-    prices = [price for price, _ in eligible]
-    lower_fence, _ = iqr_fences(prices)
-    return prices[0] < lower_fence
+    cheapest, cheapest_seller = eligible[0]
+    next_price = next(
+        (
+            price
+            for price, seller in eligible[1:]
+            if seller is None or cheapest_seller is None or seller != cheapest_seller
+        ),
+        None,
+    )
+    return next_price is not None and cheapest / next_price < ratio
 
 
 def _decide_budget_floor(
@@ -526,8 +570,9 @@ def _decide_budget_floor(
     current_price: Decimal,
     basis: RaiseBasis,
     policy: RaisePolicy,
+    seller_groups: Mapping[str, str] | None = None,
 ) -> RaiseDecision:
-    """Apply the owner's tier-agnostic 2–5% below-minimum positioning.
+    """Apply the owner's tier-agnostic fixed 5% below-minimum positioning.
 
     The minimum has a breakdown point of zero: one offer that cannot be a real
     price becomes the recommendation outright.  Two unrelated causes produce such
@@ -557,9 +602,9 @@ def _decide_budget_floor(
 
     Raises are never capped or suppressed: reaching the market floor is the
     point of the strategy, and either legacy guard would push the proposal
-    outside the approved 2–5% band or swallow a necessary small correction into
-    it.  A cut whose floor is isolated from the rest of the cohort goes to review
-    with its evidence instead — see ``_floor_is_isolated`` and the branch below.
+    outside the approved target or swallow a necessary small correction into
+    it.  A cut whose floor has a material gap to the next independent seller
+    goes to review with its evidence instead.
     """
 
     floor = (
@@ -567,16 +612,20 @@ def _decide_budget_floor(
         if policy.target_floor_ratio > ZERO
         else None
     )
-    eligible = tuple(
+    eligible_raw = tuple(
         pair for pair in basis.pairs() if floor is None or pair[0] >= floor
     )
+    # Corroboration and the gap guard run on effective sellers: two affiliated
+    # storefronts are one independent signal.  The raw pairs are kept alongside
+    # so the flag can say precisely when grouping changed the answer.
+    eligible = _apply_seller_groups(eligible_raw, seller_groups)
     excluded = basis.count - len(eligible)
 
     reasons: tuple[str, ...] = (
         "CUSTOMER_BUDGET_FLOOR_POLICY",
         "TIER_AGNOSTIC_OWNER_POLICY",
         "STOCK_AND_COST_IGNORED_BY_OWNER_POLICY",
-        "TARGET_2_TO_5_PERCENT_BELOW_MINIMUM",
+        "TARGET_5_PERCENT_BELOW_MINIMUM",
     )
     flags: tuple[str, ...] = (
         (FLAG_IMPLAUSIBLE_EXCLUDED_FROM_TARGET,) if excluded else ()
@@ -633,30 +682,41 @@ def _decide_budget_floor(
         floor_is_alone = second is None or second > market_floor
         if floor_is_alone:
             flags += (FLAG_FLOOR_RESTS_ON_ONE_SELLER,)
+        if seller_groups and floor_is_alone:
+            # Raw ids said the floor had a second shop; effective sellers say
+            # it does not.  The corroboration was inside one affiliated
+            # sphere, and that is exactly what a reviewer needs to know.
+            second_raw = corroborated_floor(eligible_raw, required_sellers=2)
+            if second_raw is not None and second_raw <= market_floor:
+                flags += (FLAG_FLOOR_CORROBORATION_BY_RELATED_SELLERS,)
     target_band_low = market_floor * (ONE - policy.maximum_discount)
     target_band_high = market_floor * (ONE - policy.minimum_discount)
-    # Graded on the offers that actually set the target.  Counting the discarded
-    # ones would advertise a thin basis as a thick one, and this grade is what
-    # orders his review queue.
-    #
-    # Graded by ``grade_confidence`` and not by a count of its own.  The first
-    # version of this branch counted offers and ignored their spread, which is
-    # how a cohort priced 1087 to 12968 for one Touareg radiator was graded HIGH
-    # and produced a -79% cut: twenty-two offers is a thick basis by count and a
-    # meaningless one by agreement.  Nothing new is introduced here — the same
-    # function, the same owner-approved thresholds, and the same LOW-goes-to-
-    # review rule the quantile strategies have always had.
-    eligible_basis = build_basis([price for price, _ in eligible])
-    confidence = (
-        grade_confidence(eligible_basis, policy)
-        if eligible_basis is not None
-        else RaiseConfidence.LOW
-    )
+    # This strategy intentionally has no dispersion/IQR confidence rule.  Its
+    # authority comes from deterministic offer gates plus a minimum count of
+    # independent sellers; spread does not move or suppress the literal floor.
+    # The separate material-gap guard below still highlights a lone suspicious
+    # floor before it can trigger an irreversible cut.
+    evidence_count = len(eligible)
+    if evidence_count >= policy.high_min_evidence:
+        confidence = RaiseConfidence.HIGH
+    elif evidence_count >= policy.medium_min_evidence:
+        confidence = RaiseConfidence.MEDIUM
+    else:
+        confidence = RaiseConfidence.LOW
     recommended = round_down_to_tick(
         target_band_high,
         policy.psychological_step,
     )
-    if recommended < target_band_low or recommended > target_band_high:
+    fixed_discount = policy.minimum_discount == policy.maximum_discount
+    ordinary_rounding_slippage = (
+        fixed_discount
+        and recommended > ZERO
+        and recommended <= target_band_high
+        and target_band_high - recommended < ONE
+    )
+    if (
+        recommended < target_band_low or recommended > target_band_high
+    ) and not ordinary_rounding_slippage:
         return RaiseDecision(
             outcome=RaiseOutcome.SHOW_BUT_FLAG,
             recommended_price=None,
@@ -685,9 +745,7 @@ def _decide_budget_floor(
             plausibility_floor=floor,
         )
     outcome = (
-        RaiseOutcome.RAISE
-        if current_price < target_band_low
-        else RaiseOutcome.LOWER
+        RaiseOutcome.RAISE if current_price < target_band_low else RaiseOutcome.LOWER
     )
     if confidence is RaiseConfidence.LOW:
         # The rule the quantile strategies apply and this one had dropped: a
@@ -712,7 +770,10 @@ def _decide_budget_floor(
             excluded_implausible_count=excluded,
             plausibility_floor=floor,
         )
-    if outcome is RaiseOutcome.LOWER and _floor_is_isolated(eligible):
+    if outcome is RaiseOutcome.LOWER and _floor_has_material_gap(
+        eligible,
+        ratio=policy.floor_gap_review_ratio,
+    ):
         # Cuts and raises are not symmetric, and the difference is not taste.
         # An over-raise is self-limiting and reversible: the part does not sell,
         # and the next run corrects it.  A cut is realised on the first sale and
@@ -725,7 +786,7 @@ def _decide_budget_floor(
         # cohort or sits apart from it, so that — and not the size of the move,
         # and not our own price — is what is tested.
         #
-        # Nothing is clamped either.  A clamped cut is 2–5% below nothing at all:
+        # Nothing is clamped either.  A clamped cut is 5% below nothing at all:
         # it satisfies neither the owner's rule nor the evidence, and it would
         # look like an answer.  It goes to him with the offers attached, which is
         # what he asked the system to do — highlight it, and let him judge.
@@ -736,7 +797,7 @@ def _decide_budget_floor(
             basis=basis,
             confidence=confidence,
             flags=flags,
-            reasons=reasons + ("CUT_FROM_ISOLATED_FLOOR",),
+            reasons=reasons + ("FLOOR_MATERIALLY_BELOW_NEXT_SELLER",),
             target_band_low=target_band_low,
             target_band_high=target_band_high,
             excluded_implausible_count=excluded,
@@ -862,6 +923,10 @@ def load_raise_policy(path: str | Path, *, strategy: str | None = None) -> Raise
             entry.get("floor_corroboration_sellers", 1),
             "floor_corroboration_sellers",
         ),
+        floor_gap_review_ratio=_decimal(
+            entry.get("floor_gap_review_ratio", "0"),
+            "floor_gap_review_ratio",
+        ),
     )
     if policy.psychological_step <= ZERO:
         raise RaisePolicyConfigError("psychological_step must be positive")
@@ -874,16 +939,13 @@ def load_raise_policy(path: str | Path, *, strategy: str | None = None) -> Raise
     if not (ZERO <= policy.target_floor_ratio < ONE):
         # At 1 the floor would discard every offer cheaper than our own price,
         # which is the entire population a cut is derived from.
+        raise RaisePolicyConfigError("target_floor_ratio must satisfy 0 <= ratio < 1")
+    if not (ZERO <= policy.floor_gap_review_ratio < ONE):
         raise RaisePolicyConfigError(
-            "target_floor_ratio must satisfy 0 <= ratio < 1"
+            "floor_gap_review_ratio must satisfy 0 <= ratio < 1"
         )
     if policy.strategy is RaiseStrategy.BUDGET_FLOOR:
-        if not (
-            ZERO
-            < policy.minimum_discount
-            <= policy.maximum_discount
-            < ONE
-        ):
+        if not (ZERO < policy.minimum_discount <= policy.maximum_discount < ONE):
             raise RaisePolicyConfigError(
                 "budget_floor discounts must satisfy "
                 "0 < minimum_discount <= maximum_discount < 1"
@@ -951,6 +1013,7 @@ def _text(value: Any, field: str) -> str:
 
 __all__ = [
     "FLAG_BELOW_COST_FLOOR",
+    "FLAG_FLOOR_CORROBORATION_BY_RELATED_SELLERS",
     "FLAG_FLOOR_CORROBORATION_UNAVAILABLE",
     "FLAG_FLOOR_RESTS_ON_ONE_SELLER",
     "FLAG_IMPLAUSIBLE_EXCLUDED_FROM_TARGET",

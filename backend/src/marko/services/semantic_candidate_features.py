@@ -5412,6 +5412,27 @@ def extract_semantic_features(record: Mapping[str, Any]) -> dict[str, FeatureSet
             str(raw_value),
         )
 
+    # A listing sold per piece is a listing of one piece.  Owner decision
+    # 2026-08-15: ``unit_basis = piece`` establishes ``package_quantity = 1``.
+    #
+    # Neither our catalogue nor the marketplace ever states a pack size --
+    # UNKNOWN on both sides in nine comparisons out of nine -- so while
+    # ``package_quantity`` sits in SEMANTIC_PRICING_BASE_REQUIRED_DIMENSIONS no
+    # offer can ever be admitted to a price.  The unit basis already carries the
+    # fact that requirement protects: two prices are comparable when both are
+    # per piece.
+    #
+    # Runs last, after both the explicit-field pass and the characteristics
+    # pass, so it sees the final unit basis whichever source stated it.
+    # ``_canonicalize_unit_basis_evidence`` has already stripped ``piece`` from
+    # anything that is really a ``комплект`` or a ``пара``, so a kit never
+    # reaches here and is never priced as one part.  An explicit pack size
+    # always wins; this only fills a blank.
+    if not values["package_quantity"] and {
+        item.normalized_value for item in values["unit_basis"]
+    } == {"piece"}:
+        _append(values, "package_quantity", "1", "unit_basis", "piece")
+
     # Side, axle position and condition describe one sellable variant.  Old
     # marketplace descriptions are often templates containing both sides or
     # another product variant.  They must not contaminate an explicit title or

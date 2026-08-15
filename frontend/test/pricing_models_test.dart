@@ -280,7 +280,7 @@ void main() {
       'calculation_trace': {
         'customer_pricing_policy': {
           'strategy': 'budget_floor',
-          'minimum_discount': '0.02',
+          'minimum_discount': '0.05',
           'maximum_discount': '0.05',
           'brand_tier_handling': 'ignored_for_price',
           'stock_status_handling': 'ignored_for_price',
@@ -289,10 +289,10 @@ void main() {
         'advisory_decision': {
           'status': 'COMPARABILITY_REVIEW_REQUIRED',
           'action': 'RAISE',
-          'recommended_price': '980',
+          'recommended_price': '950',
           'minimum_comparable_price': '1000',
           'target_band_low': '950',
-          'target_band_high': '980',
+          'target_band_high': '950',
           'automatic_price_application': false,
         },
       },
@@ -301,7 +301,7 @@ void main() {
       'fair_price': '1000',
       'recommended_price': null,
       'lower_bound': '950',
-      'upper_bound': '980',
+      'upper_bound': '950',
       'confidence': '0.8',
       'confidence_grade': 'MANUAL',
       'weakest_factor': 'coverage',
@@ -321,10 +321,10 @@ void main() {
     expect(item.needsReview, isTrue);
     expect(item.hasAdvisoryPrice, isTrue);
     expect(item.advisoryAction, 'RAISE');
-    expect(item.advisoryRecommendedPrice, DecimalValue.parse('980'));
+    expect(item.advisoryRecommendedPrice, DecimalValue.parse('950'));
     expect(item.advisoryMarketMinimum, DecimalValue.parse('1000'));
     expect(item.advisoryTargetBandLow, DecimalValue.parse('950'));
-    expect(item.advisoryTargetBandHigh, DecimalValue.parse('980'));
+    expect(item.advisoryTargetBandHigh, DecimalValue.parse('950'));
     expect(
       item.customerPricingPolicy?['brand_tier_handling'],
       'ignored_for_price',

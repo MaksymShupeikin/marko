@@ -40,6 +40,10 @@ from marko.api.schemas.pricing import (
     PricingEvaluateRequest,
     PricingEvaluateResponse,
     PricingRunCreateRequest,
+    PricingDiscoveryDecisionRequest,
+    PricingDiscoveryDecisionResponse,
+    PricingDiscoveryReviewPageResponse,
+    PricingRunResumeRequest,
     PricingRunPageResponse,
     PricingRunPreviewRequest,
     PricingRunPreviewResponse,
@@ -102,7 +106,15 @@ from marko.services.pricing_runs import (
 )
 from marko.services.cost_privacy import privacy_safe_mapping
 from marko.services.market_collection import _validated_listing_url
+from marko.services.market_collection import enqueue_collection_finalizer_dispatch
 from marko.services.market_price import effective_observation_price
+from marko.services.no_oe_pricing import (
+    NoOePricingError,
+    decide_offer,
+    resume_pricing_run,
+    review_queue,
+)
+from marko.services.scraper_outbox import publish_dispatch
 from marko.services.llm_comparability import (
     ComparabilityReviewNotFound,
     ComparabilityReviewUnavailable,
@@ -154,7 +166,10 @@ async def get_llm_comparability_status(
         rate_card_version=settings.pricing_llm_rate_version,
         configured=bool(
             settings.pricing_llm_comparability_mode != "off"
-            and settings.pricing_llm_api_key.get_secret_value().strip()
+            and (
+                settings.pricing_llm_provider == "codex_cli"
+                or settings.pricing_llm_api_key.get_secret_value().strip()
+            )
             and settings.pricing_llm_model.strip()
         ),
         automatic_price_publication=False,
@@ -631,6 +646,108 @@ async def get_pricing_run_details(
         )
     except PricingRunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Pricing run not found") from exc
+    return PricingRunResponse.model_validate(run)
+
+
+@router.get(
+    "/runs/{run_id}/discovery-reviews",
+    response_model=PricingDiscoveryReviewPageResponse,
+)
+async def get_pricing_discovery_reviews(
+    run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingDiscoveryReviewPageResponse:
+    try:
+        result = await review_queue(
+            session, workspace_id=current.workspace_id, run_id=run_id
+        )
+    except NoOePricingError as exc:
+        raise HTTPException(
+            status_code=(409 if exc.code == "OFFER_SNAPSHOT_CHANGED" else 404),
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return PricingDiscoveryReviewPageResponse.model_validate(result)
+
+
+@router.post(
+    "/runs/{run_id}/discovery-offers/{offer_id}/decision",
+    response_model=PricingDiscoveryDecisionResponse,
+)
+async def post_pricing_discovery_decision(
+    run_id: UUID,
+    offer_id: UUID,
+    payload: PricingDiscoveryDecisionRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingDiscoveryDecisionResponse:
+    try:
+        record = await decide_offer(
+            session,
+            workspace_id=current.workspace_id,
+            run_id=run_id,
+            offer_id=offer_id,
+            decision=payload.decision,
+            reason=payload.reason,
+            idempotency_key=payload.idempotency_key,
+            expected_offer_sha256=payload.expected_offer_sha256,
+            actor_id=str(current.user.id),
+        )
+    except NoOePricingError as exc:
+        status_code = (
+            409
+            if exc.code
+            in {"IDEMPOTENCY_CONFLICT", "OFFER_SNAPSHOT_CHANGED", "REVIEW_NOT_ACTIVE"}
+            else 403
+            if exc.code
+            in {
+                "OWNED_SELLER_FORBIDDEN",
+                "LUNA_MATCH_REQUIRED",
+                "UNAVAILABLE_OFFER_FORBIDDEN",
+            }
+            else 404
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return PricingDiscoveryDecisionResponse.model_validate(record)
+
+
+@router.post("/runs/{run_id}/resume", response_model=PricingRunResponse)
+async def resume_pricing_after_discovery_review(
+    run_id: UUID,
+    payload: PricingRunResumeRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PricingRunResponse:
+    try:
+        run = await resume_pricing_run(
+            session,
+            workspace_id=current.workspace_id,
+            run_id=run_id,
+            expected_review_snapshot_hash=payload.review_snapshot_hash,
+            min_sellers=get_settings().pricing_scraper_min_independent_sellers,
+        )
+    except NoOePricingError as exc:
+        status_code = (
+            409
+            if exc.code in {"REVIEW_SNAPSHOT_CHANGED", "OFFER_SNAPSHOT_CHANGED"}
+            else 422
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    event_id = await enqueue_collection_finalizer_dispatch(
+        run.id,
+        trigger_key=f"review-resume:{payload.review_snapshot_hash}",
+    )
+    await publish_dispatch(
+        session,
+        event_id=event_id,
+        celery_app=celery_app,
+    )
     return PricingRunResponse.model_validate(run)
 
 
@@ -1414,11 +1531,12 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
     identity_blocked = not recommendation_price_identity_allowed(
         item, recommendation.action
     )
-    response_action = (
-        "MANUAL_REVIEW" if identity_blocked else recommendation.action
-    )
+    response_action = "MANUAL_REVIEW" if identity_blocked else recommendation.action
     response_reason_codes = list(recommendation.reason_codes or [])
-    if identity_blocked and IDENTITY_BLOCKED_RECOMMENDATION_ACTION not in response_reason_codes:
+    if (
+        identity_blocked
+        and IDENTITY_BLOCKED_RECOMMENDATION_ACTION not in response_reason_codes
+    ):
         response_reason_codes.append(IDENTITY_BLOCKED_RECOMMENDATION_ACTION)
     # ``PricingRecommendation`` is append-only.  Do not mutate the historical
     # row just because a later identity reparse proved it was MPN_ONLY; instead
@@ -1430,14 +1548,10 @@ def _recommendation_response(recommendation, item) -> RecommendationResponse:
     response_lower_bound = None if identity_blocked else recommendation.lower_bound
     response_upper_bound = None if identity_blocked else recommendation.upper_bound
     response_absolute_change = (
-        None
-        if identity_blocked
-        else recommendation.absolute_recommended_change
+        None if identity_blocked else recommendation.absolute_recommended_change
     )
     response_percentage_change = (
-        None
-        if identity_blocked
-        else recommendation.percentage_recommended_change
+        None if identity_blocked else recommendation.percentage_recommended_change
     )
     return RecommendationResponse(
         id=recommendation.id,

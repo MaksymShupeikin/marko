@@ -438,22 +438,34 @@ async def collect_catalog_discovery(
     currency: str | None = None,
     category: str | None = None,
     settings: Settings | None = None,
+    safe_query_override: str | None = None,
 ) -> CatalogDiscoverySnapshot:
     """Run one bounded live search and persist raw evidence plus every outcome."""
 
     resolved_settings = settings or get_settings()
     require_live_prom_marketplace_collection(resolved_settings)
-    requested_query = catalog_discovery_query(sku=sku, oe=oe, mpn=mpn)
-    query = await _resolve_private_catalog_discovery_query(
-        session,
-        workspace_id=workspace_id,
-        sku=sku,
-        oe=oe,
-        mpn=mpn,
-        brand=brand,
-        requested_query=requested_query,
-    )
-    product_key = catalog_product_key(sku=sku, oe=oe, mpn=mpn, brand=brand)
+    if safe_query_override is not None:
+        query = " ".join(safe_query_override.split())[:255]
+        if not query or is_internal_catalog_code(query):
+            raise CatalogDiscoveryError(
+                "CATALOG_DISCOVERY_UNSAFE_OVERRIDE",
+                "Safe discovery override is empty or contains a private KEMP key.",
+            )
+        product_key = hashlib.sha256(
+            f"no-oe:{workspace_id}:{query}".encode("utf-8")
+        ).hexdigest()
+    else:
+        requested_query = catalog_discovery_query(sku=sku, oe=oe, mpn=mpn)
+        query = await _resolve_private_catalog_discovery_query(
+            session,
+            workspace_id=workspace_id,
+            sku=sku,
+            oe=oe,
+            mpn=mpn,
+            brand=brand,
+            requested_query=requested_query,
+        )
+        product_key = catalog_product_key(sku=sku, oe=oe, mpn=mpn, brand=brand)
     selection_config = load_candidate_selection_config(
         resolve_backend_path(resolved_settings.pricing_candidate_selection_path)
     )
@@ -1281,8 +1293,7 @@ async def _snapshot_for_run(
         # its offers are still useful for discovery, but cannot be presented as
         # current pricing evidence.
         pricing_evidence_count=sum(
-            item.selection_status == "PRICING_EVIDENCE"
-            for item in effective_items
+            item.selection_status == "PRICING_EVIDENCE" for item in effective_items
         ),
         reference_only_count=sum(
             item.selection_status == "REFERENCE_ONLY" for item in effective_items
@@ -1322,8 +1333,7 @@ def _has_current_semantic_admission(offer: CatalogDiscoveryOffer) -> bool:
     return (
         str(gate.get("status") or "").strip() == "PRICING_EVIDENCE"
         and str(gate.get("reason") or "").strip() == "OK"
-        and str(gate.get("gate_version") or "").strip()
-        == SEMANTIC_PRICING_GATE_VERSION
+        and str(gate.get("gate_version") or "").strip() == SEMANTIC_PRICING_GATE_VERSION
     )
 
 
@@ -1351,9 +1361,7 @@ def _discovery_only_verdict(verdict: Any) -> Any:
         status=CandidateStatus.REFERENCE_ONLY,
         reason="DISCOVERY_ONLY_NOT_PRICING_EVIDENCE",
         flags=tuple(
-            dict.fromkeys(
-                (*verdict.flags, "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE")
-            )
+            dict.fromkeys((*verdict.flags, "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE"))
         ),
         details=MappingProxyType(details),
     )
@@ -1371,9 +1379,7 @@ def _effective_discovery_offer(offer: CatalogDiscoveryOffer) -> CatalogDiscovere
         stale = not _has_current_semantic_admission(offer)
         selection_status = "REFERENCE_ONLY"
         selection_reason = (
-            "SEMANTIC_GATE_STALE"
-            if stale
-            else "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE"
+            "SEMANTIC_GATE_STALE" if stale else "DISCOVERY_ONLY_NOT_PRICING_EVIDENCE"
         )
         reason_codes = tuple(
             dict.fromkeys(
@@ -1428,9 +1434,7 @@ def _effective_discovery_offer(offer: CatalogDiscoveryOffer) -> CatalogDiscovere
         tier_confidence=offer.tier_confidence,
         mpn=_raw_snapshot_text(getattr(offer, "raw_snapshot", None), "mpn"),
         oe_raw=_raw_snapshot_text(getattr(offer, "raw_snapshot", None), "oe_raw"),
-        part_numbers=_raw_snapshot_part_numbers(
-            getattr(offer, "raw_snapshot", None)
-        ),
+        part_numbers=_raw_snapshot_part_numbers(getattr(offer, "raw_snapshot", None)),
     )
 
 
@@ -1454,11 +1458,7 @@ def _raw_snapshot_part_numbers(
     raw = snapshot.get("part_numbers")
     if not isinstance(raw, (list, tuple)):
         return ()
-    return tuple(
-        value
-        for item in raw
-        if (value := str(item or "").strip())
-    )
+    return tuple(value for item in raw if (value := str(item or "").strip()))
 
 
 __all__ = [

@@ -388,10 +388,15 @@ class PricingRecommendation {
   DecimalValue? get advisoryTargetBandHigh =>
       DecimalValue.tryParse(advisoryDecision?['target_band_high']);
 
-  bool get hasAdvisoryPrice =>
-      advisoryDecision?['automatic_price_application'] == false &&
-      advisoryRecommendedPrice != null &&
-      {'RAISE', 'LOWER'}.contains(advisoryAction);
+  bool get hasAdvisoryPrice {
+    if (advisoryDecision?['automatic_price_application'] != false) {
+      return false;
+    }
+    if (advisoryRecommendedPrice == null) return false;
+    if ({'RAISE', 'LOWER'}.contains(advisoryAction)) return true;
+    return advisoryDecision?['status']?.toString() ==
+        'INCOMPLETE_EVIDENCE_REVIEW_REQUIRED';
+  }
 
   bool get isRaise => action == 'RAISE';
   bool get isLower => action == 'LOWER';
@@ -1140,6 +1145,14 @@ class PricingRunPreview {
     required this.networkEligibleItems,
     required this.identityBlockedItems,
     required this.worstCaseDurationSeconds,
+    required this.oemItems,
+    required this.noOemItems,
+    required this.kempLinkedItems,
+    required this.kempUnlinkedItems,
+    required this.kempAmbiguousItems,
+    required this.expectedPromQueries,
+    required this.lunaItemLimit,
+    required this.maxProviderCalls,
   });
 
   factory PricingRunPreview.fromJson(Map<String, dynamic> json) {
@@ -1164,6 +1177,17 @@ class PricingRunPreview {
           (estimate['identity_blocked_items'] as num?)?.toInt() ?? 0,
       worstCaseDurationSeconds:
           (estimate['worst_case_duration_seconds'] as num?)?.toInt() ?? 0,
+      oemItems: (estimate['oem_items'] as num?)?.toInt() ?? 0,
+      noOemItems: (estimate['no_oem_items'] as num?)?.toInt() ?? 0,
+      kempLinkedItems: (estimate['kemp_linked_items'] as num?)?.toInt() ?? 0,
+      kempUnlinkedItems:
+          (estimate['kemp_unlinked_items'] as num?)?.toInt() ?? 0,
+      kempAmbiguousItems:
+          (estimate['kemp_ambiguous_items'] as num?)?.toInt() ?? 0,
+      expectedPromQueries:
+          (estimate['expected_prom_queries'] as num?)?.toInt() ?? 0,
+      lunaItemLimit: (estimate['luna_item_limit'] as num?)?.toInt() ?? 0,
+      maxProviderCalls: (estimate['max_provider_calls'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -1184,7 +1208,114 @@ class PricingRunPreview {
   final int networkEligibleItems;
   final int identityBlockedItems;
   final int worstCaseDurationSeconds;
+  final int oemItems;
+  final int noOemItems;
+  final int kempLinkedItems;
+  final int kempUnlinkedItems;
+  final int kempAmbiguousItems;
+  final int expectedPromQueries;
+  final int lunaItemLimit;
+  final int maxProviderCalls;
 
   /// Верхняя оценка, а не прогноз: столько прогон займёт в худшем случае.
   int get worstCaseMinutes => (worstCaseDurationSeconds / 60).ceil();
+}
+
+class PricingDiscoveryReviewOffer {
+  PricingDiscoveryReviewOffer({
+    required this.offerId,
+    required this.runItemId,
+    required this.catalogItemId,
+    required this.sourceName,
+    required this.sourceSku,
+    required this.sourceInternalCode,
+    required this.candidateTitle,
+    required this.candidateUrl,
+    required this.sellerId,
+    required this.sellerName,
+    required Object price,
+    required this.currency,
+    required this.measureUnit,
+    required this.isAvailable,
+    required this.offerSha256,
+    required this.lunaVerdict,
+    required this.lunaRationale,
+    required this.evidenceReferences,
+    required this.conflicts,
+    required this.decision,
+  }) : price = DecimalValue.from(price);
+
+  factory PricingDiscoveryReviewOffer.fromJson(Map<String, dynamic> json) =>
+      PricingDiscoveryReviewOffer(
+        offerId: json['offer_id'] as String,
+        runItemId: json['run_item_id'] as String,
+        catalogItemId: json['catalog_item_id'] as String,
+        sourceName: json['source_name'] as String,
+        sourceSku: json['source_sku'] as String,
+        sourceInternalCode: json['source_internal_code'] as String?,
+        candidateTitle: json['candidate_title'] as String,
+        candidateUrl: json['candidate_url'] as String,
+        sellerId: json['seller_id'] as String,
+        sellerName: json['seller_name'] as String,
+        price: json['price'],
+        currency: json['currency'] as String,
+        measureUnit: json['measure_unit'] as String?,
+        isAvailable: json['is_available'] as bool?,
+        offerSha256: json['offer_sha256'] as String,
+        lunaVerdict: json['luna_verdict'] as String,
+        lunaRationale: json['luna_rationale'] as String,
+        evidenceReferences:
+            (json['evidence_references'] as List<dynamic>? ?? const []),
+        conflicts: (json['conflicts'] as List<dynamic>? ?? const []),
+        decision: json['decision'] as String?,
+      );
+
+  final String offerId;
+  final String runItemId;
+  final String catalogItemId;
+  final String sourceName;
+  final String sourceSku;
+  final String? sourceInternalCode;
+  final String candidateTitle;
+  final String candidateUrl;
+  final String sellerId;
+  final String sellerName;
+  final DecimalValue price;
+  final String currency;
+  final String? measureUnit;
+  final bool? isAvailable;
+  final String offerSha256;
+  final String lunaVerdict;
+  final String lunaRationale;
+  final List<dynamic> evidenceReferences;
+  final List<dynamic> conflicts;
+  final String? decision;
+}
+
+class PricingDiscoveryReviewQueue {
+  const PricingDiscoveryReviewQueue({
+    required this.runId,
+    required this.runStatus,
+    required this.reviewSnapshotHash,
+    required this.items,
+  });
+
+  factory PricingDiscoveryReviewQueue.fromJson(Map<String, dynamic> json) =>
+      PricingDiscoveryReviewQueue(
+        runId: json['run_id'] as String,
+        runStatus: json['run_status'] as String,
+        reviewSnapshotHash: json['review_snapshot_hash'] as String,
+        items: (json['items'] as List<dynamic>)
+            .map(
+              (item) => PricingDiscoveryReviewOffer.fromJson(
+                item as Map<String, dynamic>,
+              ),
+            )
+            .toList(growable: false),
+      );
+
+  final String runId;
+  final String runStatus;
+  final String reviewSnapshotHash;
+  final List<PricingDiscoveryReviewOffer> items;
 }

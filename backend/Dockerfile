@@ -19,6 +19,7 @@ RUN uv sync --frozen --no-dev --no-editable
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY config ./config
+COPY data ./data
 COPY src ./src
 
 RUN groupadd --gid 10001 marko \

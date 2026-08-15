@@ -1177,9 +1177,7 @@ class CatalogItem(TimestampMixin, Base):
     #: Наш собственный код позиции. По нему каталог связывается с тем, что
     #: напарсено с витрины: артикул принадлежит площадке, OE — детали, и только
     #: этот код принадлежит нам. Индексируется, потому что связь идёт по нему.
-    internal_code_raw: Mapped[str] = mapped_column(
-        Text, default="", server_default=""
-    )
+    internal_code_raw: Mapped[str] = mapped_column(Text, default="", server_default="")
     internal_code_norm: Mapped[str] = mapped_column(
         String(255), default="", server_default="", index=True
     )
@@ -1319,6 +1317,160 @@ class CatalogProduct(TimestampMixin, Base):
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CatalogReferenceItem(Base):
+    """Reference-only identity assertion imported from workbook ``Только код``."""
+
+    __tablename__ = "catalog_reference_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "import_batch_id",
+            "source_sheet",
+            "source_row",
+            name="uq_catalog_reference_batch_sheet_row",
+        ),
+        CheckConstraint(
+            "char_length(content_sha256) = 64",
+            name="ck_catalog_reference_content_sha256",
+        ),
+        Index(
+            "ix_catalog_reference_workspace_internal_code",
+            "workspace_id",
+            "internal_code_norm",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    import_batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_import_batches.id", ondelete="CASCADE"), index=True
+    )
+    source_sheet: Mapped[str] = mapped_column(String(255))
+    source_row: Mapped[int] = mapped_column(Integer)
+    internal_code_raw: Mapped[str] = mapped_column(Text, default="", server_default="")
+    internal_code_norm: Mapped[str] = mapped_column(
+        String(255), default="", server_default=""
+    )
+    original_raw: Mapped[str] = mapped_column(Text, default="", server_default="")
+    original_norm: Mapped[str] = mapped_column(
+        String(255), default="", server_default=""
+    )
+    title: Mapped[str | None] = mapped_column(Text)
+    oe_sources: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    confirmed_numbers: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    anomalies: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    evidence_url: Mapped[str | None] = mapped_column(Text)
+    raw_row: Mapped[dict[str, Any]] = mapped_column(JSON)
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CatalogKempLinkResolution(Base):
+    """Append-only terminal resolution of one canonical item against owned cards."""
+
+    __tablename__ = "catalog_kemp_link_resolutions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('LINKED_OWNED_LISTING_GROUP', 'KEMP_CODE_MISSING', "
+            "'NO_CURRENT_OWNED_LISTING', 'AMBIGUOUS_LISTING_INTERNAL_CODES', "
+            "'DUPLICATE_CATALOG_INTERNAL_CODE', 'SOURCE_EVIDENCE_MISSING', "
+            "'SOURCE_ACCESS_BLOCKED')",
+            name="ck_catalog_kemp_link_resolution_status",
+        ),
+        CheckConstraint(
+            "char_length(input_sha256) = 64 AND char_length(evidence_sha256) = 64",
+            name="ck_catalog_kemp_link_resolution_hashes",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "catalog_item_id",
+            "input_sha256",
+            name="uq_catalog_kemp_link_resolution_input",
+        ),
+        Index(
+            "ix_catalog_kemp_resolution_batch_item_time",
+            "import_batch_id",
+            "catalog_item_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    import_batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_import_batches.id", ondelete="CASCADE"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="RESTRICT"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(48), index=True)
+    internal_code_raw: Mapped[str] = mapped_column(Text, default="", server_default="")
+    internal_code_norm: Mapped[str] = mapped_column(
+        String(255), default="", server_default=""
+    )
+    method: Mapped[str] = mapped_column(String(80))
+    method_version: Mapped[str] = mapped_column(String(80))
+    input_sha256: Mapped[str] = mapped_column(String(64))
+    evidence_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    evidence_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    listing_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CatalogKempOwnedListingLink(Base):
+    """Exact owned-listing member of one immutable KEMP resolution."""
+
+    __tablename__ = "catalog_kemp_owned_listing_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "resolution_id", "listing_id", name="uq_catalog_kemp_link_listing"
+        ),
+        CheckConstraint(
+            "char_length(evidence_sha256) = 64",
+            name="ck_catalog_kemp_owned_link_hash",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    resolution_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_kemp_link_resolutions.id", ondelete="RESTRICT"), index=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    catalog_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_items.id", ondelete="RESTRICT"), index=True
+    )
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("listings.id", ondelete="RESTRICT"), index=True
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("marketplace_stores.id", ondelete="RESTRICT"), index=True
+    )
+    source_listing_id: Mapped[str] = mapped_column(String(255))
+    source_url: Mapped[str] = mapped_column(Text)
+    internal_code_raw: Mapped[str] = mapped_column(Text)
+    internal_code_norm: Mapped[str] = mapped_column(String(255))
+    evidence_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    evidence_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class PriceAssessment(Base):
     """Immutable product-price conclusion built from one pricing execution."""
 
@@ -1355,7 +1507,9 @@ class PriceAssessment(Base):
         Numeric(5, 4), default=Decimal("0"), server_default="0"
     )
     evidence_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    reason_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     market_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -1546,7 +1700,8 @@ class PricingPolicyRecord(TimestampMixin, Base):
 
 
 PRICING_RUN_ACTIVE_STATUS_SQL = (
-    "'queued', 'running', 'collecting', 'classifying', 'calibrating', 'calculating'"
+    "'queued', 'running', 'collecting', 'classifying', 'calibrating', "
+    "'calculating', 'awaiting_review'"
 )
 
 
@@ -1555,7 +1710,8 @@ class PricingRun(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('queued', 'running', 'collecting', 'classifying', 'calibrating', "
-            "'calculating', 'completed', 'partial', 'failed', 'cancelled')",
+            "'calculating', 'awaiting_review', 'completed', 'partial', "
+            "'failed', 'cancelled')",
             name="ck_pricing_run_status",
         ),
         CheckConstraint(
@@ -1705,6 +1861,8 @@ class PricingRun(TimestampMixin, Base):
     start_lane: Mapped[str | None] = mapped_column(String(24))
     start_actor_id: Mapped[str | None] = mapped_column(String(160))
     start_actor_type: Mapped[str | None] = mapped_column(String(24))
+    review_snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    review_frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ScrapeTarget(TimestampMixin, Base):
@@ -1884,7 +2042,8 @@ class PricingRunItem(TimestampMixin, Base):
         ),
         UniqueConstraint("idempotency_key", name="uq_pricing_run_item_idempotency"),
         CheckConstraint(
-            "status IN ('queued', 'collecting', 'collected', 'classified', "
+            "status IN ('queued', 'discovering', 'awaiting_discovery_review', "
+            "'review_frozen', 'collecting', 'collected', 'classified', "
             "'calculating', 'calculated', 'manual_review', 'failed', 'cancelled')",
             name="ck_pricing_run_item_status",
         ),
@@ -1919,7 +2078,7 @@ class PricingRunItem(TimestampMixin, Base):
         ForeignKey("scrape_targets.id", ondelete="SET NULL"), index=True
     )
     status: Mapped[str] = mapped_column(
-        String(20), default="queued", server_default="queued"
+        String(32), default="queued", server_default="queued"
     )
     idempotency_key: Mapped[str] = mapped_column(String(160))
     task_id: Mapped[str | None] = mapped_column(String(255), index=True)
@@ -1952,6 +2111,127 @@ class PricingRunItem(TimestampMixin, Base):
     # (его отпечаток лежит в манифесте), и выводить его из живого каталога
     # нельзя: каталог меняется, а членство прогона — нет.
     membership_position: Mapped[int | None] = mapped_column(Integer)
+    no_oe_discovery_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("catalog_discovery_runs.id", ondelete="RESTRICT"), index=True
+    )
+
+
+class PricingDiscoveryReview(Base):
+    """Immutable validated Luna assessment for one discovery offer."""
+
+    __tablename__ = "pricing_discovery_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "pricing_run_item_id",
+            "catalog_discovery_offer_id",
+            name="uq_pricing_discovery_review_item_offer",
+        ),
+        CheckConstraint(
+            "verdict IN ('MATCH', 'NO_MATCH', 'INSUFFICIENT_EVIDENCE')",
+            name="ck_pricing_discovery_review_verdict",
+        ),
+        CheckConstraint(
+            "char_length(offer_sha256) = 64 AND char_length(prompt_sha256) = 64 "
+            "AND char_length(schema_sha256) = 64 AND char_length(model_sha256) = 64 "
+            "AND char_length(input_sha256) = 64 AND char_length(output_sha256) = 64",
+            name="ck_pricing_discovery_review_hashes",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    pricing_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_runs.id", ondelete="RESTRICT"), index=True
+    )
+    pricing_run_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_run_items.id", ondelete="RESTRICT"), index=True
+    )
+    catalog_discovery_offer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_discovery_offers.id", ondelete="RESTRICT"), index=True
+    )
+    verdict: Mapped[str] = mapped_column(String(32))
+    rationale: Mapped[str] = mapped_column(Text)
+    evidence_references: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    conflicts: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    offer_sha256: Mapped[str] = mapped_column(String(64))
+    prompt_sha256: Mapped[str] = mapped_column(String(64))
+    schema_sha256: Mapped[str] = mapped_column(String(64))
+    model_sha256: Mapped[str] = mapped_column(String(64))
+    input_sha256: Mapped[str] = mapped_column(String(64))
+    output_sha256: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(160))
+    reasoning_effort: Mapped[str] = mapped_column(String(16))
+    canonical_input: Mapped[dict[str, Any]] = mapped_column(JSON)
+    canonical_output: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class PricingDiscoveryDecision(Base):
+    """Append-only human admission for one exact offer in one run item."""
+
+    __tablename__ = "pricing_discovery_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "idempotency_key",
+            name="uq_pricing_discovery_decision_idempotency",
+        ),
+        Index(
+            "ix_pricing_discovery_decision_item_offer_time",
+            "pricing_run_item_id",
+            "catalog_discovery_offer_id",
+            "created_at",
+        ),
+        CheckConstraint(
+            "decision IN ('APPROVE', 'REJECT')",
+            name="ck_pricing_discovery_decision_value",
+        ),
+        CheckConstraint(
+            "price > 0 AND char_length(offer_sha256) = 64",
+            name="ck_pricing_discovery_decision_snapshot",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    pricing_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_runs.id", ondelete="RESTRICT"), index=True
+    )
+    pricing_run_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_run_items.id", ondelete="RESTRICT"), index=True
+    )
+    catalog_discovery_offer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_discovery_offers.id", ondelete="RESTRICT"), index=True
+    )
+    luna_review_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pricing_discovery_reviews.id", ondelete="RESTRICT"), index=True
+    )
+    decision: Mapped[str] = mapped_column(String(16))
+    actor_id: Mapped[str] = mapped_column(String(160))
+    actor_type: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    offer_sha256: Mapped[str] = mapped_column(String(64))
+    price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    measure_unit: Mapped[str | None] = mapped_column(String(80))
+    is_available: Mapped[bool | None] = mapped_column(Boolean)
+    seller_id: Mapped[str] = mapped_column(String(255))
+    offer_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class PricingRunPreviewContract(Base):
@@ -2557,6 +2837,13 @@ class CandidateComparabilityReview(Base):
     rate_card_version: Mapped[str | None] = mapped_column(String(120))
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_detail: Mapped[str | None] = mapped_column(Text)
+    # The provider answer that a validator rejected.  A FAILED row otherwise
+    # stores a synthesized placeholder, so the citation we paid for and threw
+    # away could not be inspected afterwards -- only a truncated error_detail
+    # survived, which is not enough to tell a prompt defect from a model one.
+    # Safe to keep: the input was already price- and KEMP-redacted, so an answer
+    # grounded in it cannot echo what it never saw.
+    rejected_output: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     reviewed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

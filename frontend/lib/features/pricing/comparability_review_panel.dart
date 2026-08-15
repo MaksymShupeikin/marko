@@ -386,8 +386,8 @@ class _PricingAdmissionDetails extends StatelessWidget {
         'p_min: ${formatMoney(marketMinimum!, currency: evidence.currency)}',
       if (targetBandLow != null && targetBandHigh != null)
         context.localized(
-          ru: 'Полоса 2–5%: ${formatMoney(targetBandLow!, currency: evidence.currency)} — ${formatMoney(targetBandHigh!, currency: evidence.currency)}',
-          uk: 'Смуга 2–5%: ${formatMoney(targetBandLow!, currency: evidence.currency)} — ${formatMoney(targetBandHigh!, currency: evidence.currency)}',
+          ru: 'Цель −5%: ${formatMoney(targetBandLow!, currency: evidence.currency)}',
+          uk: 'Ціль −5%: ${formatMoney(targetBandLow!, currency: evidence.currency)}',
         ),
     ];
     return Text(

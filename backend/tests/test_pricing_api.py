@@ -311,15 +311,15 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
                     "age_hours": "1",
                     "match_confidence": "0.95",
                     "tier": "budget",
-                        "tier_confidence": "0.95",
-                        "source_confidence": "1",
-                        # This endpoint test supplies a fully verified synthetic
-                        # offer.  Persisted market observations are fail-closed
-                        # by default and must explicitly carry both upstream
-                        # admission decisions.
-                        "automatic_eligible": True,
-                        "semantic_gate_current": True,
-                        "comparison_evidence": comparison_evidence_to_dict(
+                    "tier_confidence": "0.95",
+                    "source_confidence": "1",
+                    # This endpoint test supplies a fully verified synthetic
+                    # offer.  Persisted market observations are fail-closed
+                    # by default and must explicitly carry both upstream
+                    # admission decisions.
+                    "automatic_eligible": True,
+                    "semantic_gate_current": True,
+                    "comparison_evidence": comparison_evidence_to_dict(
                         verified_comparison_evidence(
                             stable_seller_id=f"seller-{index}",
                             source_record_id=f"obs-{index}",
@@ -359,8 +359,8 @@ async def test_authenticated_evaluate_endpoint_returns_actionable_result():
     assert body["action"] == "RAISE"
     assert body["fair_price"] == "1000"
     assert body["lower_bound"] == "950.00"
-    assert body["upper_bound"] == "980.00"
-    assert body["recommended_price"] == "980"
+    assert body["upper_bound"] == "950.00"
+    assert body["recommended_price"] == "950"
     assert body["competitor_count"] == 5
     assert body["priority_score_type"] == "gross_uplift_opportunity"
     assert body["raw_competitor_count"] == 5

@@ -15,9 +15,9 @@ class CatalogDataEvidenceResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal[
-        "OE_CONFIRMED", "MPN_ONLY", "CANDIDATE_REVIEW", "NO_OE_REVIEW"
-    ] = "NO_OE_REVIEW"
+    status: Literal["OE_CONFIRMED", "MPN_ONLY", "CANDIDATE_REVIEW", "NO_OE_REVIEW"] = (
+        "NO_OE_REVIEW"
+    )
     review_only: bool = True
     internal_code: str | None = None
     oe_sources: list[str] = Field(default_factory=list)
@@ -159,6 +159,43 @@ class CatalogItemPageResponse(BaseModel):
     offset: int
 
 
+class CatalogKempLinkRowResponse(BaseModel):
+    catalog_item_id: str
+    source_row: int
+    internal_code_norm: str
+    listing_ids: list[str]
+    store_ids: list[str]
+    ambiguous_listing_ids: list[str]
+    catalog_code_count: int
+    evidence_missing_listing_ids: list[str]
+    status: str
+    requires_single_card_consumer_stop: bool
+
+
+class CatalogKempLinkReportResponse(BaseModel):
+    report_version: str
+    generated_at: str
+    catalog_positions: int
+    catalog_positions_with_code: int
+    catalog_positions_without_code: int
+    matched_catalog_positions: int
+    matched_listing_cards: int
+    unmatched_catalog_positions: int
+    ambiguous_catalog_positions: int
+    owned_listing_count: int
+    snapshots_without_part_numbers: int
+    listings_with_one_internal_code: int
+    listings_with_multiple_internal_codes: int
+    bootstrap_evidence_rows: int = 0
+    bootstrap_source_sha256: str | None = None
+    rows: list[CatalogKempLinkRowResponse]
+    interpretation: dict[str, Any]
+
+
+class CatalogKempLinkRebuildRequest(BaseModel):
+    max_items: int | None = Field(default=None, ge=1, le=100_000)
+
+
 class OwnedCatalogStoreResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -171,6 +208,9 @@ class OwnedCatalogStoreResponse(BaseModel):
     price: Decimal | None
     currency: str
     is_available: bool | None
+    listing_id: UUID | None = None
+    source_listing_id: str | None = None
+    snapshot_at: datetime | None = None
 
 
 class OwnedCatalogStoreOptionResponse(BaseModel):
@@ -198,6 +238,11 @@ class OwnedCatalogProductResponse(BaseModel):
     currency: str | None
     listing_count: int
     stores: list[OwnedCatalogStoreResponse]
+    internal_code: str | None = None
+    kemp_link_status: str | None = None
+    identity_status: str | None = None
+    catalog_data_evidence: dict[str, Any] | None = None
+    owned_listings: list[OwnedCatalogStoreResponse] = Field(default_factory=list)
     recommended_price: Decimal | None = None
     recommendation_currency: str | None = None
     recommendation_action: str | None = None
@@ -283,9 +328,7 @@ class CatalogDiscoveryRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_identifier(self) -> CatalogDiscoveryRequest:
-        if not any(
-            (value or "").strip() for value in (self.sku, self.oe, self.mpn)
-        ):
+        if not any((value or "").strip() for value in (self.sku, self.oe, self.mpn)):
             raise ValueError("sku, oe or mpn is required")
         return self
 

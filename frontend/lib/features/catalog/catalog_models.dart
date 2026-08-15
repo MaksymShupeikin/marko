@@ -12,6 +12,9 @@ class CatalogStorePresence {
     required this.currency,
     required this.isAvailable,
     this.isOwned = true,
+    this.listingId,
+    this.sourceListingId,
+    this.snapshotAt,
   }) : price = DecimalValue.tryParse(price);
 
   factory CatalogStorePresence.fromJson(Map<String, dynamic> json) {
@@ -26,6 +29,11 @@ class CatalogStorePresence {
       currency: json['currency'] as String,
       isAvailable: json['is_available'] as bool?,
       isOwned: json['is_owned'] as bool? ?? true,
+      listingId: json['listing_id'] as String?,
+      sourceListingId: json['source_listing_id'] as String?,
+      snapshotAt: json['snapshot_at'] == null
+          ? null
+          : DateTime.parse(json['snapshot_at'] as String),
     );
   }
 
@@ -39,6 +47,9 @@ class CatalogStorePresence {
   final String currency;
   final bool? isAvailable;
   final bool isOwned;
+  final String? listingId;
+  final String? sourceListingId;
+  final DateTime? snapshotAt;
 
   String get tooltip {
     final parts = <String>[
@@ -90,6 +101,11 @@ class CatalogProduct {
     this.recommendationCurrency,
     this.recommendationAction,
     this.recommendationComputedAt,
+    this.internalCode,
+    this.kempLinkStatus,
+    this.identityStatus,
+    this.catalogDataEvidence,
+    this.ownedListings = const [],
   }) : priceMin = DecimalValue.tryParse(priceMin),
        priceMax = DecimalValue.tryParse(priceMax),
        recommendedPrice = DecimalValue.tryParse(recommendedPrice);
@@ -121,6 +137,17 @@ class CatalogProduct {
       recommendationComputedAt: json['recommendation_computed_at'] == null
           ? null
           : DateTime.parse(json['recommendation_computed_at'] as String),
+      internalCode: json['internal_code'] as String?,
+      kempLinkStatus: json['kemp_link_status'] as String?,
+      identityStatus: json['identity_status'] as String?,
+      catalogDataEvidence: (json['catalog_data_evidence'] as Map?)
+          ?.cast<String, dynamic>(),
+      ownedListings: (json['owned_listings'] as List<dynamic>? ?? const [])
+          .map(
+            (item) =>
+                CatalogStorePresence.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -142,6 +169,11 @@ class CatalogProduct {
   final String? recommendationCurrency;
   final String? recommendationAction;
   final DateTime? recommendationComputedAt;
+  final String? internalCode;
+  final String? kempLinkStatus;
+  final String? identityStatus;
+  final Map<String, dynamic>? catalogDataEvidence;
+  final List<CatalogStorePresence> ownedListings;
 
   bool get isDuplicate => listingCount > 1;
   bool get isInMultipleStores => stores.length > 1;

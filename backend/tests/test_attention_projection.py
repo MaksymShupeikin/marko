@@ -64,6 +64,42 @@ def test_attention_uses_advisory_price_action_without_hiding_review_gate() -> No
     ]
 
 
+def test_incomplete_evidence_advisory_stays_review_required() -> None:
+    computed_at = datetime.now(UTC)
+    product = SimpleNamespace(current_price=Decimal("679"))
+    recommendation = SimpleNamespace(
+        id=uuid4(),
+        action="INSUFFICIENT_DATA",
+        recommended_price=None,
+        lower_bound=None,
+        upper_bound=None,
+        confidence=Decimal("0"),
+        verified_seller_count=0,
+        reason_codes=["TOO_FEW_COMPETITORS"],
+        computed_at=computed_at,
+        calculation_trace={
+            "advisory_decision": {
+                "status": "INCOMPLETE_EVIDENCE_REVIEW_REQUIRED",
+                "action": "RAISE",
+                "recommended_price": "702",
+                "minimum_comparable_price": "739",
+                "target_band_low": "702",
+                "target_band_high": "702",
+                "automatic_price_application": False,
+                "reason": "ADVISORY_FROM_UNVERIFIED_VISIBLE_OFFERS",
+            }
+        },
+    )
+
+    result = _assessment_values(product, recommendation)
+
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["suggested_price"] == Decimal("702")
+    assert result["market_low"] == Decimal("702")
+    assert result["market_high"] == Decimal("702")
+    assert "ADVISORY_REQUIRES_REVIEW" in result["reason_codes"]
+
+
 def test_attention_fails_closed_when_pricing_produces_no_result() -> None:
     result = _assessment_values(
         SimpleNamespace(current_price=Decimal("150")),

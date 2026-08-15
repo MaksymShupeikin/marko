@@ -44,6 +44,8 @@ class _DeepLinkCatalogApi extends CatalogApi {
     List<String>? storeIds,
     int offset = 0,
     int limit = 48,
+    String? kempStatus,
+    bool noOem = false,
   }) async {
     return const CatalogProductPage(
       items: [],

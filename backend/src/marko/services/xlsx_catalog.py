@@ -31,6 +31,7 @@ from marko.core.config import Settings, backend_config_path, get_settings
 from marko.infrastructure.db.models import (
     CatalogImportBatch,
     CatalogItem,
+    CatalogReferenceItem,
     PricingRecommendation,
     PricingRun,
     PricingRunItem,
@@ -63,6 +64,16 @@ MAX_ROWS = 100_000
 MAX_COLUMNS = 256
 MAX_ERROR_LOG = 2_000
 CATALOG_ROW_OUTCOMES_CONTRACT_VERSION = "catalog-row-outcomes-v1"
+REFERENCE_ONLY_SHEET = "Только код"
+REFERENCE_ONLY_HEADERS = (
+    "Внутренний код",
+    "Оригинальный номер",
+    "Название по справочнику",
+    "Источники OE",
+    "Другие подтверждённые номера",
+    "Аномалии",
+    "Ссылка на подтверждение",
+)
 
 _HEADER_CLEAN_RE = re.compile(r"[^a-zа-яёіїґєԁөү0-9]+", re.IGNORECASE)
 _IDENTIFIER_SPLIT_RE = re.compile(r"[,;|\n\r]+")
@@ -321,8 +332,7 @@ def catalog_row_outcomes(parsed: ParsedCatalog) -> list[dict[str, Any]]:
         accepted_row = accepted.get(source_row)
         row_issues = issues.get(source_row, [])
         identity_missing = bool(
-            accepted_row is not None
-            and accepted_row.identity_status == "UNRESOLVED"
+            accepted_row is not None and accepted_row.identity_status == "UNRESOLVED"
         )
         reason_codes = list(dict.fromkeys(issue.code for issue in row_issues))
         if identity_missing:
@@ -343,9 +353,7 @@ def catalog_row_outcomes(parsed: ParsedCatalog) -> list[dict[str, Any]]:
                 "sku": accepted_row.sku if accepted_row is not None else None,
                 "oe_norm": accepted_row.oe_norm if accepted_row is not None else None,
                 "identity_status": (
-                    accepted_row.identity_status
-                    if accepted_row is not None
-                    else None
+                    accepted_row.identity_status if accepted_row is not None else None
                 ),
                 "matching_terminal_status": (
                     "NOT_MATCHED_IDENTITY_COLLISION"
@@ -392,6 +400,76 @@ def normalize_identifier(value: Any) -> str:
     raw = _cell_text(value)
     primary = _IDENTIFIER_SPLIT_RE.split(raw, maxsplit=1)[0]
     return normalize_oem_identifier(primary)
+
+
+def parse_reference_only_sheet(content: bytes) -> list[dict[str, Any]]:
+    """Read identity evidence without materialising products or prices."""
+
+    _validate_xlsx_container(content)
+    workbook = load_workbook(
+        BytesIO(content), read_only=True, data_only=True, keep_links=False
+    )
+    try:
+        if REFERENCE_ONLY_SHEET not in workbook.sheetnames:
+            return []
+        sheet = workbook[REFERENCE_ONLY_SHEET]
+        iterator = sheet.iter_rows(values_only=True)
+        try:
+            headers = tuple(_cell_text(value) for value in next(iterator))
+        except StopIteration:
+            return []
+        if headers != REFERENCE_ONLY_HEADERS:
+            raise CatalogImportError(
+                "Лист 'Только код' имеет неизвестный контракт колонок"
+            )
+        result: list[dict[str, Any]] = []
+        for source_row, values in enumerate(iterator, start=2):
+            if not any(value not in (None, "") for value in values):
+                continue
+            raw = {
+                header: _json_safe(values[index] if index < len(values) else None)
+                for index, header in enumerate(headers)
+            }
+            code_raw = _cell_text(values[0] if values else None)
+            code_norm = (
+                normalize_identifier(code_raw)
+                if is_internal_catalog_code(code_raw)
+                else ""
+            )
+            original_raw = _cell_text(values[1] if len(values) > 1 else None)
+            original_norm = normalize_identifier(original_raw)
+            anomalies = _reference_list(values[5] if len(values) > 5 else None)
+            if code_raw and not code_norm:
+                anomalies.append("INVALID_INTERNAL_CODE")
+            payload = {
+                "source_sheet": REFERENCE_ONLY_SHEET,
+                "source_row": source_row,
+                "internal_code_raw": code_raw,
+                "internal_code_norm": code_norm,
+                "original_raw": original_raw,
+                "original_norm": original_norm,
+                "title": _cell_text(values[2] if len(values) > 2 else None) or None,
+                "oe_sources": _reference_list(values[3] if len(values) > 3 else None),
+                "confirmed_numbers": _reference_list(
+                    values[4] if len(values) > 4 else None
+                ),
+                "anomalies": anomalies,
+                "evidence_url": _cell_text(values[6] if len(values) > 6 else None)
+                or None,
+                "raw_row": raw,
+            }
+            payload["content_sha256"] = _canonical_json_sha256(payload)
+            result.append(payload)
+        return result
+    finally:
+        workbook.close()
+
+
+def _reference_list(value: Any) -> list[str]:
+    raw = _cell_text(value)
+    if not raw:
+        return []
+    return [token.strip() for token in re.split(r"[,;|\n\r]+", raw) if token.strip()]
 
 
 def preview_catalog_xlsx(
@@ -857,6 +935,11 @@ async def import_catalog_xlsx(
         sheet_name=sheet_name,
         allow_encrypted_cost_input=allow_encrypted_cost_input,
     )
+    reference_rows = (
+        await asyncio.to_thread(parse_reference_only_sheet, content)
+        if str(parsed.characteristics_report.get("sheet") or "") == "Импорт"
+        else []
+    )
     request_fingerprint = _catalog_import_fingerprint(
         content_sha256=hashlib.sha256(content).hexdigest(),
         sheet_name=str(parsed.characteristics_report.get("sheet") or ""),
@@ -868,6 +951,28 @@ async def import_catalog_xlsx(
         request_fingerprint=request_fingerprint,
     )
     if existing is not None:
+        existing_reference_count = int(
+            await session.scalar(
+                select(func.count(CatalogReferenceItem.id)).where(
+                    CatalogReferenceItem.import_batch_id == existing.id
+                )
+            )
+            or 0
+        )
+        if existing_reference_count not in {0, len(reference_rows)}:
+            raise CatalogImportError(
+                "Reference-only evidence is partially persisted for this batch"
+            )
+        if reference_rows and existing_reference_count == 0:
+            session.add_all(
+                CatalogReferenceItem(
+                    workspace_id=workspace_id,
+                    import_batch_id=existing.id,
+                    **reference_row,
+                )
+                for reference_row in reference_rows
+            )
+        await session.commit()
         return existing
     if parsed.sensitive_costs:
         try:
@@ -913,6 +1018,14 @@ async def import_catalog_xlsx(
         for row in parsed.rows
     ]
     session.add_all(items)
+    session.add_all(
+        CatalogReferenceItem(
+            workspace_id=workspace_id,
+            import_batch_id=batch.id,
+            **reference_row,
+        )
+        for reference_row in reference_rows
+    )
     await session.flush()
     await upsert_xlsx_products(session, batch=batch, items=items)
     for item, row in zip(items, parsed.rows, strict=True):
@@ -976,10 +1089,7 @@ async def _existing_idempotent_import(
     dialect = getattr(getattr(bind, "dialect", None), "name", None)
     if dialect == "postgresql":
         await execute(
-            text(
-                "SELECT pg_advisory_xact_lock("
-                "hashtextextended(:fingerprint, 0))"
-            ),
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:fingerprint, 0))"),
             {"fingerprint": request_fingerprint},
         )
     existing = await scalar(
@@ -992,8 +1102,6 @@ async def _existing_idempotent_import(
         .order_by(CatalogImportBatch.created_at.desc(), CatalogImportBatch.id.desc())
         .limit(1)
     )
-    if existing is not None:
-        await session.commit()
     return existing
 
 
@@ -1125,8 +1233,12 @@ async def build_catalog_terminal_manifest(
                 row["details"].append(message[:1000])
         overlap = set(accepted_rows) & set(rejected_rows)
         known = {
-            **{key: value for key, value in accepted_rows.items() if key not in overlap},
-            **{key: value for key, value in rejected_rows.items() if key not in overlap},
+            **{
+                key: value for key, value in accepted_rows.items() if key not in overlap
+            },
+            **{
+                key: value for key, value in rejected_rows.items() if key not in overlap
+            },
         }
         rows = [
             {"source_ordinal": ordinal, **known[source_row]}
@@ -1177,8 +1289,7 @@ async def build_catalog_terminal_manifest(
                 and recommendation is not None
             )
             has_terminal_failure = bool(
-                run_item is not None
-                and run_item.status in {"failed", "cancelled"}
+                run_item is not None and run_item.status in {"failed", "cancelled"}
             )
             identity_blocked_recommendation = bool(
                 recommendation is not None
@@ -1292,9 +1403,7 @@ async def build_catalog_terminal_manifest(
         "silent_loss_count": max(0, batch.total_rows - len(rows))
         + (replay_missing_item_count or 0),
         "replay_manifest_sha256": (
-            _canonical_json_sha256(rendered_rows)
-            if pricing_run is not None
-            else None
+            _canonical_json_sha256(rendered_rows) if pricing_run is not None else None
         ),
         "rows": rendered_rows,
     }

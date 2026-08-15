@@ -149,6 +149,22 @@ class _ProductIdentity extends StatelessWidget {
           const SizedBox(height: 4),
           _OeIdentity(product: product),
         ],
+        if (product.internalCode != null || product.kempLinkStatus != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            [
+              if (product.internalCode != null) 'KEMP ${product.internalCode}',
+              if (product.kempLinkStatus != null)
+                _kempStatusLabel(context, product.kempLinkStatus!),
+            ].join(' · '),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: product.kempLinkStatus == 'LINKED_OWNED_LISTING_GROUP'
+                  ? colors.positive
+                  : colors.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
         if (product.isDuplicate) ...[
           const SizedBox(height: 4),
           Text(
@@ -353,6 +369,32 @@ String _metadata(BuildContext context, CatalogProduct product) {
   ];
   return values.join(' · ');
 }
+
+String _kempStatusLabel(BuildContext context, String status) =>
+    switch (status) {
+      'LINKED_OWNED_LISTING_GROUP' => context.localized(
+        ru: 'связано с моими магазинами',
+        uk: 'пов’язано з моїми магазинами',
+      ),
+      'KEMP_CODE_MISSING' => context.localized(
+        ru: 'KEMP-код отсутствует',
+        uk: 'KEMP-код відсутній',
+      ),
+      'AMBIGUOUS_LISTING_INTERNAL_CODES' ||
+      'DUPLICATE_CATALOG_INTERNAL_CODE' => context.localized(
+        ru: 'нужна проверка связи',
+        uk: 'потрібна перевірка зв’язку',
+      ),
+      'SOURCE_EVIDENCE_MISSING' => context.localized(
+        ru: 'нет detail evidence',
+        uk: 'немає detail evidence',
+      ),
+      'NO_CURRENT_OWNED_LISTING' => context.localized(
+        ru: 'нет текущей карточки',
+        uk: 'немає поточної картки',
+      ),
+      _ => status,
+    };
 
 String _primaryPriceLabel(BuildContext context, CatalogProduct product) {
   final primary = product.primaryStore;

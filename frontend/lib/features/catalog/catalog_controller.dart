@@ -8,6 +8,8 @@ class CatalogState {
     required this.page,
     this.query = '',
     this.selectedStoreIds = const {},
+    this.kempStatus,
+    this.noOem = false,
     this.isSearching = false,
     this.isLoadingMore = false,
     this.deepLinkUnavailable = false,
@@ -17,6 +19,8 @@ class CatalogState {
   final CatalogProductPage page;
   final String query;
   final Set<String> selectedStoreIds;
+  final String? kempStatus;
+  final bool noOem;
   final bool isSearching;
   final bool isLoadingMore;
   final bool deepLinkUnavailable;
@@ -26,6 +30,9 @@ class CatalogState {
     CatalogProductPage? page,
     String? query,
     Set<String>? selectedStoreIds,
+    String? kempStatus,
+    bool? noOem,
+    bool clearKempStatus = false,
     bool? isSearching,
     bool? isLoadingMore,
     bool? deepLinkUnavailable,
@@ -36,6 +43,8 @@ class CatalogState {
       page: page ?? this.page,
       query: query ?? this.query,
       selectedStoreIds: selectedStoreIds ?? this.selectedStoreIds,
+      kempStatus: clearKempStatus ? null : kempStatus ?? this.kempStatus,
+      noOem: noOem ?? this.noOem,
       isSearching: isSearching ?? this.isSearching,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       deepLinkUnavailable: deepLinkUnavailable ?? this.deepLinkUnavailable,
@@ -59,11 +68,30 @@ class CatalogController extends AsyncNotifier<CatalogState> {
 
   Future<void> search(String rawQuery) async {
     final query = rawQuery.trim();
-    await _reload(query: query, storeIds: _current.selectedStoreIds);
+    await _reload(
+      query: query,
+      storeIds: _current.selectedStoreIds,
+      kempStatus: _current.kempStatus,
+      noOem: _current.noOem,
+    );
   }
 
   Future<void> selectStores(Set<String> storeIds) async {
-    await _reload(query: _current.query, storeIds: storeIds);
+    await _reload(
+      query: _current.query,
+      storeIds: storeIds,
+      kempStatus: _current.kempStatus,
+      noOem: _current.noOem,
+    );
+  }
+
+  Future<void> selectIdentityFilter({String? kempStatus, bool noOem = false}) {
+    return _reload(
+      query: _current.query,
+      storeIds: _current.selectedStoreIds,
+      kempStatus: kempStatus,
+      noOem: noOem,
+    );
   }
 
   Future<CatalogCompetitorComparison> loadCompetitors(CatalogProduct product) {
@@ -156,12 +184,17 @@ class CatalogController extends AsyncNotifier<CatalogState> {
   Future<void> _reload({
     required String query,
     required Set<String> storeIds,
+    String? kempStatus,
+    bool noOem = false,
   }) async {
     final generation = ++_requestGeneration;
     state = AsyncData(
       _current.copyWith(
         query: query,
         selectedStoreIds: storeIds,
+        kempStatus: kempStatus,
+        noOem: noOem,
+        clearKempStatus: kempStatus == null,
         isSearching: true,
         clearError: true,
       ),
@@ -170,6 +203,8 @@ class CatalogController extends AsyncNotifier<CatalogState> {
       final page = await _api.listProducts(
         query: query,
         storeIds: storeIds.toList(growable: false),
+        kempStatus: kempStatus,
+        noOem: noOem,
       );
       if (generation != _requestGeneration) return;
       state = AsyncData(
@@ -190,8 +225,12 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     }
   }
 
-  Future<void> refresh() =>
-      _reload(query: _current.query, storeIds: _current.selectedStoreIds);
+  Future<void> refresh() => _reload(
+    query: _current.query,
+    storeIds: _current.selectedStoreIds,
+    kempStatus: _current.kempStatus,
+    noOem: _current.noOem,
+  );
 
   Future<void> loadMore() async {
     final current = _current;
@@ -204,6 +243,8 @@ class CatalogController extends AsyncNotifier<CatalogState> {
       final next = await _api.listProducts(
         query: current.query,
         storeIds: current.selectedStoreIds.toList(growable: false),
+        kempStatus: current.kempStatus,
+        noOem: current.noOem,
         offset: current.page.items.length,
       );
       if (generation != _requestGeneration) return;

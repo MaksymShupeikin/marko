@@ -66,11 +66,15 @@ def recommend_price(
     *,
     policy: PricingPolicy | None = None,
     legacy_replay: bool = False,
+    seller_groups: Mapping[str, str] | None = None,
 ) -> PricingResult:
     """Evaluate one SKU without HTTP, ORM, queue, or mutable global state.
 
     ``legacy_replay`` exists only so an already persisted pre-comparability trace
     can be verified without granting that legacy input new automatic authority.
+
+    ``seller_groups`` maps a raw seller id onto its affiliated sphere; only the
+    budget-floor corroboration consults it, never the target price.
     """
     policy = policy or PricingPolicy()
     collected_offers = tuple(offers)
@@ -80,6 +84,7 @@ def recommend_price(
         coefficients,
         policy=policy,
         legacy_replay=legacy_replay,
+        seller_groups=seller_groups,
     )
     if (
         policy.version != "pricing-v3.1-heterogeneity-gated"
@@ -100,6 +105,7 @@ def recommend_price(
         coefficients,
         policy=baseline_policy,
         legacy_replay=False,
+        seller_groups=seller_groups,
     )
     automatic = {
         RecommendationAction.RAISE,
@@ -138,6 +144,7 @@ def _recommend_price_core(
     *,
     policy: PricingPolicy,
     legacy_replay: bool,
+    seller_groups: Mapping[str, str] | None = None,
 ) -> PricingResult:
     """Core implementation shared by the candidate and baseline policies."""
     raise_policy = policy.raise_policy or default_raise_policy()
@@ -502,6 +509,7 @@ def _recommend_price_core(
             policy=raise_policy,
             # Positional against ``prices``: the floor may not rest on one shop.
             sellers=[offer.seller_id for offer in cleaned],
+            seller_groups=seller_groups,
         )
         if budget_floor_mode
         else None
@@ -533,8 +541,12 @@ def _recommend_price_core(
     )
     factors, n_effective = _confidence_factors(cleaned, fair_price, dispersion, policy)
     if budget_floor_mode:
-        factors["tier"] = ONE
-        factors["dispersion"] = ONE
+        # Fixed-floor mode is ordinary deterministic arithmetic.  Identity,
+        # condition, availability, source and minimum-seller gates have already
+        # run; statistical spread/effective-sample scoring must not replace or
+        # suppress the lowest valid offer selected by the owner policy.
+        factors = {name: ONE for name in factors}
+        n_effective = Decimal(len(cleaned))
     confidence, weakest = _aggregate_confidence(factors, policy)
     confidence_grade = _confidence_grade(confidence, factors, policy)
 
@@ -689,6 +701,7 @@ def _recommend_price_core(
             lower_bound,
             cleaned,
             policy,
+            seller_groups=seller_groups,
         )
         cost_floor = None
         if context.stock_status == StockStatus.UNKNOWN and not budget_floor_mode:
@@ -1116,11 +1129,13 @@ def _raise_recommendation(
     lower_bound: Decimal,
     cleaned_offers: list[NormalizedOffer],
     policy: PricingPolicy,
+    *,
+    seller_groups: Mapping[str, str] | None = None,
 ) -> tuple[RecommendationAction, Decimal | None, tuple[str, ...]]:
     """Propose a higher price, or stay silent.
 
     Legacy strategies are raise-only. The owner-approved budget-floor strategy
-    may advise either direction to restore the 2–5% below-market position.
+    may advise either direction to restore the fixed 5% below-market position.
     """
 
     del fair_price, lower_bound
@@ -1130,6 +1145,7 @@ def _raise_recommendation(
         stock_status=context.stock_status,
         policy=policy.raise_policy or default_raise_policy(),
         sellers=[offer.seller_id for offer in cleaned_offers],
+        seller_groups=seller_groups,
     )
     reasons = decision.reasons + decision.flags
     if decision.outcome is RaiseOutcome.RAISE:

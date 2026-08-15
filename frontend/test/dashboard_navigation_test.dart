@@ -312,7 +312,7 @@ void main() {
     await tester.tap(find.text('Товари'));
     await tester.pumpAndSettle();
     expect(
-      find.text('Пошук за OEM/OE, артикулу або назві оголошення'),
+      find.text('Пошук за KEMP, OEM/OE, MPN, SKU або назвою'),
       findsOneWidget,
     );
 

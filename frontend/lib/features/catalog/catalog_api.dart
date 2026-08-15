@@ -36,12 +36,16 @@ class CatalogApi {
     List<String>? storeIds,
     int offset = 0,
     int limit = 48,
+    String? kempStatus,
+    bool noOem = false,
   }) async {
     final payload = await _client.getJson(
       '/api/v1/catalog/unified-products',
       queryParameters: {
         if (query.trim().isNotEmpty) 'q': query.trim(),
         if (storeIds != null && storeIds.isNotEmpty) 'store_id': storeIds,
+        'kemp_status': ?kempStatus,
+        if (noOem) 'no_oem': 'true',
         'limit': '$limit',
         'offset': '$offset',
       },

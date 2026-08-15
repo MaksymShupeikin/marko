@@ -262,6 +262,18 @@ class _FakeSession:
             if isinstance(value, MarketObservation) and value.id is None:
                 value.id = uuid4()
 
+    def begin_nested(self):
+        session = self
+
+        class _Nested:
+            async def __aenter__(self) -> _FakeSession:
+                return session
+
+            async def __aexit__(self, *_exc: object) -> None:
+                return None
+
+        return _Nested()
+
 
 def _record(*, retrieval_kind: str, acquisition: dict | None, product_id: int = 42):
     return {

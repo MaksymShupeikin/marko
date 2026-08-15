@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -65,6 +66,9 @@ class OwnedCatalogStorePresence:
     currency: str
     is_available: bool | None
     is_owned: bool
+    listing_id: UUID | None = None
+    source_listing_id: str | None = None
+    snapshot_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,11 @@ class OwnedCatalogProduct:
     currency: str | None
     listing_count: int
     stores: tuple[OwnedCatalogStorePresence, ...]
+    internal_code: str | None = None
+    kemp_link_status: str | None = None
+    identity_status: str | None = None
+    catalog_data_evidence: dict[str, Any] | None = None
+    owned_listings: tuple[OwnedCatalogStorePresence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,14 +164,10 @@ async def list_owned_catalog(
         "normalized_tokens": normalized_tokens,
         "identity_query": identity_query,
         "identity_title_pattern": (
-            _identity_title_pattern(normalized_query)
-            if identity_query
-            else "$^"
+            _identity_title_pattern(normalized_query) if identity_query else "$^"
         ),
         "identity_title_label_pattern": (
-            _identity_title_label_pattern(normalized_query)
-            if identity_query
-            else "$^"
+            _identity_title_label_pattern(normalized_query) if identity_query else "$^"
         ),
         "has_query": bool(normalized_query or text_query),
         "limit": limit,
@@ -179,8 +184,7 @@ async def list_owned_catalog(
     if isinstance(identities_payload, str):
         identities_payload = json.loads(identities_payload)
     identities = tuple(
-        (item["identity_kind"], item["identity_value"])
-        for item in identities_payload
+        (item["identity_kind"], item["identity_value"]) for item in identities_payload
     )
 
     stores_result = await session.execute(
@@ -238,8 +242,7 @@ async def list_owned_catalog(
             )
 
     items = tuple(
-        _catalog_product(identity, selected_rows[identity])
-        for identity in identities
+        _catalog_product(identity, selected_rows[identity]) for identity in identities
     )
     catalog_total = int(page_row["catalog_total"])
     listing_total = int(page_row["listing_total"])
@@ -676,9 +679,7 @@ LIMIT 2
 
 def _owned_catalog_page_statement(*, has_query: bool = True):
     return text(
-        _OWNED_CATALOG_PAGE_SQL
-        if has_query
-        else _OWNED_CATALOG_PAGE_NO_SEARCH_SQL
+        _OWNED_CATALOG_PAGE_SQL if has_query else _OWNED_CATALOG_PAGE_NO_SEARCH_SQL
     )
 
 
@@ -813,10 +814,7 @@ async def enrich_listing_identifiers(
         if fetched_owner_evidence
         else None
     )
-    fetched_oe = (
-        normalize_oe_value(product.oe_raw)
-        or fetched_owner_oe
-    )
+    fetched_oe = normalize_oe_value(product.oe_raw) or fetched_owner_oe
     fetched_mpn = _normalize_optional_text(product.mpn)
     # A detail page can omit a field that an earlier enrichment already
     # established.  Preserve that evidence instead of turning a partial
@@ -824,9 +822,7 @@ async def enrich_listing_identifiers(
     oe = fetched_oe or normalize_oe_value(raw_data.get("oe_raw"))
     mpn = fetched_mpn or _normalize_optional_text(raw_data.get("mpn"))
     status = (
-        "IDENTIFIERS_FOUND"
-        if oe or mpn or fetched_owner_evidence
-        else "NO_IDENTIFIER"
+        "IDENTIFIERS_FOUND" if oe or mpn or fetched_owner_evidence else "NO_IDENTIFIER"
     )
     detail_fields = {
         "condition": product.condition,
@@ -1317,7 +1313,9 @@ def _matches_query(
 def _is_identity_query(query: str | None, normalized_query: str) -> bool:
     """Recognize an OE/article-shaped query without rejecting normal wording."""
 
-    if not normalized_query or not any(character.isdigit() for character in normalized_query):
+    if not normalized_query or not any(
+        character.isdigit() for character in normalized_query
+    ):
         return False
     raw_tokens = _IDENTITY_TOKEN_RE.findall(query or "")
     if not raw_tokens:
@@ -1333,13 +1331,17 @@ def _is_identity_query(query: str | None, normalized_query: str) -> bool:
     # language query such as ``Mercedes 124`` remains on the wording lane
     # because its lexical token is longer than two characters.
     lexical_tokens = [
-        token for token in raw_tokens if not any(character.isdigit() for character in token)
+        token
+        for token in raw_tokens
+        if not any(character.isdigit() for character in token)
     ]
     digit_tokens = [
         token for token in raw_tokens if any(character.isdigit() for character in token)
     ]
-    return bool(digit_tokens) and bool(lexical_tokens) and all(
-        len(token) <= 2 for token in lexical_tokens
+    return (
+        bool(digit_tokens)
+        and bool(lexical_tokens)
+        and all(len(token) <= 2 for token in lexical_tokens)
     )
 
 

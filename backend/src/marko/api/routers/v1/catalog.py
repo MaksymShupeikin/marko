@@ -29,6 +29,8 @@ from marko.api.schemas.catalog import (
     CatalogImportResponse,
     CatalogItemPageResponse,
     CatalogItemResponse,
+    CatalogKempLinkRebuildRequest,
+    CatalogKempLinkReportResponse,
     CatalogOeEnrichmentRequest,
     CatalogOeEnrichmentResponse,
     CatalogTerminalManifestResponse,
@@ -48,6 +50,10 @@ from marko.services.catalog_discovery import (
     collect_catalog_discovery,
 )
 from marko.services.catalog_costs import cost_configuration_map
+from marko.services.catalog_internal_code_join import (
+    catalog_internal_code_join_report,
+    rebuild_catalog_internal_code_links,
+)
 from marko.services.catalog_data_evidence import catalog_data_evidence
 from marko.services.attention import (
     mark_source_monitoring_failed,
@@ -273,6 +279,8 @@ async def get_unified_catalog_products(
     session: Annotated[AsyncSession, Depends(get_session)],
     q: Annotated[str | None, Query(max_length=255)] = None,
     store_id: Annotated[list[UUID] | None, Query()] = None,
+    kemp_status: Annotated[str | None, Query(max_length=48)] = None,
+    no_oem: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=100)] = 48,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> OwnedCatalogPageResponse:
@@ -283,6 +291,8 @@ async def get_unified_catalog_products(
         store_ids=frozenset(store_id) if store_id else None,
         limit=limit,
         offset=offset,
+        kemp_status=kemp_status,
+        no_oem=no_oem,
     )
     return OwnedCatalogPageResponse.model_validate(page)
 
@@ -492,6 +502,66 @@ async def get_catalog_import(
             status_code=status.HTTP_404_NOT_FOUND, detail="Import not found"
         )
     return CatalogImportResponse.model_validate(batch)
+
+
+@router.get(
+    "/imports/{batch_id}/kemp-links",
+    response_model=CatalogKempLinkReportResponse,
+)
+async def get_catalog_import_kemp_links(
+    batch_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogKempLinkReportResponse:
+    if (
+        await get_import_batch(
+            session, workspace_id=current.workspace_id, batch_id=batch_id
+        )
+        is None
+    ):
+        raise HTTPException(status_code=404, detail="Import not found")
+    report = await catalog_internal_code_join_report(
+        session, workspace_id=current.workspace_id, import_batch_id=batch_id
+    )
+    return CatalogKempLinkReportResponse.model_validate(report.as_dict())
+
+
+@router.post(
+    "/imports/{batch_id}/kemp-links/preview",
+    response_model=CatalogKempLinkReportResponse,
+)
+async def preview_catalog_import_kemp_links(
+    batch_id: UUID,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogKempLinkReportResponse:
+    return await get_catalog_import_kemp_links(batch_id, current, session)
+
+
+@router.post(
+    "/imports/{batch_id}/kemp-links/rebuild",
+    response_model=CatalogKempLinkReportResponse,
+)
+async def rebuild_catalog_import_kemp_links(
+    batch_id: UUID,
+    payload: CatalogKempLinkRebuildRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogKempLinkReportResponse:
+    if (
+        await get_import_batch(
+            session, workspace_id=current.workspace_id, batch_id=batch_id
+        )
+        is None
+    ):
+        raise HTTPException(status_code=404, detail="Import not found")
+    report = await rebuild_catalog_internal_code_links(
+        session,
+        workspace_id=current.workspace_id,
+        import_batch_id=batch_id,
+        max_items=payload.max_items,
+    )
+    return CatalogKempLinkReportResponse.model_validate(report.as_dict())
 
 
 @router.get(

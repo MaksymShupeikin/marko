@@ -118,6 +118,9 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
           onStoreChanged: (storeIds) => ref
               .read(catalogControllerProvider.notifier)
               .selectStores(storeIds),
+          onIdentityFilterChanged: (filter) => ref
+              .read(catalogControllerProvider.notifier)
+              .selectIdentityFilter(kempStatus: filter.$1, noOem: filter.$2),
           onRefresh: () =>
               ref.read(catalogControllerProvider.notifier).refresh(),
           onImport: _showCatalogImport,
@@ -196,6 +199,7 @@ class _CatalogContent extends StatelessWidget {
     required this.onQuerySubmitted,
     required this.onClearQuery,
     required this.onStoreChanged,
+    required this.onIdentityFilterChanged,
     required this.onRefresh,
     required this.onImport,
     required this.onLoadMore,
@@ -209,6 +213,7 @@ class _CatalogContent extends StatelessWidget {
   final ValueChanged<String> onQuerySubmitted;
   final VoidCallback onClearQuery;
   final ValueChanged<Set<String>> onStoreChanged;
+  final ValueChanged<(String?, bool)> onIdentityFilterChanged;
   final VoidCallback onRefresh;
   final VoidCallback onImport;
   final VoidCallback onLoadMore;
@@ -240,8 +245,8 @@ class _CatalogContent extends StatelessWidget {
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
                     hintText: context.localized(
-                      ru: 'Поиск по OEM/OE, артикулу или названию объявления',
-                      uk: 'Пошук за OEM/OE, артикулу або назві оголошення',
+                      ru: 'Поиск по KEMP, OEM/OE, MPN, SKU или названию',
+                      uk: 'Пошук за KEMP, OEM/OE, MPN, SKU або назвою',
                     ),
                     prefixIcon: const Icon(Icons.search_rounded),
                     suffixIcon: searchController.text.isEmpty
@@ -260,6 +265,84 @@ class _CatalogContent extends StatelessWidget {
                   const SizedBox(height: 2),
                   const LinearProgressIndicator(minHeight: 2),
                 ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: Text(context.localized(ru: 'Все', uk: 'Усі')),
+                      selected: state.kempStatus == null && !state.noOem,
+                      onSelected: state.isSearching
+                          ? null
+                          : (_) => onIdentityFilterChanged((null, false)),
+                    ),
+                    ChoiceChip(
+                      label: Text(
+                        context.localized(ru: 'Связанные', uk: 'Пов’язані'),
+                      ),
+                      selected:
+                          state.kempStatus == 'LINKED_OWNED_LISTING_GROUP',
+                      onSelected: state.isSearching
+                          ? null
+                          : (_) => onIdentityFilterChanged((
+                              'LINKED_OWNED_LISTING_GROUP',
+                              false,
+                            )),
+                    ),
+                    ChoiceChip(
+                      label: Text(
+                        context.localized(ru: 'Нет KEMP', uk: 'Немає KEMP'),
+                      ),
+                      selected: state.kempStatus == 'KEMP_CODE_MISSING',
+                      onSelected: state.isSearching
+                          ? null
+                          : (_) => onIdentityFilterChanged((
+                              'KEMP_CODE_MISSING',
+                              false,
+                            )),
+                    ),
+                    ChoiceChip(
+                      label: Text(
+                        context.localized(
+                          ru: 'Нет карточки',
+                          uk: 'Немає картки',
+                        ),
+                      ),
+                      selected: state.kempStatus == 'NO_CURRENT_OWNED_LISTING',
+                      onSelected: state.isSearching
+                          ? null
+                          : (_) => onIdentityFilterChanged((
+                              'NO_CURRENT_OWNED_LISTING',
+                              false,
+                            )),
+                    ),
+                    ChoiceChip(
+                      label: Text(
+                        context.localized(
+                          ru: 'Неоднозначные',
+                          uk: 'Неоднозначні',
+                        ),
+                      ),
+                      selected:
+                          state.kempStatus ==
+                          'AMBIGUOUS_LISTING_INTERNAL_CODES',
+                      onSelected: state.isSearching
+                          ? null
+                          : (_) => onIdentityFilterChanged((
+                              'AMBIGUOUS_LISTING_INTERNAL_CODES',
+                              false,
+                            )),
+                    ),
+                    ChoiceChip(
+                      label: const Text('No OEM'),
+                      selected: state.noOem,
+                      onSelected: state.isSearching
+                          ? null
+                          : (_) => onIdentityFilterChanged((null, true)),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
                 _CatalogStats(state: state, onStoreChanged: onStoreChanged),
                 if (state.error != null) ...[
@@ -274,7 +357,9 @@ class _CatalogContent extends StatelessWidget {
                   _EmptyCatalog(
                     hasQuery:
                         state.query.isNotEmpty ||
-                        state.selectedStoreIds.isNotEmpty,
+                        state.selectedStoreIds.isNotEmpty ||
+                        state.kempStatus != null ||
+                        state.noOem,
                     canImport: canAdministerWorkspace,
                     onImport: onImport,
                   )
@@ -345,11 +430,13 @@ class _CatalogContent extends StatelessWidget {
                 Text(
                   context.localized(
                     ru:
-                        'Дубли объединяются только по подтверждаемому артикулу и бренду. '
-                        'Похожие названия без идентификатора остаются отдельными товарами.',
+                        'Excel-позиция — канонический товар. Собственные объявления объединяются '
+                        'только по точному KEMP-коду из сохранённой характеристики; название, URL, '
+                        'цена и Prom ID связь не доказывают.',
                     uk:
-                        'Дублі об’єднуються лише за підтвердженим артикулом і брендом. '
-                        'Схожі назви без ідентифікатора залишаються окремими товарами.',
+                        'Excel-позиція — канонічний товар. Власні оголошення об’єднуються '
+                        'лише за точним KEMP-кодом зі збереженої характеристики; назва, URL, '
+                        'ціна та Prom ID зв’язок не доводять.',
                   ),
                   style: Theme.of(
                     context,
@@ -626,8 +713,8 @@ class _EmptyCatalog extends StatelessWidget {
           Text(
             hasQuery
                 ? context.localized(
-                    ru: 'Ищите по OEM/OE, артикулу, названию объявления или запчасти.',
-                    uk: 'Шукайте за OEM/OE, артикулом, назвою оголошення або запчастини.',
+                    ru: 'Ищите по KEMP, OEM/OE, MPN, SKU или названию запчасти.',
+                    uk: 'Шукайте за KEMP, OEM/OE, MPN, SKU або назвою запчастини.',
                   )
                 : context.localized(
                     ru: canImport

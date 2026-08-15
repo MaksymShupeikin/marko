@@ -66,8 +66,22 @@ class Settings(BaseSettings):
     pricing_collection_max_task_executions: int = 4
     pricing_collection_item_deadline_seconds: int = 1800
     pricing_collection_lease_seconds: int = 900
-    pricing_collection_task_soft_time_limit_seconds: int = 840
-    pricing_collection_task_time_limit_seconds: int = 900
+    # The collection task hosts ``ensure_run_item_comparability_reviews``, so in
+    # ``shadow``/``required`` mode its budget is scraping *plus* up to
+    # ``pricing_llm_max_provider_calls_per_position`` provider calls of up to
+    # ``pricing_llm_timeout_seconds`` each -- 1800 s of reviews alone against
+    # the former 840 s limit.  The two numbers were inconsistent by
+    # construction: a position with a wide cohort could only end in
+    # SoftTimeLimitExceeded and a retry, re-scraping and re-billing on the way.
+    pricing_collection_task_soft_time_limit_seconds: int = 2700
+    pricing_collection_task_time_limit_seconds: int = 2820
+    # One no-OE item is discovery plus enrichment of every search candidate plus
+    # up to ``pricing_no_oe_max_provider_calls`` reviews.  Measured 2026-08-14:
+    # enrichment alone ran past 600 s on a 195-candidate search, and ten xhigh
+    # reviews add ~700 s on top, so the former hardcoded 600/660 could not hold
+    # a successful item -- it always raised SoftTimeLimitExceeded and retried.
+    no_oe_discovery_task_soft_time_limit_seconds: int = 2700
+    no_oe_discovery_task_time_limit_seconds: int = 2820
     pricing_scraper_http_timeout_seconds: float = 30.0
     pricing_scraper_http_max_attempts: int = 4
     pricing_scraper_request_delay_seconds: float = 1.0
@@ -109,7 +123,11 @@ class Settings(BaseSettings):
     pricing_comparability_activation_artifact: str = ""
     pricing_comparability_activation_sha256: str = ""
     pricing_llm_comparability_mode: Literal["off", "shadow", "required"] = "off"
-    pricing_llm_provider: Literal["openai_responses"] = "openai_responses"
+    pricing_llm_provider: Literal["openai_responses", "codex_cli"] = "openai_responses"
+    pricing_llm_codex_bin: str = "codex"
+    pricing_no_oe_discovery_enabled: bool = False
+    pricing_no_oe_max_items: int = Field(default=20, ge=1, le=80)
+    pricing_no_oe_max_provider_calls: int = Field(default=10, ge=1, le=20)
     pricing_llm_base_url: str = "https://api.openai.com/v1"
     pricing_llm_api_key: SecretStr = SecretStr("")
     pricing_llm_model: str = "gpt-5.6-luna"
@@ -122,8 +140,28 @@ class Settings(BaseSettings):
     ] = "xhigh"
     pricing_llm_image_detail: Literal["auto", "low", "high"] = "auto"
     pricing_llm_rate_version: str = "openai-gpt-5.6-luna-standard-2026-07-30"
-    pricing_llm_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
-    pricing_llm_max_output_tokens: int = Field(default=1600, ge=256, le=8000)
+    # Measured 2026-08-14 against gpt-5.6-luna at xhigh, on one realistic no-OE
+    # review (2.6k chars of input): 71 s wall clock and 9 008 output tokens, of
+    # which 6 214 were reasoning.  Reasoning is billed inside
+    # ``max_output_tokens``, so the previous 1 600 budget spent the entire
+    # allowance before the verdict began: the provider answered ``incomplete``
+    # with an empty output on every call, which the adapter turns into
+    # ``LLM_RESPONSE_INCOMPLETE``.  Paid for, and unusable.  The previous 60 s
+    # timeout expired before that same call returned, and the adapter retries
+    # once, so each review was billed twice and still produced nothing.
+    #
+    # 16 000 then proved short for the OEM lane, whose payload is 12 647 input
+    # tokens against the 3 118 that measurement used, and one review of the
+    # first ``required`` run still came back ``incomplete``.  These two move
+    # together or not at all: that same measurement is 127 output tokens per
+    # second, so a 24 000-token answer needs about 189 s and a 180 s timeout
+    # would kill it just before it lands -- and then post again, and bill
+    # twice, which is the failure this comment already describes once.  240 s
+    # is also the ceiling the schedule allows: the no-OE task grants
+    # ``pricing_no_oe_max_provider_calls`` reviews inside one soft limit, and
+    # 10 x 240 s = 2 400 s still fits under 2 700 s where 300 s would not.
+    pricing_llm_timeout_seconds: float = Field(default=240.0, gt=0, le=300)
+    pricing_llm_max_output_tokens: int = Field(default=24000, ge=256, le=32000)
     pricing_llm_max_images: int = Field(default=4, ge=0, le=10)
     pricing_llm_max_concurrency: int = Field(default=4, ge=1, le=32)
     # Retained for deployment compatibility with existing manifests.  The v2
@@ -335,7 +373,10 @@ class Settings(BaseSettings):
                 "SCHEDULER_SINGLETON_REACQUIRE_INITIAL_SECONDS"
             )
         if self.pricing_llm_comparability_mode != "off":
-            if not self.pricing_llm_api_key.get_secret_value().strip():
+            if (
+                self.pricing_llm_provider == "openai_responses"
+                and not self.pricing_llm_api_key.get_secret_value().strip()
+            ):
                 raise ValueError(
                     "PRICING_LLM_API_KEY is required when "
                     "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
@@ -351,6 +392,39 @@ class Settings(BaseSettings):
                     "PRICING_LLM_COMPARABILITY_MODE is shadow or required"
                 )
             self._require_transport_base_url(environment)
+        if self.pricing_llm_provider == "codex_cli":
+            if environment not in {"development", "test", "e2e"}:
+                raise ValueError("PRICING_LLM_PROVIDER=codex_cli is local/test only")
+            if not self.pricing_llm_codex_bin.strip():
+                raise ValueError("PRICING_LLM_CODEX_BIN must not be empty")
+        if self.pricing_no_oe_discovery_enabled:
+            if self.pricing_llm_model.strip() != "gpt-5.6-luna":
+                raise ValueError("no-OE discovery requires gpt-5.6-luna")
+            if self.pricing_llm_reasoning_effort != "xhigh":
+                raise ValueError("no-OE discovery requires xhigh reasoning")
+            # The effort this contour pins is billed inside the output budget,
+            # and it is spent before the verdict starts.  Below these floors the
+            # run does not degrade gracefully: every review is paid for, returns
+            # ``incomplete`` or times out, and records no verdict.  Refuse to
+            # boot instead, because the failure is invisible in the run itself.
+            if self.pricing_llm_max_output_tokens < 12_000:
+                raise ValueError(
+                    "no-OE discovery requires PRICING_LLM_MAX_OUTPUT_TOKENS "
+                    ">= 12000; xhigh reasoning alone spends about 6200 of them "
+                    "before the verdict begins"
+                )
+            if self.pricing_llm_timeout_seconds < 120:
+                raise ValueError(
+                    "no-OE discovery requires PRICING_LLM_TIMEOUT_SECONDS "
+                    ">= 120; one xhigh review measured 71 s"
+                )
+            if (
+                self.pricing_llm_provider == "openai_responses"
+                and not self.pricing_llm_api_key.get_secret_value().strip()
+            ):
+                raise ValueError(
+                    "PRICING_LLM_API_KEY is required for no-OE Responses API"
+                )
         if self.pricing_ai_evidence_mode != "off":
             # Deliberately no API-key requirement, and this is the whole
             # contract: a missing key must produce a typed ``UNCONFIGURED``

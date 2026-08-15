@@ -1866,13 +1866,13 @@ class CustomerPriceAdvisory extends StatelessWidget {
                 ru:
                     'Минимальная сопоставимая цена: '
                     '${_recommendationMoney(recommendation, marketMinimum)}. '
-                    'Допустимый коридор: '
+                    'Цель −5%: '
                     '${_recommendationMoney(recommendation, bandLow)} — '
                     '${_recommendationMoney(recommendation, bandHigh)}.',
                 uk:
                     'Мінімальна зіставна ціна: '
                     '${_recommendationMoney(recommendation, marketMinimum)}. '
-                    'Допустимий коридор: '
+                    'Ціль −5%: '
                     '${_recommendationMoney(recommendation, bandLow)} — '
                     '${_recommendationMoney(recommendation, bandHigh)}.',
               ),
@@ -1895,17 +1895,39 @@ class CustomerPriceAdvisory extends StatelessWidget {
               ),
             ),
           ],
+          if (recommendation.advisoryDecision?['status'] ==
+              'INCOMPLETE_EVIDENCE_REVIEW_REQUIRED') ...[
+            const SizedBox(height: 6),
+            Text(
+              context.localized(
+                ru:
+                    'Не подтверждено автоматически. Основание: '
+                    '${recommendation.advisoryDecision?['basis_offer_count'] ?? '—'} '
+                    'карточек, '
+                    '${recommendation.advisoryDecision?['basis_independent_sellers'] ?? '—'} '
+                    'продавцов. Проверьте комплект, состояние и единицу — '
+                    'в автоматическую когорту это не входит.',
+                uk:
+                    'Не підтверджено автоматично. Підстава: '
+                    '${recommendation.advisoryDecision?['basis_offer_count'] ?? '—'} '
+                    'карток, '
+                    '${recommendation.advisoryDecision?['basis_independent_sellers'] ?? '—'} '
+                    'продавців. Перевірте комплект, стан і одиницю — '
+                    'в автоматичну когорту це не входить.',
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           Text(
             context.localized(
               ru:
-                  'Брендовый уровень, закупка и возраст остатка в цене не '
-                  'участвуют. Сопоставимость требует проверки; цена '
-                  'автоматически не применяется.',
+                  'Формула: минимальная подтверждённая цена конкурента минус 5%. '
+                  'Перед решением учтите закупку, комиссию Prom, эквайринг, налоги, упаковку, '
+                  'доставку, возвраты, гарантию и минимальную маржу. Цена автоматически не применяется.',
               uk:
-                  'Рівень бренду, закупівля та вік залишку в ціні не '
-                  'враховуються. Зіставність потребує перевірки; ціна '
-                  'автоматично не застосовується.',
+                  'Формула: мінімальна підтверджена ціна конкурента мінус 5%. '
+                  'Перед рішенням врахуйте закупівлю, комісію Prom, еквайринг, податки, пакування, '
+                  'доставку, повернення, гарантію та мінімальну маржу. Ціна автоматично не застосовується.',
             ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -1949,10 +1971,8 @@ class _Evidence extends StatelessWidget {
         ),
         _KeyValue(
           label: context.localized(
-            ru: budgetFloor ? 'Целевой коридор (−5%…−2%)' : 'Рыночный диапазон',
-            uk: budgetFloor
-                ? 'Цільовий коридор (−5%…−2%)'
-                : 'Ринковий діапазон',
+            ru: budgetFloor ? 'Цель: минимум − 5%' : 'Рыночный диапазон',
+            uk: budgetFloor ? 'Ціль: мінімум − 5%' : 'Ринковий діапазон',
           ),
           value: recommendation.lowerBound == null
               ? '—'

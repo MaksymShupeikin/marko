@@ -8,6 +8,7 @@ from marko.services.catalog_identity_safety import is_internal_catalog_code
 from marko.services.catalog_internal_code_join import (
     CatalogInternalCodeJoinRow,
     extract_listing_internal_codes,
+    parse_kemp_prom_bootstrap,
     summarize_catalog_internal_code_join,
 )
 from marko.services.xlsx_catalog import normalize_identifier
@@ -39,6 +40,27 @@ def test_live_internal_code_forms_share_the_import_normalization(raw: str) -> No
 
     assert extracted == (normalize_identifier(raw),)
     assert is_internal_catalog_code(raw) is True
+
+
+def test_versioned_prom_bootstrap_keeps_prom_id_as_locator_and_kemp_as_evidence() -> (
+    None
+):
+    content = (
+        Path(__file__).resolve().parents[1] / "data/kemp_prom_catalog.xlsx"
+    ).read_bytes()
+
+    evidence = parse_kemp_prom_bootstrap(content)
+    code_sets = [
+        {code for row in rows for code in row.internal_code_norm}
+        for rows in evidence.values()
+    ]
+
+    assert len(evidence) == 4315
+    assert sum(map(len, evidence.values())) == 4315
+    assert sum(len(codes) == 1 for codes in code_sets) == 4312
+    assert sum(len(codes) > 1 for codes in code_sets) == 3
+    assert all(row.source_listing_id for rows in evidence.values() for row in rows)
+    assert all(row.row_sha256 for rows in evidence.values() for row in rows)
 
 
 def test_join_summary_counts_card_groups_without_choosing_a_first_card() -> None:
@@ -83,10 +105,10 @@ def test_join_summary_counts_card_groups_without_choosing_a_first_card() -> None
     assert report.matched_listing_cards == 4
     assert report.unmatched_catalog_positions == 1
     assert report.ambiguous_catalog_positions == 1
-    assert report.rows[0].status == "MATCHED_OWNED_LISTING_GROUP"
+    assert report.rows[0].status == "LINKED_OWNED_LISTING_GROUP"
     assert report.rows[0].requires_single_card_consumer_stop is True
-    assert report.rows[1].status == "AMBIGUOUS_OWNED_LISTING_INTERNAL_CODES"
-    assert report.rows[2].status == "CATALOG_INTERNAL_CODE_MISSING"
+    assert report.rows[1].status == "AMBIGUOUS_LISTING_INTERNAL_CODES"
+    assert report.rows[2].status == "KEMP_CODE_MISSING"
 
 
 def test_ambiguous_listing_code_blocks_even_when_a_clear_card_also_exists() -> None:
@@ -110,7 +132,7 @@ def test_ambiguous_listing_code_blocks_even_when_a_clear_card_also_exists() -> N
     assert report.matched_catalog_positions == 0
     assert report.matched_listing_cards == 0
     assert report.ambiguous_catalog_positions == 1
-    assert report.rows[0].status == "AMBIGUOUS_OWNED_LISTING_INTERNAL_CODES"
+    assert report.rows[0].status == "AMBIGUOUS_LISTING_INTERNAL_CODES"
     assert report.rows[0].requires_single_card_consumer_stop is True
 
 

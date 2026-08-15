@@ -64,7 +64,7 @@ def test_a_cut_driven_by_an_isolated_floor_is_not_emitted() -> None:
 
     assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
     assert decision.recommended_price is None
-    assert "CUT_FROM_ISOLATED_FLOOR" in decision.reasons
+    assert "FLOOR_MATERIALLY_BELOW_NEXT_SELLER" in decision.reasons
 
 
 def test_the_escalated_position_still_carries_the_floor_and_the_band() -> None:
@@ -74,7 +74,7 @@ def test_the_escalated_position_still_carries_the_floor_and_the_band() -> None:
 
     assert decision.fair_price == Decimal("200")
     assert decision.target_band_low == Decimal("190.00")
-    assert decision.target_band_high == Decimal("196.00")
+    assert decision.target_band_high == Decimal("190.00")
     assert decision.basis is not None and decision.basis.count == 4
 
 
@@ -84,7 +84,7 @@ def test_a_deep_cut_from_a_tight_cohort_is_still_emitted() -> None:
     decision = _decide([1200, 1300, 1400], current=2747)
 
     assert decision.outcome is RaiseOutcome.LOWER
-    assert decision.recommended_price == Decimal("1176")
+    assert decision.recommended_price == Decimal("1140")
 
 
 def test_a_raise_is_never_withheld_by_isolation() -> None:
@@ -93,7 +93,7 @@ def test_a_raise_is_never_withheld_by_isolation() -> None:
     decision = _decide([200, 1200, 1300, 1400], current=100)
 
     assert decision.outcome is RaiseOutcome.RAISE
-    assert decision.recommended_price == Decimal("196")
+    assert decision.recommended_price == Decimal("190")
 
 
 def test_isolation_is_not_judged_without_a_cohort_to_be_isolated_from() -> None:
@@ -116,7 +116,7 @@ def test_our_own_price_does_not_enter_the_isolation_test() -> None:
     for current in (1200, 5000, 20000):
         decision = _decide([1200, 1300, 1400], current=current)
         assert decision.outcome is RaiseOutcome.LOWER
-        assert decision.recommended_price == Decimal("1176")
+        assert decision.recommended_price == Decimal("1140")
 
 
 # ------------------------------------------------- the corroboration reporting
@@ -132,7 +132,7 @@ def test_a_floor_standing_on_one_seller_is_reported_but_still_used() -> None:
     assert FLAG_FLOOR_RESTS_ON_ONE_SELLER in decision.flags
     # The owner's rule is untouched: the target is still measured from the 200.
     assert decision.fair_price == Decimal("200")
-    assert decision.recommended_price == Decimal("196")
+    assert decision.recommended_price == Decimal("190")
 
 
 def test_a_second_seller_at_the_floor_clears_the_flag() -> None:
@@ -275,34 +275,30 @@ def test_a_market_too_small_for_the_required_corroboration_is_escalated() -> Non
 # ------------------------------------------- agreement, not just count (31.07)
 
 
-def test_a_cohort_nobody_agrees_on_does_not_move_a_price() -> None:
-    """The measurement that forced this: 22 offers for one Touareg radiator,
-    priced 1087 to 12968, produced a -79% cut because the basis was graded on
-    how many offers there were and not on whether they agreed.
+def test_spread_does_not_replace_the_literal_valid_floor() -> None:
+    """The fixed-floor rule does not use a dispersion statistic.
 
-    Twenty-two is a thick basis by count and a meaningless one by agreement.
+    The explicit commercial-integrity and lone-floor gates decide whether the
+    cheapest card is valid; later expensive cards do not move that valid floor.
     """
 
     spread = [1087, 1132, 1183, 1400, 2000, 2250, 2500, 2594, 2625, 2747, 12968]
 
     decision = _decide(spread, current=5163, sellers=[f"s{i}" for i in range(11)])
 
-    assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
-    assert "LOW_CONFIDENCE_BASIS" in decision.reasons
-    assert decision.recommended_price is None
+    assert decision.outcome is RaiseOutcome.LOWER
+    assert "LOW_CONFIDENCE_BASIS" not in decision.reasons
+    assert decision.recommended_price == Decimal("1032")
 
 
-def test_the_withheld_number_is_still_shown_as_a_band() -> None:
-    """Withholding the action must not withhold the reasoning — he asked for the
-    recommendation to be highlighted, and an empty row highlights nothing."""
-
+def test_the_exact_five_percent_target_is_still_shown() -> None:
     spread = [1087, 1132, 1183, 1400, 2000, 2250, 2500, 2594, 2625, 2747, 12968]
 
     decision = _decide(spread, current=5163, sellers=[f"s{i}" for i in range(11)])
 
     assert decision.fair_price == Decimal("1087")
     assert decision.target_band_low == Decimal("1032.65")
-    assert decision.target_band_high == Decimal("1065.26")
+    assert decision.target_band_high == Decimal("1032.65")
     assert decision.basis is not None and decision.basis.count == 11
 
 
@@ -320,20 +316,19 @@ def test_a_deep_cut_from_a_cohort_that_agrees_is_still_emitted() -> None:
     )
 
     assert decision.outcome is RaiseOutcome.LOWER
-    assert decision.recommended_price == Decimal("1545")
+    assert decision.recommended_price == Decimal("1498")
 
 
-def test_a_raise_off_a_dispersed_cohort_is_held_too() -> None:
-    """Symmetric on purpose: a raise off a twelve-fold spread is the same guess."""
-
+def test_a_raise_uses_the_valid_floor_without_dispersion_statistics() -> None:
     decision = _decide(
         [3028, 3500, 4189, 5000, 6000, 12312],
         current=2714,
         sellers=[f"s{i}" for i in range(6)],
     )
 
-    assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
-    assert "LOW_CONFIDENCE_BASIS" in decision.reasons
+    assert decision.outcome is RaiseOutcome.RAISE
+    assert "LOW_CONFIDENCE_BASIS" not in decision.reasons
+    assert decision.recommended_price == Decimal("2876")
 
 
 def test_the_grade_uses_the_shipped_thresholds_and_invents_none() -> None:
@@ -344,12 +339,11 @@ def test_the_grade_uses_the_shipped_thresholds_and_invents_none() -> None:
     assert SHIPPED.medium_max_robust_cv == Decimal("0.35")
 
 
-def test_count_alone_can_no_longer_grade_a_basis_high() -> None:
-    """The exact regression: many offers, no agreement, previously HIGH."""
-
+def test_count_grades_evidence_after_deterministic_offer_gates() -> None:
     many = [1000, 1100, 1200, 1300, 1400, 9000, 10000, 11000]
 
     decision = _decide(many, current=5000, sellers=[f"s{i}" for i in range(8)])
 
-    assert decision.confidence is not RaiseConfidence.HIGH
-    assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
+    assert decision.confidence is RaiseConfidence.HIGH
+    assert decision.outcome is RaiseOutcome.LOWER
+    assert decision.recommended_price == Decimal("950")

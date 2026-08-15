@@ -34,6 +34,7 @@ from marko.services.llm_comparability import (
     _image_cache_identities,
     _model_settings_hash,
     _responses_output_text,
+    _strict_output_schema,
     apply_effective_review_to_evidence,
     build_review_input_snapshot,
     derive_pricing_admission,
@@ -52,6 +53,37 @@ from metis.pricing import (
     verified_comparison_evidence,
 )
 from marko.services.semantic_candidate_features import build_semantic_feature_matrix
+
+
+def test_provider_schema_contains_no_unsupported_regex_lookaround() -> None:
+    def walk(value):
+        if isinstance(value, dict):
+            if pattern := value.get("pattern"):
+                yield pattern
+            for child in value.values():
+                yield from walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from walk(child)
+
+    patterns = tuple(walk(_strict_output_schema()))
+
+    assert all("(?" not in pattern for pattern in patterns)
+
+
+def test_provider_schema_constrains_dimensions_to_server_allowlists() -> None:
+    schema = _strict_output_schema()
+    definitions = schema["$defs"]
+
+    finding_dimensions = definitions["ReviewDimensionFinding"]["properties"][
+        "dimension"
+    ]["enum"]
+    conflict_dimensions = definitions["ReviewHardStopConflict"]["properties"][
+        "dimension"
+    ]["enum"]
+
+    assert finding_dimensions == sorted(llm_comparability._ALLOWED_DIMENSIONS)
+    assert conflict_dimensions == sorted(llm_comparability._HARD_STOP_DIMENSIONS)
 
 
 def _positive_output() -> LLMComparabilityOutput:
@@ -245,7 +277,9 @@ def test_pricing_admission_requires_complete_commercial_evidence() -> None:
     )
     missing = derive_pricing_admission(
         _prepared_for_admission(
-            dimensions={key: value for key, value in complete.items() if key != "unit_basis"}
+            dimensions={
+                key: value for key, value in complete.items() if key != "unit_basis"
+            }
         ),
         _positive_output(),
     )
@@ -551,6 +585,349 @@ def test_text_conflict_rejects_ungrounded_model_evidence(
         )
 
     assert exc_info.value.code == error_code
+
+
+def _prepared_with_real_payload_shape() -> _PreparedReview:
+    """A snapshot laid out like the one the OEM lane actually sends.
+
+    Two traps live in this layout and both cost a paid call in the first
+    ``required`` run: ``deterministic_evidence`` sits beside
+    ``deterministic_context`` rather than inside it, and the feature matrix
+    names one concept ``part_type`` under ``comparisons`` and ``part_family``
+    under ``candidate``.
+    """
+
+    prepared = _prepared_for_admission(
+        dimensions={"oe_reference": "UNKNOWN"},
+        semantic_feature_matrix={
+            "comparisons": {
+                "part_type": {
+                    "state": "MATCH",
+                    "our_values": ["viscous_coupling_bearing"],
+                    "candidate_values": ["viscous_coupling_bearing"],
+                }
+            },
+            "candidate": {"part_family": ["viscous_coupling_bearing"]},
+            "our_product": {"part_family": ["viscous_coupling_bearing"]},
+            "extractor_version": "semantic-features-v1",
+        },
+    )
+    return replace(
+        prepared,
+        input_snapshot={
+            **prepared.input_snapshot,
+            "candidate": {
+                **prepared.input_snapshot["candidate"],
+                "title": "Підшипник вискомуфти VW LT/Crafter 2.5TDI 112045, Solgy!",
+                # Real snapshots carry nulls on unparsed fields, and the
+                # resolver reports a null exactly as it reports an absent key.
+                "condition": None,
+                "verified_matched_oe_norm": None,
+            },
+        },
+    )
+
+
+def _gate_reference(field: str, value: str) -> LLMComparabilityOutput:
+    return LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.MANUAL_REVIEW,
+        match_level=ComparabilityMatchLevel.SUSPICIOUS,
+        identity_match_score=Decimal("0.4"),
+        decision_confidence=Decimal("0.5"),
+        image_consistency=ImageConsistency.UNAVAILABLE,
+        rationale="The deterministic gate has not confirmed the OE reference.",
+        reason_codes=["OE_REFERENCE_UNKNOWN"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="oe_reference",
+                outcome=FindingOutcome.CONFLICT,
+                explanation="The gate reports an unconfirmed OE reference.",
+                evidence=[
+                    ReviewEvidenceReference(
+                        source="DETERMINISTIC_GATE",
+                        field=field,
+                        value=value,
+                    )
+                ],
+            )
+        ],
+    )
+
+
+def test_gate_citation_binds_through_the_redundant_sibling_root_prefix() -> None:
+    """``DETERMINISTIC_GATE`` is one source name over two side-by-side roots.
+
+    A reviewer reading the payload as a tree writes the second root as a child
+    of the first.  The sub-path is real and the value is verbatim, so rejecting
+    the whole answer over the prefix buys nothing but a wasted call.
+    """
+
+    llm_comparability._validate_provider_text_evidence(
+        _prepared_with_real_payload_shape(),
+        _gate_reference(
+            "deterministic_context.deterministic_evidence.dimensions."
+            "oe_reference.state",
+            "UNKNOWN",
+        ),
+    )
+
+
+def test_gate_citation_binds_at_its_own_root() -> None:
+    llm_comparability._validate_provider_text_evidence(
+        _prepared_with_real_payload_shape(),
+        _gate_reference("deterministic_evidence.dimensions.oe_reference.state", "UNKNOWN"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # ``comparisons`` is keyed by dimension and carries ``state``; the
+        # sibling ``candidate`` map is keyed by feature and does not.  Only the
+        # path index and the prompt can prevent this one -- the alias must not.
+        (
+            "deterministic_context.semantic_feature_matrix.candidate.part_type.state",
+            "MATCH",
+        ),
+        # A real root, a real-sounding leaf, and nothing behind it.
+        ("deterministic_context.semantic_feature_matrix.comparisons.part_type.verdict", "MATCH"),
+    ],
+)
+def test_plausible_but_absent_gate_paths_are_still_rejected(
+    field: str,
+    value: str,
+) -> None:
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_with_real_payload_shape(),
+            _gate_reference(field, value),
+        )
+
+    assert exc_info.value.code == "LLM_EVIDENCE_FIELD_UNBOUND"
+
+
+def test_invented_candidate_field_is_still_rejected() -> None:
+    """``candidate`` has a fixed key set; ``measure_unit`` is not in it."""
+
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_with_real_payload_shape(),
+            _grounded_negative_output(candidate_field="candidate.measure_unit"),
+        )
+
+    assert exc_info.value.code == "LLM_EVIDENCE_FIELD_UNBOUND"
+
+
+def test_the_alias_does_not_open_a_path_across_sources() -> None:
+    """Stripping a sibling root must stay inside one source's own roots."""
+
+    prepared = _prepared_with_real_payload_shape()
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            prepared,
+            _grounded_negative_output(
+                candidate_field="our_product.category",
+                candidate_value="brakes",
+                candidate_excerpt="",
+            ),
+        )
+
+    assert exc_info.value.code == "LLM_EVIDENCE_FIELD_UNBOUND"
+
+
+def test_every_path_the_index_advertises_resolves_in_its_snapshot() -> None:
+    """The index exists to stop the model guessing; it must not become the guess.
+
+    If it can advertise a path the resolver then rejects, it has turned into the
+    same defect one layer up -- and a rejection costs a call that was paid for.
+    """
+
+    snapshot = _prepared_with_real_payload_shape().input_snapshot
+    index = llm_comparability._evidence_path_index(snapshot)
+
+    assert index["DETERMINISTIC_GATE"], "the gate source must advertise paths"
+    for source, paths in index.items():
+        for path in paths:
+            reference = ReviewEvidenceReference(source=source, field=path)
+            resolved = llm_comparability._resolve_evidence_reference(
+                snapshot,
+                reference,
+            )
+            assert resolved, f"{source} advertises an unresolvable path: {path}"
+    assert "candidate.condition" not in index["CANDIDATE"]
+
+
+def test_the_index_names_both_gate_roots_and_the_matrix_keyings() -> None:
+    snapshot = _prepared_with_real_payload_shape().input_snapshot
+    gate = set(llm_comparability._evidence_path_index(snapshot)["DETERMINISTIC_GATE"])
+
+    assert "deterministic_evidence.dimensions" in gate
+    assert (
+        "deterministic_context.semantic_feature_matrix.comparisons" in gate
+    )
+    # Both keyings are advertised, so the difference between them is visible
+    # rather than something the model has to infer from one example.
+    assert (
+        "deterministic_context.semantic_feature_matrix.comparisons.part_type" in gate
+    )
+    assert (
+        "deterministic_context.semantic_feature_matrix.candidate.part_family" in gate
+    )
+
+
+def test_the_request_payload_carries_the_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None)
+    snapshot = _prepared_with_real_payload_shape().input_snapshot
+
+    payload = llm_comparability.build_responses_request_payload(
+        settings,
+        input_snapshot=snapshot,
+        image_urls=(),
+    )
+    product_data = json.loads(
+        payload["input"][0]["content"][0]["text"].split("\n", 1)[1]
+    )
+
+    assert product_data["evidence_path_index"]["CANDIDATE"]
+    assert "evidence_path_index" in payload["instructions"]
+    # Derived at request time, so a snapshot persisted before the index existed
+    # still produces one and the stored snapshot stays what was hashed.
+    assert "evidence_path_index" not in snapshot
+
+
+def test_a_short_verbatim_excerpt_binds() -> None:
+    """``VW`` quoted out of a title is verbatim, and used to cost a whole answer.
+
+    ``_evidence_text_occurs`` rejects a needle under three characters, which is
+    what keeps a two-character token from *binding* a value.  An excerpt is
+    subordinate to a value that already bound at the same path, so the floor
+    only threw away paid answers that were telling the truth.
+    """
+
+    llm_comparability._validate_provider_text_evidence(
+        _prepared_for_grounding(),
+        _grounded_negative_output(candidate_excerpt="Vw"),
+    )
+
+
+def test_a_short_excerpt_that_is_absent_is_still_rejected() -> None:
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_for_grounding(),
+            _grounded_negative_output(candidate_excerpt="ZZ"),
+        )
+
+    assert exc_info.value.code == "LLM_EVIDENCE_EXCERPT_UNBOUND"
+
+
+def test_a_short_value_still_cannot_bind() -> None:
+    """The floor stays where it does real work: on the value itself."""
+
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_for_grounding(),
+            _grounded_negative_output(candidate_value="Vw", candidate_excerpt=""),
+        )
+
+    assert exc_info.value.code == "LLM_EVIDENCE_VALUE_UNBOUND"
+
+
+async def test_an_out_of_stock_listing_is_not_reviewed_at_all() -> None:
+    """Owner decision 2026-08-15, narrowing "review every listing found by OE".
+
+    ``derive_pricing_admission`` excludes an unavailable candidate whatever the
+    reviewer concludes, so the call can only buy a verdict that changes nothing.
+    A third of the first runs' spend went to exactly this.
+    """
+
+    prepared = replace(
+        _prepared_for_grounding(),
+        input_snapshot={
+            **_prepared_for_grounding().input_snapshot,
+            "candidate": {
+                **_prepared_for_grounding().input_snapshot["candidate"],
+                "is_available": False,
+            },
+        },
+    )
+    persisted: dict[str, object] = {}
+
+    async def _capture(_prepared, **kwargs):
+        persisted.update(kwargs)
+        return "persisted"
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(llm_comparability, "_persist_prepared_review", _capture)
+        resolved = await llm_comparability._resolve_without_provider(
+            prepared, settings=Settings(_env_file=None)
+        )
+
+    assert resolved == "persisted", "an out-of-stock offer must not reach the provider"
+    assert persisted["error_code"] == "CANDIDATE_NOT_AVAILABLE"
+    assert persisted["provider_review"] is None
+
+
+async def test_unproven_availability_is_still_reviewed() -> None:
+    """``None`` means never proven, which is not the same claim as out of stock."""
+
+    prepared = replace(
+        _prepared_for_grounding(),
+        input_snapshot={
+            **_prepared_for_grounding().input_snapshot,
+            "candidate": {
+                **_prepared_for_grounding().input_snapshot["candidate"],
+                "is_available": None,
+            },
+        },
+    )
+
+    resolved = await llm_comparability._resolve_without_provider(
+        prepared, settings=Settings(_env_file=None)
+    )
+
+    assert resolved is None, "unproven availability must still be judged"
+
+
+def test_a_score_field_cannot_be_answered_with_a_word() -> None:
+    """Pydantic renders a Decimal as number-or-string, and the string branch's
+    pattern is stripped because Responses rejects lookaheads.  That left
+    ``identity_match_score: "unresolved"`` legal to the provider and fatal to
+    ``model_validate_json`` -- a whole answer discarded after it was billed.
+    """
+
+    schema = _strict_output_schema()
+
+    for field in ("identity_match_score", "decision_confidence"):
+        branches = schema["properties"][field]["anyOf"]
+        assert {"type": "string"} not in branches, field
+        assert any(branch.get("type") == "number" for branch in branches), field
+
+
+def test_the_index_never_advertises_a_redacted_money_path() -> None:
+    """Redaction removes monetary keys; the index must not name them back.
+
+    A path is not a value, but ``our_product.current_price`` still tells the
+    model a price is in play -- and rule 9 exists precisely so that price can
+    never touch identity.  Index the redacted copy, never the raw snapshot.
+    """
+
+    settings = Settings(_env_file=None)
+    snapshot = {
+        "our_product": {"name": "Disc", "current_price": "999.00"},
+        "candidate": {"title": "Disc", "sale_price": "800.00", "cost_hint": "1"},
+    }
+
+    payload = llm_comparability.build_responses_request_payload(
+        settings,
+        input_snapshot=snapshot,
+        image_urls=(),
+    )
+    provider_text = payload["input"][0]["content"][0]["text"]
+
+    assert "current_price" not in provider_text
+    assert "sale_price" not in provider_text
+    assert "cost_hint" not in provider_text
+    assert "our_product.name" in provider_text
 
 
 def test_not_match_requires_an_evidenced_hard_stop() -> None:
@@ -1093,6 +1470,116 @@ def test_review_snapshot_hides_private_kemp_code_from_identity_namespace() -> No
     assert snapshot["deterministic_context"]["automatic_eligible"] is False
 
 
+def _seed_item(**overrides) -> SimpleNamespace:
+    fields = dict(
+        id=uuid4(),
+        sku="1153724258",
+        oe_raw="077115136A",
+        oe_norm="077115136A",
+        mpn_raw=None,
+        mpn_norm=None,
+        name="Подшипник ролика промеж (термомуфты) Audi-100 91-97",
+        category="Запчастини",
+        brand="KEMP",
+        description=None,
+        part_numbers_norm=[],
+        applicability_brands=[],
+        applicability_models=[],
+        characteristics_raw={},
+        raw_row={},
+        identity_status="OE_CONFIRMED",
+        identity_reason=None,
+        currency="UAH",
+        product_url=None,
+    )
+    return SimpleNamespace(**{**fields, **overrides})
+
+
+def _seed_observation() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        candidate_snapshot={},
+        source_listing_id="prom-1",
+        seller_id="seller-1",
+        seller_name="Competitor",
+        title="Підшипник вискомуфти VW LT/Crafter 2.5TDI",
+        description=None,
+        brand_raw="Autotechteile",
+        url="https://example.test/listing",
+        currency="UAH",
+        is_available=True,
+        condition_raw="Новий",
+        condition_state="NEW",
+        search_oe_norm="077115136A",
+        extracted_oe_norms=["077115136A"],
+        verified_matched_oe_norm="077115136A",
+        oe_verification_status="VERIFIED_EXACT",
+        comparison_evidence={},
+        automatic_eligible=True,
+    )
+
+
+def test_the_seed_unit_basis_reaches_the_matrix_from_a_prom_column() -> None:
+    """``Одиниця_виміру`` is a top-level Prom column, so it lands in raw_row.
+
+    ``our_product`` never carried it, so our side of ``unit_basis`` compared as
+    UNKNOWN against a candidate that stated its own unit in nine cases out of
+    nine -- and the pricing gate requires MATCH on it.
+    """
+
+    snapshot, _ = build_review_input_snapshot(
+        _seed_item(
+            raw_row={"Одиниця_виміру": "шт.", "Кількість": "55"},
+            characteristics_raw={"Стан": ["Новий"]},
+        ),
+        _seed_observation(),
+        max_images=0,
+    )
+    comparisons = snapshot["deterministic_context"]["semantic_feature_matrix"][
+        "comparisons"
+    ]
+
+    assert snapshot["our_product"]["measure_unit"] == "шт."
+    # Symmetric on purpose: exposing one side's unit and not the other made a
+    # reviewer cite ``candidate.measure_unit``, which did not exist, and its
+    # entire paid answer was discarded for an unbound path.
+    assert "measure_unit" in snapshot["candidate"]
+    assert comparisons["unit_basis"]["our_values"] == ["piece"]
+    assert comparisons["condition"]["our_values"] == ["new"]
+    # ``Кількість`` is stock on hand, not pack size.  Reading it as a package
+    # quantity would invent a 55-piece pack and a conflict that is not there.
+    assert comparisons["package_quantity"]["our_values"] == ["1"]
+
+
+def test_a_characteristic_unit_column_is_not_the_listing_unit() -> None:
+    """Prom names every characteristic's own unit with the same word."""
+
+    snapshot, _ = build_review_input_snapshot(
+        _seed_item(
+            raw_row={
+                "Одиниця_виміру_Характеристики": "мм",
+                "Одиниця_виміру_Характеристики#2": "кг",
+            }
+        ),
+        _seed_observation(),
+        max_images=0,
+    )
+
+    assert snapshot["our_product"]["measure_unit"] is None
+
+
+def test_a_seed_without_a_unit_column_stays_silent() -> None:
+    snapshot, _ = build_review_input_snapshot(
+        _seed_item(), _seed_observation(), max_images=0
+    )
+    comparisons = snapshot["deterministic_context"]["semantic_feature_matrix"][
+        "comparisons"
+    ]
+
+    assert snapshot["our_product"]["measure_unit"] is None
+    assert comparisons["unit_basis"]["our_values"] == []
+
+
 def test_marketplace_supplied_image_hash_does_not_gain_diagnostic_authority() -> None:
     image_url = "https://cdn.example.test/untrusted.jpg"
     snapshot = {
@@ -1234,9 +1721,7 @@ def test_reasoning_effort_invalidates_current_runtime_review() -> None:
         pricing_llm_reasoning_effort="high",
     )
     xhigh = high.model_copy(update={"pricing_llm_reasoning_effort": "xhigh"})
-    record = SimpleNamespace(
-        **llm_comparability.current_review_runtime_identity(high)
-    )
+    record = SimpleNamespace(**llm_comparability.current_review_runtime_identity(high))
 
     assert llm_comparability._review_matches_current_runtime(record, high)
     assert not llm_comparability._review_matches_current_runtime(record, xhigh)
@@ -1490,11 +1975,7 @@ async def test_openai_responses_provider_uses_strict_schema_and_images() -> None
         (
             {
                 "output": [
-                    {
-                        "content": [
-                            {"type": "refusal", "refusal": "Cannot process."}
-                        ]
-                    }
+                    {"content": [{"type": "refusal", "refusal": "Cannot process."}]}
                 ]
             },
             "LLM_REFUSAL",
@@ -1510,6 +1991,79 @@ def test_responses_terminal_errors_are_typed_and_fail_closed(
         _responses_output_text(payload)
 
     assert raised.value.code == error_code
+
+
+@pytest.mark.parametrize(
+    ("payload", "error_code"),
+    [
+        (
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "usage": {"input_tokens": 12647, "output_tokens": 24000},
+            },
+            "LLM_RESPONSE_INCOMPLETE",
+        ),
+        (
+            {
+                "output": [
+                    {"content": [{"type": "refusal", "refusal": "Cannot process."}]}
+                ],
+                "usage": {"input_tokens": 12647, "output_tokens": 40},
+            },
+            "LLM_REFUSAL",
+        ),
+    ],
+)
+def test_a_terminal_answer_still_carries_what_it_cost(
+    payload: dict[str, object],
+    error_code: str,
+) -> None:
+    """A truncated or refused answer is billed in full.
+
+    These used to reach the review row with ``estimated_cost = {}``, so the run
+    that spent the money reported zero for it.
+    """
+
+    with pytest.raises(ComparabilityProviderError) as raised:
+        _responses_output_text(payload)
+
+    assert raised.value.code == error_code
+    assert raised.value.usage == payload["usage"]
+
+
+async def test_an_unparseable_answer_is_booked_and_kept() -> None:
+    """The parse fails before a ProviderReview exists; usage must survive it."""
+
+    settings = Settings(
+        _env_file=None,
+        pricing_llm_comparability_mode="shadow",
+        pricing_llm_api_key="test-key",
+    )
+    body = {
+        "id": "resp_bad",
+        "model": "gpt-5.6-luna",
+        "usage": {"input_tokens": 12647, "output_tokens": 9868},
+        "output": [
+            {
+                "content": [
+                    {"type": "output_text", "text": '{"identity_verdict": "MATCH"}'}
+                ]
+            }
+        ],
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+    provider = OpenAIResponsesComparabilityProvider(
+        settings,
+        client=httpx.AsyncClient(transport=transport),
+    )
+
+    with pytest.raises(ComparabilityProviderError) as raised:
+        await provider.review(input_snapshot={"our_product": {}}, image_urls=())
+
+    assert raised.value.code == "LLM_OUTPUT_SCHEMA_INVALID"
+    assert raised.value.usage["output_tokens"] == 9868
+    assert "identity_verdict" in raised.value.raw_output
 
 
 def _offer(

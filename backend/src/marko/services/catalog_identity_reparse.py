@@ -160,9 +160,7 @@ class SourceIndex:
     #: These are catalog-code aliases, not fuzzy joins: plan_identity only
     #: consults an exact key present in the row's code or explicit part-number
     #: block.
-    owner_by_code: Mapping[str, tuple[SourceNumbers, ...]] = field(
-        default_factory=dict
-    )
+    owner_by_code: Mapping[str, tuple[SourceNumbers, ...]] = field(default_factory=dict)
     #: Reference rows whose article is a supplier number rather than an OE.
     #: Counted rather than turned into edges: the reference map is declared as a
     #: source that asserts "this part's OE", and feeding a supplier number
@@ -191,9 +189,9 @@ class SourceIndex:
     #: titles contradict on a high-certainty structural dimension.  This is
     #: narrower than ordinary fan-out: engine-only or dimension-only drift is
     #: not enough to defeat an exact number by itself.
-    semantic_fanout_conflicts: Mapping[
-        str, tuple[Mapping[str, Any], ...]
-    ] = field(default_factory=dict)
+    semantic_fanout_conflicts: Mapping[str, tuple[Mapping[str, Any], ...]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,10 +541,9 @@ def public_number_semantic_conflicts(
             for raw in entry.numbers:
                 normalized = normalize_cross_oem(raw)
                 claim = (code, entry.extraction_method, title)
-                if (
-                    is_safe_public_number_shape(normalized)
-                    and claim not in claims.setdefault(normalized, [])
-                ):
+                if is_safe_public_number_shape(
+                    normalized
+                ) and claim not in claims.setdefault(normalized, []):
                     claims[normalized].append(claim)
 
     result: dict[str, tuple[Mapping[str, Any], ...]] = {}
@@ -660,9 +657,8 @@ def _article_identity_chunks(
         chunk = raw_chunk.strip()
         normalized = normalize_cross_oem(chunk)
         upper = chunk.upper()
-        if (
-            tokens.internal_code_pattern.fullmatch(normalized)
-            or any(rule.pattern.match(upper) for rule in tokens.aftermarket_patterns)
+        if tokens.internal_code_pattern.fullmatch(normalized) or any(
+            rule.pattern.match(upper) for rule in tokens.aftermarket_patterns
         ):
             chunks.append(chunk)
             continue
@@ -681,19 +677,18 @@ def _article_identity_chunks(
             # suffix (``...A/K`` or ``...B,L,R``), not an editorial brand.
             # Preserve it for ``_expand_slash_shorthand``; the expansion logic
             # decides whether the base makes that suffix unambiguous.
-            if (
-                len(normalize_cross_oem(chunk)) <= 3
-                and ({"/", ","} & set(article))
-            ):
+            if len(normalize_cross_oem(chunk)) <= 3 and ({"/", ","} & set(article)):
                 chunks.append(chunk)
             continue
 
         digit_fragments = [
-            fragment for fragment in fragments if any(character.isdigit() for character in fragment)
+            fragment
+            for fragment in fragments
+            if any(character.isdigit() for character in fragment)
         ]
-        if (
-            len(digit_fragments) >= 2
-            and all(len(normalize_cross_oem(fragment)) >= tokens.min_length for fragment in digit_fragments)
+        if len(digit_fragments) >= 2 and all(
+            len(normalize_cross_oem(fragment)) >= tokens.min_length
+            for fragment in digit_fragments
         ):
             chunks.extend(digit_fragments)
         else:
@@ -823,15 +818,11 @@ def load_site_source(path: str | Path) -> tuple[dict[str, SourceNumbers], int]:
             # context as well: the title is semantic evidence, while the URL
             # is the provenance a reviewer can open and re-check.  Old v1 CSVs
             # remain readable and fall back to the URL/slug parser.
-            source_title = (
-                row.get("source_title") or row.get("title") or ""
-            ).strip()
+            source_title = (row.get("source_title") or row.get("title") or "").strip()
             structured_title = (row.get("structured_name") or "").strip()
             source_image_url = (row.get("source_image_url") or "").strip()
             structured_image_url = (row.get("structured_image_url") or "").strip()
-            if source_image_url and not _kemp_site_media_url_is_safe(
-                source_image_url
-            ):
+            if source_image_url and not _kemp_site_media_url_is_safe(source_image_url):
                 raise CatalogIdentityReparseError(
                     "KEMP_SITE row has untrusted source_image_url: "
                     f"code={code!r}, url={source_image_url!r}"
@@ -950,7 +941,9 @@ def load_spareto_source(path: str | Path) -> tuple[dict[str, SourceNumbers], int
                 )
             headline = (row.get("page_headline") or "").strip()
             match = _SPARETO_HEADLINE.match(headline)
-            if match is None or normalize_cross_oem(match.group("num")) != normalize_cross_oem(raw):
+            if match is None or normalize_cross_oem(
+                match.group("num")
+            ) != normalize_cross_oem(raw):
                 not_a_confirmation += 1
                 continue
             if KEMP_SITE_INTERNAL_CODE_RE.fullmatch(normalize_cross_oem(raw)):
@@ -984,9 +977,7 @@ def _kemp_site_source_url_binds_code(source_url: str, code: str) -> bool:
     evidence.
     """
 
-    if not KEMP_SITE_INTERNAL_CODE_RE.fullmatch(
-        normalize_cross_oem(code.upper())
-    ):
+    if not KEMP_SITE_INTERNAL_CODE_RE.fullmatch(normalize_cross_oem(code.upper())):
         return False
     try:
         parsed = urlsplit(source_url)
@@ -1007,7 +998,9 @@ def _kemp_site_source_url_binds_code(source_url: str, code: str) -> bool:
         return True
     if path.casefold() == "/index.php":
         route = (query.get("route") or ("",))[0].casefold()
-        return route == "product/product" and bool((query.get("product_id") or ("",))[0])
+        return route == "product/product" and bool(
+            (query.get("product_id") or ("",))[0]
+        )
     return False
 
 
@@ -1169,6 +1162,8 @@ _OWNER_CARD_URL_RE = re.compile(
     r"^/" r"(?:[a-z]{2}/)?" r"p(?P<product_id>[0-9]+)-[^/?#]+\.html$",
     re.IGNORECASE,
 )
+
+
 def _owner_card_url_is_safe(source_url: str) -> bool:
     """Accept only an exact HTTPS Prom product-card URL.
 
@@ -1205,9 +1200,7 @@ def _owner_code_aliases(raw_code: str) -> tuple[str, ...]:
 
 
 def _owner_row_value(row: Mapping[str, object], *names: str) -> str:
-    folded = {
-        str(key or "").strip().casefold(): value for key, value in row.items()
-    }
+    folded = {str(key or "").strip().casefold(): value for key, value in row.items()}
     for name in names:
         value = folded.get(name.casefold())
         if value is not None and str(value).strip():
@@ -1221,9 +1214,7 @@ def _owner_rows(path: Path) -> tuple[bytes, list[dict[str, object]]]:
         try:
             from openpyxl import load_workbook
 
-            workbook = load_workbook(
-                io.BytesIO(raw), read_only=True, data_only=True
-            )
+            workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
             sheet = workbook[workbook.sheetnames[0]]
             values = list(sheet.iter_rows(values_only=True))
         except Exception as exc:  # pragma: no cover - openpyxl's concrete errors vary
@@ -1234,7 +1225,11 @@ def _owner_rows(path: Path) -> tuple[bytes, list[dict[str, object]]]:
             return raw, []
         headers = [str(value or "").strip() for value in values[0]]
         return raw, [
-            {headers[index]: value for index, value in enumerate(row) if index < len(headers)}
+            {
+                headers[index]: value
+                for index, value in enumerate(row)
+                if index < len(headers)
+            }
             for row in values[1:]
         ]
 
@@ -1304,9 +1299,7 @@ def _load_owner_store_source_with_stats(path: str | Path) -> OwnerStoreSourceLoa
         number_brand = _owner_row_value(
             row, "бренд_номера", "number_brand", "brand", "manufacturer"
         )
-        captured_at = _owner_row_value(
-            row, "дата", "date", "captured_at", "timestamp"
-        )
+        captured_at = _owner_row_value(row, "дата", "date", "captured_at", "timestamp")
         screenshot = _owner_row_value(row, "скриншот", "screenshot", "image")
         if not code or not raw_number:
             continue
@@ -1373,9 +1366,7 @@ def _load_owner_store_source_with_stats(path: str | Path) -> OwnerStoreSourceLoa
         rows_bound=rows_bound,
         noise_rows=noise_rows,
         cards_bound=len(cards),
-        ambiguous_codes=sum(
-            1 for urls in card_urls_by_code.values() if len(urls) > 1
-        ),
+        ambiguous_codes=sum(1 for urls in card_urls_by_code.values() if len(urls) > 1),
         source_sha256=source_sha256,
     )
 
@@ -1515,7 +1506,10 @@ def build_source_index(
             for digest, source_name in config.datasets.items()
             if source_name == OWN_STORE_LABELLED_OE_SOURCE
         }
-        if declared_owner_hashes and owner_load.source_sha256 not in declared_owner_hashes:
+        if (
+            declared_owner_hashes
+            and owner_load.source_sha256 not in declared_owner_hashes
+        ):
             raise CatalogIdentityReparseError(
                 "Owner store export has an undeclared sha256; refresh the "
                 "identity graph dataset manifest before admitting it: "
@@ -1642,9 +1636,7 @@ def _owner_evidence_sources(
                 f"label={label}" if label else "",
                 f"source_url={source_url}" if source_url else "",
                 f"source_path={source_path}" if source_path else "",
-                f"publisher={item.get('publisher')}"
-                if item.get("publisher")
-                else "",
+                f"publisher={item.get('publisher')}" if item.get("publisher") else "",
                 f"source_version={item.get('source_version')}"
                 if item.get("source_version")
                 else "",
@@ -1793,9 +1785,7 @@ def plan_identity(
         config=config,
         shared_article_numbers=index.shared_articles,
         source_semantic_conflict=bool(source_semantic_conflicts),
-        public_number_semantic_fanout=frozenset(
-            index.semantic_fanout_conflicts
-        ),
+        public_number_semantic_fanout=frozenset(index.semantic_fanout_conflicts),
     )
     public_number_semantic_conflicts = {
         number: index.semantic_fanout_conflicts[number]
@@ -1819,9 +1809,7 @@ def plan_identity(
                     if link.validation_status is LinkStatus.CONFIRMED
                     else "0"
                 ),
-                "automatic_eligible": (
-                    link.validation_status is LinkStatus.CONFIRMED
-                ),
+                "automatic_eligible": (link.validation_status is LinkStatus.CONFIRMED),
                 "own_code": code,
                 "internal_catalog_codes": list(internal_codes),
                 "reference_lookup_codes": lookup_codes,
@@ -1834,9 +1822,7 @@ def plan_identity(
                     link.extracted_oem_norm, {}
                 ),
                 "source_semantic_conflicts": source_semantic_conflicts,
-                "public_number_semantic_conflicts": (
-                    public_number_semantic_conflicts
-                ),
+                "public_number_semantic_conflicts": (public_number_semantic_conflicts),
                 "semantic_feature_extractor_version": (
                     SEMANTIC_FEATURE_EXTRACTOR_VERSION
                 ),
@@ -1989,6 +1975,7 @@ async def reparse_workspace_identity(
     session: AsyncSession,
     *,
     workspace_id: UUID,
+    import_batch_id: UUID | None = None,
     index: SourceIndex,
     config: IdentityGraphConfig,
     tokens: KempSiteTokensConfig,
@@ -1998,7 +1985,11 @@ async def reparse_workspace_identity(
     """Apply the plan for every catalogue row of one workspace."""
 
     report = ReparseReport(dry_run=dry_run)
-    existing = await _existing_link_keys(session, workspace_id=workspace_id)
+    existing = await _existing_link_keys(
+        session,
+        workspace_id=workspace_id,
+        import_batch_id=import_batch_id,
+    )
     produced: set[tuple[UUID, str, str, str]] = set()
 
     if not dry_run:
@@ -2007,9 +1998,17 @@ async def reparse_workspace_identity(
         # one transaction, so a failed partial reparse rolls back instead of
         # leaving a half-disabled graph.  This also handles catalog-row changes
         # where method/config hashes alone cannot distinguish an obsolete edge.
+        stale_scope = CatalogIdentityLink.workspace_id == workspace_id
+        if import_batch_id is not None:
+            stale_scope = stale_scope & CatalogIdentityLink.catalog_item_id.in_(
+                select(CatalogItem.id).where(
+                    CatalogItem.workspace_id == workspace_id,
+                    CatalogItem.import_batch_id == import_batch_id,
+                )
+            )
         await session.execute(
             update(CatalogIdentityLink)
-            .where(CatalogIdentityLink.workspace_id == workspace_id)
+            .where(stale_scope)
             .values(
                 validation_status=LinkStatus.REVIEW.value,
                 anomaly=ANOMALY_STALE_AFTER_REPARSE,
@@ -2018,12 +2017,15 @@ async def reparse_workspace_identity(
 
     offset = 0
     while True:
+        item_query = select(CatalogItem).where(CatalogItem.workspace_id == workspace_id)
+        if import_batch_id is not None:
+            item_query = item_query.where(
+                CatalogItem.import_batch_id == import_batch_id
+            )
         rows = (
             (
                 await session.execute(
-                    select(CatalogItem)
-                    .where(CatalogItem.workspace_id == workspace_id)
-                    .order_by(CatalogItem.source_row)
+                    item_query.order_by(CatalogItem.source_row)
                     .offset(offset)
                     .limit(batch_size)
                 )
@@ -2035,10 +2037,9 @@ async def reparse_workspace_identity(
             break
         offset += len(rows)
         for item in rows:
-            # The join key is the code column, not ``sku``: the importer puts
-            # Prom's own product id in ``sku`` (1153724202), and none of the 4647
-            # rows matches a reference code through it. Measured 2026-07-31:
-            # ``oe_norm`` matches 550.
+            # Stage 7 joins through the dedicated private KEMP code.  ``sku``
+            # is a Prom/export identifier and ``oe_norm`` is public identity;
+            # using either here collapses distinct identity domains.
             owner_evidence: tuple[Mapping[str, Any], ...] = ()
             if _owner_card_url_is_safe(item.product_url or ""):
                 owner_evidence = tuple(
@@ -2052,8 +2053,8 @@ async def reparse_workspace_identity(
                     )
                 )
             plan = plan_identity(
-                own_code=item.oe_norm or "",
-                code_raw=item.oe_raw or "",
+                own_code=item.internal_code_norm or "",
+                code_raw=item.internal_code_raw or "",
                 part_numbers_raw=list(item.part_numbers_raw or ()),
                 current_oe_norm=item.oe_norm or "",
                 index=index,
@@ -2061,7 +2062,7 @@ async def reparse_workspace_identity(
                 tokens=tokens,
                 owner_oe_evidence=owner_evidence,
             )
-            _record_plan(report, plan, index, item.oe_norm or "")
+            _record_plan(report, plan, index, item.internal_code_norm or "")
             for link in plan.links:
                 key = (
                     item.id,
@@ -2135,18 +2136,22 @@ def _apply_item_fields(item: CatalogItem, plan: ItemPlan) -> None:
 
 
 async def _existing_link_keys(
-    session: AsyncSession, *, workspace_id: UUID
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    import_batch_id: UUID | None = None,
 ) -> set[tuple[UUID, str, str, str]]:
-    rows = (
-        await session.execute(
-            select(
-                CatalogIdentityLink.catalog_item_id,
-                CatalogIdentityLink.our_oem_norm,
-                CatalogIdentityLink.extracted_oem_norm,
-                CatalogIdentityLink.extraction_method,
-            ).where(CatalogIdentityLink.workspace_id == workspace_id)
-        )
-    ).all()
+    query = select(
+        CatalogIdentityLink.catalog_item_id,
+        CatalogIdentityLink.our_oem_norm,
+        CatalogIdentityLink.extracted_oem_norm,
+        CatalogIdentityLink.extraction_method,
+    ).where(CatalogIdentityLink.workspace_id == workspace_id)
+    if import_batch_id is not None:
+        query = query.join(
+            CatalogItem, CatalogItem.id == CatalogIdentityLink.catalog_item_id
+        ).where(CatalogItem.import_batch_id == import_batch_id)
+    rows = (await session.execute(query)).all()
     return {
         (item_id, our_oem, extracted_oem, method)
         for item_id, our_oem, extracted_oem, method in rows

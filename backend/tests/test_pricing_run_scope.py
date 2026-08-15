@@ -403,6 +403,29 @@ def test_each_semantic_comparability_input_changes_scope_hash(
     )
 
 
+def test_the_frozen_snapshot_carries_the_listing_unit() -> None:
+    """The seed's commercial basis is an execution input, so it must freeze.
+
+    It did not, and the consequence was invisible: ``characteristics_raw`` rode
+    the snapshot so ``condition`` arrived, while ``Одиниця_виміру`` sits in
+    ``raw_row`` which the snapshot never carried.  A whole run of reviews
+    compared UNKNOWN unit basis on our side and admitted nothing.
+    """
+
+    candidate = _candidate(measure_unit="шт.")
+    snapshot = _catalog_item_snapshot(candidate)
+
+    assert snapshot["measure_unit"] == "шт."
+    assert frozen_catalog_item_from_snapshot(snapshot).measure_unit == "шт."
+
+
+def test_a_snapshot_frozen_before_the_unit_existed_still_loads() -> None:
+    snapshot = dict(_catalog_item_snapshot(_candidate()))
+    snapshot.pop("measure_unit", None)
+
+    assert frozen_catalog_item_from_snapshot(snapshot).measure_unit is None
+
+
 def test_bounded_execution_does_not_read_live_semantic_catalog_edits() -> None:
     candidate = _candidate(
         description="Заморожений опис",
@@ -620,6 +643,15 @@ def test_scope_counts_missing_identity_without_counting_a_network_input() -> Non
         "worst_case_duration_seconds": 0,
         "network_eligible_items": 0,
         "identity_blocked_items": 2,
+        "oem_items": 0,
+        "no_oem_items": 2,
+        "kemp_linked_items": 0,
+        "kemp_unlinked_items": 2,
+        "kemp_ambiguous_items": 0,
+        "expected_prom_queries": 2,
+        "luna_item_limit": 20,
+        "max_provider_calls": 20,
+        "estimated_ai_cost": None,
     }
 
 

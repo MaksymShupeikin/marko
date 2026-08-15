@@ -512,6 +512,18 @@ class _FakeSession:
             if isinstance(value, MarketObservation) and value.id is None:
                 value.id = uuid4()
 
+    def begin_nested(self):
+        session = self
+
+        class _Nested:
+            async def __aenter__(self) -> _FakeSession:
+                return session
+
+            async def __aexit__(self, *_exc: object) -> None:
+                return None
+
+        return _Nested()
+
 
 async def _persist(
     payload: dict,
@@ -561,6 +573,7 @@ async def _persist(
         prepared_url=output.prepared_url,
         acquisition_input_hash=output.input_hash,
         acquisition_query=output.acquisition_query,
+        requested_query=output.requested_query,
     )
     return next(
         value for value in session.added if isinstance(value, MarketObservation)
@@ -598,6 +611,35 @@ async def test_public_identity_never_falls_back_to_private_catalog_code() -> Non
         == OeVerificationStatus.VERIFIED_EXACT.value
     )
     assert observation.verified_matched_oe_norm == OUR_OE
+
+
+@pytest.mark.asyncio
+async def test_seed_motors_page_on_compatible_oe_does_not_fail_the_item() -> None:
+    """Canary OE 578128: the owned card is grouped under a different Prom OE.
+
+    The frozen catalog identity stays 578128. Prom's motors page on that
+    listing is 4A0412249 (VAG). Persist used to compare the *page* number to
+    the catalog and raise ACQUISITION_QUERY_BINDING_ERROR. The input query
+    is still the frozen identity; the page number is retrieval.
+    """
+
+    catalog_oe = "578128"
+    page_oe = "4A0412249"
+    payload = _payload(query=catalog_oe)
+    payload["output"]["acquisition"]["queried_oe_norm"] = page_oe
+    for record in payload["output"]["records"]:
+        record["acquisition"]["queried_oe_norm"] = page_oe
+    summary = payload["output"].get("comparison_summary")
+    if isinstance(summary, dict):
+        summary["query"] = page_oe
+
+    observation, _ = await _persist(payload, catalog_oe=catalog_oe)
+
+    assert observation.search_oe_norm == catalog_oe
+    assert (
+        observation.source_assertion_queried_oe_norm == page_oe
+        or observation.source_assertion_queried_oe_norm is None
+    )
 
 
 @pytest.mark.asyncio

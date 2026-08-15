@@ -69,9 +69,9 @@ def test_a_placeholder_price_does_not_set_the_target() -> None:
 
     decision = _decide([1, 1200, 1300, 1400], current=2747)
 
-    # 1200 * 0.98 = 1176, and 1200 * 0.95 = 1140.
+    # The accepted floor is 1200, so the fixed target is 1200 * 0.95 = 1140.
     assert decision.outcome is RaiseOutcome.LOWER
-    assert decision.recommended_price == Decimal("1176")
+    assert decision.recommended_price == Decimal("1140")
     assert decision.fair_price == Decimal("1200")
     assert FLAG_IMPLAUSIBLE_EXCLUDED_FROM_TARGET in decision.flags
     assert decision.excluded_implausible_count == 1
@@ -104,7 +104,7 @@ def test_removing_junk_can_turn_a_cut_into_a_raise() -> None:
     guarded = _decide([200, 1200, 1300, 1400], current=1000)
 
     assert guarded.outcome is RaiseOutcome.RAISE
-    assert guarded.recommended_price == Decimal("1176")
+    assert guarded.recommended_price == Decimal("1140")
     assert guarded.fair_price == Decimal("1200")
     assert guarded.excluded_implausible_count == 1
 
@@ -122,7 +122,7 @@ def test_removing_junk_can_turn_a_cut_into_a_raise() -> None:
     assert unguarded.outcome is RaiseOutcome.SHOW_BUT_FLAG
     assert unguarded.recommended_price is None
     assert unguarded.fair_price == Decimal("200")
-    assert "CUT_FROM_ISOLATED_FLOOR" in unguarded.reasons
+    assert "FLOOR_MATERIALLY_BELOW_NEXT_SELLER" in unguarded.reasons
 
 
 def test_a_sub_tick_placeholder_was_already_withheld() -> None:

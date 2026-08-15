@@ -117,9 +117,9 @@ def test_export_exposes_gated_customer_target_without_calling_it_automatic() -> 
         calculation_trace={
             "advisory_decision": {
                 "action": "LOWER",
-                "recommended_price": "980",
+                "recommended_price": "950",
                 "target_band_low": "950",
-                "target_band_high": "980",
+                "target_band_high": "950",
                 "automatic_price_application": False,
             }
         },
@@ -140,9 +140,9 @@ def test_export_exposes_gated_customer_target_without_calling_it_automatic() -> 
     assert row["action"] == "MANUAL_REVIEW"
     assert row["recommended_price"] == ""
     assert row["customer_advisory_action"] == "LOWER"
-    assert row["customer_advisory_price"] == "980 UAH"
+    assert row["customer_advisory_price"] == "950 UAH"
     assert row["customer_target_band_low"] == "950 UAH"
-    assert row["customer_target_band_high"] == "980 UAH"
+    assert row["customer_target_band_high"] == "950 UAH"
     assert row["automatic_price_application"] == "false"
 
 
@@ -225,13 +225,18 @@ def test_export_downgrades_legacy_mpn_price_decision_to_manual_review() -> None:
 @pytest.mark.asyncio
 async def test_export_refuses_more_than_the_documented_limit(monkeypatch) -> None:
     async def too_many(*_args, **_kwargs):
-        return [], 5001, uuid4(), {
-            "raise": 0,
-            "lower": 0,
-            "review": 0,
-            "hold": 0,
-            "total": 5001,
-        }
+        return (
+            [],
+            5001,
+            uuid4(),
+            {
+                "raise": 0,
+                "lower": 0,
+                "review": 0,
+                "hold": 0,
+                "total": 5001,
+            },
+        )
 
     monkeypatch.setattr(recommendation_export, "list_recommendations", too_many)
 

@@ -24,6 +24,10 @@ from marko.services.market_collection import (
     reset_pricing_item_for_retry,
 )
 from marko.services.ai_evidence_shadow import process_ai_evidence_position
+from marko.services.no_oe_pricing import (
+    fail_no_oe_discovery_batch,
+    process_no_oe_discovery_item,
+)
 from marko.services.scraper_outbox import publish_dispatch
 from marko.services.oe_reenrichment import re_enrich_retained_observations
 from marko.worker.async_runtime import run_async
@@ -109,6 +113,43 @@ def process_pricing_item_task(self, run_item_id: str) -> str:
             raise
         run_async(reset_pricing_item_for_retry(item_id, exc))
         raise self.retry(exc=exc, countdown=min(300, 10 * (2**self.request.retries)))
+
+
+@celery_app.task(
+    name="marko.worker.process_no_oe_discovery_item",
+    bind=True,
+    max_retries=2,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=settings.no_oe_discovery_task_soft_time_limit_seconds,
+    time_limit=settings.no_oe_discovery_task_time_limit_seconds,
+)
+def process_no_oe_discovery_item_task(self, run_item_id: str) -> str:
+    item_id = UUID(run_item_id)
+    try:
+        run_id = run_async(process_no_oe_discovery_item(item_id))
+        if run_id is not None:
+            _enqueue_collection_finalizer(run_id, trigger_id=item_id)
+        return "skipped" if run_id is None else str(run_id)
+    except Exception as exc:
+        error_code = str(getattr(exc, "code", "")).upper()
+        source_blocked = any(
+            marker in error_code
+            for marker in ("403", "429", "CAPTCHA", "CHALLENGE", "ACCESS_BLOCKED")
+        )
+        if source_blocked:
+            run_id = run_async(get_pricing_item_run_id(item_id))
+            run_async(fail_no_oe_discovery_batch(item_id, exc))
+            if run_id is not None:
+                _enqueue_collection_finalizer(run_id, trigger_id=item_id)
+            raise
+        if self.request.retries >= self.max_retries:
+            run_id = run_async(get_pricing_item_run_id(item_id))
+            run_async(fail_pricing_item(item_id, exc))
+            if run_id is not None:
+                _enqueue_collection_finalizer(run_id, trigger_id=item_id)
+            raise
+        raise self.retry(exc=exc, countdown=min(300, 30 * (2**self.request.retries)))
 
 
 @celery_app.task(
