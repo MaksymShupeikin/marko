@@ -865,6 +865,11 @@ async def test_an_out_of_stock_listing_is_not_reviewed_at_all() -> None:
     assert resolved == "persisted", "an out-of-stock offer must not reach the provider"
     assert persisted["error_code"] == "CANDIDATE_NOT_AVAILABLE"
     assert persisted["provider_review"] is None
+    # Not SKIPPED: ``ck_candidate_comparability_review_failure_verdict`` demands
+    # INSUFFICIENT_DATA there, and an unavailable candidate projects to
+    # NOT_COMPARABLE.  Writing SKIPPED failed the insert and took five of eight
+    # positions down with it.
+    assert persisted["status"] == "HARD_STOP"
 
 
 async def test_unproven_availability_is_still_reviewed() -> None:

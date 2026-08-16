@@ -57,6 +57,9 @@ from .types import (
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
+# Non-budget-floor strategies keep the statistical cohort floor they were
+# calibrated against; only the owner's budget-floor policy names its own.
+_LEGACY_COHORT_MINIMUM = 3
 
 
 def recommend_price(
@@ -399,7 +402,13 @@ def _recommend_price_core(
             unknown_hard_fields = tuple(
                 dict.fromkeys((*unknown_hard_fields, "llm_comparability"))
             )
-    if unique_count < 3:
+    # A cohort floor of three is the statistical default; the budget-floor owner
+    # asked for two independent sellers behind a price and that is a policy
+    # number, so read it from the raise policy rather than from this literal.
+    cohort_minimum = (
+        raise_policy.min_evidence if budget_floor_mode else _LEGACY_COHORT_MINIMUM
+    )
+    if unique_count < cohort_minimum:
         return _result_without_market_action(
             context,
             policy,
@@ -470,7 +479,7 @@ def _recommend_price_core(
     else:
         cleaned, outliers, outlier_method = _clean_outliers(deduplicated, policy)
     excluded.extend(outliers)
-    if len(cleaned) < 3:
+    if len(cleaned) < cohort_minimum:
         return _result_without_market_action(
             context,
             policy,
@@ -601,7 +610,18 @@ def _recommend_price_core(
     )
     if len(cleaned) < action_min_competitors:
         reasons.append("TOO_FEW_COMPETITORS_FOR_ACTION")
-    if n_effective < policy.min_effective_competitors:
+    # The effective-sample floor guards a weighted central estimate against a
+    # cohort that is nominally large but dominated by one offer.  Budget-floor
+    # takes the cheapest admitted price outright -- no weighting, no central
+    # estimate -- so the guard would only re-impose a cohort size the owner has
+    # already decided.  Hold it to the same two-seller floor instead of the
+    # estimator's three.
+    min_effective = (
+        Decimal(raise_policy.min_evidence)
+        if budget_floor_mode
+        else policy.min_effective_competitors
+    )
+    if n_effective < min_effective:
         reasons.append("LOW_EFFECTIVE_SAMPLE_SIZE")
     failed_factors = [
         name for name, score in factors.items() if score < policy.floor_for(name)
@@ -617,7 +637,7 @@ def _recommend_price_core(
     action_gates_pass = (
         not data_health_issues
         and len(cleaned) >= action_min_competitors
-        and n_effective >= policy.min_effective_competitors
+        and n_effective >= min_effective
         and confidence >= policy.confidence_min
         and not failed_factors
         and (budget_floor_mode or sensitivity <= policy.sensitivity_tolerance)

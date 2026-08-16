@@ -96,10 +96,26 @@ def test_a_raise_is_never_withheld_by_isolation() -> None:
     assert decision.recommended_price == Decimal("190")
 
 
-def test_isolation_is_not_judged_without_a_cohort_to_be_isolated_from() -> None:
-    """Two offers have no interquartile shape; the shipped min_evidence is three."""
+def test_two_offers_are_a_cohort_but_a_lone_low_floor_is_still_held_back() -> None:
+    """Two offers now clear ``min_evidence`` (owner, 2026-08-15).
+
+    They have no interquartile shape, so the isolation test cannot run -- which
+    is exactly why the corroboration rule matters more at this size, not less.
+    Nothing stands with 200 against 1400, so the cut is shown and flagged
+    instead of applied.
+    """
 
     decision = _decide([200, 1400], current=1000)
+
+    assert decision.outcome is RaiseOutcome.SHOW_BUT_FLAG
+    assert "TOO_FEW_PRICING_EVIDENCE" not in decision.reasons
+    # This helper carries no seller identities, so corroboration cannot be
+    # judged at all -- which is itself a reason to withhold the cut.
+    assert FLAG_FLOOR_CORROBORATION_UNAVAILABLE in decision.flags
+
+
+def test_a_single_offer_is_still_not_pricing_evidence() -> None:
+    decision = _decide([200], current=1000)
 
     assert decision.outcome is RaiseOutcome.NO_DATA
     assert "TOO_FEW_PRICING_EVIDENCE" in decision.reasons

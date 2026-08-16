@@ -225,3 +225,50 @@ def test_observation_json_payload_can_contain_decimal_integrity_context() -> Non
     assert decoded["semantic_gate"]["score"] == "0.9800"
     assert decoded["source_confidence_factors"]["listing_identity"] == "1"
     assert decoded["offer_integrity"]["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "description",
+    (
+        "Технічний стан: товар новий, не був у використанні, без пошкоджень та пошкоджень",
+        "Новий, без дефектів та подряпин, оригінальна упаковка",
+        "Состояние отличное, без повреждений и царапин",
+        "Без будь-яких пошкоджень, гарантія 6 місяців",
+    ),
+)
+def test_asserting_no_damage_is_not_damage(description: str) -> None:
+    """«Без пошкоджень» is the seller promising integrity, not reporting a defect.
+
+    Three exact-OE VW T4 sliding-door carriages were parked to manual review by
+    their own "brand new, undamaged" boilerplate.
+    """
+
+    assessment = assess_offer_integrity(
+        title="Візок з розсувними дверима VW T4",
+        description=description,
+        is_available=True,
+        detail_evidence_safe=True,
+    )
+
+    assert assessment.status is OfferIntegrityStatus.PASS
+    assert "DAMAGED_OR_INCOMPLETE" not in assessment.reason_codes
+
+
+@pytest.mark.parametrize(
+    "description",
+    (
+        "Є невеликий дефект корпусу, дивіться фото",
+        "Пошкоджений роз'єм, потребує пайки",
+        "Некомплект: без кронштейна",
+    ),
+)
+def test_a_real_defect_still_requires_review(description: str) -> None:
+    assessment = assess_offer_integrity(
+        title="Автодеталь",
+        description=description,
+        is_available=True,
+        detail_evidence_safe=True,
+    )
+
+    assert assessment.status is OfferIntegrityStatus.MANUAL_REVIEW
+    assert "DAMAGED_OR_INCOMPLETE" in assessment.reason_codes

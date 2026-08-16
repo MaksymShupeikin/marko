@@ -27,12 +27,18 @@ from metis.pricing.raise_policy import (
     decide_raise,
     load_raise_policy,
 )
+from marko.core.config import Settings
 from marko.services.market_collection import (
     apply_comparability_activation_gate,
     customer_budget_floor_trace,
+    resolve_comparability_activation,
 )
 from marko.services.cost_privacy import privacy_safe_mapping
-from marko.services.pricing_runs import execution_policy_hash, policy_to_dict
+from marko.services.pricing_runs import (
+    _raise_policy_from_snapshot,
+    execution_policy_hash,
+    policy_to_dict,
+)
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -274,6 +280,102 @@ def test_engine_collapses_related_sellers_for_floor_corroboration() -> None:
 
     assert "FLOOR_CORROBORATION_BY_RELATED_SELLERS" in result.reasons
     assert "FLOOR_RESTS_ON_ONE_SELLER" in result.reasons
+
+
+def test_the_per_strategy_seller_counts_survive_a_run_snapshot() -> None:
+    # ``min_evidence`` and ``medium_min_evidence`` are now per-strategy entries
+    # in the yaml.  A run freezes its policy and reads it back through the
+    # snapshot, so a key the loader accepts but the snapshot drops would leave
+    # the run silently pricing under the shipped defaults instead.
+    stored = policy_to_dict(replace(PricingPolicy(), raise_policy=BUDGET_POLICY))
+    restored = _raise_policy_from_snapshot(stored["raise_policy"])
+
+    assert restored == BUDGET_POLICY
+    assert restored.strategy is RaiseStrategy.BUDGET_FLOOR
+    assert restored.min_evidence == 2
+    assert restored.medium_min_evidence == 2
+    assert restored.tier_agnostic is True
+
+
+def test_two_independent_sellers_are_enough_to_reach_a_number() -> None:
+    # The owner's floor is two independent sellers.  Every count threshold in
+    # the chain -- cohort admission, post-cleaning, action gating and the
+    # effective-sample guard -- has to agree, or the run produces a cohort and
+    # still refuses to name a price.
+    offers = [
+        _offer(0, "1000", tier=ProductTier.BUDGET),
+        _offer(1, "1000", tier=ProductTier.BUDGET),
+    ]
+
+    result = _engine_result("2000", offers)
+
+    assert result.unique_seller_count == 2
+    assert result.action_gates_passed
+    assert result.recommended_price == Decimal("950")
+    assert "TOO_FEW_COMPETITORS" not in result.reasons
+    assert "LOW_EFFECTIVE_SAMPLE_SIZE" not in result.reasons
+
+
+def test_a_lone_floor_is_recorded_even_when_the_cut_still_applies() -> None:
+    # The target is the cheapest of the two, and only one seller stands at it.
+    # That fact is always reported; on its own it does not withhold the price,
+    # because the prices are close enough that the floor is not suspicious.
+    offers = [
+        _offer(0, "1000", tier=ProductTier.BUDGET),
+        _offer(1, "1200", tier=ProductTier.BUDGET),
+    ]
+
+    result = _engine_result("2000", offers)
+
+    assert result.recommended_price == Decimal("950")
+    assert "FLOOR_RESTS_ON_ONE_SELLER" in result.reasons
+
+
+def test_a_lone_floor_far_below_the_next_seller_is_held_back() -> None:
+    # Same two-seller cohort, but 200 against 1400 is not a market price until
+    # somebody confirms it.
+    offers = [
+        _offer(0, "200", tier=ProductTier.BUDGET),
+        _offer(1, "1400", tier=ProductTier.BUDGET),
+    ]
+
+    result = _engine_result("1000", offers)
+
+    assert result.recommended_price is None
+    assert "FLOOR_RESTS_ON_ONE_SELLER" in result.reasons
+
+
+def test_a_single_seller_is_still_not_a_market() -> None:
+    result = _engine_result("2000", [_offer(0, "1000", tier=ProductTier.BUDGET)])
+
+    assert result.recommended_price is None
+    assert "TOO_FEW_COMPETITORS" in result.reasons
+
+
+def test_a_tier_priced_policy_keeps_its_own_cohort_floor() -> None:
+    # Only the owner's budget-floor strategy names its cohort size; the
+    # statistical strategies keep the three they were calibrated against.
+    offers = [
+        _offer(0, "1000", tier=ProductTier.BUDGET),
+        _offer(1, "1200", tier=ProductTier.BUDGET),
+    ]
+
+    result = recommend_price(
+        ProductPricingContext(
+            sku="OWNER-BUDGET-1",
+            category="brakes",
+            current_price=Decimal("2000"),
+        ),
+        offers,
+        {},
+        policy=PricingPolicy(
+            version="pricing-v2",
+            raise_policy=replace(BUDGET_POLICY, strategy=RaiseStrategy.BALANCED),
+        ),
+    )
+
+    assert result.recommended_price is None
+    assert "TOO_FEW_COMPETITORS" in result.reasons
 
 
 def test_budget_floor_holds_price_already_inside_customer_band() -> None:
@@ -695,3 +797,63 @@ def test_comparability_gate_keeps_advisory_math_but_blocks_auto_action() -> None
     assert gated.recommended_price is None
     assert not gated.automatic_eligible
     assert "COMPARABILITY_AUTOMATIC_ACTIVATION_BLOCKED" in gated.reasons
+
+
+def _activation_settings(**overrides: object) -> Settings:
+    return Settings(**{"environment": "test", **overrides})  # type: ignore[arg-type]
+
+
+def test_owner_flag_opens_activation_outside_production() -> None:
+    verified, basis = resolve_comparability_activation(
+        _activation_settings(pricing_comparability_v1_automatic_enabled=True)
+    )
+
+    assert verified is True
+    assert basis == "owner_flag"
+
+
+def test_activation_stays_closed_without_the_owner_flag() -> None:
+    verified, basis = resolve_comparability_activation(_activation_settings())
+
+    assert verified is False
+    assert basis == "closed"
+
+
+@pytest.mark.parametrize("environment", ["production", "staging", "prodcution"])
+def test_unrecognized_or_production_environment_still_demands_the_artifact(
+    environment: str,
+) -> None:
+    # Anything outside the explicit dev set fails closed -- a typo'd
+    # ENVIRONMENT must not open a release gate the config validator no
+    # longer guards.
+    verified, basis = resolve_comparability_activation(
+        _activation_settings(
+            environment=environment,
+            firebase_project_id="marko-prod",
+            allowed_hosts="marko.example.com",
+            pricing_comparability_v1_automatic_enabled=True,
+            pricing_comparability_activation_artifact="/nonexistent/artifact.json",
+            pricing_comparability_activation_sha256="0" * 64,
+        )
+    )
+
+    assert verified is False
+    assert basis == "closed"
+
+
+def test_a_configured_artifact_is_validated_even_in_dev(tmp_path: Path) -> None:
+    # Setting the artifact fields in a dev environment opts back into the
+    # production contract: a broken artifact closes the gate instead of
+    # being ignored in favour of the flag.
+    broken = tmp_path / "activation.json"
+    broken.write_text("{}", encoding="utf-8")
+    verified, basis = resolve_comparability_activation(
+        _activation_settings(
+            pricing_comparability_v1_automatic_enabled=True,
+            pricing_comparability_activation_artifact=str(broken),
+            pricing_comparability_activation_sha256="0" * 64,
+        )
+    )
+
+    assert verified is False
+    assert basis == "closed"

@@ -216,12 +216,25 @@ _DEFAULT_CATEGORY_DOMAIN_NON_AUTOMOTIVE_MARKERS: Mapping[str, list[str]] = {
         "lenovo",
         "gap",
     ],
+    "regex": [
+        # Ukrainian "ніж" normalizes to "ниж" (``norm_text`` folds і into и),
+        # and after that the knife is indistinguishable from the conjunction
+        # "ніж" ("than").  As a prefix the marker swallowed "нижнього важеля"
+        # and every other lower control arm; as a whole word it still killed an
+        # Audi 100 tie rod end carrying the exact OE 4A0419812A, because the
+        # reseller boilerplate says "Перш ніж купити, варто порівняти номер".
+        # One deny marker rejects the listing outright, so both forms were
+        # broad words -- exactly what this set is documented not to hold.
+        # The discriminator is position: a knife being sold is the first word
+        # of the title, and the conjunction never is.  ``semantic_text`` is
+        # built title-first and ``norm_text`` pads with a leading space.
+        r"^ ниж\b",
+    ],
     "prefixes": [
         "витамин",
         "добавк",
         "коллаген",
         "нож",
-        "ниж",
         "лезви",
         "фотофон",
         "фотозон",
@@ -229,7 +242,13 @@ _DEFAULT_CATEGORY_DOMAIN_NON_AUTOMOTIVE_MARKERS: Mapping[str, list[str]] = {
         "ноутбук",
         "компьютер",
         "смартфон",
-        "телефон",
+        # No bare "телефон" here, deliberately -- see comparability.yaml.  The
+        # markers match on substring, and on Prom the word is the seller's
+        # contact line ("телефон для замовлення"), not the product.  It rejected
+        # a VW Crafter viscous-coupling bearing carrying an exact OE match while
+        # "vw" was firing as an automotive marker in the same listing.  A real
+        # phone or phone accessory is still caught by "смартфон" and by
+        # "для телефона" below, and by the category blocklist.
         "планшет",
         "клавиатур",
         "монитор",

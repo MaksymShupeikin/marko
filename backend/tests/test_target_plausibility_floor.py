@@ -181,13 +181,19 @@ def test_the_floor_is_inclusive(price, kept) -> None:
 
 
 def test_confidence_counts_the_offers_that_set_the_target() -> None:
-    """Grading on discarded evidence would overstate a thin basis."""
+    """Grading on discarded evidence would overstate a thin basis.
+
+    Both cohorts hold four prices; only the second has four that count.  The
+    thin one is graded on the two survivors -- MEDIUM under the owner's
+    two-seller boundary -- and would read HIGH if the discarded pair still
+    counted, which is the mistake this guards against.
+    """
 
     thin = _decide([1, 2, 1200, 1300], current=1000)
     full = _decide([1200, 1300, 1400, 1500], current=1000)
 
     assert thin.excluded_implausible_count == 2
-    assert thin.confidence is RaiseConfidence.LOW
+    assert thin.confidence is RaiseConfidence.MEDIUM
     assert full.confidence is RaiseConfidence.HIGH
 
 

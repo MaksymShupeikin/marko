@@ -4516,3 +4516,95 @@ def test_engine_mount_wording_is_unchanged(title: str) -> None:
     features = extract_semantic_features({"title": title})
 
     assert features["part_subtype"].values == ("engine_or_transmission_mount",)
+
+
+@pytest.mark.parametrize(
+    "title",
+    (
+        "Протитуманна фара Audi 100 91-94 ліва (FPS) 4A0941699",
+        "Протитуманна фара для AUDI 100 '91-94 ліва (Depo)",
+        "Фара противотуманна AUDI 100 C4 Avant DEPO 441-2026L-UE",
+        "Ліва Протитуманка Audi 100 C4 1991-1994 без лінзи",
+        "Противотуманка Audi (Ауді)-100 91-94 L левая",
+    ),
+)
+def test_ukrainian_fog_lamp_wording_reaches_its_own_subtype(title: str) -> None:
+    """Adjective-first Ukrainian wording is the same part as the seed's noun.
+
+    Six offers carrying the exact OE 4A0941699 met the pricing gate with no
+    part family at all, because the lexicon knew "протитуманка" and the
+    Russian "фара противотуманная" but not "протитуманна фара".
+    """
+
+    features = extract_semantic_features({"title": title})
+
+    assert features["part_family"].values == ("vehicle_lighting",)
+    assert features["part_subtype"].values == ("fog_lamp",)
+
+
+def test_fog_lamp_frame_still_outranks_the_lamp_itself() -> None:
+    features = extract_semantic_features(
+        {"title": "Рамка кріплення протитуманної фари Skoda Octavia"}
+    )
+
+    assert features["part_subtype"].values == ("fog_lamp_frame",)
+
+
+def test_applicability_table_engine_power_is_not_a_part_power_rating() -> None:
+    """Vehicle engine power is not the part's own rating.
+
+    A Prom applicability table repeats one row per engine variant, and three
+    such rows made a fog lamp assert three contradictory power ratings, which
+    the pricing gate read as the listing contradicting itself.
+    """
+
+    features = extract_semantic_features(
+        {
+            "title": "Фара противотуманна AUDI 100 C4 Avant DEPO 441-2026L-UE",
+            "description": (
+                "AUDI 100 C4 Avant (4A5) [12/90-11/94] 2.0 E (1984ccm\\74kW\\100HP)\n"
+                "AUDI 100 C4 Avant (4A5) 2.0 E (1984ccm\\85kW\\115HP)\n"
+                "AUDI 100 C4 Avant (4A5) 2.0 E 16V (1984ccm\\103kW\\140HP)"
+            ),
+        }
+    )
+
+    assert features["power_rating"].values == ()
+
+
+def test_a_part_that_really_states_its_power_still_reports_it() -> None:
+    features = extract_semantic_features({"title": "Мотор пічки 0.15 кВт Renault Master"})
+
+    assert features["power_rating"].values == ("0.15kw",)
+
+
+@pytest.mark.parametrize(
+    "title",
+    (
+        "VW T4 90-04 Візок з розсувними дверима права ЦЕНТР",
+        "Каретка сдвижной двери VW Transporter T4 средняя",
+        "Візок зсувних дверей Volkswagen T4 середній з роликами",
+    ),
+)
+def test_sliding_door_carriage_wording_is_the_bracket(title: str) -> None:
+    """A carriage ("візок"/"каретка") is the part the OE catalogue calls a bracket.
+
+    Four exact-OE 701843336A listings met the pricing gate with no part family
+    at all, because the lexicon only knew the "кронштейн" wording for the VW T4
+    sliding-door roller carriage.
+    """
+
+    features = extract_semantic_features({"title": title})
+
+    assert features["part_family"].values == ("door_hardware",)
+    assert features["part_subtype"].values == ("sliding_door_bracket",)
+
+
+def test_a_plain_door_guide_still_asserts_no_carriage_subtype() -> None:
+    # "Направляюча" without the sliding-door wording stays family-less: a
+    # window or seat guide must not silently join the carriage cohort.
+    features = extract_semantic_features(
+        {"title": "Направляюча двері VW T4 California STARLINE JL 54333 UA"}
+    )
+
+    assert features["part_subtype"].values == ()

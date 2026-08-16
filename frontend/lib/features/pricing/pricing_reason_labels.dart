@@ -74,6 +74,14 @@ const pricingReasonTranslations = <String, PricingReasonTranslation>{
     ru: 'продавцы предложений неизвестны, подтвердить минимум было нечем',
     uk: 'продавці пропозицій невідомі, підтвердити мінімум було нічим',
   ),
+  'FLOOR_CORROBORATION_BY_RELATED_SELLERS': PricingReasonTranslation(
+    ru: 'минимум подтверждён только связанными между собой продавцами',
+    uk: 'мінімум підтверджено лише пов’язаними між собою продавцями',
+  ),
+  'FLAG_FLOOR_CORROBORATION_BY_RELATED_SELLERS': PricingReasonTranslation(
+    ru: 'минимум подтверждён только связанными между собой продавцами',
+    uk: 'мінімум підтверджено лише пов’язаними між собою продавцями',
+  ),
   'FLOOR_NOT_CORROBORATED_AS_REQUIRED': PricingReasonTranslation(
     ru: 'на минимуме нет требуемого числа независимых продавцов',
     uk: 'на мінімумі немає потрібної кількості незалежних продавців',

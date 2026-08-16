@@ -1001,6 +1001,80 @@ def test_semantic_domain_guard_rejects_non_automotive_text_under_auto_branch() -
     )
 
 
+@pytest.mark.parametrize(
+    ("label", "title"),
+    [
+        (
+            "нижний рычаг",
+            "08-45 Сайлентблок нижнього важеля Volkswagen Transporter (T4) 7D0407183",
+        ),
+        (
+            "наконечник рулевой тяги",
+            "Наконечник рульової тяги передній правий AUDI 100 C4 4A0419812A",
+        ),
+        (
+            "втулка стабилизатора",
+            "Поліуретанова втулка стійки стабілізатора переднього, нижня Di=11мм",
+        ),
+        ("шаровая нижняя", "Шаровая опора VW T4 нижняя"),
+    ],
+)
+def test_lower_suspension_wording_is_not_a_knife(label: str, title: str) -> None:
+    """Украинское "ніж" нормализуется в "ниж" и стояло среди префиксов.
+
+    Один маркер deny-списка отклоняет объявление целиком, поэтому префикс
+    съедал всю нижнюю подвеску: наконечник рулевой тяги Audi 100 с точным OE
+    4A0419812A отклонялся как неавтомобильный при живых маркерах
+    audi/авто/запчаст/автомоб/рул в том же тексте.
+    """
+
+    verdict = check_candidate(
+        _reference(),
+        _candidate(title=title, category_path=AUTOPART_PATH),
+        CONFIG,
+    )
+
+    assert verdict.reason != "CATEGORY_NOT_AUTOPARTS", label
+
+
+def test_reseller_boilerplate_conjunction_is_not_a_knife() -> None:
+    """«Перш ніж купити…» — шаблон продавца, а не товар.
+
+    Целым словом маркер тоже не годится: после свёртки і→и украинский нож
+    неотличим от союза «ніж», а этот абзац стоит в огромной доле объявлений
+    Prom. Различает позиция: нож стоит первым словом заголовка.
+    """
+
+    verdict = check_candidate(
+        _reference(),
+        _candidate(
+            title="Наконечник рульової тяги передній правий AUDI 100 C4 4A0419812A",
+            description=(
+                "Перш ніж купити, варто обов'язково порівняти номер запчастини "
+                "чи підходить дана запчастина за маркою та моделлю."
+            ),
+            category_path=AUTOPART_PATH,
+        ),
+        CONFIG,
+    )
+
+    assert verdict.reason != "CATEGORY_NOT_AUTOPARTS"
+
+
+def test_a_knife_titled_as_a_knife_is_still_rejected() -> None:
+    verdict = check_candidate(
+        _reference(),
+        _candidate(title="Ніж кухонний Tramontina 23861", category_path=AUTOPART_PATH),
+        CONFIG,
+    )
+
+    assert verdict.status is CandidateStatus.REJECTED
+    assert verdict.reason == "CATEGORY_NOT_AUTOPARTS"
+    assert verdict.details["gates"]["category_domain"]["mode"] == (
+        "SEMANTIC_NON_AUTOMOTIVE"
+    )
+
+
 def test_unknown_or_unapproved_category_without_auto_semantics_stays_nonterminal_until_adapter_gate() -> (
     None
 ):

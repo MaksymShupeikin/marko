@@ -28,7 +28,7 @@ from metis.pricing.candidate_selection import (
 
 
 SEMANTIC_PRICING_GATE_VERSION = (
-    "semantic-pricing-gate-v12-structured-identity-admission"
+    "semantic-pricing-gate-v13-blocking-dimension-set"
 )
 
 
@@ -105,6 +105,25 @@ def semantic_gate_snapshot_is_current(
 # evidence for an operator, but it must not enter a deterministic price cohort.
 SEMANTIC_PRICING_BASE_REQUIRED_DIMENSIONS = frozenset(
     {"condition", "package_quantity", "unit_basis"}
+)
+
+# Owner decision of 2026-08-15.  A dimension blocks a price only when getting it
+# wrong sells the customer the wrong thing: the part family, its condition, and
+# the unit the price is quoted in.  Everything else the extractor reads --
+# fuel_type, assembly_level, position, power_rating, the vehicle axes and the
+# rest of ``SEMANTIC_PRICING_CONFLICT_DIMENSIONS`` -- is still extracted, still
+# compared, still written into the review and still shown to the operator; it
+# simply no longer withholds a price on its own.
+#
+# The distinction is between an *explicit contradiction* and *silence*.  A
+# CONFLICT anywhere in ``SEMANTIC_PRICING_CONFLICT_DIMENSIONS`` remains a hard
+# stop, because two stated values that disagree are evidence of a different
+# part.  What changes here is the treatment of an asserted-but-unresolved
+# dimension: previously any of the thirty could hold the offer out of the
+# cohort by being merely unconfirmed, which on measured data was the single
+# largest source of "no price" after the unit fields.
+SEMANTIC_PRICING_BLOCKING_DIMENSIONS = frozenset(
+    {"part_type"} | SEMANTIC_PRICING_BASE_REQUIRED_DIMENSIONS
 )
 
 # A text-search hit with an explicit vehicle conflict is not safe to price:
@@ -277,6 +296,10 @@ def apply_semantic_pricing_gate(
         sorted(
             str(dimension)
             for dimension, comparison in matrix.get("comparisons", {}).items()
+            # Deliberately the wide set, not the blocking one.  An ambiguous
+            # source value is the listing contradicting itself about what it
+            # sells ("left right"), which is a conflict wearing different
+            # clothes -- not the silence that the blocking set narrows.
             if str(dimension) in SEMANTIC_PRICING_CONFLICT_DIMENSIONS
             and isinstance(comparison, Mapping)
             and comparison.get("source_values_ambiguous") is True
@@ -327,6 +350,18 @@ def apply_semantic_pricing_gate(
     # This boundary applies even to discovery callers that do not request the
     # full package/unit completeness contract; otherwise the UI could label a
     # richer but unresolved candidate as price evidence before persistence.
+    # Which asserted dimensions may withhold a price.  The persisted pricing
+    # caller applies the owner's blocking set (2026-08-15): an unresolved
+    # ``fuel_type`` or ``assembly_level`` is recorded and shown, but no longer
+    # holds the offer out of a cohort on its own.  Discovery keeps the wider
+    # contract, because there the question is whether to *label* a card as
+    # price evidence in the UI, and an unresolved sellable fact should stop that
+    # label before anything is persisted.
+    asserted_blocking = (
+        SEMANTIC_PRICING_BLOCKING_DIMENSIONS
+        if require_pricing_completeness
+        else SEMANTIC_PRICING_CONFLICT_DIMENSIONS
+    )
     candidate_asserted_missing: set[str] = set()
     for key in ("seed_asserted_dimensions", "candidate_asserted_dimensions"):
         raw_asserted = matrix.get(key)
@@ -334,10 +369,7 @@ def apply_semantic_pricing_gate(
             continue
         for raw_dimension in raw_asserted:
             dimension = str(raw_dimension).strip()
-            if (
-                not dimension
-                or dimension not in SEMANTIC_PRICING_CONFLICT_DIMENSIONS
-            ):
+            if not dimension or dimension not in asserted_blocking:
                 continue
             if not _comparison_is_match(matrix, dimension):
                 candidate_asserted_missing.add(dimension)
@@ -595,6 +627,7 @@ __all__ = [
     "SEMANTIC_FITMENT_REVIEW_DIMENSIONS",
     "SEMANTIC_PRICING_GATE_VERSION",
     "SEMANTIC_PRICING_BASE_REQUIRED_DIMENSIONS",
+    "SEMANTIC_PRICING_BLOCKING_DIMENSIONS",
     "semantic_gate_snapshot_is_current",
     "apply_semantic_pricing_gate",
     "category_required_semantic_conflicts",

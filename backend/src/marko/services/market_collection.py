@@ -24,7 +24,7 @@ from uuid import UUID
 
 from sqlalchemy import func, or_, select
 
-from marko.core.config import get_settings
+from marko.core.config import Settings, get_settings
 from marko.infrastructure.db.models import (
     BrandTierRule,
     CandidateComparabilityReview,
@@ -140,6 +140,7 @@ from marko.services.pricing_runs import (
     load_target_tier_coefficients,
     persist_run_calibration_pairs,
     require_activated_run_policy,
+    resolve_catalog_measure_unit,
     resolve_execution_override,
     retrieval_only_queries,
     run_is_bounded,
@@ -641,6 +642,51 @@ def customer_budget_floor_trace(
         result=result,
         operator_cost_warning=policy_trace["operator_cost_warning"],
     )
+
+
+# Mirrors the transport HTTPS rule's explicit environment set (config.py):
+# an unrecognized environment name is treated as production, so a typo in
+# ``ENVIRONMENT`` leaves the release gate closed instead of opening it.
+_COMPARABILITY_ARTIFACT_OPTIONAL_ENVIRONMENTS = frozenset(
+    {"development", "test", "e2e"}
+)
+
+
+def resolve_comparability_activation(settings: Settings) -> tuple[bool, str]:
+    """Decide whether automatic comparability release is authorized.
+
+    Returns ``(verified, basis)`` where ``basis`` names the evidence:
+    ``"artifact"`` for the signed acceptance artifact, ``"owner_flag"`` for
+    the non-production owner switch, ``"closed"`` otherwise.
+
+    Production always demands the artifact (the config validator additionally
+    refuses to boot with the flag set and no artifact).  Outside production
+    the owner's ``pricing_comparability_v1_automatic_enabled`` flag alone
+    opens the gate — the owner's 2026-08-16 decision to run the budget-floor
+    recommendations without the full acceptance evaluation.  The v3 robust
+    gate has no such bypass; this one is deliberate and dev-only.  If artifact
+    fields are configured in a dev environment they are validated rather than
+    ignored, so a broken artifact fails closed everywhere.
+    """
+
+    if not settings.pricing_comparability_v1_automatic_enabled:
+        return False, "closed"
+    artifact_configured = bool(
+        settings.pricing_comparability_activation_artifact.strip()
+        or settings.pricing_comparability_activation_sha256.strip()
+    )
+    environment = settings.environment.strip().casefold()
+    if (
+        not artifact_configured
+        and environment in _COMPARABILITY_ARTIFACT_OPTIONAL_ENVIRONMENTS
+    ):
+        return True, "owner_flag"
+    verified = comparability_activation_artifact_verified(
+        settings.pricing_comparability_activation_artifact,
+        settings.pricing_comparability_activation_sha256,
+        expected_runtime_identity=current_review_runtime_identity(settings),
+    )
+    return verified, "artifact" if verified else "closed"
 
 
 def apply_comparability_activation_gate(
@@ -3044,6 +3090,18 @@ def _catalog_semantic_reference_payload(
             getattr(catalog_item, "applicability_models", ()) or ()
         ),
     }
+    # The unit the seed is priced in decides ``unit_basis``, and through it
+    # ``package_quantity``.  A bounded run reads a ``FrozenCatalogItem``, which
+    # resolved the unit at scope time and carries no ``raw_row`` at all, so the
+    # extractor below cannot rediscover it from the raw import columns.  Without
+    # this line the gate reports ``unit_basis``/``package_quantity`` missing on
+    # every candidate while the same fact is plainly present in the review
+    # payload, which reads the frozen field directly.
+    measure_unit = getattr(catalog_item, "measure_unit", None)
+    if measure_unit is None or not str(measure_unit).strip():
+        measure_unit = resolve_catalog_measure_unit(catalog_item)
+    if measure_unit and str(measure_unit).strip():
+        payload["measure_unit"] = str(measure_unit).strip()
     characteristics = getattr(catalog_item, "characteristics_raw", None)
     if isinstance(characteristics, Mapping):
         payload["characteristics"] = dict(characteristics)
@@ -3186,6 +3244,14 @@ async def _persist_payload_observations(
     requested_query: str | None = None,
 ) -> OfferAccounting:
     policy = load_run_execution_policy(run) if hasattr(run, "policy_config") else None
+    # Read from the run's own frozen policy, never from the deployment file, so
+    # a replayed run keeps the partition it was actually computed with.
+    run_raise_policy = getattr(policy, "raise_policy", None) if policy else None
+    tier_agnostic_pricing = bool(
+        run_raise_policy is not None
+        and run_raise_policy.strategy is RaiseStrategy.BUDGET_FLOOR
+        and run_raise_policy.tier_agnostic
+    )
     semantic_selection_config, semantic_config_error = (
         _market_candidate_selection_config()
     )
@@ -3596,7 +3662,11 @@ async def _persist_payload_observations(
                 )
             url, url_absence_reason = _validated_listing_url(product.get("url"))
             is_owned = seller_id in owned_sellers
-            cohort_role = _initial_cohort_role(classification, is_owned=is_owned)
+            cohort_role = _initial_cohort_role(
+                classification,
+                is_owned=is_owned,
+                tier_agnostic=tier_agnostic_pricing,
+            )
             if (
                 not is_owned
                 and cohort_role is not CohortRole.USED_REJECTED
@@ -5016,14 +5086,10 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                     dict.fromkeys(("CUSTOMER_IDENTITY_MISSING", *result.reasons))
                 ),
             )
-        comparability_activation_verified = bool(
-            settings.pricing_comparability_v1_automatic_enabled
-            and comparability_activation_artifact_verified(
-                settings.pricing_comparability_activation_artifact,
-                settings.pricing_comparability_activation_sha256,
-                expected_runtime_identity=current_review_runtime_identity(settings),
-            )
-        )
+        (
+            comparability_activation_verified,
+            comparability_activation_basis,
+        ) = resolve_comparability_activation(settings)
         customer_policy_trace, advisory_decision = customer_budget_floor_trace(
             policy=policy.raise_policy,
             result=result,
@@ -5138,6 +5204,7 @@ async def _calculate_and_persist(run_item_id: UUID) -> None:
                 "policy_hash": result.comparability_policy_hash,
                 "automatic_eligible": result.automatic_eligible,
                 "activation_verified": comparability_activation_verified,
+                "activation_basis": comparability_activation_basis,
                 "verified_seller_count": result.verified_seller_count,
                 "hard_gates": dict(result.hard_gate_results),
                 "failed_hard_gates": list(result.failed_hard_gates),
@@ -6041,7 +6108,22 @@ def _initial_cohort_role(
     classification: TierClassification,
     *,
     is_owned: bool,
+    tier_agnostic: bool = False,
 ) -> CohortRole:
+    """Partition one classified offer into its pricing cohort.
+
+    ``tier_agnostic`` reflects the owner's budget-floor decision of 2026-07-30
+    (``raise_policy.yaml``): the price is the cheapest comparable offer whatever
+    brand level it sits at, so an unreadable brand level is no longer a reason
+    to hold an offer out of the cohort.  The classification keeps its
+    ``UNKNOWN_TIER`` exclusion reason for diagnostics -- only the cohort role,
+    which is a pricing-policy question, follows the policy.
+
+    This is not a general amnesty for excluded offers.  ``UNKNOWN_TIER`` is the
+    one exclusion the policy has already discarded; every other reason, and the
+    offer-integrity downgrade applied by the caller, still parks the offer.
+    """
+
     if is_owned:
         return CohortRole.OWNED_STORE
     if classification.is_used:
@@ -6049,6 +6131,8 @@ def _initial_cohort_role(
     if classification.is_kemp:
         return CohortRole.KEMP_REFERENCE
     if classification.exclusion_reason:
+        if tier_agnostic and classification.exclusion_reason == "UNKNOWN_TIER":
+            return CohortRole.TARGET_MARKET
         return CohortRole.MANUAL_REVIEW
     return CohortRole.TARGET_MARKET
 

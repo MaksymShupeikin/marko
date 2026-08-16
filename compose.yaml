@@ -9,7 +9,7 @@ x-backend-environment: &backend-environment
   CELERY_VISIBILITY_TIMEOUT_SECONDS: ${CELERY_VISIBILITY_TIMEOUT_SECONDS:-3600}
   API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
   ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,test,testserver}
-  CORS_ORIGINS: http://localhost:${WEB_PORT:-8080},http://127.0.0.1:${WEB_PORT:-8080}
+  CORS_ORIGINS: http://localhost:${WEB_PORT:-8080},http://127.0.0.1:${WEB_PORT:-8080},http://localhost:8090,http://127.0.0.1:8090
   CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
   CORS_METHODS: ${CORS_METHODS:-GET,POST,PUT,PATCH,DELETE,OPTIONS}
   CORS_HEADERS: ${CORS_HEADERS:-Authorization,Content-Type,Accept,Origin,X-Request-ID}

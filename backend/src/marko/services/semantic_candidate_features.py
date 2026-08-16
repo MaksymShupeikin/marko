@@ -23,7 +23,7 @@ from typing import Any
 
 
 SEMANTIC_FEATURE_EXTRACTOR_VERSION = (
-    "semantic-features-v43-transmission-mount"
+    "semantic-features-v45-sliding-door-carriage"
 )
 
 
@@ -870,6 +870,13 @@ _PART_PATTERNS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         (
             r"^\s*кронштейн\w*[^\n]{0,45}(?:зсувн|сдвижн|бічн|боков|сувальн|ковзн|розсувн)\w*[^\n]{0,20}двер\w*\b",
             r"^\s*кронштейн\w*[^\n]{0,20}двер\w*[^\n]{0,35}(?:зсувн|сдвижн|бічн|боков|сувальн|ковзн|розсувн)\w*\b",
+            # The same physical part (the roller carriage the OE catalogue
+            # calls a bracket) is titled "Візок з розсувними дверима" or
+            # "Каретка сдвижной двери" by Prom sellers; four exact-OE VW T4
+            # listings carried no part family at all because the lexicon only
+            # knew the "кронштейн" wording.
+            r"\b(?:візок|візк\w*|каретк\w*)[^\n]{0,45}(?:зсувн|сдвижн|бічн|боков|сувальн|ковзн|розсувн)\w*[^\n]{0,20}двер\w*\b",
+            r"\b(?:візок|візк\w*|каретк\w*)[^\n]{0,20}двер\w*[^\n]{0,35}(?:зсувн|сдвижн|бічн|боков|сувальн|ковзн|розсувн)\w*\b",
             r"\bsliding\s+door\s+bracket\b",
         ),
     ),
@@ -2160,13 +2167,31 @@ _PART_PATTERNS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         "set",
         (r"^\s*колодк\w*(?:\s|$)",),
     ),
+    # The frame stays ahead of the lamp: the table is first-match-wins, and
+    # the lamp now also matches the adjective-first wording that the frame
+    # phrase contains ("рамка кріплення протитуманної фари").
+    (
+        "vehicle_lighting",
+        "fog_lamp_frame",
+        "component",
+        (
+            r"\bрамк\w*[^\n]{0,25}(?:креплен|кріплен)\w*[^\n]{0,25}(?:противотуманн|протитуманн)\w*[^\n]{0,15}фар\w*\b",
+        ),
+    ),
     (
         "vehicle_lighting",
         "fog_lamp",
         "single_part",
         (
             r"\b(?:противотуманк|протитуманк)\w*\b",
-            r"\b(?:фара|стекло)\w*[^\n]{0,20}противотуман\w*\b",
+            # Both stems and both word orders.  Ukrainian sellers write
+            # "Протитуманна фара", which carries neither the noun stem
+            # ``протитуманк`` nor the Russian ``противотуман`` of the
+            # noun-first pattern, so an exact-OE Audi 100 fog lamp reached the
+            # gate with no part family at all and was withheld as
+            # SEMANTIC_UNCONFIRMED.
+            r"\b(?:фар|стекл|скл)\w*[^\n]{0,20}(?:противотуман|протитуман)\w*\b",
+            r"\b(?:противотуманн|протитуманн)\w*[^\n]{0,20}(?:фар|стекл|скл)\w*\b",
             r"\bfog\s+lamp\b",
         ),
     ),
@@ -2750,14 +2775,6 @@ _PART_PATTERNS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         "intermediate_shaft",
         "single_part",
         (r"\bпромежуточн\w*\s+вал\w*[^\n]{0,20}(?:двигат|двигун)\w*\b",),
-    ),
-    (
-        "vehicle_lighting",
-        "fog_lamp_frame",
-        "component",
-        (
-            r"\bрамк\w*[^\n]{0,25}(?:креплен|кріплен)\w*[^\n]{0,25}(?:противотуманн|протитуманн)\w*[^\n]{0,15}фар\w*\b",
-        ),
     ),
     (
         "body_structure",
@@ -4322,6 +4339,16 @@ _POWER_RATING_RE = re.compile(
     r"(?<![\d.,])(\d{1,3}(?:[.,]\d{1,3})?)\s*(?:kw|квт)\b",
     re.IGNORECASE,
 )
+# A kW figure standing next to a displacement or a horsepower figure belongs to
+# the *vehicle* the part fits, not to the part.  Prom applicability tables are
+# full of them -- "2.0 E (1984ccm\74kW\100HP)" repeated per engine variant --
+# and three such rows made a fog lamp look like it asserted three contradictory
+# power ratings, which the gate read as the listing contradicting itself.
+_VEHICLE_ENGINE_SPEC_RE = re.compile(
+    r"\d\s*(?:ccm|cm3|см3|куб)|(?<![\d.,])\d{1,4}\s*(?:hp|ps|л\.?\s?с|к\.?\s?с)\b",
+    re.IGNORECASE,
+)
+_VEHICLE_ENGINE_SPEC_WINDOW = 24
 _OPERATING_PRESSURE_RE = re.compile(
     r"(?<![\d.,])(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:bar|бар)\b",
     re.IGNORECASE,
@@ -5251,6 +5278,8 @@ def extract_semantic_features(record: Mapping[str, Any]) -> dict[str, FeatureSet
             match.group(0),
         )
     for match in _POWER_RATING_RE.finditer(normalized):
+        if _looks_like_vehicle_engine_spec(normalized, match.start(), match.end()):
+            continue
         _append(
             values,
             "power_rating",
@@ -5500,6 +5529,15 @@ def _text_sources(record: Mapping[str, Any]) -> list[tuple[str, str]]:
 def _normalize_text(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).casefold()
     return " ".join(value.replace("\u00a0", " ").split())
+
+
+def _looks_like_vehicle_engine_spec(text: str, start: int, end: int) -> bool:
+    """True when a kW figure sits inside a vehicle engine specification."""
+
+    window = text[
+        max(0, start - _VEHICLE_ENGINE_SPEC_WINDOW) : end + _VEHICLE_ENGINE_SPEC_WINDOW
+    ]
+    return _VEHICLE_ENGINE_SPEC_RE.search(window) is not None
 
 
 def _first_match(patterns: Sequence[str], text: str) -> re.Match[str] | None:

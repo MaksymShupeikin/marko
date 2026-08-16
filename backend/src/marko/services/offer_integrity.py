@@ -18,7 +18,7 @@ import re
 from typing import Any
 
 
-OFFER_INTEGRITY_METHOD_VERSION = "offer-integrity-v2"
+OFFER_INTEGRITY_METHOD_VERSION = "offer-integrity-v3"
 DEFAULT_FLOOR_GAP_RATIO = Decimal("0.75")
 
 
@@ -187,6 +187,22 @@ _REVIEW_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
+# «Без пошкоджень», «без дефектів та подряпин» is a seller asserting the item
+# is intact -- the opposite of damage.  The whole negated phrase is removed
+# before the markers run, because a bare lookbehind on «без » cannot reach the
+# second noun of a conjunction («… без пошкоджень та дефектів») and three
+# exact-OE VW T4 carriages were parked by their own "brand new, undamaged"
+# boilerplate.  «Без упаковки/датчика/…» stays: a missing part is real
+# incompleteness, and this phrase only swallows the damage nouns themselves.
+_NEGATED_DAMAGE_PHRASE = re.compile(
+    r"\bбез\s+(?:будь[-\s]яких\s+|каких[-\s]либо\s+)?"
+    r"(?:поврежден\w*|пошкоджен\w*|дефект\w*|некомплект\w*)"
+    r"(?:\s*(?:,|та|і|и|and|/)\s*"
+    r"(?:поврежден\w*|пошкоджен\w*|дефект\w*|некомплект\w*|"
+    r"подряпин\w*|царапин\w*|сколів|сколов))*",
+    re.IGNORECASE,
+)
+
 _PRICE_PER_PIECE = re.compile(
     r"\b(?:цена|ц[іi]на|price)\s+за\s+(?:штуку|шт\.?|одиницю|единицу|одну|1\s*шт)",
     re.IGNORECASE,
@@ -236,13 +252,13 @@ def assess_offer_integrity(
 ) -> OfferIntegrityAssessment:
     """Classify explicit commercial traps without using statistical inference."""
 
-    text = _bounded_text(
+    text = _NEGATED_DAMAGE_PHRASE.sub(" ", _bounded_text(
         title,
         description,
         condition,
         characteristics,
         measure_unit,
-    )
+    ))
     rejects: list[str] = []
     reviews: list[str] = []
     evidence: list[dict[str, str]] = []

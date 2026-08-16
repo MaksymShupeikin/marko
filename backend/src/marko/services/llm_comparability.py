@@ -1681,7 +1681,12 @@ async def _resolve_without_provider(
             output=output,
             settings=settings,
             decision_source="HARD_RULE",
-            status="SKIPPED",
+            # HARD_STOP, not SKIPPED.  ``ck_candidate_comparability_review_
+            # failure_verdict`` demands INSUFFICIENT_DATA on a SKIPPED row, and
+            # an unavailable candidate is admitted as EXCLUDED, which projects
+            # to NOT_COMPARABLE -- the insert fails and takes the whole position
+            # down with it.  A deterministic exclusion is a hard stop anyway.
+            status="HARD_STOP",
             provider_review=None,
             error_code="CANDIDATE_NOT_AVAILABLE",
         )

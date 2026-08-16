@@ -869,7 +869,13 @@ def load_raise_policy(path: str | Path, *, strategy: str | None = None) -> Raise
     policy = RaisePolicy(
         strategy=resolved,
         target_quantile=target_quantile,
-        min_evidence=_positive_int(guards.get("min_evidence"), "min_evidence"),
+        # Per-strategy override, like ``psychological_step`` below: how many
+        # independent sellers a price must rest on is a property of the market
+        # position the owner chose, not a global constant.
+        min_evidence=_positive_int(
+            entry.get("min_evidence", guards.get("min_evidence")),
+            "min_evidence",
+        ),
         min_change_pct=_decimal(guards.get("min_change_pct"), "min_change_pct"),
         max_step_pct=_decimal(guards.get("max_step_pct"), "max_step_pct"),
         psychological_step=_decimal(
@@ -882,8 +888,15 @@ def load_raise_policy(path: str | Path, *, strategy: str | None = None) -> Raise
         high_max_robust_cv=_decimal(
             confidence.get("high_max_robust_cv"), "high_max_robust_cv"
         ),
+        # Also overridable per strategy.  A LOW grade is not advisory here --
+        # it returns SHOW_BUT_FLAG with no price -- so a grade boundary above
+        # the strategy's own ``min_evidence`` would quietly veto the cohort size
+        # the owner chose.
         medium_min_evidence=_positive_int(
-            confidence.get("medium_min_evidence"), "medium_min_evidence"
+            entry.get(
+                "medium_min_evidence", confidence.get("medium_min_evidence")
+            ),
+            "medium_min_evidence",
         ),
         medium_max_robust_cv=_decimal(
             confidence.get("medium_max_robust_cv"), "medium_max_robust_cv"
