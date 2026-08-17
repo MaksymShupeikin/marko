@@ -60,6 +60,8 @@ Future<PricingRunSummary> pollPricingRun({
 /// воспроизводимый и объяснимый, в отличие от «каких-нибудь 300 позиций».
 enum PricingRunScopeChoice {
   fullCatalog(null),
+  first20(20),
+  first50(50),
   first300(300),
   first500(500);
 
