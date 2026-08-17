@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -326,6 +327,7 @@ async def process_no_oe_discovery_item(
                 "reasoning_effort": selected.pricing_llm_reasoning_effort,
             }
         )
+        prepared_calls: list[tuple[CatalogDiscoveryOffer, str, dict[str, Any], str]] = []
         for offer in offers:
             exact_offer = offer_snapshot(offer)
             exact_hash = canonical_sha256(exact_offer)
@@ -362,9 +364,27 @@ async def process_no_oe_discovery_item(
                 offer_integrity_context=amount_context.as_dict(),
             )
             input_hash = canonical_sha256(input_snapshot)
-            response = await adapter.review(
-                input_snapshot=input_snapshot, image_urls=()
-            )
+            prepared_calls.append((offer, exact_hash, input_snapshot, input_hash))
+
+        # One provider call per offer, run under a shared semaphore instead of
+        # one after another. At an average 99 s per call a ten-offer position
+        # took ~16 minutes of pure waiting; the offers are independent, so the
+        # only thing serialising them was this loop. The semaphore keeps the
+        # provider seeing at most ``pricing_llm_max_concurrency`` calls, exactly
+        # like the OE lane.
+        gate = asyncio.Semaphore(max(1, selected.pricing_llm_max_concurrency))
+
+        async def _review(snapshot: dict[str, Any]) -> Any:
+            async with gate:
+                return await adapter.review(input_snapshot=snapshot, image_urls=())
+
+        responses = await asyncio.gather(
+            *(_review(snapshot) for _, _, snapshot, _ in prepared_calls)
+        )
+
+        for (offer, exact_hash, input_snapshot, input_hash), response in zip(
+            prepared_calls, responses, strict=True
+        ):
             # Book the call before anything can reject its answer: a run that
             # cannot say what it spent on this lane teaches the operator a cost
             # that is not the real one.
