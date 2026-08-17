@@ -18,6 +18,10 @@ const pricingReasonTranslations = <String, PricingReasonTranslation>{
     ru: 'рынок поддерживает повышение',
     uk: 'ринок підтримує підвищення',
   ),
+  'EVIDENCE_REFERENCE_UNBOUND': PricingReasonTranslation(
+    ru: 'часть подтверждающих цитат не сошлась с карточкой и отброшена',
+    uk: 'частину підтверджувальних цитат не звірено з карткою і відкинуто',
+  ),
   'MARKET_SUPPORTS_LOWER': PricingReasonTranslation(
     ru: 'рынок поддерживает снижение',
     uk: 'ринок підтримує зниження',
