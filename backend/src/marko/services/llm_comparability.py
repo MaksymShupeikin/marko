@@ -2340,7 +2340,7 @@ async def _persist_prepared_review(
         admission,
         effective_match_level=effective_identity_match_level,
     )
-    usage, estimated_cost, rate_card_version = _usage_and_cost_metadata(
+    usage, estimated_cost, rate_card_version = usage_and_cost_metadata(
         provider_review.usage if provider_review is not None else provider_usage,
         settings,
     )
@@ -3871,11 +3871,15 @@ def _legacy_projection(
     return ComparabilityVerdict.INSUFFICIENT_DATA, ComparabilityMatchLevel.SUSPICIOUS
 
 
-def _usage_and_cost_metadata(
+def usage_and_cost_metadata(
     provider_usage: Mapping[str, Any] | None,
     settings: Settings,
 ) -> tuple[dict[str, Any], dict[str, Any], str | None]:
     """Book what the provider reported, whether or not its answer was usable.
+
+    Public because the no-OE discovery lane pays the same provider through its
+    own code path; a second copy of this would be the copy that stops matching
+    the rate card.
 
     Takes the usage mapping rather than a ``ProviderReview`` because the calls
     that most need booking are exactly the ones that never produce one: an

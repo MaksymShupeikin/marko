@@ -36,6 +36,7 @@ from marko.services.llm_comparability import (
     OpenAIResponsesComparabilityProvider,
     _SYSTEM_INSTRUCTIONS,
     _strict_output_schema,
+    usage_and_cost_metadata,
     validate_comparability_provider_output,
 )
 from marko.services.market_collection import _validated_listing_url
@@ -364,6 +365,12 @@ async def process_no_oe_discovery_item(
             response = await adapter.review(
                 input_snapshot=input_snapshot, image_urls=()
             )
+            # Book the call before anything can reject its answer: a run that
+            # cannot say what it spent on this lane teaches the operator a cost
+            # that is not the real one.
+            call_usage, call_cost, call_rate_version = usage_and_cost_metadata(
+                getattr(response, "usage", None), selected
+            )
             validate_comparability_provider_output(
                 input_snapshot=input_snapshot,
                 output=response.output,
@@ -403,6 +410,9 @@ async def process_no_oe_discovery_item(
                     reasoning_effort=selected.pricing_llm_reasoning_effort,
                     canonical_input=input_snapshot,
                     canonical_output=output,
+                    usage=call_usage,
+                    estimated_cost=call_cost,
+                    rate_card_version=call_rate_version,
                 )
             )
         run_item.status = "awaiting_discovery_review"

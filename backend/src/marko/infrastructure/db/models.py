@@ -2170,6 +2170,11 @@ class PricingDiscoveryReview(Base):
     reasoning_effort: Mapped[str] = mapped_column(String(16))
     canonical_input: Mapped[dict[str, Any]] = mapped_column(JSON)
     canonical_output: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # What the call cost. Booked here because this lane pays the provider
+    # directly: without it a run reports the OE lane's spend as the whole bill.
+    usage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    estimated_cost: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    rate_card_version: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

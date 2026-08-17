@@ -18,6 +18,7 @@ from marko.infrastructure.db.models import (
     MarketObservation,
     ObservationTierClassification,
     OfferProcessingOutcome,
+    PricingDiscoveryReview,
     PricingRun,
     PricingRunItem,
 )
@@ -51,6 +52,48 @@ def _decimal(value: object) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return Decimal("0")
+
+
+#: Token counters a provider answer may report. Named once because both paid
+#: lanes book into the same totals.
+_USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "uncached_input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+)
+
+
+def accumulate_provider_spend(
+    records: Iterable[Any],
+    *,
+    token_totals: Counter[str],
+    rate_versions: set[str],
+) -> Decimal:
+    """Add one lane's booked usage into the run totals and return its cost.
+
+    Takes any row carrying ``usage`` / ``estimated_cost`` / ``rate_card_version``
+    rather than one ORM class: the OE lane and the no-OE discovery lane store
+    the same three fields on different tables, and a run that sums only one of
+    them reports a bill that is not the bill.
+    """
+
+    total = Decimal("0")
+    for record in records:
+        usage = getattr(record, "usage", None) or {}
+        for key in _USAGE_TOKEN_KEYS:
+            value = usage.get(key)
+            if isinstance(value, int) and value >= 0:
+                token_totals[key] += value
+        estimated_cost = getattr(record, "estimated_cost", None)
+        if estimated_cost:
+            total += _decimal(estimated_cost.get("total_usd"))
+        rate_card_version = getattr(record, "rate_card_version", None)
+        if rate_card_version:
+            rate_versions.add(rate_card_version)
+    return total
 
 
 def _p95(values: Sequence[int]) -> int | None:
@@ -430,27 +473,29 @@ async def build_comparability_run_report(
     )
 
     token_totals: Counter[str] = Counter()
-    total_cost = Decimal("0")
     rate_versions: set[str] = set()
-    latencies: list[int] = []
-    for record in records:
-        for key in (
-            "input_tokens",
-            "cached_input_tokens",
-            "uncached_input_tokens",
-            "output_tokens",
-            "reasoning_tokens",
-            "total_tokens",
-        ):
-            value = (record.usage or {}).get(key)
-            if isinstance(value, int) and value >= 0:
-                token_totals[key] += value
-        if record.estimated_cost:
-            total_cost += _decimal(record.estimated_cost.get("total_usd"))
-        if record.rate_card_version:
-            rate_versions.add(record.rate_card_version)
-        if record.status == "COMPLETED":
-            latencies.append(max(0, record.latency_ms))
+    total_cost = accumulate_provider_spend(
+        records, token_totals=token_totals, rate_versions=rate_versions
+    )
+    latencies = [
+        max(0, record.latency_ms) for record in records if record.status == "COMPLETED"
+    ]
+
+    # The no-OE discovery lane pays the same provider through its own code
+    # path. Leaving it out reported one lane's spend as the whole bill: on
+    # 2026-08-17 a run showed $0.157 while discovery was still calling out.
+    discovery_records = list(
+        (
+            await session.scalars(
+                select(PricingDiscoveryReview).where(
+                    PricingDiscoveryReview.pricing_run_id == run.id
+                )
+            )
+        ).all()
+    )
+    total_cost += accumulate_provider_spend(
+        discovery_records, token_totals=token_totals, rate_versions=rate_versions
+    )
 
     item_status_counts = Counter(item.status for item in run_items)
     return {
