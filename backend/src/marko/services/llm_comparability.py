@@ -101,6 +101,11 @@ LLM_COMPARABILITY_CONTRACT_VERSION = "comparability-v2"
 LLM_COMPARABILITY_PROMPT_VERSION = "marko-product-comparability-v3.9-path-index"
 LLM_COMPARABILITY_SCHEMA_VERSION = "marko-product-comparability-output-v2"
 
+# A supporting finding that cited a path or value the snapshot cannot confirm
+# loses that one citation, not the whole paid answer; this reason code marks
+# the drop in the persisted review.
+EVIDENCE_REFERENCE_UNBOUND = "EVIDENCE_REFERENCE_UNBOUND"
+
 # The one definition of which snapshot roots each evidence source may cite.
 # ``_resolve_evidence_reference`` decides binding from it and
 # ``_evidence_path_index`` advertises paths from it, so the index the model is
@@ -3106,7 +3111,13 @@ def _validate_provider_text_evidence(
     prepared: _PreparedReview,
     output: LLMComparabilityOutput,
 ) -> None:
-    """Reject model conflicts whose citations are absent from the snapshot."""
+    """Reject model conflicts whose citations are absent from the snapshot.
+
+    Only citations that *justify a rejection* -- CONFLICT findings and hard
+    stops -- can discard the answer.  An unbound citation on a supporting
+    finding is dropped from the finding and recorded as
+    ``EVIDENCE_REFERENCE_UNBOUND``; the answer itself survives.
+    """
 
     if (
         output.identity_verdict is IdentityVerdict.NOT_MATCH
@@ -3140,22 +3151,12 @@ def _validate_provider_text_evidence(
                 "LLM_HARD_STOP_EVIDENCE_INCOMPLETE",
                 f"hard-stop conflict {conflict.dimension} lacks both sides or authority",
             )
-    references = [
-        reference
-        for finding in output.dimension_findings
-        for reference in finding.evidence
-        if reference.source != "IMAGE"
-    ]
-    references.extend(
-        reference
-        for conflict in output.hard_stop_conflicts
-        for reference in conflict.evidence
-        if reference.source != "IMAGE"
-    )
-    for reference in references:
+    def unbound_error(
+        reference: ReviewEvidenceReference,
+    ) -> ComparabilityProviderError | None:
         resolved = _resolve_evidence_reference(prepared.input_snapshot, reference)
         if not resolved:
-            raise ComparabilityProviderError(
+            return ComparabilityProviderError(
                 "LLM_EVIDENCE_FIELD_UNBOUND",
                 f"evidence field is absent from {reference.source}: {reference.field}",
             )
@@ -3164,7 +3165,7 @@ def _validate_provider_text_evidence(
             _evidence_text_occurs(value, _normalize_evidence_text(item))
             for item in resolved
         ):
-            raise ComparabilityProviderError(
+            return ComparabilityProviderError(
                 "LLM_EVIDENCE_VALUE_UNBOUND",
                 f"evidence value is absent at {reference.field}",
             )
@@ -3180,10 +3181,46 @@ def _validate_provider_text_evidence(
         if excerpt and not any(
             excerpt in _normalize_evidence_text(item) for item in resolved
         ):
-            raise ComparabilityProviderError(
+            return ComparabilityProviderError(
                 "LLM_EVIDENCE_EXCERPT_UNBOUND",
                 f"evidence excerpt is absent at {reference.field}",
             )
+        return None
+
+    # A rejection is only as good as its citations: an unbound reference under
+    # a CONFLICT finding or a hard stop still discards the whole answer.  A
+    # *supporting* finding is different -- its citation confirms a fact the
+    # decision does not rest on, so a reference the snapshot cannot bind loses
+    # that one citation and stamps ``EVIDENCE_REFERENCE_UNBOUND`` instead of
+    # costing the paid answer.
+    for finding in output.dimension_findings:
+        if finding.outcome is FindingOutcome.CONFLICT:
+            for reference in finding.evidence:
+                if reference.source == "IMAGE":
+                    continue
+                error = unbound_error(reference)
+                if error is not None:
+                    raise error
+            continue
+        kept = [
+            reference
+            for reference in finding.evidence
+            if reference.source == "IMAGE" or unbound_error(reference) is None
+        ]
+        if len(kept) != len(finding.evidence):
+            finding.evidence[:] = kept
+            if (
+                EVIDENCE_REFERENCE_UNBOUND not in output.reason_codes
+                and len(output.reason_codes) < 32
+            ):
+                output.reason_codes.append(EVIDENCE_REFERENCE_UNBOUND)
+    for conflict in output.hard_stop_conflicts:
+        for reference in conflict.evidence:
+            if reference.source == "IMAGE":
+                continue
+            error = unbound_error(reference)
+            if error is not None:
+                raise error
 
 
 def validate_comparability_provider_output(

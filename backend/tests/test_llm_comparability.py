@@ -832,6 +832,88 @@ def test_a_short_value_still_cannot_bind() -> None:
     assert exc_info.value.code == "LLM_EVIDENCE_VALUE_UNBOUND"
 
 
+def _grounded_match_output(
+    *,
+    candidate_value: str = "контактна група Vw Golf 3",
+) -> LLMComparabilityOutput:
+    return LLMComparabilityOutput(
+        identity_verdict=IdentityVerdict.MATCH,
+        match_level=ComparabilityMatchLevel.EXACT,
+        identity_match_score=Decimal("0.95"),
+        decision_confidence=Decimal("0.95"),
+        image_consistency=ImageConsistency.UNAVAILABLE,
+        rationale="Both records describe the same ignition lock housing.",
+        reason_codes=["IDENTITY_MATCH"],
+        dimension_findings=[
+            ReviewDimensionFinding(
+                dimension="part_type",
+                outcome=FindingOutcome.MATCH,
+                explanation="Both records describe the same component.",
+                evidence=[
+                    ReviewEvidenceReference(
+                        source="OUR_PRODUCT",
+                        field="our_product.name",
+                        value="Корпус замка зажигания VW Golf",
+                    ),
+                    ReviewEvidenceReference(
+                        source="CANDIDATE",
+                        field="candidate.title",
+                        value=candidate_value,
+                    ),
+                ],
+            )
+        ],
+    )
+
+
+def test_an_unbound_supporting_citation_costs_the_citation_not_the_answer() -> None:
+    """A bad reference under a MATCH finding used to discard the paid answer.
+
+    The decision does not rest on a supporting citation, so rejecting the whole
+    review over it bought nothing: ~18% of the first paid runs' calls died
+    exactly here.  The reference is dropped, the drop is stamped as a reason
+    code, and the answer survives.
+    """
+
+    output = _grounded_match_output(candidate_value="complete ignition lock")
+
+    llm_comparability._validate_provider_text_evidence(
+        _prepared_for_grounding(),
+        output,
+    )
+
+    finding = output.dimension_findings[0]
+    assert [reference.source for reference in finding.evidence] == ["OUR_PRODUCT"]
+    assert llm_comparability.EVIDENCE_REFERENCE_UNBOUND in output.reason_codes
+
+
+def test_a_bound_supporting_citation_is_kept_without_a_stamp() -> None:
+    output = _grounded_match_output()
+
+    llm_comparability._validate_provider_text_evidence(
+        _prepared_for_grounding(),
+        output,
+    )
+
+    assert len(output.dimension_findings[0].evidence) == 2
+    assert llm_comparability.EVIDENCE_REFERENCE_UNBOUND not in output.reason_codes
+
+
+def test_an_unbound_citation_under_a_conflict_still_costs_the_answer() -> None:
+    """The relaxation must never reach the citations a rejection rests on."""
+
+    with pytest.raises(ComparabilityProviderError) as exc_info:
+        llm_comparability._validate_provider_text_evidence(
+            _prepared_for_grounding(),
+            _grounded_negative_output(
+                candidate_value="complete ignition lock",
+                candidate_excerpt="",
+            ),
+        )
+
+    assert exc_info.value.code == "LLM_EVIDENCE_VALUE_UNBOUND"
+
+
 async def test_an_out_of_stock_listing_is_not_reviewed_at_all() -> None:
     """Owner decision 2026-08-15, narrowing "review every listing found by OE".
 
