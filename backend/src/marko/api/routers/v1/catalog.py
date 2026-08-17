@@ -632,6 +632,23 @@ async def get_catalog_items(
     )
 
 
+# Поля ответа, которые собираются здесь, а не читаются со строки каталога.
+# Всё остальное берётся через getattr, поэтому любое поле схемы, которого нет
+# у модели, роняет эндпоинт на первой же позиции.
+DERIVED_CATALOG_ITEM_FIELDS = frozenset(
+    {
+        "cost_configured",
+        "cost_privacy_mode",
+        "raw_row",
+        "oe_norm",
+        "mpn_norm",
+        "search_identity",
+        "identity_status",
+        "catalog_data_evidence",
+    }
+)
+
+
 def _catalog_item_response(
     item: Any, *, cost_configured: bool = False
 ) -> CatalogItemResponse:
@@ -639,17 +656,7 @@ def _catalog_item_response(
     public_fields = {
         field: getattr(item, field)
         for field in CatalogItemResponse.model_fields
-        if field
-        not in {
-            "cost_configured",
-            "cost_privacy_mode",
-            "raw_row",
-            "oe_norm",
-            "mpn_norm",
-            "search_identity",
-            "identity_status",
-            "catalog_data_evidence",
-        }
+        if field not in DERIVED_CATALOG_ITEM_FIELDS
     }
     return CatalogItemResponse(
         **public_fields,

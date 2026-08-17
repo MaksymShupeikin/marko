@@ -140,7 +140,6 @@ class CatalogItemResponse(BaseModel):
     current_price: Decimal
     currency: str
     is_available: bool | None
-    is_owned: bool
     stock_status: str
     stock_qty: Decimal | None
     stock_age_days: Decimal | None
