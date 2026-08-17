@@ -179,6 +179,31 @@ class _PricingDiscoveryReviewDialogState
               Expanded(
                 child: queue == null
                     ? const Center(child: CircularProgressIndicator())
+                    : queue.items.isEmpty
+                    // Пауза без строк — законное состояние: проверка Luna ещё
+                    // не записана или совпадений нет вовсе. Без подсказки
+                    // оператор видит пустоту и не знает, что жать.
+                    ? Center(
+                        child: Text(
+                          context.localized(
+                            ru:
+                                'Одобрять нечего: у этой паузы нет записанных '
+                                'предложений. Нажмите «Продолжить расчёт» — '
+                                'позиции без одобренных предложений получат '
+                                'вердикт «недостаточно данных».',
+                            uk:
+                                'Схвалювати нічого: у цієї паузи немає '
+                                'записаних пропозицій. Натисніть «Продовжити '
+                                'розрахунок» — позиції без схвалених '
+                                'пропозицій отримають вердикт «недостатньо '
+                                'даних».',
+                          ),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.copyWith(color: colors.muted),
+                        ),
+                      )
                     : ListView.separated(
                         itemCount: queue.items.length,
                         separatorBuilder: (_, _) => const SizedBox(height: 10),
