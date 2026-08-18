@@ -60,6 +60,10 @@ class CatalogImportApi {
           'limit': '$page',
           'offset': '${ids.length}',
         },
+        // Часть запуска ограниченной области: страницы собираются
+        // последовательно, и на большом импорте их несколько. Общий
+        // 15-секундный лимит обрывал сбор до того, как область была собрана.
+        timeout: const Duration(minutes: 2),
       );
       final items = (payload as Map<String, dynamic>)['items'] as List<dynamic>;
       ids.addAll(

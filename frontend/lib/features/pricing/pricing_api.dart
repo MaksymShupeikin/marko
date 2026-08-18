@@ -60,6 +60,12 @@ class PricingApi {
         'scope_mode': scopeMode,
         if (catalogItemIds.isNotEmpty) 'catalog_item_ids': catalogItemIds,
       },
+      // Предпросмотр обходит каждую позицию области: замораживает снимок,
+      // считает пригодность, оценивает запросы и потолок платных вызовов.
+      // На общем 15-секундном лимите он успевал ответить 200, но клиент уже
+      // сдавался — владелец видел TimeoutException на запуске, который сервер
+      // выполнил.
+      timeout: const Duration(minutes: 2),
     );
     return PricingRunPreview.fromJson(payload as Map<String, dynamic>);
   }
