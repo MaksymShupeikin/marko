@@ -182,7 +182,20 @@ async def test_human_decisions_are_exact_idempotent_and_resume_is_snapshot_safe(
                     provider="codex_cli",
                     model="gpt-5.6-luna",
                     reasoning_effort="xhigh",
-                    canonical_input={},
+                    canonical_input={
+                        # Шлюз целостности суммы появился позже этого набора и
+                        # отклонял здесь КАЖДОЕ одобрение: без пройденной
+                        # проверки тест падал не на своём предмете.
+                        "deterministic_context": {
+                            "offer_integrity_context": {
+                                "assessment": {
+                                    "status": "PASS",
+                                    "reason_codes": ["OFFER_INTEGRITY_PASS"],
+                                    "evidence": [],
+                                }
+                            }
+                        }
+                    },
                     canonical_output={},
                 )
             )
@@ -262,8 +275,11 @@ async def test_human_decisions_are_exact_idempotent_and_resume_is_snapshot_safe(
         assert resumed.status == "collecting"
         assert recommendation is not None
         assert recommendation.action == "MANUAL_REVIEW"
-        assert recommendation.fair_price == Decimal("100.00")
-        assert recommendation.recommended_price == Decimal("100.00")
+        # Одобрены предложения по 90, 100 и 110: справедливая цена — минимум из
+        # них, рекомендация — минус пять процентов. Ожидания «100 и 100» здесь
+        # застали более раннее правило и пережили его.
+        assert recommendation.fair_price == Decimal("90.00")
+        assert recommendation.recommended_price == Decimal("85.50")
         assert recommendation.automatic_eligible is False
         assert recommendation.unique_seller_count == 3
         assert decision_count == 3

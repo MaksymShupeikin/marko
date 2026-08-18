@@ -327,7 +327,9 @@ async def process_no_oe_discovery_item(
                 "reasoning_effort": selected.pricing_llm_reasoning_effort,
             }
         )
-        prepared_calls: list[tuple[CatalogDiscoveryOffer, str, dict[str, Any], str]] = []
+        prepared_calls: list[
+            tuple[CatalogDiscoveryOffer, str, dict[str, Any], str]
+        ] = []
         for offer in offers:
             exact_offer = offer_snapshot(offer)
             exact_hash = canonical_sha256(exact_offer)
@@ -699,6 +701,13 @@ async def decide_offer(
     return record
 
 
+# Дорожка без OE считает не по статистической модели OE-дорожки, а по
+# минимальной одобренной человеком цене.  Её повтор поэтому обязан быть
+# ОТДЕЛЬНЫМ контрактом: версии ``recommendation-replay-v*`` описывают вход,
+# которого у этой рекомендации нет (наблюдения рынка, коэффициенты, политика).
+NO_OE_REPLAY_CONTRACT_V1 = "no-oe-human-approved-replay-v1"
+
+
 def _five_percent_below(value: Decimal) -> Decimal:
     return (value * Decimal("0.95")).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
@@ -760,6 +769,7 @@ async def resume_pricing_run(
         for value in approved:
             by_seller.setdefault(value.seller_id, value)
         source = run_item.start_snapshot
+        calculated_at = datetime.now(UTC)
         enough = len(by_seller) >= min_sellers
         fair_price = min((value.price for value in by_seller.values()), default=None)
         recommended_price = (
@@ -787,6 +797,13 @@ async def resume_pricing_run(
                 ],
             },
             calculation_trace={
+                "replay_contract_version": NO_OE_REPLAY_CONTRACT_V1,
+                "calculated_at": calculated_at.isoformat(),
+                # Порог продавцов — НАСТРОЙКА развёртывания, и она уже менялась
+                # на живом проекте.  Повтор, читающий её из текущего окружения,
+                # повторял бы не тот расчёт, что был выполнен: смена порога
+                # молча переписала бы историю.  Он хранится здесь.
+                "min_independent_sellers": min_sellers,
                 "method": "human-approved-no-oe-lowest-minus-5pct-v1",
                 "market_basis": "minimum_human_approved_comparable_price",
                 "discount": "0.05",
@@ -863,7 +880,7 @@ async def resume_pricing_run(
         )
         session.add(recommendation)
         run_item.status = "manual_review"
-        run_item.finished_at = datetime.now(UTC)
+        run_item.finished_at = calculated_at
         run_item.checkpoint = {
             "stage": "manual_no_oe_calculated",
             "action": action,
@@ -876,6 +893,7 @@ async def resume_pricing_run(
 
 
 __all__ = [
+    "NO_OE_REPLAY_CONTRACT_V1",
     "NoOePricingError",
     "NoOeQueryPlan",
     "build_no_oe_review_input",

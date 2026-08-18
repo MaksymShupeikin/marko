@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from marko.infrastructure.db.models import (
     MarketObservation,
     ObservationTierClassification,
+    PricingDiscoveryDecision,
     PricingRecommendation,
     PricingRunItem,
 )
@@ -30,6 +31,10 @@ from marko.services.market_collection import (
     _semantic_review_required_for_observation,
     apply_comparability_activation_gate,
     resolve_bound_execution_item,
+)
+from marko.services.no_oe_pricing import (
+    NO_OE_REPLAY_CONTRACT_V1,
+    _five_percent_below,
 )
 from marko.services.pricing_runs import (
     PricingRunSnapshotError,
@@ -97,6 +102,15 @@ async def replay_recommendation(
     )
     trace = recommendation.calculation_trace
     replay_contract_version = str(trace.get("replay_contract_version", ""))
+    # Развилка стоит ДО машинерии OE-дорожки намеренно: рекомендация без OE не
+    # имеет подтверждённого OE по определению, и общая проверка личности ниже
+    # объявила бы её неповторимой раньше, чем дело дошло бы до расчёта.
+    if replay_contract_version == NO_OE_REPLAY_CONTRACT_V1:
+        return await _replay_no_oe(
+            session,
+            recommendation=recommendation,
+            trace=trace,
+        )
     if replay_contract_version not in SUPPORTED_REPLAY_CONTRACTS:
         raise RecommendationReplayUnavailable(
             "Recommendation has no supported replay contract"
@@ -315,6 +329,142 @@ async def replay_recommendation(
     return RecommendationReplay(
         recommendation_id=recommendation.id,
         replay_contract_version=replay_contract_version,
+        calculated_at=calculated_at,
+        exact_match=not mismatches,
+        mismatches=mismatches,
+        replayed=replayed_summary,
+    )
+
+
+async def _replay_no_oe(
+    session: AsyncSession,
+    *,
+    recommendation: PricingRecommendation,
+    trace: Mapping[str, Any],
+) -> RecommendationReplay:
+    """Пересчитать рекомендацию дорожки без OE из её же допущенных предложений.
+
+    Считать здесь нечего, кроме минимума одобренных человеком цен и минус пяти
+    процентов, — и именно поэтому повтор осмыслен: он показывает, что цена
+    выведена из решений оператора, которые лежат в базе и не менялись, а не из
+    промежуточного состояния воркера.
+    """
+
+    calculated_at = _required_datetime(trace.get("calculated_at"))
+    stored_threshold = trace.get("min_independent_sellers")
+    if (
+        not isinstance(stored_threshold, int)
+        or isinstance(stored_threshold, bool)
+        or stored_threshold < 1
+    ):
+        raise RecommendationReplayUnavailable(
+            "Recommendation trace is missing the independent-seller threshold "
+            "it was calculated under"
+        )
+    snapshot = recommendation.context_snapshot
+    review_snapshot_hash = str(
+        (snapshot if isinstance(snapshot, Mapping) else {}).get(
+            "review_snapshot_hash", ""
+        )
+    )
+    if not review_snapshot_hash:
+        raise RecommendationReplayUnavailable(
+            "Recommendation context snapshot is missing the review snapshot hash"
+        )
+
+    # Порядок здесь несущий, а не косметический: при двух допущенных
+    # предложениях одного продавца ``setdefault`` оставляет ПЕРВОЕ, и другой
+    # порядок дал бы другую справедливую цену.  Повторяем выборку расчёта
+    # дословно — те же сортировка, схлопывание по предложению и по продавцу.
+    decisions = list(
+        (
+            await session.scalars(
+                select(PricingDiscoveryDecision)
+                .where(
+                    PricingDiscoveryDecision.pricing_run_item_id
+                    == recommendation.pricing_run_item_id,
+                    PricingDiscoveryDecision.created_at <= calculated_at,
+                )
+                .order_by(
+                    PricingDiscoveryDecision.created_at,
+                    PricingDiscoveryDecision.id,
+                )
+            )
+        ).all()
+    )
+    latest = {decision.catalog_discovery_offer_id: decision for decision in decisions}
+    approved = [
+        decision for decision in latest.values() if decision.decision == "APPROVE"
+    ]
+    by_seller: dict[str, PricingDiscoveryDecision] = {}
+    for value in approved:
+        by_seller.setdefault(value.seller_id, value)
+
+    enough = len(by_seller) >= stored_threshold
+    fair_price = min((value.price for value in by_seller.values()), default=None)
+    recommended_price = (
+        _five_percent_below(fair_price) if enough and fair_price else None
+    )
+    reason_codes = [
+        "NO_OE_HUMAN_APPROVED_OFFERS",
+        "AUTOMATIC_ELIGIBILITY_FORCED_FALSE",
+        "NO_GLOBAL_IDENTITY_CREATED",
+    ]
+    if not enough:
+        reason_codes.append("INSUFFICIENT_INDEPENDENT_SELLERS")
+    replayed_fingerprint = canonical_sha256(
+        {
+            "run_item_id": str(recommendation.pricing_run_item_id),
+            "review_snapshot_hash": review_snapshot_hash,
+            "decision_ids": [str(value.id) for value in by_seller.values()],
+        }
+    )
+
+    stored_hashes = trace.get("offer_hashes")
+    expected: dict[str, Any] = {
+        "action": recommendation.action,
+        "fair_price": _quantize(recommendation.fair_price, "0.01"),
+        "recommended_price": _quantize(recommendation.recommended_price, "0.01"),
+        "competitor_count": recommendation.competitor_count,
+        "raw_competitor_count": recommendation.raw_competitor_count,
+        "unique_seller_count": recommendation.unique_seller_count,
+        "reason_codes": list(recommendation.reason_codes),
+        "offer_hashes": list(stored_hashes) if isinstance(stored_hashes, list) else [],
+        "decision_fingerprint": recommendation.decision_fingerprint,
+    }
+    actual: dict[str, Any] = {
+        "action": "MANUAL_REVIEW" if enough else "INSUFFICIENT_DATA",
+        "fair_price": _quantize(fair_price, "0.01"),
+        "recommended_price": _quantize(recommended_price, "0.01"),
+        "competitor_count": len(by_seller),
+        "raw_competitor_count": len(latest),
+        "unique_seller_count": len(by_seller),
+        "reason_codes": reason_codes,
+        "offer_hashes": [value.offer_sha256 for value in by_seller.values()],
+        "decision_fingerprint": replayed_fingerprint,
+    }
+    mismatches = {
+        field: {
+            "stored": _json_value(expected[field]),
+            "replayed": _json_value(actual[field]),
+        }
+        for field in expected
+        if expected[field] != actual[field]
+    }
+    replayed_summary = {
+        **{field: _json_value(value) for field, value in actual.items()},
+        "method": str(trace.get("method", "")),
+        "min_independent_sellers": stored_threshold,
+    }
+    pricing_event(
+        "replay_exact_match_total",
+        policy_version=recommendation.policy_version,
+        exact_match=not mismatches,
+        value=1,
+    )
+    return RecommendationReplay(
+        recommendation_id=recommendation.id,
+        replay_contract_version=NO_OE_REPLAY_CONTRACT_V1,
         calculated_at=calculated_at,
         exact_match=not mismatches,
         mismatches=mismatches,
