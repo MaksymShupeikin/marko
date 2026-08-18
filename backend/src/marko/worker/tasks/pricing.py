@@ -133,6 +133,16 @@ def process_no_oe_discovery_item_task(self, run_item_id: str) -> str:
         return "skipped" if run_id is None else str(run_id)
     except Exception as exc:
         error_code = str(getattr(exc, "code", "")).upper()
+        # A safety refusal is a decision about this row's own data, so the next
+        # attempt refuses identically. Retrying it held the run open and kept a
+        # worker slot busy every 60 s for hours; worse, a worker restart resets
+        # Celery's retry counter, so the loop had no end at all.
+        if "PRIVATE_KEMP" in error_code:
+            run_id = run_async(get_pricing_item_run_id(item_id))
+            run_async(fail_pricing_item(item_id, exc))
+            if run_id is not None:
+                _enqueue_collection_finalizer(run_id, trigger_id=item_id)
+            raise
         source_blocked = any(
             marker in error_code
             for marker in ("403", "429", "CAPTCHA", "CHALLENGE", "ACCESS_BLOCKED")
