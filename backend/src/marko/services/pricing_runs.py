@@ -3792,6 +3792,10 @@ async def cancel_pricing_run(
         return run
     run.cancel_requested = True
     await session.commit()
+    # ``commit`` expires the instance, so returning it here made the response
+    # model lazy-load outside the async context and the operator's «Отменить
+    # расчёт» answered 500 on a cancellation the server had already accepted.
+    await session.refresh(run)
     return run
 
 
