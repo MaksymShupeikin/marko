@@ -707,7 +707,14 @@ def test_plausible_but_absent_gate_paths_are_still_rejected(
 
 
 def test_invented_candidate_field_is_still_rejected() -> None:
-    """``candidate`` has a fixed key set; ``measure_unit`` is not in it."""
+    """A citation of a key absent from THIS payload is unbound.
+
+    The fixture below hand-builds a pre-``aaf2093`` candidate without
+    ``measure_unit``; real snapshots have carried the key on both sides since
+    that commit (15 of 15 in run ``43211994``).  Binding is payload-driven, so
+    the citation is rejected because the key is missing from the fixture, not
+    because ``measure_unit`` is off-contract -- it no longer is.
+    """
 
     with pytest.raises(ComparabilityProviderError) as exc_info:
         llm_comparability._validate_provider_text_evidence(
