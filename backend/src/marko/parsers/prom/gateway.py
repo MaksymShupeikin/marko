@@ -438,6 +438,27 @@ def _motors_from_detail(detail: Any) -> MotorsContext | None:
     )
 
 
+def _source_stayed_silent(value: Any) -> bool:
+    """Tell "the source said nothing" apart from "the source said this".
+
+    Every empty container is silence.  ``part_numbers`` is a tuple defaulting
+    to ``()`` and grouping-page tiles never carry it, so a membership test
+    listing only ``None``, ``""``, ``[]`` and ``{}`` read that default as a
+    spoken value: a card that did name its numbers then "disagreed" with a
+    tile that had never spoken, and the phantom conflict dropped exactly the
+    candidates whose structured evidence the pricing cohort needs.
+
+    ``0`` and ``False`` are values a source can legitimately state, so only
+    containers and ``None`` count as silence here.
+    """
+
+    if value is None:
+        return True
+    if isinstance(value, (str, bytes, tuple, list, set, frozenset, dict)):
+        return len(value) == 0
+    return False
+
+
 def _detail_identity_conflicts_with_comparison(
     comparison: PriceComparison,
     offer: Offer,
@@ -1146,9 +1167,9 @@ class PromGateway:
         for field in _DETAIL_MERGE_FIELDS:
             listing_value = getattr(listing, field)
             detail_value = getattr(detail, field)
-            if detail_value in (None, "", [], {}):
+            if _source_stayed_silent(detail_value):
                 continue
-            if listing_value in (None, "", [], {}):
+            if _source_stayed_silent(listing_value):
                 updates[field] = detail_value
                 field_sources[field] = _DETAIL_SOURCE_PATHS[field]
             elif listing_value != detail_value:

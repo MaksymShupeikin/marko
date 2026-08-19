@@ -209,6 +209,104 @@ def test_detail_identity_mismatch_is_explicit_and_merges_nothing() -> None:
     assert enriched.detail_evidence["error_code"] == "PRODUCT_IDENTITY_MISMATCH"
 
 
+def _detail_client(listing: Product, raw: dict[str, object]) -> _DocumentClient:
+    html = _product_card_html(raw)
+    return _DocumentClient(
+        HttpDocument(
+            text=html,
+            content_sha256=hashlib.sha256(html.encode()).hexdigest(),
+            request_url=listing.url or "",
+            status_code=200,
+        )
+    )
+
+
+def test_two_different_part_numbers_stay_a_conflict() -> None:
+    """The identity check the other two tests relax must still bite.
+
+    A card that names another manufacturer number contradicts the listing that
+    retrieved it, and the comparison lane drops that row.  This test comes
+    first on purpose: without it, treating an empty tuple as silence would be
+    indistinguishable from switching the identity check off.
+    """
+
+    listing = replace(_product(101, 501, sku="1086282"), part_numbers=("1086282",))
+    client = _detail_client(
+        listing,
+        _raw_product(
+            101,
+            501,
+            sku="1086282",
+            attributes=[
+                {"name": "Код виробника", "values": [{"value": "BFC1001"}]}
+            ],
+        ),
+    )
+
+    enriched = PromGateway()._fetch_candidate_detail(client, listing, lang="ua")
+
+    assert enriched.detail_evidence is not None
+    assert enriched.detail_evidence["status"] == "SUCCESS_WITH_CONFLICTS"
+    assert enriched.detail_evidence["conflicts"]["part_numbers"] == {
+        "listing": ("1086282",),
+        "detail": ("BFC1001",),
+    }
+    assert enriched.part_numbers == ("1086282",)
+
+
+def test_a_listing_without_part_numbers_takes_them_from_the_card() -> None:
+    """An absent tuple is silence, not a value that can disagree.
+
+    Tiles on the OE grouping page carry no ``part_numbers`` at all, so reading
+    the default ``()`` as something the source said turned every card that does
+    carry numbers into an identity conflict -- and the conflict dropped exactly
+    the candidates whose evidence the pricing cohort needs.
+    """
+
+    listing = _product(101, 501, sku="1086282")
+    assert listing.part_numbers == ()
+    client = _detail_client(
+        listing,
+        _raw_product(
+            101,
+            501,
+            sku="1086282",
+            attributes=[
+                {"name": "Код виробника", "values": [{"value": "1K0129620E"}]}
+            ],
+        ),
+    )
+
+    enriched = PromGateway()._fetch_candidate_detail(client, listing, lang="ua")
+
+    assert enriched.part_numbers == ("1K0129620E",)
+    assert enriched.detail_evidence is not None
+    assert enriched.detail_evidence["status"] == "SUCCESS"
+    assert enriched.detail_evidence["conflicts"] == {}
+
+
+def test_a_card_without_part_numbers_neither_conflicts_nor_erases() -> None:
+    """The same silence read from the other side of the merge."""
+
+    listing = replace(_product(101, 501, sku="1086282"), part_numbers=("1086282",))
+    client = _detail_client(
+        listing,
+        _raw_product(
+            101,
+            501,
+            sku="1086282",
+            attributes=[{"name": "Стан", "values": [{"value": "Новий"}]}],
+        ),
+    )
+
+    enriched = PromGateway()._fetch_candidate_detail(client, listing, lang="ua")
+
+    assert enriched.part_numbers == ("1086282",)
+    assert enriched.detail_evidence is not None
+    assert enriched.detail_evidence["status"] == "SUCCESS"
+    assert enriched.detail_evidence["conflicts"] == {}
+
+
 def test_missing_product_card_record_is_not_an_empty_market() -> None:
     listing = _product(101, 501, sku="1086282")
     html = '<script>window.ApolloCacheState = {"_FAST_CACHE": {}};</script>'
