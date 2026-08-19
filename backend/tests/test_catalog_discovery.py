@@ -426,10 +426,20 @@ def test_semantic_gate_holds_damaged_exact_oe_for_manual_review() -> None:
     )
 
     assert gated.status is CandidateStatus.REFERENCE_ONLY
-    assert gated.reason == "SEMANTIC_PRICING_EVIDENCE_INCOMPLETE"
+    # Since the marketplace-silence default (owner decision 2026-08-19) the
+    # reference side asserts new, so «погнутий» is an explicit condition
+    # conflict rather than merely missing evidence.  Either way the damaged
+    # card never prices — this pins that it now fails harder, not softer.
+    assert gated.reason == "SEMANTIC_CONFLICT"
+    # «damaged» is a conflict against our default-new side AND still not a
+    # usable price basis, so the dimension shows up on both lists at once.
     assert gated.details["semantic_gate"]["missing_pricing_dimensions"] == [
         "condition"
     ]
+    assert "condition" in {
+        row["dimension"]
+        for row in gated.details["semantic_gate"]["hard_stop_conflicts"]
+    }
 
 
 def test_semantic_pricing_gate_holds_explicit_engine_conflict_for_review() -> None:
@@ -609,11 +619,11 @@ def test_market_pricing_gate_holds_missing_package_and_unit_evidence() -> None:
 
     assert gated.status is CandidateStatus.REFERENCE_ONLY
     assert gated.reason == "SEMANTIC_PRICING_EVIDENCE_INCOMPLETE"
-    assert set(gated.details["semantic_gate"]["missing_pricing_dimensions"]) >= {
-        "condition",
-        "package_quantity",
-        "unit_basis",
-    }
+    # ``condition`` is no longer in the missing set: a silent card defaults to
+    # new (owner decision 2026-08-19).  The unit fields still hold the price.
+    missing = set(gated.details["semantic_gate"]["missing_pricing_dimensions"])
+    assert missing >= {"package_quantity", "unit_basis"}
+    assert "condition" not in missing
 
 
 def test_market_cross_gate_requires_category_specific_evidence() -> None:

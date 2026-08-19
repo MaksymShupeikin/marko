@@ -529,6 +529,10 @@ def test_saved_five_pair_semantics_are_conservative_and_category_aware() -> None
         "engine",
         "part_subtype",
         "assembly_level",
+        # Present since the marketplace-silence default (owner decision
+        # 2026-08-19): our side always asserts a condition now, so an
+        # analogue must match it.
+        "condition",
     ]
 
     assert wrong_lock_component["comparisons"]["part_type"]["state"] == "MATCH"
@@ -1538,7 +1542,10 @@ def test_damaged_marketplace_wording_is_not_a_usable_new_or_used_price() -> None
         "Радіатор кондиціонера Renault Scenic",
         "Радіатор кондиціонера Renault Scenic погнутий",
     )
-    assert matrix["comparisons"]["condition"]["state"] == "UNKNOWN"
+    # Our silent side defaults to new (owner decision 2026-08-19), so a stated
+    # damaged candidate is now an explicit conflict rather than an unknown —
+    # strictly harder to price, which is the point of this test.
+    assert matrix["comparisons"]["condition"]["state"] == "CONFLICT"
     assert "condition" in matrix["candidate_asserted_dimensions"]
 
 
@@ -1566,9 +1573,14 @@ def test_latin_used_markers_from_saved_marketplace_titles_are_detected(
     ),
 )
 def test_ambiguous_latin_bu_tokens_do_not_imply_used_condition(title: str) -> None:
+    """A BU part-number fragment is not «б/у»; only the silence default fills in."""
+
     features = extract_semantic_features({"title": title})
 
-    assert features["condition"].values == ()
+    assert features["condition"].values == ("new",)
+    assert [item.source_field for item in features["condition"].evidence] == [
+        "marketplace_default"
+    ]
 
 
 def test_current_condition_classifier_rejects_stale_unknown_observation() -> None:
@@ -1949,6 +1961,72 @@ def test_an_explicit_pack_size_is_never_overwritten_by_the_inference() -> None:
     features = extract_semantic_features({"title": "Підшипник 4 шт.", "measure_unit": "шт."})
 
     assert features["package_quantity"].values == ("4",)
+
+
+def test_a_stated_used_condition_is_never_overridden_by_the_default() -> None:
+    """The guard the condition default must not touch.
+
+    A card that says «б/у» anywhere has spoken; the marketplace default exists
+    only for silence.  Without this case the default would be indistinguishable
+    from ignoring the stated condition.
+    """
+
+    features = extract_semantic_features(
+        {"title": "Фільтр повітряний VW Caddy б/у оригінал"}
+    )
+
+    assert features["condition"].values == ("used",)
+    assert all(
+        item.source_field != "marketplace_default"
+        for item in features["condition"].evidence
+    )
+
+
+def test_a_silent_card_defaults_to_new_with_an_auditable_source() -> None:
+    """Owner decision 2026-08-19: an unstated condition means a new part.
+
+    Measured on run ``c2d5e78b``: 32 of 70 competitor cards say nothing about
+    condition, and 28 of 70 observations were held out of the price cohort by
+    that silence alone.  A marketplace listing sells new goods unless it says
+    otherwise; used listings say so and are caught by the pattern above and by
+    the ``is_used`` cohort rejection upstream.
+    """
+
+    features = extract_semantic_features({"title": "Фільтр повітряний VW Caddy"})
+
+    assert features["condition"].values == ("new",)
+    assert [item.source_field for item in features["condition"].evidence] == [
+        "marketplace_default"
+    ]
+
+
+def test_a_stated_new_condition_is_evidence_not_the_default() -> None:
+    features = extract_semantic_features(
+        {
+            "title": "Фільтр повітряний VW Caddy",
+            "characteristics": {"Стан": ["Новий"]},
+        }
+    )
+
+    assert features["condition"].values == ("new",)
+    assert all(
+        item.source_field != "marketplace_default"
+        for item in features["condition"].evidence
+    )
+
+
+def test_the_default_resolves_the_condition_comparison_to_a_match() -> None:
+    """The money case: our stated «Новий» against a silent competitor card."""
+
+    matrix = build_semantic_feature_matrix(
+        {"name": "Фільтр повітряний VW Caddy", "characteristics": {"Стан": ["Новий"]}},
+        {"title": "Фільтр повітряний VW Caddy III 1.9TDI"},
+    )
+
+    assert matrix["comparisons"]["condition"]["state"] == "MATCH"
+    assert "condition" not in {
+        row["dimension"] for row in matrix["hard_stop_conflicts"]
+    }
 
 
 def test_a_listing_with_no_unit_basis_stays_unknown() -> None:
@@ -2442,12 +2520,24 @@ def test_marketplace_piece_unit_does_not_erase_explicit_set_boundary() -> None:
 
 
 def test_vehicle_model_new_beetle_does_not_manufacture_new_condition() -> None:
+    """The model name «New Beetle» must never become condition evidence.
+
+    Our side does end up ``new`` — but from the marketplace-silence default,
+    not from the word «New» in the title; the candidate's stated «б/у» keeps
+    the comparison an honest conflict.
+    """
+
     matrix = _matrix(
         "Фильтр воздуха VW New Beetle",
         "Фільтр повітряний VW New Beetle б/у",
     )
 
-    assert matrix["our_product"]["condition"]["state"] == "UNKNOWN"
+    assert [
+        item["source_field"]
+        for item in matrix["our_product"]["condition"]["evidence"]
+    ] == ["marketplace_default"]
+    assert matrix["candidate"]["condition"]["values"] == ["used"]
+    assert matrix["comparisons"]["condition"]["state"] == "CONFLICT"
 
 
 @pytest.mark.parametrize(

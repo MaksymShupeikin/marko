@@ -23,7 +23,7 @@ from typing import Any
 
 
 SEMANTIC_FEATURE_EXTRACTOR_VERSION = (
-    "semantic-features-v45-sliding-door-carriage"
+    "semantic-features-v46-condition-default-new"
 )
 
 
@@ -5461,6 +5461,21 @@ def extract_semantic_features(record: Mapping[str, Any]) -> dict[str, FeatureSet
         item.normalized_value for item in values["unit_basis"]
     } == {"piece"}:
         _append(values, "package_quantity", "1", "unit_basis", "piece")
+
+    # A listing that says nothing about condition is a listing of a new part.
+    # Owner decision 2026-08-19: the marketplace default is new.
+    #
+    # Measured on run ``c2d5e78b``: 32 of 70 competitor cards carry no
+    # condition anywhere, and that silence alone held 28 of 70 observations
+    # out of the price cohort while ``condition`` sits in
+    # SEMANTIC_PRICING_BASE_REQUIRED_DIMENSIONS.  Sellers of used parts say so
+    # -- «б/у» in a title is caught by ``_CONDITION_PATTERNS`` above, and the
+    # ``is_used`` tier classification rejects the cohort upstream -- so the
+    # stated-value passes always win and this only fills a blank.  The source
+    # field names the assumption: an operator reading the evidence sees
+    # ``marketplace_default``, not a claim the card never made.
+    if not values["condition"]:
+        _append(values, "condition", "new", "marketplace_default", "new")
 
     # Side, axle position and condition describe one sellable variant.  Old
     # marketplace descriptions are often templates containing both sides or
