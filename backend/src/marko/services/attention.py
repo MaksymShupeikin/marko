@@ -23,6 +23,7 @@ from marko.infrastructure.db.models import (
     PricingRun,
     SyncRun,
 )
+from marko.core.config import get_settings
 from marko.infrastructure.db.session import async_session_factory
 from marko.services.pricing_runs import (
     CONFIRMATION_SOURCE_AUTOMATED_MONITORING,
@@ -90,6 +91,8 @@ class AttentionPage:
 async def start_store_monitoring_run(sync_run_id: UUID, celery_app: Celery) -> UUID | None:
     """Materialise the latest store view and start one idempotent pricing run."""
 
+    if not get_settings().attention_monitoring_enabled:
+        return None
     async with async_session_factory() as session:
         sync_run = await session.get(SyncRun, sync_run_id)
         if sync_run is None:
@@ -134,6 +137,8 @@ async def start_import_monitoring_run(
 ) -> UUID | None:
     """Start the same monitoring pipeline for an imported XLSX snapshot."""
 
+    if not get_settings().attention_monitoring_enabled:
+        return None
     if batch.status not in {"completed", "partial"} or batch.imported_rows <= 0:
         return None
     await _mark_batch_attention_processing(

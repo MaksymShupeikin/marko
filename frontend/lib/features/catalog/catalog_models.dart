@@ -428,6 +428,8 @@ class CatalogCompetitorComparison {
     required Object? currentPrice,
     required Object? fairPrice,
     required Object? recommendedPrice,
+    Object? lowerBound,
+    Object? upperBound,
     required this.currency,
     required this.reasonCodes,
     required this.items,
@@ -462,7 +464,9 @@ class CatalogCompetitorComparison {
     this.collectionStatus,
   }) : currentPrice = DecimalValue.tryParse(currentPrice),
        fairPrice = DecimalValue.tryParse(fairPrice),
-       recommendedPrice = DecimalValue.tryParse(recommendedPrice);
+       recommendedPrice = DecimalValue.tryParse(recommendedPrice),
+       lowerBound = DecimalValue.tryParse(lowerBound),
+       upperBound = DecimalValue.tryParse(upperBound);
 
   factory CatalogCompetitorComparison.fromJson(Map<String, dynamic> json) {
     return CatalogCompetitorComparison(
@@ -473,6 +477,8 @@ class CatalogCompetitorComparison {
       currentPrice: json['current_price'],
       fairPrice: json['fair_price'],
       recommendedPrice: json['recommended_price'],
+      lowerBound: json['lower_bound'],
+      upperBound: json['upper_bound'],
       currency: json['currency'] as String?,
       reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
@@ -549,6 +555,11 @@ class CatalogCompetitorComparison {
   final DecimalValue? currentPrice;
   final DecimalValue? fairPrice;
   final DecimalValue? recommendedPrice;
+
+  /// Recommended band from the engine: the budget-floor target band or the
+  /// P25-P75 interquartile range of the cleaned competitor prices.
+  final DecimalValue? lowerBound;
+  final DecimalValue? upperBound;
   final String? currency;
   final List<String> reasonCodes;
   final List<CatalogCompetitorOffer> items;
@@ -588,6 +599,7 @@ class CatalogCompetitorComparison {
 
   bool get hasComparison => recommendationId != null;
   bool get hasDiscovery => discoveryRunId != null;
+  bool get hasBand => lowerBound != null && upperBound != null;
 }
 
 double? _decimal(dynamic value) {

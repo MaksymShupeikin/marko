@@ -88,19 +88,19 @@ class CustomerPriceAdvisory extends StatelessWidget {
             Text(
               context.localized(
                 ru:
-                    'Не подтверждено автоматически. Основание: '
+                    'Требует проверки оператором. Основание: '
                     '${recommendation.advisoryDecision?['basis_offer_count'] ?? '—'} '
                     'карточек, '
                     '${recommendation.advisoryDecision?['basis_independent_sellers'] ?? '—'} '
-                    'продавцов. Проверьте комплект, состояние и единицу — '
-                    'в автоматическую когорту это не входит.',
+                    'продавцов. Проверьте комплект, состояние и единицу '
+                    'перед решением.',
                 uk:
-                    'Не підтверджено автоматично. Підстава: '
+                    'Потребує перевірки оператором. Підстава: '
                     '${recommendation.advisoryDecision?['basis_offer_count'] ?? '—'} '
                     'карток, '
                     '${recommendation.advisoryDecision?['basis_independent_sellers'] ?? '—'} '
-                    'продавців. Перевірте комплект, стан і одиницю — '
-                    'в автоматичну когорту це не входить.',
+                    'продавців. Перевірте комплект, стан і одиницю '
+                    'перед рішенням.',
               ),
             ),
           ],

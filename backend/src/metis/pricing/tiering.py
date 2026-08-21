@@ -12,7 +12,7 @@ from .types import ConditionState, ProductTier, TierClassification
 
 
 TIER_METHOD_VERSION = "brand-tier-v1"
-CONDITION_METHOD_VERSION = "yuri-v1-condition-v3"
+CONDITION_METHOD_VERSION = "yuri-v1-condition-v4"
 CROSS_CANDIDATE_METHOD_VERSION = "description-cross-candidate-v1"
 
 UNAPPROVED_ENGINEERING_BRAND_TIERS: dict[str, ProductTier] = {
@@ -119,7 +119,13 @@ def classify_condition(
     description: str | None,
     explicit_condition: str | None,
 ) -> ConditionAssessment:
-    """Classify condition from every available lane without unsafe NEW defaults."""
+    """Classify condition from every available lane.
+
+    Владельческое решение 2026-08-21: карточка, молчащая о состоянии, читается
+    как «новый товар» — на Prom про б/у пишут явно, и любой такой маркер
+    по-прежнему уводит в USED_OR_REFURBISHED/CONFLICT.  До v4 молчание давало
+    UNKNOWN и парковало предложение в ручной разбор.
+    """
 
     fields = {
         "title": unicodedata.normalize("NFKC", title or ""),
@@ -173,9 +179,9 @@ def classify_condition(
             evidence_sources=new_sources,
         )
     return ConditionAssessment(
-        state=ConditionState.UNKNOWN,
+        state=ConditionState.NEW,
         is_used=False,
-        reason_codes=("CONDITION_UNKNOWN",),
+        reason_codes=("CONDITION_NEW_ASSUMED_NO_USED_MARKERS",),
         evidence_sources=(),
     )
 

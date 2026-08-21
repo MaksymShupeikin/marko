@@ -5,6 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+from marko.api.schemas.catalog import CatalogCompetitorComparisonResponse
 from marko.services.catalog_competitors import (
     CatalogCompetitorOffer,
     _catalog_item_match_score,
@@ -92,6 +93,8 @@ def test_catalog_competitors_only_include_actual_target_market_evidence() -> Non
         currency="UAH",
         confidence_grade="HIGH",
         dispersion=Decimal("0.08"),
+        lower_bound=Decimal("690"),
+        upper_bound=Decimal("735"),
         reason_codes=[],
         evidence_observation_ids=[
             str(competitor.id),
@@ -131,6 +134,45 @@ def test_catalog_competitors_only_include_actual_target_market_evidence() -> Non
     assert result.items[0].seller_name == "Auto Partner"
     assert result.items[0].normalized_price == Decimal("705.50")
     assert result.current_price == Decimal("720")
+    assert result.lower_bound == Decimal("690")
+    assert result.upper_bound == Decimal("735")
+
+
+def test_catalog_competitor_response_exposes_recommendation_band() -> None:
+    competitor = _observation(seller_name="Auto Partner", price="690")
+    recommendation = SimpleNamespace(
+        id=uuid4(),
+        computed_at=datetime(2026, 7, 25, 13, 0, tzinfo=UTC),
+        current_price=Decimal("720"),
+        fair_price=Decimal("700"),
+        recommended_price=Decimal("710"),
+        currency="UAH",
+        confidence_grade="HIGH",
+        dispersion=Decimal("0.08"),
+        lower_bound=Decimal("690"),
+        upper_bound=Decimal("735"),
+        reason_codes=[],
+        evidence_observation_ids=[str(competitor.id)],
+        calculation_trace={"normalized_offers": []},
+    )
+
+    comparison = build_catalog_competitor_comparison(
+        recommendation,
+        [
+            (
+                competitor,
+                _classification(is_owned=False, cohort_role="TARGET_MARKET"),
+            )
+        ],
+    )
+    response = CatalogCompetitorComparisonResponse.model_validate(comparison)
+
+    assert response.lower_bound == Decimal("690")
+    assert response.upper_bound == Decimal("735")
+
+    empty = empty_catalog_competitor_comparison()
+    assert empty.lower_bound is None
+    assert empty.upper_bound is None
 
 
 def test_catalog_competitors_recheck_persisted_admission_before_rendering() -> None:
@@ -148,6 +190,8 @@ def test_catalog_competitors_recheck_persisted_admission_before_rendering() -> N
         currency="UAH",
         confidence_grade="HIGH",
         dispersion=Decimal("0.08"),
+        lower_bound=Decimal("690"),
+        upper_bound=Decimal("735"),
         reason_codes=[],
         evidence_observation_ids=[str(stale.id)],
         calculation_trace={"normalized_offers": []},
@@ -179,6 +223,8 @@ def test_catalog_competitors_hide_dumping_or_stale_semantic_rows() -> None:
         currency="UAH",
         confidence_grade="HIGH",
         dispersion=Decimal("0.08"),
+        lower_bound=Decimal("690"),
+        upper_bound=Decimal("735"),
         reason_codes=[],
         evidence_observation_ids=[str(dumping.id), str(stale.id)],
         calculation_trace={"normalized_offers": []},

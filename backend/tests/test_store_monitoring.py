@@ -87,3 +87,88 @@ async def test_periodic_store_monitoring_queues_each_due_owned_store(
         (pairs[0][0], pairs[0][1], celery),
         (pairs[1][0], pairs[1][1], celery),
     ]
+
+
+# Решение заказчика 2026-08-21: прогоны проверки цен не стартуют сами.
+# Обе точки автозапуска обязаны молча выйти до первого обращения к базе.
+
+
+class _ExplodingSessionFactory:
+    def __call__(self):
+        raise AssertionError("attention run must not touch the database when disabled")
+
+
+class _ExplodingSession:
+    def __getattr__(self, name):
+        raise AssertionError("attention run must not touch the session when disabled")
+
+
+@pytest.mark.asyncio
+async def test_store_monitoring_run_is_silenced_by_attention_flag(monkeypatch) -> None:
+    from marko.services import attention
+
+    monkeypatch.setattr(
+        attention,
+        "get_settings",
+        lambda: SimpleNamespace(attention_monitoring_enabled=False),
+    )
+    monkeypatch.setattr(
+        attention, "async_session_factory", _ExplodingSessionFactory()
+    )
+
+    result = await attention.start_store_monitoring_run(uuid4(), object())
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_import_monitoring_run_is_silenced_by_attention_flag(monkeypatch) -> None:
+    from marko.services import attention
+
+    monkeypatch.setattr(
+        attention,
+        "get_settings",
+        lambda: SimpleNamespace(attention_monitoring_enabled=False),
+    )
+    batch = SimpleNamespace(
+        status="completed",
+        imported_rows=5,
+        id=uuid4(),
+        workspace_id=uuid4(),
+    )
+
+    result = await attention.start_import_monitoring_run(
+        _ExplodingSession(),  # type: ignore[arg-type]
+        batch=batch,  # type: ignore[arg-type]
+        celery_app=object(),  # type: ignore[arg-type]
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_import_monitoring_gate_is_the_only_thing_stopping_the_run(
+    monkeypatch,
+) -> None:
+    """With the flag on, the same call must get past the gate (and hit the DB)."""
+
+    from marko.services import attention
+
+    monkeypatch.setattr(
+        attention,
+        "get_settings",
+        lambda: SimpleNamespace(attention_monitoring_enabled=True),
+    )
+    batch = SimpleNamespace(
+        status="completed",
+        imported_rows=5,
+        id=uuid4(),
+        workspace_id=uuid4(),
+    )
+
+    with pytest.raises(AssertionError, match="must not touch the session"):
+        await attention.start_import_monitoring_run(
+            _ExplodingSession(),  # type: ignore[arg-type]
+            batch=batch,  # type: ignore[arg-type]
+            celery_app=object(),  # type: ignore[arg-type]
+        )

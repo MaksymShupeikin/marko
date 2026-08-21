@@ -199,13 +199,17 @@ class CategoryComparabilityRule:
 
 _CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
     {
+        # Владельческое решение 2026-08-21: карточка продавца не обязана
+        # повторять OE-номер, чтобы пройти жёсткие ворота сопоставимости —
+        # идентичность по-прежнему доказывается verification/identity-evidence
+        # и семантическим ревью, а КОНФЛИКТ OE-номера всё так же даёт REJECT
+        # (oe_reference остаётся в IDENTITY_DIMENSIONS).
         "brake_pad": CategoryComparabilityRule(
             policy_key="brake_pad",
-            hard_required=frozenset(
-                {"oe_reference", "position", "condition", "package_quantity"}
-            ),
+            hard_required=frozenset({"position", "condition", "package_quantity"}),
             conditional=frozenset(
                 {
+                    "oe_reference",
                     "part_type",
                     "fitment",
                     "vehicle_generation",
@@ -218,9 +222,10 @@ _CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
         ),
         "shock_absorber": CategoryComparabilityRule(
             policy_key="shock_absorber",
-            hard_required=frozenset({"oe_reference", "position", "side", "condition"}),
+            hard_required=frozenset({"position", "side", "condition"}),
             conditional=frozenset(
                 {
+                    "oe_reference",
                     "part_type",
                     "fitment",
                     "vehicle_generation",
@@ -233,11 +238,10 @@ _CATEGORY_RULES: Mapping[str, CategoryComparabilityRule] = MappingProxyType(
         ),
         "generic_unknown": CategoryComparabilityRule(
             policy_key="generic_unknown",
-            hard_required=frozenset({"oe_reference", "condition"}),
+            hard_required=frozenset({"condition"}),
             conditional=frozenset(
                 set(COMPARABILITY_DIMENSIONS)
                 - {
-                    "oe_reference",
                     "condition",
                     "brand_manufacturer",
                 }

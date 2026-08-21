@@ -265,6 +265,11 @@ class Settings(BaseSettings):
     )
     store_sync_scraper_max_pages: int = 0
     store_monitoring_enabled: bool = True
+    # Решение заказчика, передано владельцем 2026-08-21: прогоны проверки цен
+    # не должны стартовать сами — ни после импорта XLSX, ни после
+    # синхронизации магазина. False глушит оба автозапуска в
+    # services/attention.py; ручной запуск оператором не затрагивается.
+    attention_monitoring_enabled: bool = True
     store_monitoring_refresh_interval_seconds: int = Field(
         default=3600,
         ge=300,

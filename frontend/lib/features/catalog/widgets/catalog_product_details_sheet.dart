@@ -6,17 +6,20 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/app_language.dart';
 import '../../../core/app_theme.dart';
+import '../../../core/marko_motion.dart';
 import '../../../core/marko_ui.dart';
+import '../../../core/presentation_formatters.dart';
 import '../../../core/widgets/marko_cached_image.dart';
 import '../catalog_models.dart';
 import 'catalog_competitor_section.dart';
+import 'catalog_recommendation_banner.dart';
 
 Future<void> showCatalogProductDetailsSheet({
   required BuildContext context,
   required CatalogProduct product,
   required Future<CatalogCompetitorComparison> Function() loadCompetitors,
   Future<CatalogCompetitorComparison> Function()? discoverCompetitors,
-  required VoidCallback onCompare,
+  VoidCallback? onOpenPricing,
   ValueChanged<String>? onOpenListing,
 }) {
   return showGeneralDialog<void>(
@@ -29,10 +32,12 @@ Future<void> showCatalogProductDetailsSheet({
       product: product,
       loadCompetitors: loadCompetitors,
       discoverCompetitors: discoverCompetitors,
-      onCompare: () {
-        Navigator.of(dialogContext).pop();
-        onCompare();
-      },
+      onOpenPricing: onOpenPricing == null
+          ? null
+          : () {
+              Navigator.of(dialogContext).pop();
+              onOpenPricing();
+            },
       onOpenListing: onOpenListing,
     ),
     transitionBuilder: (context, animation, secondaryAnimation, child) {
@@ -59,8 +64,8 @@ class CatalogProductDetailsSheet extends StatefulWidget {
   const CatalogProductDetailsSheet({
     required this.product,
     required this.loadCompetitors,
-    required this.onCompare,
     this.discoverCompetitors,
+    this.onOpenPricing,
     this.onOpenListing,
     super.key,
   });
@@ -68,7 +73,7 @@ class CatalogProductDetailsSheet extends StatefulWidget {
   final CatalogProduct product;
   final Future<CatalogCompetitorComparison> Function() loadCompetitors;
   final Future<CatalogCompetitorComparison> Function()? discoverCompetitors;
-  final VoidCallback onCompare;
+  final VoidCallback? onOpenPricing;
   final ValueChanged<String>? onOpenListing;
 
   @override
@@ -78,14 +83,30 @@ class CatalogProductDetailsSheet extends StatefulWidget {
 
 class _CatalogProductDetailsSheetState
     extends State<CatalogProductDetailsSheet> {
+  final ScrollController _scrollController = ScrollController();
   late Future<_CatalogComparisonLoad> _comparison;
   bool _isDiscovering = false;
   String? _discoveryError;
+  bool _isMatching = false;
+  bool _matchRequested = false;
+  String? _matchError;
+  bool _stalePromptShown = false;
+
+  /// Срок годности сохранённого сбора: старше — предлагаем повторную
+  /// проверку сопоставления и оценки (требование заказчика, 2026-08-21).
+  static const Duration _staleAfter = Duration(days: 14);
 
   @override
   void initState() {
     super.initState();
     _comparison = _loadComparison();
+    _comparison.then(_maybeWarnStale);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -121,22 +142,32 @@ class _CatalogProductDetailsSheetState
                 Divider(color: colors.border),
                 Expanded(
                   child: SingleChildScrollView(
+                    controller: _scrollController,
                     padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _ProductSummary(product: widget.product),
-                        const SizedBox(height: 24),
-                        FutureBuilder<_CatalogComparisonLoad>(
-                          future: _comparison,
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState !=
-                                ConnectionState.done) {
-                              return const CatalogCompetitorLoading();
-                            }
-                            final result = snapshot.requireData;
-                            if (result.error case final error?) {
-                              return MarkoAsyncErrorView(
+                    child: FutureBuilder<_CatalogComparisonLoad>(
+                      future: _comparison,
+                      builder: (context, snapshot) {
+                        final result =
+                            snapshot.connectionState == ConnectionState.done
+                            ? snapshot.requireData
+                            : null;
+                        final comparison = result?.comparison;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (_matchRequested && comparison != null) ...[
+                              CatalogRecommendationBanner(
+                                comparison: comparison,
+                                onOpenPricing: widget.onOpenPricing,
+                              ),
+                              const SizedBox(height: 20),
+                            ],
+                            _ProductSummary(product: widget.product),
+                            const SizedBox(height: 24),
+                            if (result == null)
+                              const CatalogCompetitorLoading()
+                            else if (result.error case final error?)
+                              MarkoAsyncErrorView(
                                 error: error,
                                 forbiddenResourceRu:
                                     'конкурентным объявлениям этого товара',
@@ -144,15 +175,15 @@ class _CatalogProductDetailsSheetState
                                     'конкурентних оголошень цього товару',
                                 onRetry: _retry,
                                 padding: EdgeInsets.zero,
-                              );
-                            }
-                            return CatalogCompetitorSection(
-                              comparison: result.comparison!,
-                              onOpenListing: _openListing,
-                            );
-                          },
-                        ),
-                      ],
+                              )
+                            else
+                              CatalogCompetitorSection(
+                                comparison: comparison!,
+                                onOpenListing: _openListing,
+                              ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -207,20 +238,43 @@ class _CatalogProductDetailsSheetState
                       ],
                       OutlinedButton.icon(
                         key: const ValueKey('catalog-details-compare'),
-                        onPressed: widget.onCompare,
+                        onPressed: _isMatching ? null : _match,
                         style: OutlinedButton.styleFrom(
                           backgroundColor: colors.surface,
                           foregroundColor: colors.ink,
                           side: BorderSide(color: colors.border),
                         ),
-                        icon: const Icon(Icons.price_check_rounded, size: 19),
+                        icon: _isMatching
+                            ? const SizedBox.square(
+                                dimension: 17,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.price_check_rounded, size: 19),
                         label: Text(
-                          context.localized(
-                            ru: 'Сопоставление с объявлениями конкурентов',
-                            uk: 'Зіставлення з оголошеннями конкурентів',
-                          ),
+                          _isMatching
+                              ? context.localized(
+                                  ru: 'Сопоставляем…',
+                                  uk: 'Зіставляємо…',
+                                )
+                              : context.localized(
+                                  ru: 'Сопоставить и рассчитать цену',
+                                  uk: 'Зіставити та розрахувати ціну',
+                                ),
                         ),
                       ),
+                      if (_matchError != null) ...[
+                        const SizedBox(height: 7),
+                        Text(
+                          _matchError!,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -243,6 +297,108 @@ class _CatalogProductDetailsSheetState
       return _CatalogComparisonLoad.success(await widget.loadCompetitors());
     } catch (error) {
       return _CatalogComparisonLoad.failure(error);
+    }
+  }
+
+  void _maybeWarnStale(_CatalogComparisonLoad load) {
+    if (!mounted || _stalePromptShown) return;
+    final comparison = load.comparison;
+    final collectedAt = comparison?.discoveredAt;
+    if (collectedAt == null) return;
+    if (DateTime.now().difference(collectedAt) < _staleAfter) return;
+    _stalePromptShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_showStaleDialog(collectedAt));
+    });
+  }
+
+  Future<void> _showStaleDialog(DateTime collectedAt) async {
+    final canRefresh = widget.discoverCompetitors != null;
+    final refresh = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('catalog-stale-discovery-dialog'),
+        title: Text(
+          dialogContext.localized(
+            ru: 'Данные устарели',
+            uk: 'Дані застаріли',
+          ),
+        ),
+        content: Text(
+          dialogContext.localized(
+            ru:
+                'Объявления по этому товару собраны '
+                '${formatLocalDateTime(collectedAt)} — больше двух недель '
+                'назад. Нужно сделать ещё одну проверку сопоставления и '
+                'оценки товаров.',
+            uk:
+                'Оголошення за цим товаром зібрані '
+                '${formatLocalDateTime(collectedAt)} — понад два тижні тому. '
+                'Потрібно зробити ще одну перевірку зіставлення та оцінки '
+                'товарів.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              dialogContext.localized(ru: 'Позже', uk: 'Пізніше'),
+            ),
+          ),
+          if (canRefresh)
+            FilledButton(
+              key: const ValueKey('catalog-stale-discovery-refresh'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(
+                dialogContext.localized(
+                  ru: 'Проверить заново',
+                  uk: 'Перевірити заново',
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (refresh == true && mounted) {
+      await _discover();
+      if (mounted && _discoveryError == null) {
+        await _match();
+      }
+    }
+  }
+
+  Future<void> _match() async {
+    if (_isMatching) return;
+    setState(() {
+      _isMatching = true;
+      _matchError = null;
+    });
+    try {
+      final result = await widget.loadCompetitors();
+      if (!mounted) return;
+      setState(() {
+        _comparison = Future.value(_CatalogComparisonLoad.success(result));
+        _matchRequested = true;
+        _isMatching = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        _scrollController.animateTo(
+          0,
+          duration: MarkoMotion.enter,
+          curve: MarkoMotion.enterCurve,
+        );
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isMatching = false;
+        _matchError = context.localized(
+          ru: 'Сопоставление не выполнено: $error',
+          uk: 'Зіставлення не виконано: $error',
+        );
+      });
     }
   }
 

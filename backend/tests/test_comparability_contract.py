@@ -182,8 +182,9 @@ def test_padded_normalized_currency_passes_the_currency_hard_gate() -> None:
 @pytest.mark.parametrize(
     ("case_id", "dimension", "state"),
     (
-        ("M-001", "oe_reference", EvidenceState.UNKNOWN),
-        ("M-002", "oe_reference", EvidenceState.UNKNOWN),
+        # M-001/M-002 (oe_reference UNKNOWN) сняты решением владельца
+        # 2026-08-21: карточка не обязана повторять OE-номер; конфликт номера
+        # (M-003) по-прежнему никогда не автоматизируется.
         ("M-003", "oe_reference", EvidenceState.CONFLICT),
         ("M-007", "vehicle_generation", EvidenceState.CONFLICT),
         ("M-008", "year_interval", EvidenceState.CONFLICT),
@@ -217,6 +218,24 @@ def test_m001_m013_hard_dimensions_never_auto(
     assert result.recommended_price is None
     if state == EvidenceState.CONFLICT:
         assert any("REJECTED_" in item.reason for item in result.excluded)
+
+
+def test_unknown_oe_reference_no_longer_blocks_the_hard_gate() -> None:
+    # Решение владельца 2026-08-21: отсутствие OE-номера на карточке — не
+    # жёсткие ворота (идентичность доказывают verification и семантика),
+    # а вот КОНФЛИКТ номера остаётся REJECT — см. M-003 выше.
+    offers = [
+        _offer(
+            index,
+            evidence=_evidence(
+                index, dimension="oe_reference", state=EvidenceState.UNKNOWN
+            ),
+        )
+        for index in range(5)
+    ]
+    result = recommend_price(_context(), offers, _coefficients())
+    assert result.action in AUTOMATIC
+    assert result.automatic_eligible
 
 
 @pytest.mark.parametrize("state", (EvidenceState.UNKNOWN, EvidenceState.CONFLICT))

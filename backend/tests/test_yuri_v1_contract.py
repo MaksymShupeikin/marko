@@ -298,8 +298,10 @@ def test_legacy_domain_adapter_rederives_used_and_kemp_safety_signals() -> None:
 
     assert used_offer.is_used
     assert kemp_offer.is_kemp
-    assert kemp_offer.severe_conflict
-    assert kemp_offer.conflict_reason == "CONDITION_UNKNOWN"
+    # condition-v4 (2026-08-21): молчание карточки о состоянии больше не
+    # конфликт — KEMP исключается своей ролью, а не «неизвестным состоянием».
+    assert not kemp_offer.severe_conflict
+    assert kemp_offer.conflict_reason is None
 
 
 def test_product_additive_boundary_preserves_available_description() -> None:
@@ -344,15 +346,18 @@ def test_used_signal_from_any_available_lane_is_a_hard_tier_reject(
     assert tier.is_used
 
 
-def test_unknown_condition_is_not_silently_treated_as_new() -> None:
+def test_silent_condition_is_assumed_new_by_owner_decision() -> None:
+    # Решение владельца 2026-08-21: про б/у на Prom пишут явно, поэтому
+    # молчание карточки читается как «новый», а не UNKNOWN (condition-v4).
     assessment = classify_condition(
         title="Колодки",
         description=None,
         explicit_condition=None,
     )
 
-    assert assessment.state == ConditionState.UNKNOWN
+    assert assessment.state == ConditionState.NEW
     assert not assessment.is_used
+    assert assessment.reason_codes == ("CONDITION_NEW_ASSUMED_NO_USED_MARKERS",)
 
 
 def test_condition_markers_are_boundary_aware_and_conflicts_fail_closed() -> None:
@@ -367,7 +372,8 @@ def test_condition_markers_are_boundary_aware_and_conflicts_fail_closed() -> Non
         explicit_condition=None,
     )
 
-    assert safe.state == ConditionState.UNKNOWN
+    # BU-токены в артикулах — не маркер б/у; молчание = «новый» (condition-v4).
+    assert safe.state == ConditionState.NEW
     assert not safe.is_used
     assert conflict.state == ConditionState.CONFLICT
     assert conflict.is_used

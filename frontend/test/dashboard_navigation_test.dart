@@ -174,6 +174,18 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('catalog-details-compare')));
     await tester.pumpAndSettle();
 
+    expect(
+      find.byKey(const ValueKey('catalog-recommendation-banner')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('catalog-product-details-sheet')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Перейти к сравнению цен'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Требует внимания'), findsWidgets);
     expect(find.text('Цены под контролем'), findsOneWidget);
     expect(tester.takeException(), isNull);

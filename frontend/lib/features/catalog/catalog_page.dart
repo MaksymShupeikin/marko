@@ -200,7 +200,7 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
                   .read(catalogControllerProvider.notifier)
                   .discoverCompetitors(product)
             : null,
-        onCompare: widget.onOpenPriceComparison,
+        onOpenPricing: widget.onOpenPriceComparison,
       ),
     );
   }

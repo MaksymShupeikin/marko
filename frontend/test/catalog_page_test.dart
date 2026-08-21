@@ -130,14 +130,28 @@ void main() {
     expect(find.text('Parts Avto'), findsNothing);
     expect(find.text('Основной'), findsNothing);
     expect(find.text('OE/OEM: 6 1131 36 9611'), findsOneWidget);
-    expect(
-      find.text('Сопоставление с объявлениями конкурентов'),
-      findsOneWidget,
-    );
+    expect(find.text('Сопоставить и рассчитать цену'), findsOneWidget);
     expect(find.text('Перейти к сравнению цен'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('catalog-recommendation-banner')),
+      findsNothing,
+    );
     expect(comparisons, 0);
 
     await tester.tap(find.byKey(const ValueKey('catalog-details-compare')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('catalog-recommendation-banner')),
+      findsOneWidget,
+    );
+    expect(find.text('Рекомендованный диапазон'), findsOneWidget);
+    expect(find.text('690–735 UAH'), findsOneWidget);
+    expect(find.text('Рекомендованная цена: 700 UAH (+55.6%)'), findsOneWidget);
+    expect(sheet, findsOneWidget);
+    expect(comparisons, 0);
+
+    await tester.tap(find.text('Перейти к сравнению цен'));
     await tester.pumpAndSettle();
 
     expect(comparisons, 1);
@@ -199,7 +213,7 @@ void main() {
 
     expect(find.text('Конкурентні оголошення'), findsOneWidget);
     expect(find.text('Враховується у порівнянні'), findsOneWidget);
-    expect(find.text('Зіставлення з оголошеннями конкурентів'), findsOneWidget);
+    expect(find.text('Зіставити та розрахувати ціну'), findsOneWidget);
   });
 
   testWidgets('panel never substitutes owned stores for missing competitors', (
@@ -224,6 +238,32 @@ void main() {
     );
     expect(find.text('KEMP Автозапчастини'), findsNothing);
     expect(find.text('Parts Avto'), findsNothing);
+  });
+
+  testWidgets('match without a stored recommendation explains the silence', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_testApp(comparison: _emptyComparison));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Показать конкурентов'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('catalog-details-compare')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('catalog-recommendation-banner')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Рекомендация появится после запуска проверки рынка оператором.'),
+      findsOneWidget,
+    );
+    expect(find.text('Рекомендованный диапазон'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('catalog-product-details-sheet')),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -335,6 +375,8 @@ final _comparison = CatalogCompetitorComparison(
   currentPrice: 450,
   fairPrice: 700,
   recommendedPrice: 700,
+  lowerBound: 690,
+  upperBound: 735,
   currency: 'UAH',
   reasonCodes: const [],
   items: [

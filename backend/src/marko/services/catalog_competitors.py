@@ -130,6 +130,11 @@ class CatalogCompetitorComparison:
     # progress and rejection reasons visible immediately.
     candidate_items: tuple[CatalogCompetitorOffer, ...] = ()
     collection_status: str | None = None
+    # The engine's recommended band (budget-floor target band or the P25-P75
+    # interquartile range of the cleaned prices).  Absent when there is no
+    # persisted recommendation.
+    lower_bound: Decimal | None = None
+    upper_bound: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -429,6 +434,8 @@ def build_catalog_competitor_comparison(
         currency=recommendation.currency,
         reason_codes=tuple(recommendation.reason_codes),
         items=tuple(offers),
+        lower_bound=recommendation.lower_bound,
+        upper_bound=recommendation.upper_bound,
         **_discovery_fields(discovery),
     )
 

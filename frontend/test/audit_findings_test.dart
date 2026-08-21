@@ -866,7 +866,7 @@ Widget _auditSurfaceApp({
     _AuditP0Surface.productDetails => CatalogProductDetailsSheet(
       product: _auditProduct,
       loadCompetitors: () => _auditComparisonFor(state),
-      onCompare: _noop,
+      onOpenPricing: _noop,
     ),
   };
   final app = MaterialApp(

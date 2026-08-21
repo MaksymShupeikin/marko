@@ -329,9 +329,7 @@ class _RecommendationTable extends StatelessWidget {
         vertical: MarkoSpacing.sm,
       ),
       decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: colors.border),
-        ),
+        border: Border(bottom: BorderSide(color: colors.border)),
       ),
       child: Row(
         children: [

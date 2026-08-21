@@ -356,6 +356,10 @@ class CatalogCompetitorComparisonResponse(BaseModel):
     fair_price: Decimal | None
     recommended_price: Decimal | None
     currency: str | None
+    # Recommended band: budget-floor target band or the P25-P75 interquartile
+    # range of the cleaned competitor prices.
+    lower_bound: Decimal | None = None
+    upper_bound: Decimal | None = None
     # How trustworthy the basis was, and how widely it was spread, so the
     # card can show the arithmetic instead of only its conclusion.
     confidence_grade: str | None
