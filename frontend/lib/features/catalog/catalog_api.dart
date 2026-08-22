@@ -3,6 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api_client.dart';
 import 'catalog_models.dart';
 
+/// Сколько ждать один живой сбор объявлений с Prom.
+///
+/// Сбор идёт синхронно внутри запроса и упирается в вежливые паузы между
+/// страницами выдачи, а не в скорость сервера. Замеры завершённых сборов по
+/// `catalog_discovery_runs`: 2:18, 3:34, 4:18. Прежние 2 минуты обрывали
+/// клиента раньше, чем сервер успевал ответить, — оператор видел
+/// «Сбор не завершён: TimeoutException» на успешно собранных 99 объявлениях.
+const catalogDiscoveryTimeout = Duration(minutes: 6);
+
 class CatalogApi {
   const CatalogApi(this._client);
 
@@ -87,7 +96,7 @@ class CatalogApi {
   }) async {
     final payload = await _client.postJson(
       '/api/v1/catalog/competitors/discover',
-      timeout: const Duration(minutes: 2),
+      timeout: catalogDiscoveryTimeout,
       body: {
         'sku': sku,
         'oe': oe,

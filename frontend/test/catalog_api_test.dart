@@ -307,7 +307,12 @@ void main() {
 
     await CatalogApi(client).discoverCompetitors(sku: 'SKU-1');
 
-    expect(client.capturedTimeout, const Duration(minutes: 2));
+    // Смысл проверки прежний: у сбора свой длинный срок, а не умолчание
+    // клиента. Само число переехало в `catalogDiscoveryTimeout` и выросло
+    // с двух минут: замеренные сборы длятся 2:18–4:18, и на двух минутах
+    // клиент обрывался раньше, чем сервер успевал ответить.
+    expect(client.capturedTimeout, catalogDiscoveryTimeout);
+    expect(client.capturedTimeout, greaterThan(const Duration(minutes: 5)));
   });
 }
 

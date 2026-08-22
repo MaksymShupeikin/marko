@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api_client.dart';
 import 'catalog_api.dart';
 import 'catalog_models.dart';
 
@@ -155,13 +156,26 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     // silently fall back to a weak title-only path.
     if (oe == null && mpn == null) {
       final store = product.primaryStore;
-      if (store != null) {
-        final enriched = await _api.enrichIdentifiers(
-          storeId: store.storeId,
-          externalId: store.externalId,
-        );
-        oe = enriched.oe;
-        mpn = enriched.mpn;
+      // Витрина несёт два разных внешних номера: магазина (`externalId`) и
+      // объявления (`sourceListingId`). Починке нужен номер объявления —
+      // подстановка номера магазина искала `listings.external_id`, которого
+      // там не бывает никогда, и роняла сбор 404-й у 69,5 % карточек Prom.
+      final listingExternalId = store?.sourceListingId;
+      if (store != null &&
+          listingExternalId != null &&
+          listingExternalId.isNotEmpty) {
+        try {
+          final enriched = await _api.enrichIdentifiers(
+            storeId: store.storeId,
+            externalId: listingExternalId,
+          );
+          oe = enriched.oe;
+          mpn = enriched.mpn;
+        } catch (error) {
+          if (markoIsSessionExpired(error)) rethrow;
+          // Починка карточки — не условие поиска, а попытка его улучшить.
+          // Её отказ оставляет сбор на артикуле и названии, а не отменяет.
+        }
       }
     }
     return _api.discoverCompetitors(
@@ -177,8 +191,18 @@ class CatalogController extends AsyncNotifier<CatalogState> {
 
   Future<String?> enrichOe(CatalogProduct product) {
     final store = product.primaryStore;
-    if (store == null) return Future.value(null);
-    return _api.enrichOe(storeId: store.storeId, externalId: store.externalId);
+    // Тот же адресный номер, что и в discoverCompetitors: объявления, не
+    // магазина.
+    final listingExternalId = store?.sourceListingId;
+    if (store == null ||
+        listingExternalId == null ||
+        listingExternalId.isEmpty) {
+      return Future.value(null);
+    }
+    return _api.enrichOe(
+      storeId: store.storeId,
+      externalId: listingExternalId,
+    );
   }
 
   Future<void> _reload({
