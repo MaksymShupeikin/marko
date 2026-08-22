@@ -2180,6 +2180,144 @@ class PricingDiscoveryReview(Base):
     )
 
 
+class CatalogMatchRun(Base):
+    """One operator click on "Сопоставить" for one catalog card.
+
+    The paid comparability review already had a home -- but only inside a
+    pricing run, bound to ``pricing_run_items.catalog_item_id``, which exists
+    solely for imported XLSX rows.  A storefront card has no such row and can
+    never have one, so the card-level lane needs its own ledger rather than a
+    nullable foreign key that no card could satisfy.
+    """
+
+    __tablename__ = "catalog_match_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_catalog_match_run_status",
+        ),
+        Index(
+            "ix_catalog_match_run_workspace_product_time",
+            "workspace_id",
+            "product_key",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    product_key: Mapped[str] = mapped_column(String(64), index=True)
+    discovery_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_discovery_runs.id", ondelete="RESTRICT"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    # Публичные поля нашей карточки, замороженные на момент нажатия. Здесь же
+    # живёт её состояние: карточка 2141006 помечена «Вживаний», и сравнивать
+    # подержанное с новым — не то же самое, что новое с новым.
+    product_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    offer_count: Mapped[int] = mapped_column(Integer, default=0)
+    group_count: Mapped[int] = mapped_column(Integer, default=0)
+    reviewed_group_count: Mapped[int] = mapped_column(Integer, default=0)
+    comparable_group_count: Mapped[int] = mapped_column(Integer, default=0)
+    # The customer's rule, unchanged from the pricing runs so that a number
+    # from a card and a number from a run can never disagree.
+    minimum_comparable_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    advisory_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    grouping_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class CatalogMatchReview(Base):
+    """Immutable validated verdict for one distinct product of one click."""
+
+    __tablename__ = "catalog_match_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "catalog_match_run_id",
+            "group_key",
+            name="uq_catalog_match_review_run_group",
+        ),
+        CheckConstraint(
+            "verdict IN ('MATCH', 'NO_MATCH', 'INSUFFICIENT_EVIDENCE')",
+            name="ck_catalog_match_review_verdict",
+        ),
+        CheckConstraint(
+            "char_length(prompt_sha256) = 64 AND char_length(schema_sha256) = 64 "
+            "AND char_length(model_sha256) = 64 AND char_length(input_sha256) = 64 "
+            "AND char_length(output_sha256) = 64",
+            name="ck_catalog_match_review_hashes",
+        ),
+        # A second click on an unchanged card must reuse the answer instead of
+        # buying it again.
+        Index(
+            "ix_catalog_match_review_cache",
+            "workspace_id",
+            "input_sha256",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    catalog_match_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_match_runs.id", ondelete="CASCADE"), index=True
+    )
+    catalog_discovery_offer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("catalog_discovery_offers.id", ondelete="RESTRICT"), index=True
+    )
+    group_key: Mapped[str] = mapped_column(String(512))
+    offer_ids: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    seller_ids: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    # Why the free deterministic gates refused this group, carried into the
+    # review so the model revisits a stated decision instead of judging blind.
+    gate_rejected_reasons: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    verdict: Mapped[str] = mapped_column(String(32))
+    rationale: Mapped[str] = mapped_column(Text)
+    evidence_references: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    conflicts: Mapped[list[Any]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    prompt_sha256: Mapped[str] = mapped_column(String(64))
+    schema_sha256: Mapped[str] = mapped_column(String(64))
+    model_sha256: Mapped[str] = mapped_column(String(64))
+    input_sha256: Mapped[str] = mapped_column(String(64))
+    output_sha256: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(160))
+    reasoning_effort: Mapped[str] = mapped_column(String(16))
+    canonical_input: Mapped[dict[str, Any]] = mapped_column(JSON)
+    canonical_output: Mapped[dict[str, Any]] = mapped_column(JSON)
+    usage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    estimated_cost: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    rate_card_version: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class PricingDiscoveryDecision(Base):
     """Append-only human admission for one exact offer in one run item."""
 

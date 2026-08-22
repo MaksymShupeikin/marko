@@ -128,6 +128,15 @@ class Settings(BaseSettings):
     pricing_no_oe_discovery_enabled: bool = False
     pricing_no_oe_max_items: int = Field(default=20, ge=1, le=80)
     pricing_no_oe_max_provider_calls: int = Field(default=10, ge=1, le=20)
+    # Кнопка «Сопоставить» в карточке: платный отсев спарсенных объявлений.
+    # Собственный выключатель, а не общий с дорожкой без OE — та закрыта по
+    # своей причине (инцидент 21.08) и висит на другой точке входа. Fail-closed:
+    # пока не включено явно, операторская кнопка ничего не тратит.
+    catalog_match_enabled: bool = False
+    # Верхняя граница на одно нажатие. Карточка 2141006 даёт 42 группы; предел
+    # существует, чтобы аномальная выдача не превратила один клик в сотни
+    # вызовов, а не чтобы обрезать нормальную работу.
+    catalog_match_max_groups: int = Field(default=80, ge=1, le=200)
     pricing_llm_base_url: str = "https://api.openai.com/v1"
     pricing_llm_api_key: SecretStr = SecretStr("")
     pricing_llm_model: str = "gpt-5.6-luna"

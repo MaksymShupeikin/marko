@@ -183,6 +183,7 @@ def build_no_oe_review_input(
     exact_offer: Mapping[str, Any],
     plan: NoOeQueryPlan,
     offer_integrity_context: Mapping[str, Any] | None = None,
+    gate_assessment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Canonical Luna input with identity plus bounded public amount integrity.
 
@@ -215,6 +216,12 @@ def build_no_oe_review_input(
             "offer_integrity_context": dict(offer_integrity_context or {}),
         },
     }
+    if gate_assessment:
+        # Почему бесплатные детерминированные ворота отказали этому кандидату.
+        # Владелец 22.08 попросил, чтобы модель пересматривала отказ, а не
+        # судила вслепую. Ключ добавляется только когда он есть, поэтому
+        # входные хеши прежних отзывов не сдвигаются и кэш остаётся живым.
+        payload["deterministic_context"]["gate_assessment"] = dict(gate_assessment)
     scrubbed = _without_pricing_fields(payload)
     serialized = json.dumps(scrubbed, ensure_ascii=False, sort_keys=True)
     for match in re.findall(r"776[0-9A-ZА-Я]{1,9}", serialized.upper()):
