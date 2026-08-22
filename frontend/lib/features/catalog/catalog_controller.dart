@@ -189,6 +189,31 @@ class CatalogController extends AsyncNotifier<CatalogState> {
     );
   }
 
+  /// Запустить отсев моделью по последнему сбору этой карточки.
+  ///
+  /// Возвращает `null`, если дорожка выключена в этой среде: тогда карточка
+  /// ведёт себя как прежде и просто перечитывает сохранённое, а не показывает
+  /// оператору ошибку про выключенный флаг.
+  Future<CatalogMatchRun?> startMatch(CatalogProduct product) async {
+    try {
+      return await _api.startMatch(
+        sku: product.sku,
+        oe: product.oe,
+        mpn: product.mpn,
+        brand: product.brand,
+        title: product.name,
+        // Состояние товара живёт в характеристиках объявления, которых у
+        // карточки нет; сервер берёт его из собранного снимка сам.
+      );
+    } on ApiException catch (error) {
+      if (error.code == 'CATALOG_MATCH_DISABLED') return null;
+      rethrow;
+    }
+  }
+
+  Future<CatalogMatchRun> matchStatus(String matchRunId) =>
+      _api.getMatch(matchRunId);
+
   Future<String?> enrichOe(CatalogProduct product) {
     final store = product.primaryStore;
     // Тот же адресный номер, что и в discoverCompetitors: объявления, не

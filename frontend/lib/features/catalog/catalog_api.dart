@@ -113,6 +113,41 @@ class CatalogApi {
     );
   }
 
+  /// Запустить платный отсев по уже собранным объявлениям карточки.
+  ///
+  /// Возвращает идентификатор, а не результат: работа идёт минутами, и держать
+  /// ради неё запрос открытым — та же ошибка, что стоила карточке таймаута.
+  Future<CatalogMatchRun> startMatch({
+    String? sku,
+    String? oe,
+    String? mpn,
+    String? brand,
+    String? title,
+    String? category,
+    String? condition,
+  }) async {
+    final payload = await _client.postJson(
+      '/api/v1/catalog/competitors/match',
+      body: {
+        'sku': sku,
+        'oe': oe,
+        'mpn': mpn,
+        'brand': brand,
+        'title': title,
+        'category': category,
+        'condition': condition,
+      },
+    );
+    return CatalogMatchRun.fromJson(payload as Map<String, dynamic>);
+  }
+
+  Future<CatalogMatchRun> getMatch(String matchRunId) async {
+    final payload = await _client.getJson(
+      '/api/v1/catalog/competitors/match/$matchRunId',
+    );
+    return CatalogMatchRun.fromJson(payload as Map<String, dynamic>);
+  }
+
   Future<String?> enrichOe({
     required String storeId,
     required String externalId,

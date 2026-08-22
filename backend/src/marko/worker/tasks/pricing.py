@@ -24,6 +24,7 @@ from marko.services.market_collection import (
     reset_pricing_item_for_retry,
 )
 from marko.services.ai_evidence_shadow import process_ai_evidence_position
+from marko.services.catalog_match import process_catalog_match_run
 from marko.services.no_oe_pricing import (
     fail_no_oe_discovery_batch,
     process_no_oe_discovery_item,
@@ -282,6 +283,31 @@ def _enqueue_collection_finalizer(run_id: UUID, *, trigger_id: UUID) -> None:
         )
     )
     run_async(_publish_dispatch_events([event_id]))
+
+
+@celery_app.task(
+    name="marko.worker.process_catalog_match_run",
+    bind=True,
+    max_retries=0,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=settings.no_oe_discovery_task_soft_time_limit_seconds,
+    time_limit=settings.no_oe_discovery_task_time_limit_seconds,
+)
+def process_catalog_match_run_task(self, match_run_id: str) -> str:
+    """Review one card's collected offers off the request thread.
+
+    Forty-two distinct products at roughly a hundred seconds a call is twenty
+    minutes of work. Holding an HTTP request open for that was the bug fixed
+    on this card the same morning; the operator reopens the card instead.
+
+    Retries are off deliberately: every attempt pays the provider again, and a
+    half-finished click is cheaper to inspect than to blindly repeat.
+    """
+
+    run_id = UUID(match_run_id)
+    result = run_async(process_catalog_match_run(run_id))
+    return "skipped" if result is None else str(result)
 
 
 async def _publish_dispatch_events(event_ids: list[UUID]) -> int:

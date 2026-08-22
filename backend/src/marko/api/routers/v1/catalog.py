@@ -31,6 +31,8 @@ from marko.api.schemas.catalog import (
     CatalogItemResponse,
     CatalogKempLinkRebuildRequest,
     CatalogKempLinkReportResponse,
+    CatalogMatchRunResponse,
+    CatalogMatchStartRequest,
     CatalogOeEnrichmentRequest,
     CatalogOeEnrichmentResponse,
     CatalogTerminalManifestResponse,
@@ -48,7 +50,14 @@ from marko.services.recommendation_export import _export_identity_fields
 from marko.services.catalog_discovery import (
     CatalogDiscoveryError,
     collect_catalog_discovery,
+    latest_catalog_discovery,
 )
+from marko.services.catalog_match import (
+    CatalogMatchError,
+    catalog_match_spend,
+    start_catalog_match,
+)
+from marko.infrastructure.db.models import CatalogMatchRun
 from marko.services.catalog_costs import cost_configuration_map
 from marko.services.catalog_internal_code_join import (
     catalog_internal_code_join_report,
@@ -161,6 +170,99 @@ async def discover_catalog_product_competitors(
         brand=payload.brand,
     )
     return CatalogCompetitorComparisonResponse.model_validate(comparison)
+
+
+@router.post(
+    "/competitors/match",
+    response_model=CatalogMatchRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_catalog_product_match(
+    payload: CatalogMatchStartRequest,
+    current: WorkspaceAdmin,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogMatchRunResponse:
+    """Judge the offers this card's last collection saved, off the request thread.
+
+    Returns immediately with a run id. The review itself is minutes of paid
+    work -- forty-two distinct products on the card that prompted this feature
+    -- and an HTTP request is the wrong place to wait for it.
+    """
+
+    settings = get_settings()
+    if not settings.catalog_match_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CATALOG_MATCH_DISABLED",
+                "message": "Сопоставление моделью выключено в этой среде.",
+            },
+        )
+    snapshot = await latest_catalog_discovery(
+        session,
+        workspace_id=current.workspace_id,
+        sku=payload.sku,
+        oe=payload.oe,
+        mpn=payload.mpn,
+        brand=payload.brand,
+    )
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CATALOG_MATCH_NOTHING_COLLECTED",
+                "message": "Сначала соберите объявления с Prom.ua.",
+            },
+        )
+    try:
+        run = await start_catalog_match(
+            session,
+            workspace_id=current.workspace_id,
+            discovery_run_id=snapshot.run_id,
+            product_snapshot={
+                "sku": payload.sku,
+                "mpn_norm": payload.mpn,
+                "brand": payload.brand,
+                "name": payload.title,
+                "category": payload.category,
+                "characteristics_raw": (
+                    {"Стан": payload.condition} if payload.condition else {}
+                ),
+            },
+        )
+    except CatalogMatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    celery_app.send_task(
+        "marko.worker.process_catalog_match_run", args=[str(run.id)]
+    )
+    return CatalogMatchRunResponse.model_validate(run)
+
+
+@router.get(
+    "/competitors/match/{match_run_id}",
+    response_model=CatalogMatchRunResponse,
+)
+async def get_catalog_product_match(
+    match_run_id: UUID,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CatalogMatchRunResponse:
+    run = await session.get(CatalogMatchRun, match_run_id)
+    if run is None or run.workspace_id != current.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Match run not found"
+        )
+    response = CatalogMatchRunResponse.model_validate(run)
+    # Что стоило это нажатие — рядом с самим нажатием, а не в таблице, которую
+    # никто не складывает.
+    return response.model_copy(
+        update={
+            "spent_usd": await catalog_match_spend(session, match_run_id=run.id),
+        }
+    )
 
 
 @router.post("/products/oe", response_model=CatalogOeEnrichmentResponse)

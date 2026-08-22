@@ -332,6 +332,42 @@ class CatalogDiscoveryRequest(BaseModel):
         return self
 
 
+class CatalogMatchStartRequest(BaseModel):
+    """Одна карточка, по которой оператор нажал «Сопоставить»."""
+
+    sku: str | None = Field(default=None, max_length=255)
+    oe: str | None = Field(default=None, max_length=255)
+    mpn: str | None = Field(default=None, max_length=255)
+    brand: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=512)
+    category: str | None = Field(default=None, max_length=255)
+    # Состояние нашего товара. Карточка 2141006 помечена «Вживаний», и
+    # сопоставимость подержанного с новым — не то же, что нового с новым.
+    condition: str | None = Field(default=None, max_length=64)
+
+
+class CatalogMatchRunResponse(BaseModel):
+    id: UUID
+    status: str
+    offer_count: int
+    group_count: int
+    reviewed_group_count: int
+    comparable_group_count: int
+    minimum_comparable_price: Decimal | None = None
+    advisory_price: Decimal | None = None
+    currency: str | None = None
+    grouping_summary: dict[str, Any] = Field(default_factory=dict)
+    # Сколько стоило это нажатие. Здесь, а не в отдельной таблице, которую
+    # никто не складывает: так 21.08 потерялись $0.83.
+    spent_usd: Decimal = Decimal("0")
+    error_code: str | None = None
+    error_detail: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CatalogOeEnrichmentRequest(BaseModel):
     store_id: UUID
     external_id: str = Field(max_length=100)

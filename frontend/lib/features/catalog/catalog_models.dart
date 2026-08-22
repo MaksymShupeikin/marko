@@ -602,6 +602,63 @@ class CatalogCompetitorComparison {
   bool get hasBand => lowerBound != null && upperBound != null;
 }
 
+/// Одно нажатие «Сопоставить»: платный отсев собранных объявлений.
+///
+/// Живёт минутами, а не секундами — 42 разных товара на карточке 2141006 при
+/// ~100 секундах на вызов. Поэтому запуск возвращает идентификатор, а не
+/// результат, и карточка спрашивает о состоянии.
+class CatalogMatchRun {
+  const CatalogMatchRun({
+    required this.id,
+    required this.status,
+    required this.offerCount,
+    required this.groupCount,
+    required this.reviewedGroupCount,
+    required this.comparableGroupCount,
+    this.minimumComparablePrice,
+    this.advisoryPrice,
+    this.currency,
+    this.spentUsd,
+    this.errorCode,
+    this.errorDetail,
+  });
+
+  factory CatalogMatchRun.fromJson(Map<String, dynamic> json) {
+    return CatalogMatchRun(
+      id: json['id'] as String,
+      status: json['status'] as String,
+      offerCount: (json['offer_count'] as num?)?.toInt() ?? 0,
+      groupCount: (json['group_count'] as num?)?.toInt() ?? 0,
+      reviewedGroupCount: (json['reviewed_group_count'] as num?)?.toInt() ?? 0,
+      comparableGroupCount:
+          (json['comparable_group_count'] as num?)?.toInt() ?? 0,
+      minimumComparablePrice: _decimal(json['minimum_comparable_price']),
+      advisoryPrice: _decimal(json['advisory_price']),
+      currency: json['currency'] as String?,
+      spentUsd: _decimal(json['spent_usd']),
+      errorCode: json['error_code'] as String?,
+      errorDetail: json['error_detail'] as String?,
+    );
+  }
+
+  final String id;
+  final String status;
+  final int offerCount;
+  final int groupCount;
+  final int reviewedGroupCount;
+  final int comparableGroupCount;
+  final double? minimumComparablePrice;
+  final double? advisoryPrice;
+  final String? currency;
+  final double? spentUsd;
+  final String? errorCode;
+  final String? errorDetail;
+
+  bool get isFinished =>
+      status == 'completed' || status == 'failed' || status == 'cancelled';
+  bool get hasAdvisory => status == 'completed' && advisoryPrice != null;
+}
+
 double? _decimal(dynamic value) {
   if (value == null) return null;
   return double.tryParse(value.toString());

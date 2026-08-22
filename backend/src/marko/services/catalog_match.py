@@ -417,6 +417,35 @@ async def _review_groups(
     return verdicts
 
 
+async def catalog_match_spend(session: Any, *, match_run_id: UUID) -> Decimal:
+    """What one click actually cost, read from its own reviews.
+
+    A third cost table nobody sums is how $0.83 went unnoticed on 2026-08-21:
+    the panel's query read one lane's table while the other lane was spending.
+    This lane's number therefore travels with the click that caused it.
+    """
+
+    rows = (
+        await session.scalars(
+            select(CatalogMatchReview.estimated_cost).where(
+                CatalogMatchReview.catalog_match_run_id == match_run_id
+            )
+        )
+    ).all()
+    total = Decimal("0")
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        value = row.get("total_usd")
+        if value is None:
+            continue
+        try:
+            total += Decimal(str(value))
+        except (ArithmeticError, ValueError):
+            continue
+    return total
+
+
 async def _cached_verdicts(
     session: Any, *, workspace_id: UUID, input_hashes: Sequence[str]
 ) -> dict[str, str]:
@@ -445,6 +474,7 @@ __all__ = [
     "COMPARABLE_VERDICT",
     "CatalogMatchError",
     "CatalogMatchOutcome",
+    "catalog_match_spend",
     "process_catalog_match_run",
     "start_catalog_match",
     "summarize_catalog_match",

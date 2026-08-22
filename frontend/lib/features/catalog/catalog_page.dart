@@ -200,6 +200,15 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
                   .read(catalogControllerProvider.notifier)
                   .discoverCompetitors(product)
             : null,
+        startMatch: widget.canAdministerWorkspace
+            ? () =>
+                  ref.read(catalogControllerProvider.notifier).startMatch(product)
+            : null,
+        matchStatus: widget.canAdministerWorkspace
+            ? (matchRunId) => ref
+                  .read(catalogControllerProvider.notifier)
+                  .matchStatus(matchRunId)
+            : null,
         onOpenPricing: widget.onOpenPriceComparison,
       ),
     );

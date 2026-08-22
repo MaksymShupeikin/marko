@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/api_client.dart';
 import '../../../core/app_language.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/marko_motion.dart';
@@ -19,6 +20,8 @@ Future<void> showCatalogProductDetailsSheet({
   required CatalogProduct product,
   required Future<CatalogCompetitorComparison> Function() loadCompetitors,
   Future<CatalogCompetitorComparison> Function()? discoverCompetitors,
+  Future<CatalogMatchRun?> Function()? startMatch,
+  Future<CatalogMatchRun> Function(String matchRunId)? matchStatus,
   VoidCallback? onOpenPricing,
   ValueChanged<String>? onOpenListing,
 }) {
@@ -32,6 +35,8 @@ Future<void> showCatalogProductDetailsSheet({
       product: product,
       loadCompetitors: loadCompetitors,
       discoverCompetitors: discoverCompetitors,
+      startMatch: startMatch,
+      matchStatus: matchStatus,
       onOpenPricing: onOpenPricing == null
           ? null
           : () {
@@ -65,6 +70,8 @@ class CatalogProductDetailsSheet extends StatefulWidget {
     required this.product,
     required this.loadCompetitors,
     this.discoverCompetitors,
+    this.startMatch,
+    this.matchStatus,
     this.onOpenPricing,
     this.onOpenListing,
     super.key,
@@ -73,6 +80,11 @@ class CatalogProductDetailsSheet extends StatefulWidget {
   final CatalogProduct product;
   final Future<CatalogCompetitorComparison> Function() loadCompetitors;
   final Future<CatalogCompetitorComparison> Function()? discoverCompetitors;
+
+  /// Запуск платного отсева. `null` в результате означает, что дорожка
+  /// выключена в этой среде — карточка тогда работает как прежде.
+  final Future<CatalogMatchRun?> Function()? startMatch;
+  final Future<CatalogMatchRun> Function(String matchRunId)? matchStatus;
   final VoidCallback? onOpenPricing;
   final ValueChanged<String>? onOpenListing;
 
@@ -90,6 +102,8 @@ class _CatalogProductDetailsSheetState
   bool _isMatching = false;
   bool _matchRequested = false;
   String? _matchError;
+  CatalogMatchRun? _matchRun;
+  bool _matchCancelled = false;
   bool _stalePromptShown = false;
 
   /// Срок годности сохранённого сбора: старше — предлагаем повторную
@@ -105,6 +119,9 @@ class _CatalogProductDetailsSheetState
 
   @override
   void dispose() {
+    // Опрос состояния переживёт закрытие карточки, если его не остановить:
+    // работа идёт минутами, а виджета к тому времени уже нет.
+    _matchCancelled = true;
     _scrollController.dispose();
     super.dispose();
   }
@@ -254,10 +271,7 @@ class _CatalogProductDetailsSheetState
                             : const Icon(Icons.price_check_rounded, size: 19),
                         label: Text(
                           _isMatching
-                              ? context.localized(
-                                  ru: 'Сопоставляем…',
-                                  uk: 'Зіставляємо…',
-                                )
+                              ? _matchProgressLabel(context)
                               : context.localized(
                                   ru: 'Сопоставить и рассчитать цену',
                                   uk: 'Зіставити та розрахувати ціну',
@@ -283,6 +297,19 @@ class _CatalogProductDetailsSheetState
           ),
         ),
       ),
+    );
+  }
+
+  String _matchProgressLabel(BuildContext context) {
+    final run = _matchRun;
+    if (run == null || run.groupCount == 0) {
+      return context.localized(ru: 'Сопоставляем…', uk: 'Зіставляємо…');
+    }
+    // Число говорит оператору, что работа идёт и сколько её осталось: отсев
+    // длится минутами, и молчащая кнопка выглядит зависшей.
+    return context.localized(
+      ru: 'Сопоставляем: ${run.reviewedGroupCount} из ${run.groupCount}…',
+      uk: 'Зіставляємо: ${run.reviewedGroupCount} з ${run.groupCount}…',
     );
   }
 
@@ -373,14 +400,48 @@ class _CatalogProductDetailsSheetState
     setState(() {
       _isMatching = true;
       _matchError = null;
+      _matchRun = null;
     });
     try {
+      final start = widget.startMatch;
+      final poll = widget.matchStatus;
+      Object? startFailure;
+      if (start != null && poll != null) {
+        CatalogMatchRun? started;
+        try {
+          // `null` значит «дорожка выключена в этой среде».
+          started = await start();
+        } catch (error) {
+          if (markoIsSessionExpired(error)) rethrow;
+          // Отсев моделью — вторая ступень, а не условие первой. Если её не
+          // удалось начать, оператор всё равно обязан увидеть собранное:
+          // ровно та же ошибка стоила этой карточке кнопки сбора 22.08.
+          startFailure = error;
+        }
+        if (started != null) {
+          final finished = await _awaitMatch(started, poll);
+          if (finished == null) return;
+          if (finished.status == 'failed') {
+            throw StateError(
+              finished.errorDetail ?? finished.errorCode ?? 'match failed',
+            );
+          }
+        }
+      }
       final result = await widget.loadCompetitors();
       if (!mounted) return;
       setState(() {
         _comparison = Future.value(_CatalogComparisonLoad.success(result));
         _matchRequested = true;
         _isMatching = false;
+        // Оператору — одна короткая фраза, а не текст исключения: собранное
+        // он всё равно видит, а разбираться с причиной будет не он.
+        _matchError = startFailure == null
+            ? null
+            : context.localized(
+                ru: 'Отсев моделью недоступен — показано собранное.',
+                uk: 'Відсів моделлю недоступний — показано зібране.',
+              );
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !_scrollController.hasClients) return;
@@ -440,6 +501,26 @@ class _CatalogProductDetailsSheetState
               );
       });
     }
+  }
+
+  /// Дождаться конца отсева, спрашивая сервер, а не держа запрос открытым.
+  ///
+  /// Возвращает `null`, если карточку закрыли: работа на сервере от этого не
+  /// прекращается, но обновлять уже нечего.
+  Future<CatalogMatchRun?> _awaitMatch(
+    CatalogMatchRun started,
+    Future<CatalogMatchRun> Function(String matchRunId) poll,
+  ) async {
+    var current = started;
+    while (mounted && !_matchCancelled && !current.isFinished) {
+      setState(() => _matchRun = current);
+      await Future<void>.delayed(const Duration(seconds: 8));
+      if (!mounted || _matchCancelled) return null;
+      current = await poll(current.id);
+    }
+    if (!mounted || _matchCancelled) return null;
+    setState(() => _matchRun = current);
+    return current;
   }
 
   void _openListing(String value) {
