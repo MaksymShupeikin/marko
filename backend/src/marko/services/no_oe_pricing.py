@@ -253,6 +253,22 @@ async def fail_no_oe_discovery_batch(run_item_id: UUID, error: Exception) -> Non
         await fail_pricing_item(item_id, error)
 
 
+async def _stop_cancelled_no_oe_item(session: Any, run_item: Any) -> None:
+    """Close one no-OE position because the operator cancelled the run.
+
+    The OE lane has had this since the beginning (``market_collection`` checks
+    ``cancel_requested`` before it materialises evidence).  This lane did not,
+    and on 2026-08-21 it kept calling the paid provider for nine hours after a
+    cancel, spending $0.83 that no one could see because the panel's query read
+    the other lane's table.
+    """
+
+    run_item.status = "cancelled"
+    run_item.finished_at = datetime.now(UTC)
+    await session.commit()
+    return None
+
+
 async def process_no_oe_discovery_item(
     run_item_id: UUID,
     *,
@@ -278,6 +294,8 @@ async def process_no_oe_discovery_item(
         run = await session.get(PricingRun, run_item.pricing_run_id)
         if run is None:
             return None
+        if run.cancel_requested:
+            return await _stop_cancelled_no_oe_item(session, run_item)
         plan = plan_no_oe_queries(run_item.start_snapshot)
         query = plan.queries[0]
         snapshot = await collect_catalog_discovery(
@@ -296,6 +314,12 @@ async def process_no_oe_discovery_item(
         )
         run_item.no_oe_discovery_run_id = snapshot.run_id
         await session.commit()
+        # Живой сбор длится 2–4 минуты, и сразу за ним уходит до десяти
+        # параллельных платных вызовов. Отмена, нажатая во время сбора, обязана
+        # быть замечена здесь — иначе повторяется 21.08, когда дорожка платила
+        # ещё девять часов после отмены.
+        if run.cancel_requested:
+            return await _stop_cancelled_no_oe_item(session, run_item)
         offers = list(
             (
                 await session.scalars(
