@@ -317,6 +317,149 @@ def catalog_discovery_search_context(
     return " ".join(parts)[:255]
 
 
+_PARENTHETICAL_RE = re.compile(r"\([^)]*\)")
+_SLASH_RE = re.compile(r"[\\/]+")
+_QUANTITY_TOKEN_RE = re.compile(r"\d+\s*(шт|штук|pcs|уп)\.?", re.IGNORECASE)
+
+CATALOG_DISCOVERY_QUERY_OE = "OE"
+CATALOG_DISCOVERY_QUERY_MPN = "MPN"
+CATALOG_DISCOVERY_QUERY_TITLE_BRAND = "TITLE_BRAND"
+CATALOG_DISCOVERY_QUERY_SELLER_ARTICLE = "SELLER_ARTICLE"
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogDiscoverySearchPlan:
+    """What to search Prom with, and what that search is allowed to prove.
+
+    The two are not the same thing, and conflating them is what filled a
+    Mercedes wheel-stud card with BMW oil caps: the seller's own article was
+    used both as the search term and as the identity it asserted.
+    """
+
+    search_query: str
+    identity_query: str
+    kind: str
+    discovery_queries: tuple[str, ...] = ()
+
+    @property
+    def identity_bearing(self) -> bool:
+        """Whether a row this search found may be treated as identity-proven."""
+
+        return bool(self.identity_query)
+
+
+def _public_search_phrase(
+    *,
+    title: str | None,
+    brand: str | None,
+    category: str | None,
+) -> str:
+    """Title and brand as a public search phrase, with private codes removed.
+
+    The customer's titles occasionally carry the private KEMP code inline.
+    That code is a join key, never a public query, so it is dropped token by
+    token rather than allowed to travel inside a phrase.
+    """
+
+    phrase = catalog_discovery_search_context(
+        title=title, brand=brand, category=category
+    )
+    if not phrase:
+        return ""
+    # Marketplace titles carry packaging and synonym noise that steers the
+    # search away from the part: "(6шт) Шпилька \ болт передньої ступиці
+    # (колісна)" retrieved wheel spacers rather than wheel studs. Parenthetical
+    # fragments and slash alternatives are decoration on a search term, not
+    # part of it.
+    stripped = _PARENTHETICAL_RE.sub(" ", phrase)
+    stripped = _SLASH_RE.sub(" ", stripped)
+    public = " ".join(
+        token
+        for token in stripped.split()
+        if not is_internal_catalog_code(token) and not _QUANTITY_TOKEN_RE.fullmatch(token)
+    )
+    return public.strip()[:255].strip()
+
+
+def catalog_discovery_search_plan(
+    *,
+    resolved_query: str,
+    sku: str | None,
+    oe: str | None,
+    mpn: str | None,
+    title: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+) -> CatalogDiscoverySearchPlan:
+    """Decide the search term after the private-code resolution has run.
+
+    ``resolved_query`` is what the existing identifier chain produced, private
+    KEMP codes already resolved to a public number.  Three of the four
+    outcomes keep it verbatim; the fourth is the one that was wrong.
+
+    When the row has neither OE nor MPN and the resolution came back as the
+    seller's own article, that article proves nothing about the part: it is
+    the shop's shelf number, and Prom reuses such numbers across unrelated
+    domains.  Searching it bare returned, for article ``2141006``, a pool-stair
+    pad and a cascade of BMW oil caps -- 99 offers, 99 rejected by the free
+    gates.  The title and brand are the honest query in that case, and the
+    article survives only as a retrieval-only key: it may still *find* the
+    supplier part, and a row it found may never *price* one.
+    """
+
+    query = (resolved_query or "").strip()
+    normalized_oe = normalize_catalog_code(oe)
+    normalized_mpn = normalize_catalog_code(mpn)
+    normalized_sku = normalize_catalog_code(sku)
+
+    if query and normalized_oe and query == normalized_oe:
+        return CatalogDiscoverySearchPlan(
+            search_query=query,
+            identity_query=query,
+            kind=CATALOG_DISCOVERY_QUERY_OE,
+        )
+    if query and normalized_mpn and query == normalized_mpn:
+        return CatalogDiscoverySearchPlan(
+            search_query=query,
+            identity_query=query,
+            kind=CATALOG_DISCOVERY_QUERY_MPN,
+        )
+    if query and not (normalized_sku and query == normalized_sku):
+        # Neither the row's OE nor its MPN, and not its article either: the
+        # private-code resolution produced a public number from the imported
+        # catalog. That number is identity, exactly as before.
+        return CatalogDiscoverySearchPlan(
+            search_query=query,
+            identity_query=query,
+            kind=CATALOG_DISCOVERY_QUERY_OE,
+        )
+
+    retrieval_only: tuple[str, ...] = ()
+    if query and not is_internal_catalog_code(query):
+        retrieval_only = (query,)
+
+    phrase = _public_search_phrase(title=title, brand=brand, category=category)
+    if phrase:
+        return CatalogDiscoverySearchPlan(
+            search_query=phrase,
+            identity_query="",
+            kind=CATALOG_DISCOVERY_QUERY_TITLE_BRAND,
+            discovery_queries=retrieval_only,
+        )
+    if retrieval_only:
+        # No title to search by. The article is all there is, so it is used --
+        # and still asserts nothing.
+        return CatalogDiscoverySearchPlan(
+            search_query=retrieval_only[0],
+            identity_query="",
+            kind=CATALOG_DISCOVERY_QUERY_SELLER_ARTICLE,
+        )
+    raise CatalogDiscoveryError(
+        "CATALOG_DISCOVERY_IDENTIFIER_REQUIRED",
+        "Для поиска нужен OE/OEM, MPN, артикул товара или название с брендом.",
+    )
+
+
 def _catalog_identity_query_from_rows(rows: list[CatalogItem]) -> str | None:
     """Return one consensus query from matching imported catalog rows.
 
@@ -454,9 +597,14 @@ async def collect_catalog_discovery(
         product_key = hashlib.sha256(
             f"no-oe:{workspace_id}:{query}".encode("utf-8")
         ).hexdigest()
+        search_plan = CatalogDiscoverySearchPlan(
+            search_query=query,
+            identity_query=query,
+            kind=CATALOG_DISCOVERY_QUERY_OE,
+        )
     else:
         requested_query = catalog_discovery_query(sku=sku, oe=oe, mpn=mpn)
-        query = await _resolve_private_catalog_discovery_query(
+        resolved_query = await _resolve_private_catalog_discovery_query(
             session,
             workspace_id=workspace_id,
             sku=sku,
@@ -465,6 +613,16 @@ async def collect_catalog_discovery(
             brand=brand,
             requested_query=requested_query,
         )
+        search_plan = catalog_discovery_search_plan(
+            resolved_query=resolved_query,
+            sku=sku,
+            oe=oe,
+            mpn=mpn,
+            title=title,
+            brand=brand,
+            category=category,
+        )
+        query = search_plan.search_query
         product_key = catalog_product_key(sku=sku, oe=oe, mpn=mpn, brand=brand)
     selection_config = load_candidate_selection_config(
         resolve_backend_path(resolved_settings.pricing_candidate_selection_path)
@@ -476,13 +634,20 @@ async def collect_catalog_discovery(
     effective_owned_seller_ids = frozenset(dynamic_owned_seller_ids) | (
         selection_config.own_seller_ids
     )
-    confirmed_cross_oems = await _confirmed_cross_oems(
-        session,
-        workspace_id=workspace_id,
-        reference_oem=query,
+    # A search that proves no identity has no reference number to widen from:
+    # asking for confirmed crosses of a title phrase would either find nothing
+    # or, worse, match on an accidental token.
+    confirmed_cross_oems = (
+        await _confirmed_cross_oems(
+            session,
+            workspace_id=workspace_id,
+            reference_oem=search_plan.identity_query,
+        )
+        if search_plan.identity_bearing
+        else frozenset()
     )
     reference = ReferenceItem(
-        oem=query,
+        oem=search_plan.identity_query,
         title=(title or "").strip() or query,
         price=current_price,
         brand=(brand or "").strip() or None,
@@ -544,6 +709,7 @@ async def collect_catalog_discovery(
                 brand=brand,
                 category=category,
             ),
+            discovery_queries=search_plan.discovery_queries,
         )
         await _persist_live_result(
             session,
@@ -686,11 +852,13 @@ def _collect_live(
     search_page_limit: int,
     excluded_seller_ids: frozenset[str] = frozenset(),
     search_context: str | None = None,
+    discovery_queries: tuple[str, ...] = (),
 ) -> _LiveDiscoveryResult:
     scrape_input = QueryInput.build(
         query,
         language="ua",
         search_context=search_context,
+        discovery_queries=discovery_queries,
     )
     trace = ScrapeExecutionTrace(
         item_kind=CATALOG_DISCOVERY_CONTRACT_VERSION,
