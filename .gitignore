@@ -19,3 +19,11 @@ Thumbs.db
 
 # Logs
 *.log
+
+# AI and Agent tooling
+.agent/
+.agents/
+.claude/
+.codex/
+.gemini/
+

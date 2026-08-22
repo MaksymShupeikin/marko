@@ -144,6 +144,15 @@ async def get_or_create_auth_context(
     if not user.is_active:
         raise InvalidTokenError("Marko account is disabled")
 
+    # The name and picture live in Firebase: keep our copy in step, otherwise
+    # accounts created before a Google link never get one.
+    if identity.display_name and user.display_name != identity.display_name:
+        user.display_name = identity.display_name
+        needs_commit = True
+    if identity.avatar_url and user.avatar_url != identity.avatar_url:
+        user.avatar_url = identity.avatar_url
+        needs_commit = True
+
     workspace_id = await users_repo.get_first_workspace_id_by_user_id(session, user.id)
     if workspace_id is None:
         workspace_id = await _create_workspace(session, user)

@@ -39,8 +39,8 @@ def test_from_raw_uses_fallback_keys():
     assert (p.model_id, p.seller_id) == ("NM", 99)
 
 
-def test_field_names_end_with_url():
-    assert Product.field_names()[-1] == "url"
+def test_field_names_end_with_the_computed_columns():
+    assert Product.field_names()[-2:] == ["url", "oem_numbers"]
 
 
 def test_listing_exposes_image_url_from_raw_product_data():

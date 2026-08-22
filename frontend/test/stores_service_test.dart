@@ -4,44 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:marko_client/core/api_client.dart';
-import 'package:marko_client/features/stores/stores_api.dart';
+import 'package:marko_client/features/products/products_api.dart';
 
 void main() {
-  test('loads stores from the FastAPI REST endpoint', () async {
-    final service = StoresApi(
-      ApiClient(
-        client: MockClient((request) async {
-          expect(request.method, 'GET');
-          expect(request.url.path, '/api/v1/stores');
-          return http.Response(
-            jsonEncode([
-              {
-                'id': 'store-id',
-                'marketplace': 'prom',
-                'external_id': '2847093',
-                'name': 'Kemp',
-                'url': 'https://prom.ua/ua/c2847093-kemp.html',
-                'kind': 'owned',
-                'product_count': 12,
-                'last_synced_at': '2026-07-13T12:00:00Z',
-              },
-            ]),
-            200,
-          );
-        }),
-        baseUrl: 'http://api.test',
-      ),
-    );
-
-    final stores = await service.listStores();
-
-    expect(stores, hasLength(1));
-    expect(stores.single.displayName, 'Kemp');
-    expect(stores.single.productCount, 12);
-  });
-
-  test('sends store registration to the custom backend', () async {
-    final service = StoresApi(
+  test('sends store registration to the backend', () async {
+    final service = ProductsApi(
       ApiClient(
         client: MockClient((request) async {
           expect(request.method, 'POST');
@@ -71,19 +38,30 @@ void main() {
     expect(sync.status, 'queued');
   });
 
-  test('deletes a store through the FastAPI REST endpoint', () async {
-    final service = StoresApi(
+  test('fetches sync job details', () async {
+    final service = ProductsApi(
       ApiClient(
         client: MockClient((request) async {
-          expect(request.method, 'DELETE');
-          expect(request.url.path, '/api/v1/stores/store-id');
-          return http.Response('', 204);
+          expect(request.method, 'GET');
+          expect(request.url.path, '/api/v1/jobs/sync-123');
+          return http.Response(
+            jsonEncode({
+              'status': 'completed',
+              'progress_current': 100,
+              'progress_total': 100,
+              'error': null,
+            }),
+            200,
+          );
         }),
         baseUrl: 'http://api.test',
       ),
     );
 
-    await service.deleteStore('store-id');
+    final job = await service.getJob('sync-123');
+    expect(job.status, 'completed');
+    expect(job.isFinished, isTrue);
+    expect(job.progress, 1.0);
   });
 
   test('preserves FastAPI error details', () async {

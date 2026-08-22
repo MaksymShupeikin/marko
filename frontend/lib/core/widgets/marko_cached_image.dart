@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:heroicons/heroicons.dart';
 
 import '../app_theme.dart';
 
@@ -131,11 +132,7 @@ class _ImageFallback extends StatelessWidget {
     return ColoredBox(
       color: colors.surfaceMuted,
       child: Center(
-        child: Icon(
-          Icons.image_not_supported_outlined,
-          color: colors.muted,
-          size: 30,
-        ),
+        child: HeroIcon(HeroIcons.photo, color: colors.muted, size: 30),
       ),
     );
   }

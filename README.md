@@ -9,9 +9,9 @@ The repository is a Docker-first modular monolith:
 ```text
 Flutter ── Firebase ID token ──► FastAPI ──► PostgreSQL
    │                                │
-   ├── Firebase Authentication      └──► Redis ──► Celery worker ──► prom.ua
-   └── web / Android / desktop                         │
-                                                     matching
+   ├── Firebase Authentication      ├──► Redis ──► Celery worker ──► prom.ua
+   └── web / Android / desktop      │
+                                    └──► avto.pro (live competitor prices)
 ```
 
 Firebase is used only for authentication. Marko's users, workspaces, stores,
@@ -25,18 +25,20 @@ database and are accessed only through FastAPI.
 ├── backend/
 │   ├── migrations/                 Alembic database migrations
 │   ├── src/marko/
-│   │   ├── api/                    FastAPI routes and dependencies
+│   │   ├── api/                    FastAPI routes and schemas
 │   │   ├── core/                   application configuration
 │   │   ├── infrastructure/db/      SQLAlchemy models and sessions
-│   │   ├── parsers/prom/           prom.ua integration
+│   │   ├── parsers/                prom.ua and avto.pro parsers
 │   │   ├── repositories/           database queries
 │   │   ├── services/               import, matching, and authentication logic
 │   │   └── worker/                 Celery tasks and scheduler
 │   └── tests/
 ├── frontend/
 │   ├── lib/main.dart               app entry point and MaterialApp
-│   ├── lib/core/                   routing, API, Firebase auth, theme
-│   └── lib/features/               flat feature directories
+│   ├── lib/core/                   routing, API client, Firebase auth, theme & design tokens
+│   └── lib/features/
+│       ├── auth/                   sign-in, registration, Google OAuth, session
+│       └── products/               catalog grid, search, filters, XLSX/Prom import, avto.pro analytics
 ├── docs/
 ├── compose.yaml
 └── .env.example
@@ -386,16 +388,17 @@ The main endpoints are:
 GET  /api/v1/health/live
 GET  /api/v1/health/ready
 GET  /api/v1/auth/me
-GET  /api/v1/stores
+GET  /api/v1/products
 POST /api/v1/stores
-GET  /api/v1/stores/{store_id}/products
+POST /api/v1/stores/import-file
+GET  /api/v1/competitors/avtopro
 GET  /api/v1/jobs/{job_id}
 ```
 
-`POST /api/v1/stores` validates and stores the requested prom.ua shop, creates a
-sync run, queues a Celery task, and returns without blocking for the catalog
-import. The client polls the job endpoint and refreshes the catalog after it
-finishes.
+- `GET /api/v1/products` returns the paginated catalog with query search, price range, and sorting.
+- `POST /api/v1/stores/import-file` synchronously imports a Prom.ua XLSX catalog export.
+- `POST /api/v1/stores` registers a Prom shop URL, queues a background scraping task in Celery, and returns a job ID to poll.
+- `GET /api/v1/competitors/avtopro` performs live market price lookups on avto.pro by OEM and brand.
 
 ## Database and migrations
 

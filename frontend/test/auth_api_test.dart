@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:marko_client/core/api_client.dart';
 import 'package:marko_client/features/auth/auth_api.dart';
+import 'package:marko_client/features/auth/auth_models.dart';
 
 void main() {
   test('loads the local Marko user with a Firebase ID token', () async {
@@ -55,6 +56,19 @@ void main() {
     expect(response, {'status': 'ok'});
     expect(protectedCalls, 2);
     expect(refreshCalls, 1);
+  });
+  test('the display name wins over the email, which is the fallback', () {
+    AuthUser user(String? displayName) => AuthUser(
+      id: 'user-id',
+      email: 'seller@example.com',
+      displayName: displayName,
+      avatarUrl: null,
+      workspaceId: 'workspace-id',
+    );
+
+    expect(user('Іван Петренко').shortName, 'Іван Петренко');
+    expect(user('  ').shortName, 'seller');
+    expect(user(null).shortName, 'seller');
   });
 }
 

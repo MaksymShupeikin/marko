@@ -1,0 +1,14 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Neutral Black Container with subtle border -->
+  <rect x="8" y="8" width="496" height="496" rx="124" fill="#09090B" stroke="#27272A" stroke-width="8"/>
+  
+  <!-- Centered Precision Thin Price Chart Line -->
+  <path d="M128 368L174 298L202 322L262 174L304 292L336 242L362 274L412 134" 
+        stroke="#FFFFFF" 
+        stroke-width="18" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+  
+  <!-- Breakout Target Price Dot -->
+  <circle cx="412" cy="134" r="16" fill="#FFFFFF"/>
+</svg>

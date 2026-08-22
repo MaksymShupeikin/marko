@@ -22,6 +22,15 @@ class AuthUser {
   final String? displayName;
   final String? avatarUrl;
   final String workspaceId;
+
+  /// What to call the user in the UI. Google sign-ins carry a name; an
+  /// email/password account falls back to the part before the `@`.
+  String get shortName {
+    final name = displayName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    final local = email.split('@').first;
+    return local.isEmpty ? email : local;
+  }
 }
 
 class MarkoAuthState {

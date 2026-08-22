@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:marko_client/core/app_theme.dart';
-import 'package:marko_client/features/stores/store_models.dart';
-import 'package:marko_client/features/stores/widgets/product_card.dart';
+import 'package:marko_client/features/products/products_models.dart';
+import 'package:marko_client/features/products/widgets/product_card.dart';
 
 void main() {
   testWidgets('product card keeps price as the primary visual element', (
@@ -39,6 +39,6 @@ void main() {
 
     expect(price.style!.fontSize, greaterThan(name.style!.fontSize!));
     expect(find.text('Marko  ·  SKU SKU-1'), findsOneWidget);
-    expect(find.text('В наличии'), findsNothing);
+    expect(find.text('В наявності'), findsOneWidget);
   });
 }

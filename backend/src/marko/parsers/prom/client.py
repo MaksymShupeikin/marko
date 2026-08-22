@@ -31,6 +31,17 @@ class HttpClient:
         response = self._request(url, params)
         return response.text
 
+    def put_json(self, url: str, payload: dict) -> dict:
+        """PUT a JSON payload and return the parsed JSON response."""
+        response = self._request(
+            url, None, method="PUT", json=payload,
+            headers={"Accept": "application/json"},
+        )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise RequestFailed(f"Невалідний JSON у відповіді {url}: {exc}") from exc
+
     def close(self) -> None:
         self._session.close()
 
@@ -40,14 +51,28 @@ class HttpClient:
     def __exit__(self, *_exc) -> None:
         self.close()
 
-    def _request(self, url: str, params: dict | None) -> requests.Response:
+    def _request(
+        self,
+        url: str,
+        params: dict | None,
+        *,
+        method: str = "GET",
+        json: dict | None = None,
+        headers: dict | None = None,
+    ) -> requests.Response:
         last_error: Exception | None = None
 
         for attempt in range(1, self._config.max_retries + 1):
             self._respect_rate_limit()
             try:
-                response = self._session.get(
-                    url, params=params, timeout=self._config.timeout, allow_redirects=True
+                response = self._session.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json,
+                    headers=headers,
+                    timeout=self._config.timeout,
+                    allow_redirects=True,
                 )
             except requests.RequestException as exc:
                 last_error = exc

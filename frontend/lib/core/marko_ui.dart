@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:heroicons/heroicons.dart';
 
 import 'app_theme.dart';
 
@@ -11,33 +14,63 @@ class MarkoWordmark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iconBoxSize = compact ? 28.0 : 32.0;
+    final innerChartSize = compact
+        ? const Size(14.5, 12.5)
+        : const Size(16.5, 14.0);
+    final strokeWidth = compact ? 1.2 : 1.35;
+
+    final containerColor = inverse
+        ? colors.onInverse.withValues(alpha: 0.12)
+        : (isDark ? const Color(0xFF1E1E22) : const Color(0xFF0C0C0E));
+
+    final borderColor = inverse
+        ? colors.onInverse.withValues(alpha: 0.16)
+        : (isDark ? const Color(0x2EFFFFFF) : const Color(0x18000000));
+
+    final iconColor = inverse
+        ? colors.onInverse
+        : (isDark ? const Color(0xFFF4F4F5) : const Color(0xFFFFFFFF));
+
     return Row(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Container(
-          width: compact ? 30 : 34,
-          height: compact ? 30 : 34,
+          width: iconBoxSize,
+          height: iconBoxSize,
           decoration: BoxDecoration(
-            color: inverse ? Colors.white.withValues(alpha: 0.12) : colors.ink,
-            borderRadius: BorderRadius.circular(9),
-            border: inverse
-                ? Border.all(color: Colors.white.withValues(alpha: 0.14))
-                : null,
+            color: containerColor,
+            borderRadius: BorderRadius.circular(compact ? 7.0 : 8.5),
+            border: Border.all(color: borderColor, width: 1.0),
+            boxShadow: inverse
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 3,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
           ),
           alignment: Alignment.center,
-          child: Icon(
-            Icons.show_chart_rounded,
-            size: compact ? 18 : 20,
-            color: Colors.white,
+          child: CustomPaint(
+            size: innerChartSize,
+            painter: MarkoChartPainter(
+              color: iconColor,
+              strokeWidth: strokeWidth,
+            ),
           ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: MarkoSpace.sm),
         Text(
           'Marko',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
             fontSize: compact ? 17 : 19,
-            letterSpacing: -0.4,
-            color: inverse ? Colors.white : colors.ink,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.5,
+            color: inverse ? colors.onInverse : colors.ink,
           ),
         ),
       ],
@@ -45,10 +78,191 @@ class MarkoWordmark extends StatelessWidget {
   }
 }
 
+/// Minimalist financial price chart with subtle organic 'M' pulse and breakout dot.
+class MarkoChartPainter extends CustomPainter {
+  const MarkoChartPainter({required this.color, this.strokeWidth = 1.35});
+
+  final Color color;
+  final double strokeWidth;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..color = color
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final dotPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    final tip = Offset(size.width * 0.93, size.height * 0.12);
+
+    final path = Path()
+      ..moveTo(size.width * 0.07, size.height * 0.88)
+      ..lineTo(size.width * 0.22, size.height * 0.65)
+      ..lineTo(size.width * 0.31, size.height * 0.73)
+      ..lineTo(size.width * 0.49, size.height * 0.26)
+      ..lineTo(size.width * 0.62, size.height * 0.63)
+      ..lineTo(size.width * 0.72, size.height * 0.47)
+      ..lineTo(size.width * 0.79, size.height * 0.57)
+      ..lineTo(tip.dx, tip.dy);
+
+    canvas.drawPath(path, linePaint);
+    canvas.drawCircle(tip, strokeWidth * 0.85, dotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant MarkoChartPainter oldDelegate) {
+    return oldDelegate.color != color || oldDelegate.strokeWidth != strokeWidth;
+  }
+}
+
+/// The shared content column — app bar and page body use the same one.
+class MarkoContentFrame extends StatelessWidget {
+  const MarkoContentFrame({required this.child, super.key});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: MarkoLayout.contentMaxWidth,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: MarkoLayout.gutter),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// The only text field in the app: same height, same 14px ink, same icon size.
+/// Everything else comes from `inputDecorationTheme`.
+class MarkoTextField extends StatelessWidget {
+  const MarkoTextField({
+    required this.controller,
+    this.hintText,
+    this.labelText,
+    this.prefixIcon,
+    this.prefix,
+    this.prefixText,
+    this.suffixIcon,
+    this.enabled = true,
+    this.obscureText = false,
+    this.autofocus = false,
+    this.keyboardType,
+    this.inputFormatters,
+    this.textInputAction,
+    this.autofillHints,
+    this.style,
+    this.onChanged,
+    this.onSubmitted,
+    super.key,
+  });
+
+  final TextEditingController controller;
+  final String? hintText;
+  final String? labelText;
+  final HeroIcons? prefixIcon;
+
+  /// Always-visible prefix widget. Unlike [prefixText], it shows while the
+  /// field is empty and unfocused.
+  final Widget? prefix;
+  final String? prefixText;
+  final Widget? suffixIcon;
+  final bool enabled;
+  final bool obscureText;
+  final bool autofocus;
+  final TextInputType? keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
+  final TextInputAction? textInputAction;
+  final Iterable<String>? autofillHints;
+  final TextStyle? style;
+  final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefixChild =
+        prefix ?? (prefixIcon == null ? null : HeroIcon(prefixIcon!, size: 16));
+    final height = MarkoLayout.fieldHeightOf(context);
+    final slot = BoxConstraints(minWidth: 34, minHeight: height);
+    return SizedBox(
+      height: height,
+      child: TextField(
+        controller: controller,
+        enabled: enabled,
+        obscureText: obscureText,
+        autofocus: autofocus,
+        keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
+        textInputAction: textInputAction,
+        autofillHints: autofillHints,
+        style:
+            style ??
+            Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontSize: MarkoLayout.fieldFontSizeOf(context),
+            ),
+        textAlignVertical: TextAlignVertical.center,
+        onChanged: onChanged,
+        onSubmitted: onSubmitted,
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: hintText,
+          labelText: labelText,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: MarkoSpace.md,
+            vertical: 9.5,
+          ),
+          prefixIcon: prefixChild == null
+              // Center, because prefixIconConstraints stretch the slot to the
+              // full field height and the child would else sit at the top.
+              ? null
+              : Center(
+                  widthFactor: 1,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 10, right: 8),
+                    child: prefixChild,
+                  ),
+                ),
+          prefixIconConstraints: slot,
+          prefixText: prefixText,
+          suffixIcon: suffixIcon,
+          suffixIconConstraints: slot,
+        ),
+      ),
+    );
+  }
+}
+
+/// Flips the app between the light and dark palettes.
+class MarkoThemeToggle extends ConsumerWidget {
+  const MarkoThemeToggle({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return IconButton(
+      tooltip: dark ? 'Світла тема' : 'Темна тема',
+      onPressed: () => ref
+          .read(themeModeProvider.notifier)
+          .toggle(Theme.of(context).brightness),
+      icon: HeroIcon(dark ? HeroIcons.sun : HeroIcons.moon, size: 18),
+    );
+  }
+}
+
+/// Level 1 surface: 1px hairline plus a single crisp offset shadow.
 class MarkoPanel extends StatelessWidget {
   const MarkoPanel({
     required this.child,
-    this.padding = const EdgeInsets.all(20),
+    this.padding = const EdgeInsets.all(MarkoSpace.xl),
     this.color,
     this.borderColor,
     this.onTap,
@@ -71,6 +285,7 @@ class MarkoPanel extends StatelessWidget {
         color: color ?? colors.surface,
         borderRadius: radius,
         border: Border.all(color: borderColor ?? colors.border),
+        boxShadow: MarkoShadow.card,
       ),
       child: onTap == null
           ? content
@@ -82,6 +297,107 @@ class MarkoPanel extends StatelessWidget {
                 child: content,
               ),
             ),
+    );
+  }
+}
+
+/// Section label above a block of content: mono caption, `faint` ink.
+/// Sentence case — the design system never shouts.
+class MarkoSectionLabel extends StatelessWidget {
+  const MarkoSectionLabel(this.text, {super.key});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Text(text, style: MarkoType.caption.copyWith(color: colors.faint));
+  }
+}
+
+/// Monospaced technical identifier: OEM numbers, article codes, SKUs.
+class MarkoOemChip extends StatelessWidget {
+  const MarkoOemChip(this.code, {this.tone, super.key});
+
+  final String code;
+  final Color? tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final ink = tone ?? colors.ink;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: tone == null
+            ? colors.surfaceMuted
+            : tone!.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(MarkoRadius.xs),
+        border: Border.all(
+          color: tone == null ? colors.border : tone!.withValues(alpha: 0.24),
+        ),
+      ),
+      child: Text(code, style: MarkoType.oem.copyWith(color: ink)),
+    );
+  }
+}
+
+/// Keycap hint shown next to actionable inputs (`Enter ↵`, `Esc`).
+class MarkoHotkey extends StatelessWidget {
+  const MarkoHotkey(this.label, {super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MarkoRadius.xs),
+        border: Border.all(color: colors.border),
+      ),
+      child: Text(label, style: MarkoType.hotkey.copyWith(color: colors.faint)),
+    );
+  }
+}
+
+/// Status pill with a semantic dot: availability, sync state, quality.
+class MarkoStatusPill extends StatelessWidget {
+  const MarkoStatusPill({required this.label, required this.tone, super.key});
+
+  final String label;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.sm,
+        vertical: 4,
+      ),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: tone, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: tone),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -107,34 +423,38 @@ class MarkoInlineMessage extends StatelessWidget {
       MarkoMessageTone.info => (
         colors.brand,
         colors.brandSoft,
-        Icons.info_outline,
+        HeroIcons.informationCircle,
       ),
       MarkoMessageTone.success => (
         colors.positive,
         colors.positiveSoft,
-        Icons.check_circle_outline,
+        HeroIcons.checkCircle,
       ),
       MarkoMessageTone.warning => (
         colors.warning,
         colors.warningSoft,
-        Icons.warning_amber_rounded,
+        HeroIcons.exclamationTriangle,
       ),
       MarkoMessageTone.error => (
         colors.negative,
         colors.negativeSoft,
-        Icons.error_outline,
+        HeroIcons.exclamationCircle,
       ),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.md,
+        vertical: MarkoSpace.md,
+      ),
       decoration: BoxDecoration(
         color: background,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(MarkoRadius.lg),
+        border: Border.all(color: foreground.withValues(alpha: 0.18)),
       ),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: foreground),
-          const SizedBox(width: 10),
+          HeroIcon(icon, size: 17, color: foreground),
+          const SizedBox(width: MarkoSpace.sm),
           Expanded(
             child: Text(
               message,
@@ -144,7 +464,266 @@ class MarkoInlineMessage extends StatelessWidget {
               ),
             ),
           ),
-          if (action != null) ...[const SizedBox(width: 8), action!],
+          if (action != null) ...[
+            const SizedBox(width: MarkoSpace.sm),
+            action!,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Formats raw digit input with thousand space separators (e.g. 1 000 000).
+class ThousandsPriceInputFormatter extends TextInputFormatter {
+  const ThousandsPriceInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty) {
+      return newValue;
+    }
+
+    final text = newValue.text;
+    final parts = text.replaceAll(' ', '').split(RegExp(r'[,.]'));
+    final integerPart = parts[0].replaceAll(RegExp(r'[^\d]'), '');
+
+    if (integerPart.isEmpty && parts.length == 1) {
+      return const TextEditingValue(text: '');
+    }
+
+    final formattedInt = integerPart.replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (match) => ' ',
+    );
+
+    String formatted = formattedInt;
+    if (parts.length > 1) {
+      final sep = text.contains(',') ? ',' : '.';
+      final decimalPart = parts
+          .sublist(1)
+          .join()
+          .replaceAll(RegExp(r'[^\d]'), '');
+      formatted = '$formattedInt$sep$decimalPart';
+    }
+
+    final nonSpaceBeforeCursor =
+        newValue.selection.end > 0 && newValue.selection.end <= text.length
+        ? text.substring(0, newValue.selection.end).replaceAll(' ', '').length
+        : text.replaceAll(' ', '').length;
+
+    var newCursorPos = 0;
+    var nonSpaceCount = 0;
+    for (int i = 0; i < formatted.length; i++) {
+      if (nonSpaceCount == nonSpaceBeforeCursor) {
+        break;
+      }
+      if (formatted[i] != ' ') {
+        nonSpaceCount++;
+      }
+      newCursorPos = i + 1;
+    }
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(
+        offset: newCursorPos.clamp(0, formatted.length),
+      ),
+    );
+  }
+}
+
+/// The one modal shell in the app: a bottom sheet on phones, a centered
+/// dialog above that. Everything overlaying the catalog goes through here.
+Future<void> showMarkoModal(
+  BuildContext context, {
+  required HeroIcons icon,
+  Color? accent,
+  required String title,
+  required String subtitle,
+  required Widget child,
+}) {
+  final header = _ModalHeader(
+    icon: icon,
+    accent: accent,
+    title: title,
+    subtitle: subtitle,
+  );
+  if (MediaQuery.sizeOf(context).width < 700) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _Sheet(header: header, child: child),
+    );
+  }
+  return showDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    builder: (context) => _Dialog(header: header, child: child),
+  );
+}
+
+class _Dialog extends StatelessWidget {
+  const _Dialog({required this.header, required this.child});
+
+  final Widget header;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.lg,
+        vertical: MarkoSpace.xl,
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480, maxHeight: 840),
+        child: Container(
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(MarkoRadius.xl),
+            border: Border.all(color: colors.border),
+            boxShadow: MarkoShadow.overlay,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header,
+              const Divider(height: 1),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(MarkoSpace.xl),
+                  child: child,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Sheet extends StatelessWidget {
+  const _Sheet({required this.header, required this.child});
+
+  final Widget header;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+      ),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(MarkoRadius.xl),
+        ),
+        boxShadow: MarkoShadow.overlay,
+      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 4),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colors.borderStrong,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          header,
+          const Divider(height: 1),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(MarkoSpace.lg),
+              child: child,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModalHeader extends StatelessWidget {
+  const _ModalHeader({
+    required this.icon,
+    this.accent,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final HeroIcons icon;
+  final Color? accent;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.xl,
+        vertical: MarkoSpace.md,
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: accent != null
+                  ? accent!.withValues(alpha: 0.12)
+                  : colors.surfaceMuted,
+              borderRadius: BorderRadius.circular(MarkoRadius.md),
+              border: Border.all(
+                color: accent != null
+                    ? accent!.withValues(alpha: 0.28)
+                    : colors.border,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: HeroIcon(icon, size: 17, color: accent ?? colors.ink),
+          ),
+          const SizedBox(width: MarkoSpace.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 1),
+                Text(
+                  subtitle,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colors.faint),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Закрити',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const HeroIcon(HeroIcons.xMark, size: 18),
+          ),
         ],
       ),
     );

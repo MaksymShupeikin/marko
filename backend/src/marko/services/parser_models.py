@@ -82,6 +82,9 @@ class Product:
     image: str | None
     url_text: str | None
     url: str | None  # calculated, not from map
+    # Part numbers to look up on avto.pro, best first. Only file imports carry
+    # more than one; scraped products get whatever `sku` holds.
+    oem_numbers: tuple[str, ...] = ()
 
     @classmethod
     def from_raw(cls, raw: dict, lang: str = "ua") -> Product:

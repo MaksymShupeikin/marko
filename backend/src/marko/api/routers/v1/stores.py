@@ -4,7 +4,16 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.api.dependencies import CurrentUser, get_session
@@ -12,9 +21,12 @@ from marko.api.schemas.stores import (
     ProductPageResponse,
     ProductResponse,
     StoreCreateRequest,
+    StoreFileImportResponse,
     StoreResponse,
     StoreSyncResponse,
 )
+from marko.parsers.prom_export import ExportFormatError
+from marko.services.catalog_import import import_export_file
 from marko.services.stores import (
     StoreNotFoundError,
     TaskDispatchError,
@@ -52,6 +64,40 @@ async def create_store(
         store_id=store_id,
         sync_run_id=sync_run.id,
         status=sync_run.status.value,
+    )
+
+
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+@router.post("/import-file", response_model=StoreFileImportResponse)
+async def import_catalog_file(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+    file: Annotated[UploadFile, File()],
+) -> StoreFileImportResponse:
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Файл більший за 25 МБ",
+        )
+    try:
+        result = await import_export_file(
+            session,
+            workspace_id=current.workspace_id,
+            content=content,
+        )
+    except (ExportFormatError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return StoreFileImportResponse(
+        store_id=result.store_id,
+        store_name=result.store_name,
+        imported=result.imported,
+        skipped=result.skipped,
     )
 
 

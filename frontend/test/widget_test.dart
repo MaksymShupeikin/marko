@@ -16,9 +16,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Marko'), findsOneWidget);
-    expect(find.text('Почта'), findsOneWidget);
+    expect(find.text('Пошта'), findsOneWidget);
     expect(find.text('Пароль'), findsOneWidget);
-    expect(find.text('Продолжить с Google'), findsOneWidget);
+    expect(find.text('Продовжити з Google'), findsOneWidget);
   });
 }
 

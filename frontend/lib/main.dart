@@ -73,11 +73,15 @@ class MarkoApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
+    final themeMode = ref.watch(themeModeProvider);
     if (auth.isLoading) {
       return MaterialApp(
         title: 'Marko',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        themeMode: themeMode,
+        builder: AppTheme.touchTargets,
         home: const Scaffold(body: _AppLoading()),
       );
     }
@@ -85,6 +89,9 @@ class MarkoApp extends ConsumerWidget {
       title: 'Marko',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: themeMode,
+      builder: AppTheme.touchTargets,
       routerConfig: ref.watch(appRouterProvider),
     );
   }

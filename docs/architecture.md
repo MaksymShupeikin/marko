@@ -29,16 +29,16 @@ FastAPI не обходит каталог синхронно. `POST /api/v1/sto
 
 ## Клиент
 
-Flutter содержит один набор feature-модулей для web, mobile и desktop. Разметка
-выбирается по доступной ширине окна: нижняя навигация на компактных экранах и
-`NavigationRail` на широких.
+Flutter содержит единый экран каталога для web, mobile и desktop. Верхняя панель
+(TopBar) содержит поиск, фильтры, быстрые действия («Ціни конкурентів», «Імпорт»)
+и меню профиля; на мобильных устройствах действия дублируются в нижней плашке.
 
-Клиент использует Riverpod с ручными providers и GoRouter. Архитектура намеренно
-плоская: у каждого feature одна директория с файлами `*_models.dart`,
-`*_api.dart`, `*_controller.dart` и `*_page.dart`. API-файл вызывает FastAPI
-через единый `core/api_client.dart`, controller хранит состояние, а виджет не
-выполняет HTTP-запросы напрямую. Корневой `MaterialApp` расположен в
-`lib/main.dart`; отдельных директорий `lib/app` и `lib/shared` нет.
+Клиент использует Riverpod с ручными providers и GoRouter. Архитектура
+плоская: каталог, фильтры, модалы импорта и аналитики цен живут в `features/products/`,
+а авторизация — в `features/auth/`. API-файлы вызывают FastAPI через единый
+`core/api_client.dart`, controller хранит состояние, а виджеты не выполняют
+HTTP-запросы напрямую. Корневой `MaterialApp` расположен в `lib/main.dart`;
+отдельных директорий `lib/app` и `lib/shared` нет.
 
 Firebase реализует регистрацию, подтверждение почты, Google OAuth и обновление
 сессий. Android получает Google credential через официальный `google_sign_in`,

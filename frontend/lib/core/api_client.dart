@@ -58,6 +58,27 @@ class ApiClient {
     return _request('DELETE', path, authenticated: authenticated);
   }
 
+  /// Uploads one file as multipart/form-data. Catalog files are large and the
+  /// server parses them inline, so this uses a longer timeout than JSON calls.
+  Future<dynamic> postFile(
+    String path, {
+    required String field,
+    required String filename,
+    required List<int> bytes,
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$path'))
+      ..files.add(
+        http.MultipartFile.fromBytes(field, bytes, filename: filename),
+      );
+    final accessToken = await _accessToken();
+    if (accessToken != null) {
+      request.headers['Authorization'] = 'Bearer $accessToken';
+    }
+    final streamed = await client.send(request).timeout(timeout);
+    return _decode(await http.Response.fromStream(streamed));
+  }
+
   Future<dynamic> _request(
     String method,
     String path, {

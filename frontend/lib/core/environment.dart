@@ -14,6 +14,7 @@ abstract final class Environment {
     'FIREBASE_MESSAGING_SENDER_ID',
   );
   static const firebaseWebAppId = String.fromEnvironment('FIREBASE_WEB_APP_ID');
+  static const googleClientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
 
   static bool get usesAndroidFirebaseConfig =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;

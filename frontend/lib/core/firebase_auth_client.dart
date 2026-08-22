@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'environment.dart';
+
 class AuthSession {
   const AuthSession({
     required this.uid,
@@ -60,7 +62,7 @@ class FirebaseAuthClient implements AuthClient {
         await user.sendEmailVerification();
         await _auth.signOut();
         throw const AuthClientException(
-          'Подтвердите почту. Мы повторно отправили письмо со ссылкой.',
+          'Підтвердіть пошту. Ми повторно надіслали лист із посиланням.',
         );
       }
       return _requireSession(user);
@@ -89,7 +91,49 @@ class FirebaseAuthClient implements AuthClient {
     try {
       UserCredential credential;
       if (kIsWeb) {
-        credential = await _auth.signInWithPopup(GoogleAuthProvider());
+        if (Environment.googleClientId.isNotEmpty) {
+          try {
+            _googleInitialization ??= GoogleSignIn.instance.initialize(
+              clientId: Environment.googleClientId,
+            );
+            await _googleInitialization;
+            final account = await GoogleSignIn.instance.authenticate();
+            final googleAuthentication = account.authentication;
+            final idToken = googleAuthentication.idToken;
+            if (idToken == null || idToken.isEmpty) {
+              throw const AuthClientException('canceled');
+            }
+            credential = await _auth.signInWithCredential(
+              GoogleAuthProvider.credential(idToken: idToken),
+            );
+          } on GoogleSignInException catch (e) {
+            if (e.code == GoogleSignInExceptionCode.canceled) {
+              throw const AuthClientException('canceled');
+            }
+            throw AuthClientException(
+              e.description ?? 'Вхід через Google скасовано.',
+            );
+          } catch (e) {
+            final msg = e.toString().toLowerCase();
+            if (msg.contains('cancel') ||
+                msg.contains('closed') ||
+                msg.contains('abort') ||
+                msg.contains('popup_closed')) {
+              throw const AuthClientException('canceled');
+            }
+            rethrow;
+          }
+        } else {
+          try {
+            credential = await _auth.signInWithPopup(GoogleAuthProvider());
+          } on FirebaseAuthException catch (e) {
+            if (e.code == 'popup-closed-by-user' ||
+                e.code == 'cancelled-popup-request') {
+              throw const AuthClientException('canceled');
+            }
+            rethrow;
+          }
+        }
       } else if (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.macOS) {
@@ -100,7 +144,7 @@ class FirebaseAuthClient implements AuthClient {
         final idToken = googleAuthentication.idToken;
         if (idToken == null || idToken.isEmpty) {
           throw const AuthClientException(
-            'Google не вернул ID token. Проверьте OAuth client и SHA-1.',
+            'Google не повернув ID token. Перевірте OAuth client та SHA-1.',
           );
         }
         credential = await _auth.signInWithCredential(
@@ -108,20 +152,33 @@ class FirebaseAuthClient implements AuthClient {
         );
       } else {
         throw const AuthClientException(
-          'Google-вход недоступен в нативной Windows-версии. '
-          'Используйте web/PWA или вход по почте.',
+          'Google-вхід недоступний у нативній Windows-версії. '
+          'Використовуйте web/PWA або вхід поштою.',
         );
       }
       return _requireSession(_requireUser(credential.user));
     } on FirebaseAuthException catch (error) {
+      if (error.code == 'popup-closed-by-user' ||
+          error.code == 'cancelled-popup-request') {
+        throw const AuthClientException('canceled');
+      }
       throw AuthClientException(_firebaseMessage(error));
     } on GoogleSignInException catch (error) {
       if (error.code == GoogleSignInExceptionCode.canceled) {
-        throw const AuthClientException('Вход через Google отменён.');
+        throw const AuthClientException('canceled');
       }
       throw AuthClientException(
-        error.description ?? 'Ошибка входа через Google.',
+        error.description ?? 'Помилка входу через Google.',
       );
+    } catch (error) {
+      final msg = error.toString().toLowerCase();
+      if (msg.contains('cancel') ||
+          msg.contains('closed by user') ||
+          msg.contains('popup-closed') ||
+          msg.contains('popup_closed')) {
+        throw const AuthClientException('canceled');
+      }
+      rethrow;
     }
   }
 
@@ -159,7 +216,7 @@ class FirebaseAuthClient implements AuthClient {
 
   static User _requireUser(User? user) {
     if (user == null) {
-      throw const AuthClientException('Firebase не вернул пользователя.');
+      throw const AuthClientException('Firebase не повернув користувача.');
     }
     return user;
   }
@@ -167,29 +224,29 @@ class FirebaseAuthClient implements AuthClient {
   static AuthSession _requireSession(User user) {
     final session = _toSession(user);
     if (session == null) {
-      throw const AuthClientException('Firebase не создал сессию.');
+      throw const AuthClientException('Firebase не створив сесію.');
     }
     return session;
   }
 
   static String _firebaseMessage(FirebaseAuthException error) {
     return switch (error.code) {
-      'invalid-email' => 'Введите корректную почту.',
+      'invalid-email' => 'Введіть коректну пошту.',
       'invalid-credential' ||
       'user-not-found' ||
-      'wrong-password' => 'Неверная почта или пароль.',
-      'email-already-in-use' => 'Аккаунт с этой почтой уже существует.',
-      'weak-password' => 'Пароль слишком простой.',
-      'user-disabled' => 'Этот аккаунт отключён.',
+      'wrong-password' => 'Невірна пошта або пароль.',
+      'email-already-in-use' => 'Акаунт із цією поштою вже існує.',
+      'weak-password' => 'Пароль занадто простий.',
+      'user-disabled' => 'Цей акаунт вимкнено.',
       'operation-not-allowed' =>
-        'Этот способ входа не включён в Firebase Authentication.',
+        'Цей спосіб входу не ввімкнено у Firebase Authentication.',
       'popup-closed-by-user' ||
-      'cancelled-popup-request' => 'Вход через Google отменён.',
-      'popup-blocked' => 'Браузер заблокировал окно входа через Google.',
-      'network-request-failed' => 'Нет соединения с Firebase.',
+      'cancelled-popup-request' => 'Вхід через Google скасовано.',
+      'popup-blocked' => 'Браузер заблокував вікно входу через Google.',
+      'network-request-failed' => 'Немає з’єднання з Firebase.',
       'account-exists-with-different-credential' =>
-        'Аккаунт с этой почтой уже использует другой способ входа.',
-      _ => error.message ?? 'Ошибка Firebase Authentication.',
+        'Акаунт із цією поштою вже використовує інший спосіб входу.',
+      _ => error.message ?? 'Помилка Firebase Authentication.',
     };
   }
 }

@@ -32,15 +32,23 @@ lib/
     │   ├── auth_api.dart
     │   ├── auth_controller.dart
     │   └── auth_page.dart
-    └── stores/
-        ├── store_models.dart
-        ├── stores_api.dart
-        ├── stores_controller.dart
-        ├── stores_page.dart
-        ├── store_products_page.dart
+    ├── dashboard/
+    │   └── dashboard_page.dart   # top bar plus the single main screen
+    └── products/                 # the entire app: catalog, filters, import, competitor prices, details
+        ├── products_models.dart
+        ├── products_api.dart
+        ├── products_controller.dart
+        ├── products_page.dart
         └── widgets/
-            └── product_card.dart
+            ├── product_card.dart
+            ├── source_panel.dart
+            ├── competitor_results.dart
+            ├── product_details_panel.dart
+            └── help_overlay.dart
 ```
+
+The client has one main screen: the product catalog. Everything the user sees
+is a product, its details, competitor price analytics, or catalog import sources.
 
 Keep one flat directory per feature. Create a `widgets/` subdirectory only when
 a page becomes difficult to scan or a widget is reused by multiple pages in the
@@ -95,7 +103,11 @@ have fewer files when it is small.
 
 - Keep colors, typography, radii, and component styles in `app_theme.dart`.
   Read semantic product colors through `MarkoTheme.of(context)` instead of
-  putting hex values in pages.
+  putting hex values in pages. Spacing, radii, elevation and the monospace
+  layer are the constants `MarkoSpace`, `MarkoRadius`, `MarkoShadow` and
+  `MarkoType` in the same file — no raw numbers in pages.
+- OEM numbers, article codes, prices and timestamps render in `MarkoType`
+  monospace; narrative UI stays in the sans stack. Sentence case everywhere.
 - Reusable product-wide surfaces and messages live in `core/marko_ui.dart`.
   Standalone interactive components live in `core/widgets/`. Feature-specific
   presentation widgets stay private in their page file.

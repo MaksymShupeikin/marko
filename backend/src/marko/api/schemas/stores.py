@@ -10,6 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from marko.services.parser_models import Seller
 
 
+class StoreFileImportResponse(BaseModel):
+    store_id: UUID
+    store_name: str
+    imported: int
+    skipped: int
+
+
 class StoreCreateRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
 
@@ -53,6 +60,22 @@ class ProductResponse(BaseModel):
     is_available: bool | None
     image_url: str | None
     last_seen_at: datetime
+
+
+class CatalogProductResponse(ProductResponse):
+    """A product plus the store it came from, for the workspace-wide catalog."""
+
+    store_id: UUID
+    store_name: str | None = None
+    marketplace: str = ""
+    oem_numbers: list[str] = Field(default_factory=list)
+
+
+class CatalogPageResponse(BaseModel):
+    items: list[CatalogProductResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class ProductPageResponse(BaseModel):
