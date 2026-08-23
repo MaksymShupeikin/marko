@@ -87,6 +87,21 @@ requires the Android SDK and a device/emulator with Google Play services. You do
 not need a Python virtual environment, a local PostgreSQL installation, Redis,
 Node.js, or backend Python dependencies.
 
+## Product and behaviour specs
+
+Before changing behaviour, read the specs — they are the source of truth for
+what the product should do, and the code is expected to match them:
+
+- [`docs/product-vision.md`](docs/product-vision.md) — what Marko is for and
+  what the main scenario looks like;
+- [`docs/ui-behavior.md`](docs/ui-behavior.md) — what every screen and button
+  does, and its loading / success / empty / error states;
+- [`docs/parser-spec.md`](docs/parser-spec.md) — contracts and acceptance
+  criteria for the prom.ua, XLSX and avto.pro parsers;
+- [`docs/known-gaps.md`](docs/known-gaps.md) — the live list of gaps between
+  the specs and the code;
+- [`CLAUDE.md`](CLAUDE.md) — working rules for agents on this repository.
+
 ## Firebase and Google Authentication
 
 Use one Firebase project for web and Android. This is important: users then keep
