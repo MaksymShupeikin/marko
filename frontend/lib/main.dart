@@ -1,16 +1,19 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:toastification/toastification.dart';
 
 import 'core/app_router.dart';
 import 'core/app_theme.dart';
 import 'core/environment.dart';
 import 'core/marko_ui.dart';
+import 'core/widgets/marko_loader.dart';
+import 'core/widgets/marko_toast.dart';
 import 'features/auth/auth_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!Environment.usesAndroidFirebaseConfig &&
+  if (!Environment.usesNativeFirebaseConfig &&
       !Environment.hasFirebaseConfig) {
     runApp(
       const _ConfigurationErrorApp(
@@ -21,7 +24,7 @@ Future<void> main() async {
   }
   try {
     await Firebase.initializeApp(
-      options: Environment.usesAndroidFirebaseConfig
+      options: Environment.usesNativeFirebaseConfig
           ? null
           : Environment.firebaseOptions,
     );
@@ -85,15 +88,51 @@ class MarkoApp extends ConsumerWidget {
         home: const Scaffold(body: _AppLoading()),
       );
     }
-    return MaterialApp.router(
-      title: 'Marko',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: themeMode,
-      builder: AppTheme.touchTargets,
-      routerConfig: ref.watch(appRouterProvider),
+    return ToastificationWrapper(
+      child: MaterialApp.router(
+        title: 'Marko',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        themeMode: themeMode,
+        builder: (context, child) => ToastificationConfigProvider(
+          config: markoToastConfig(context),
+          child: _AuthToasts(child: AppTheme.touchTargets(context, child)),
+        ),
+        routerConfig: ref.watch(appRouterProvider),
+      ),
     );
+  }
+}
+
+/// Signing in and out happens from three different places; the confirmation
+/// belongs to the session change, not to whichever button triggered it.
+class _AuthToasts extends ConsumerWidget {
+  const _AuthToasts({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen(authControllerProvider, (previous, next) {
+      final before = previous?.value?.user;
+      final after = next.value?.user;
+      if (before?.id == after?.id) return;
+      if (after != null) {
+        showMarkoToast(
+          context,
+          title: 'Вітаємо, ${after.shortName}',
+          message: 'Ви увійшли в акаунт.',
+        );
+      } else if (before != null) {
+        showMarkoToast(
+          context,
+          message: 'Ви вийшли з акаунта.',
+          tone: MarkoMessageTone.info,
+        );
+      }
+    });
+    return child;
   }
 }
 
@@ -108,10 +147,7 @@ class _AppLoading extends StatelessWidget {
         children: [
           MarkoWordmark(),
           SizedBox(height: 24),
-          SizedBox.square(
-            dimension: 22,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
+          MarkoLoader(size: 22),
         ],
       ),
     );

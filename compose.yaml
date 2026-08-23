@@ -5,8 +5,13 @@ x-backend-environment: &backend-environment
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-marko}:${POSTGRES_PASSWORD:-marko}@db:5432/${POSTGRES_DB:-marko}
   CELERY_BROKER_URL: redis://broker:6379/0
   CELERY_RESULT_BACKEND: redis://broker:6379/1
+  COMPETITOR_PRICE_CACHE_URL: redis://broker:6379/2
   CORS_ORIGINS: http://localhost:${WEB_PORT:-8080}
   FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+  COMPETITOR_FILTER_MODEL: ${COMPETITOR_FILTER_MODEL:-claude-haiku-4-5}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
   PYTHONDONTWRITEBYTECODE: 1
 
 x-backend: &backend

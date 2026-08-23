@@ -3,8 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
-import 'environment.dart';
-
 class AuthSession {
   const AuthSession({
     required this.uid,
@@ -33,6 +31,9 @@ abstract interface class AuthClient {
   Future<AuthSession> login(String email, String password);
   Future<void> register(String email, String password);
   Future<AuthSession> loginWithGoogle();
+
+  /// For the web GIS button, which produces the token itself.
+  Future<AuthSession> loginWithGoogleIdToken(String idToken);
   Future<void> logout();
   Future<String?> idToken({bool forceRefresh = false});
 }
@@ -91,49 +92,9 @@ class FirebaseAuthClient implements AuthClient {
     try {
       UserCredential credential;
       if (kIsWeb) {
-        if (Environment.googleClientId.isNotEmpty) {
-          try {
-            _googleInitialization ??= GoogleSignIn.instance.initialize(
-              clientId: Environment.googleClientId,
-            );
-            await _googleInitialization;
-            final account = await GoogleSignIn.instance.authenticate();
-            final googleAuthentication = account.authentication;
-            final idToken = googleAuthentication.idToken;
-            if (idToken == null || idToken.isEmpty) {
-              throw const AuthClientException('canceled');
-            }
-            credential = await _auth.signInWithCredential(
-              GoogleAuthProvider.credential(idToken: idToken),
-            );
-          } on GoogleSignInException catch (e) {
-            if (e.code == GoogleSignInExceptionCode.canceled) {
-              throw const AuthClientException('canceled');
-            }
-            throw AuthClientException(
-              e.description ?? 'Вхід через Google скасовано.',
-            );
-          } catch (e) {
-            final msg = e.toString().toLowerCase();
-            if (msg.contains('cancel') ||
-                msg.contains('closed') ||
-                msg.contains('abort') ||
-                msg.contains('popup_closed')) {
-              throw const AuthClientException('canceled');
-            }
-            rethrow;
-          }
-        } else {
-          try {
-            credential = await _auth.signInWithPopup(GoogleAuthProvider());
-          } on FirebaseAuthException catch (e) {
-            if (e.code == 'popup-closed-by-user' ||
-                e.code == 'cancelled-popup-request') {
-              throw const AuthClientException('canceled');
-            }
-            rethrow;
-          }
-        }
+        // google_sign_in has no programmatic sign-in on the web — it only
+        // renders its own button. Firebase's popup does the same job here.
+        credential = await _auth.signInWithPopup(GoogleAuthProvider());
       } else if (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.macOS) {
@@ -183,17 +144,25 @@ class FirebaseAuthClient implements AuthClient {
   }
 
   @override
+  Future<AuthSession> loginWithGoogleIdToken(String idToken) async {
+    try {
+      final credential = await _auth.signInWithCredential(
+        GoogleAuthProvider.credential(idToken: idToken),
+      );
+      return _requireSession(_requireUser(credential.user));
+    } on FirebaseAuthException catch (error) {
+      throw AuthClientException(_firebaseMessage(error));
+    }
+  }
+
+  @override
   Future<void> logout() async {
     await _auth.signOut();
-    if (!kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS ||
-            defaultTargetPlatform == TargetPlatform.macOS)) {
-      try {
-        await GoogleSignIn.instance.signOut();
-      } catch (_) {
-        // Firebase is already signed out; Google cleanup is best-effort.
-      }
+    try {
+      // Also clears the GIS auto-select on the web; unimplemented on Windows.
+      await GoogleSignIn.instance.signOut();
+    } catch (_) {
+      // Firebase is already signed out; Google cleanup is best-effort.
     }
   }
 

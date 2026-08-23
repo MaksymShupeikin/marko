@@ -93,7 +93,50 @@ def test_pick_suggestion_falls_back_to_make_from_product_name():
     suggestions = parse_search_suggestions(payload)
     name = "Радіатор Renault Kangoo 00- 1.2-1.6 16V 480*415"
     assert pick_suggestion(suggestions, "KEMP", name).brand == "Renault/Dacia (RVI)"
-    # Без назви лишається стара поведінка — перша підказка сайту.
-    assert pick_suggestion(suggestions, "KEMP") is suggestions[0]
-    # Назва без марки нічого не ламає.
-    assert pick_suggestion(suggestions, None, "Кільця поршнів STD") is suggestions[0]
+    # Ні бренд, ні назва не збіглися — краще нічого, ніж чужа марка з топ-1.
+    assert pick_suggestion(suggestions, "KEMP") is None
+    assert pick_suggestion(suggestions, None, "Кільця поршнів STD") is None
+
+
+def test_broken_continuation_keeps_the_first_page(monkeypatch):
+    """401 і антибот на продовженні стрічки — звична річ, сторінка 1 має вціліти."""
+    from marko.parsers.avtopro import AvtoproGateway
+    from marko.parsers.prom.exceptions import RequestFailed
+
+    part_page = f"<div class='ap-feed'>{_ROW}</div>{_SHOW_MORE}"
+
+    class FakeClient:
+        def __init__(self, _config) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            pass
+
+        def put_json(self, _url, _payload):
+            return {
+                "Suggestions": [
+                    {
+                        "Title": "Purflux LS489A",
+                        "Uri": "/r?uri=%2Fpart-LS489A-PURFLUX-978%2F",
+                        "FoundPart": {"Part": {"Brand": {"Name": "Purflux"}}},
+                    }
+                ]
+            }
+
+        def get_html(self, url: str) -> str:
+            if "Continuation" in url:
+                raise RequestFailed("HTTP 401 для avto.pro")
+            return part_page
+
+    import marko.parsers.avtopro.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "HttpClient", FakeClient)
+
+    result = AvtoproGateway().offers("LS489A", brand="Purflux")
+
+    assert result is not None
+    assert [offer.code for offer in result.offers] == ["LS489A"]
+    assert result.pages_fetched == 1

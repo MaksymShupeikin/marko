@@ -11,7 +11,11 @@ celery_app = Celery(
     "marko",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["marko.worker.tasks.import_store", "marko.worker.tasks.system"],
+    include=[
+        "marko.worker.tasks.import_store",
+        "marko.worker.tasks.refresh_catalog",
+        "marko.worker.tasks.system",
+    ],
 )
 celery_app.conf.update(
     task_acks_late=True,

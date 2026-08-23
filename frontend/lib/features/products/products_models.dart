@@ -11,6 +11,18 @@ enum ProductSort {
   final String label;
 }
 
+/// Where a product came from: an uploaded XLSX export or a Prom scrape.
+enum ProductSource {
+  all(null, 'Усі'),
+  export('export', 'З файлу'),
+  scrape('scrape', 'З Prom');
+
+  const ProductSource(this.value, this.label);
+
+  final String? value;
+  final String label;
+}
+
 class StoreProduct {
   const StoreProduct({
     required this.id,
@@ -26,6 +38,8 @@ class StoreProduct {
     this.marketplace = '',
     this.oemNumbers = const [],
     this.lastSeenAt,
+    this.canManage = false,
+    this.source = ProductSource.scrape,
   });
 
   factory StoreProduct.fromJson(Map<String, dynamic> json) {
@@ -46,6 +60,10 @@ class StoreProduct {
           .map((value) => value.toString())
           .toList(growable: false),
       lastSeenAt: DateTime.tryParse(json['last_seen_at'] as String? ?? ''),
+      canManage: json['can_manage'] as bool? ?? false,
+      source: json['source'] == 'export'
+          ? ProductSource.export
+          : ProductSource.scrape,
     );
   }
 
@@ -62,6 +80,8 @@ class StoreProduct {
   final String marketplace;
   final List<String> oemNumbers;
   final DateTime? lastSeenAt;
+  final bool canManage;
+  final ProductSource source;
 
   bool get isFromProm => url.contains('prom.ua');
 
@@ -83,6 +103,36 @@ class StoreProduct {
   String get priceLabel => price == null
       ? 'Ціна не вказана'
       : '${price!.toStringAsFixed(2)} $currency';
+}
+
+class ProductUpdate {
+  const ProductUpdate({
+    required this.name,
+    required this.sku,
+    required this.brand,
+    required this.price,
+    required this.isAvailable,
+    required this.imageUrl,
+    required this.oemNumbers,
+  });
+
+  final String name;
+  final String? sku;
+  final String? brand;
+  final double? price;
+  final bool? isAvailable;
+  final String? imageUrl;
+  final List<String> oemNumbers;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'sku': sku,
+    'brand': brand,
+    'current_price': price,
+    'is_available': isAvailable,
+    'image_url': imageUrl,
+    'oem_numbers': oemNumbers,
+  };
 }
 
 typedef Product = StoreProduct;
@@ -115,6 +165,11 @@ class CatalogState {
     this.isLoadingMore = false,
     this.isRefreshing = false,
     this.selected,
+    this.selectedIds = const {},
+    this.allMatchingSelected = false,
+    this.bulkJob,
+    this.source = ProductSource.all,
+    this.hasImportedProducts = false,
     this.error,
   });
 
@@ -126,15 +181,42 @@ class CatalogState {
   final bool isLoadingMore;
   final bool isRefreshing;
   final StoreProduct? selected;
+
+  /// Ticked cards, for actions applied to many products at once.
+  final Set<String> selectedIds;
+
+  /// The selection is the whole filtered catalog, not the ticked cards —
+  /// actions then run server-side over the filter instead of per id.
+  final bool allMatchingSelected;
+
+  /// Progress of a running catalog-wide refresh.
+  final SyncRun? bulkJob;
+  final ProductSource source;
+  final bool hasImportedProducts;
   final String? error;
+
+  /// How many products the buttons would act on right now.
+  int get actionCount =>
+      allMatchingSelected ? page.total : selectedIds.length;
+
+  bool get hasSelection => allMatchingSelected || selectedIds.isNotEmpty;
+
+  /// Whether any search query, price bounds, or source filter is currently applied.
+  bool get hasActiveFilters =>
+      query.trim().isNotEmpty ||
+      priceMin != null ||
+      priceMax != null ||
+      source != ProductSource.all;
 
   /// Nothing imported yet, as opposed to a search or a filter that found
   /// nothing: only then is the whole catalog UI pointless.
   bool get isPristineEmpty =>
+      !hasImportedProducts &&
       page.items.isEmpty &&
       query.trim().isEmpty &&
       priceMin == null &&
-      priceMax == null;
+      priceMax == null &&
+      source == ProductSource.all;
 
   CatalogState copyWith({
     CatalogPage? page,
@@ -144,9 +226,15 @@ class CatalogState {
     bool? isLoadingMore,
     bool? isRefreshing,
     StoreProduct? selected,
+    Set<String>? selectedIds,
+    bool? allMatchingSelected,
+    SyncRun? bulkJob,
+    ProductSource? source,
+    bool? hasImportedProducts,
     String? error,
     bool clearSelected = false,
     bool clearError = false,
+    bool clearBulkJob = false,
   }) {
     return CatalogState(
       page: page ?? this.page,
@@ -157,6 +245,11 @@ class CatalogState {
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       isRefreshing: isRefreshing ?? this.isRefreshing,
       selected: clearSelected ? null : selected ?? this.selected,
+      selectedIds: selectedIds ?? this.selectedIds,
+      allMatchingSelected: allMatchingSelected ?? this.allMatchingSelected,
+      bulkJob: clearBulkJob ? null : bulkJob ?? this.bulkJob,
+      source: source ?? this.source,
+      hasImportedProducts: hasImportedProducts ?? this.hasImportedProducts,
       error: clearError ? null : error ?? this.error,
     );
   }
@@ -198,13 +291,14 @@ class StoreSync {
 
   factory StoreSync.fromJson(Map<String, dynamic> json) {
     return StoreSync(
-      storeId: json['store_id'] as String,
+      storeId: json['store_id'] as String?,
       syncRunId: json['sync_run_id'] as String,
       status: json['status'] as String,
     );
   }
 
-  final String storeId;
+  /// Null for catalog-wide work, which belongs to no single store.
+  final String? storeId;
   final String syncRunId;
   final String status;
 }
@@ -248,80 +342,182 @@ class SyncRun {
   }
 }
 
-class CompetitorOffer {
-  const CompetitorOffer({
-    required this.maker,
-    required this.code,
-    required this.city,
+class MarketPriceOffer {
+  const MarketPriceOffer({
+    required this.source,
+    required this.title,
     required this.price,
     required this.currency,
-    required this.boosted,
+    required this.url,
+    this.seller,
+    this.city,
+    this.availability,
+    this.condition,
+    this.imageUrl,
+    this.confidence = 1,
+    this.isAnalog = false,
   });
 
-  factory CompetitorOffer.fromJson(Map<String, dynamic> json) {
-    return CompetitorOffer(
-      maker: json['maker'] as String?,
-      code: json['code'] as String?,
-      city: json['city'] as String?,
-      price: (json['price'] as num).toDouble(),
+  factory MarketPriceOffer.fromJson(Map<String, dynamic> json) {
+    final rawPrice = json['price'];
+    return MarketPriceOffer(
+      source: json['source'] as String,
+      title: json['title'] as String,
+      price: rawPrice == null ? 0 : double.tryParse(rawPrice.toString()) ?? 0,
       currency: json['currency'] as String,
-      boosted: json['boosted'] as bool,
+      url: json['url'] as String,
+      seller: json['seller'] as String?,
+      city: json['city'] as String?,
+      availability: json['availability'] as String?,
+      condition: json['condition'] as String?,
+      imageUrl: json['image_url'] as String?,
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 1,
+      isAnalog: json['is_analog'] as bool? ?? false,
     );
   }
 
-  final String? maker;
-  final String? code;
-  final String? city;
+  final String source;
+  final String title;
   final double price;
   final String currency;
-  final bool boosted;
+  final String url;
+  final String? seller;
+  final String? city;
+  final String? availability;
+  final String? condition;
+  final String? imageUrl;
+  final double confidence;
 
-  String get partLabel =>
-      [maker, code].whereType<String>().join(' ').trim().isEmpty
-      ? 'Без назви'
-      : [maker, code].whereType<String>().join(' ');
+  /// Не той самий номер: аналог іншого виробника або схожа позиція.
+  final bool isAnalog;
 
-  String get priceLabel => '${price.toStringAsFixed(2)} $currency';
+  String get priceLabel => '${price.toStringAsFixed(0)} $currency';
+
+  String get subtitle => [
+    seller,
+    city,
+    condition == 'used'
+        ? 'б/в'
+        : condition == 'new'
+        ? 'нове'
+        : null,
+  ].whereType<String>().join(' · ');
 }
 
-class CompetitorSearch {
-  const CompetitorSearch({
-    required this.query,
-    required this.title,
-    required this.isOriginal,
-    required this.partUrl,
+class SourcePriceResult {
+  const SourcePriceResult({
+    required this.source,
+    required this.label,
+    required this.status,
     required this.offersTotal,
-    required this.minPrice,
-    required this.medianPrice,
-    required this.maxPrice,
     required this.offers,
+    this.error,
+    this.minPrice,
+    this.medianPrice,
+    this.maxPrice,
   });
 
-  factory CompetitorSearch.fromJson(Map<String, dynamic> json) {
-    return CompetitorSearch(
-      query: json['query'] as String,
-      title: json['title'] as String,
-      isOriginal: json['is_original'] as bool,
-      partUrl: json['part_url'] as String,
+  factory SourcePriceResult.fromJson(Map<String, dynamic> json) {
+    double? price(String key) {
+      final value = json[key];
+      return value == null ? null : double.tryParse(value.toString());
+    }
+
+    return SourcePriceResult(
+      source: json['source'] as String,
+      label: json['label'] as String,
+      status: json['status'] as String,
+      error: json['error'] as String?,
       offersTotal: (json['offers_total'] as num).toInt(),
-      minPrice: (json['min_price'] as num?)?.toDouble(),
-      medianPrice: (json['median_price'] as num?)?.toDouble(),
-      maxPrice: (json['max_price'] as num?)?.toDouble(),
-      offers: (json['offers'] as List<dynamic>)
-          .map((item) => CompetitorOffer.fromJson(item as Map<String, dynamic>))
+      minPrice: price('min_price'),
+      medianPrice: price('median_price'),
+      maxPrice: price('max_price'),
+      offers: (json['offers'] as List<dynamic>? ?? const [])
+          .map(
+            (item) => MarketPriceOffer.fromJson(item as Map<String, dynamic>),
+          )
           .toList(growable: false),
     );
   }
 
-  final String query;
-  final String title;
-  final bool isOriginal;
-  final String partUrl;
+  final String source;
+  final String label;
+  final String status;
+  final String? error;
   final int offersTotal;
   final double? minPrice;
   final double? medianPrice;
   final double? maxPrice;
-  final List<CompetitorOffer> offers;
+  final List<MarketPriceOffer> offers;
+
+  bool get hasOffers => offers.isNotEmpty;
+}
+
+class CompetitorPriceStats {
+  const CompetitorPriceStats({
+    required this.offersTotal,
+    required this.sourcesTotal,
+    this.minPrice,
+    this.medianPrice,
+    this.maxPrice,
+  });
+
+  factory CompetitorPriceStats.fromJson(Map<String, dynamic> json) {
+    double? price(String key) {
+      final value = json[key];
+      return value == null ? null : double.tryParse(value.toString());
+    }
+
+    return CompetitorPriceStats(
+      offersTotal: (json['offers_total'] as num).toInt(),
+      sourcesTotal: (json['sources_total'] as num).toInt(),
+      minPrice: price('min_price'),
+      medianPrice: price('median_price'),
+      maxPrice: price('max_price'),
+    );
+  }
+
+  final int offersTotal;
+  final int sourcesTotal;
+  final double? minPrice;
+  final double? medianPrice;
+  final double? maxPrice;
+}
+
+class CompetitorPriceReport {
+  const CompetitorPriceReport({
+    required this.cached,
+    required this.observedAt,
+    required this.stats,
+    required this.sources,
+  });
+
+  factory CompetitorPriceReport.fromJson(Map<String, dynamic> json) {
+    return CompetitorPriceReport(
+      cached: json['cached'] as bool? ?? false,
+      observedAt: DateTime.tryParse(json['observed_at'] as String? ?? ''),
+      stats: CompetitorPriceStats.fromJson(
+        json['stats'] as Map<String, dynamic>,
+      ),
+      sources: (json['sources'] as List<dynamic>)
+          .map(
+            (item) => SourcePriceResult.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  final bool cached;
+  final DateTime? observedAt;
+  final CompetitorPriceStats stats;
+  final List<SourcePriceResult> sources;
+
+  String get currency {
+    for (final source in sources) {
+      if (source.offers.isNotEmpty) return source.offers.first.currency;
+    }
+    return 'UAH';
+  }
 }
 
 class CatalogImportState {
@@ -347,13 +543,14 @@ class CatalogImportState {
     SyncRun? activeJob,
     String? error,
     FileImportResult? lastImport,
+    bool clearSync = false,
     bool clearJob = false,
     bool clearError = false,
     bool clearImport = false,
   }) {
     return CatalogImportState(
       isSubmitting: isSubmitting ?? this.isSubmitting,
-      activeSync: activeSync ?? this.activeSync,
+      activeSync: clearSync ? null : activeSync ?? this.activeSync,
       activeJob: clearJob ? null : activeJob ?? this.activeJob,
       error: clearError ? null : error ?? this.error,
       lastImport: clearImport ? null : lastImport ?? this.lastImport,

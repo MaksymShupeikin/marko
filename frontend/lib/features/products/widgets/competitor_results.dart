@@ -85,12 +85,12 @@ final oemHistoryProvider =
       OemHistoryController.new,
     );
 
-/// Prices from avto.pro, over the catalog.
+/// Real-time competitor price lookup over the catalog.
 Future<void> showOemLookup(BuildContext context) => showMarkoModal(
   context,
   icon: HeroIcons.magnifyingGlass,
   title: 'Ціни конкурентів',
-  subtitle: 'Пошук за OEM на avto.pro в реальному часі',
+  subtitle: 'Миттєвий пошук ринкових цін за OEM',
   child: const _OemLookupContent(),
 );
 
@@ -372,12 +372,15 @@ class CompetitorResults extends ConsumerWidget {
   }
 }
 
-class _ResultsSkeleton extends StatelessWidget {
+class _ResultsSkeleton extends ConsumerWidget {
   const _ResultsSkeleton();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MarkoTheme.of(context);
+    final stage =
+        ref.watch(competitorStageProvider(manualSearchKey)) ??
+        'Скануємо актуальні ціни на ринку...';
     Widget bar(double width) => Container(
       height: 12,
       width: width,
@@ -393,10 +396,24 @@ class _ResultsSkeleton extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(MarkoRadius.xs),
-            child: const LinearProgressIndicator(minHeight: 3),
+            child: LinearProgressIndicator(
+              minHeight: 3,
+              color: colors.brand,
+              backgroundColor: colors.surfaceMuted,
+            ),
           ),
           const SizedBox(height: MarkoSpace.lg),
-          bar(220),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 250),
+            child: Text(
+              stage,
+              key: ValueKey(stage),
+              style: MarkoType.caption.copyWith(
+                color: colors.ink,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
           const SizedBox(height: MarkoSpace.lg),
           for (final width in const [400.0, 320.0, 260.0]) ...[
             bar(width),
@@ -411,7 +428,7 @@ class _ResultsSkeleton extends StatelessWidget {
 class _ResultsPanel extends StatefulWidget {
   const _ResultsPanel({required this.result, required this.onClose});
 
-  final CompetitorSearch result;
+  final CompetitorPriceReport result;
   final VoidCallback onClose;
 
   @override
@@ -431,12 +448,14 @@ class _ResultsPanelState extends State<_ResultsPanel> {
   @override
   Widget build(BuildContext context) {
     final result = widget.result;
-    final currency = result.offers.isEmpty
-        ? 'UAH'
-        : result.offers.first.currency;
+    final stats = result.stats;
+    final currency = result.currency;
+    // Одна цінова драбина на всі джерела, від дешевшого.
+    final offers = result.sources.expand((s) => s.offers).toList()
+      ..sort((a, b) => a.price.compareTo(b.price));
     final visible = _expanded
-        ? result.offers
-        : result.offers.take(_collapsedCount).toList(growable: false);
+        ? offers
+        : offers.take(_collapsedCount).toList(growable: false);
 
     final colors = MarkoTheme.of(context);
     return MarkoPanel(
@@ -452,21 +471,25 @@ class _ResultsPanelState extends State<_ResultsPanel> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      result.title,
+                      'Знайдено на ринку',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: MarkoSpace.sm),
-                    Row(
+                    Wrap(
+                      spacing: MarkoSpace.sm,
+                      runSpacing: MarkoSpace.xs,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        MarkoStatusPill(
-                          label: result.isOriginal ? 'Оригінал' : 'Аналог',
-                          tone: result.isOriginal
-                              ? colors.positive
-                              : colors.warning,
-                        ),
-                        const SizedBox(width: MarkoSpace.sm),
+                        for (final source in result.sources)
+                          MarkoStatusPill(
+                            label:
+                                '${source.label}: ${source.offers.length}',
+                            tone: source.hasOffers
+                                ? colors.positive
+                                : colors.muted,
+                          ),
                         Text(
-                          'пропозицій: ${result.offersTotal}',
+                          'пропозицій: ${stats.offersTotal}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -475,21 +498,13 @@ class _ResultsPanelState extends State<_ResultsPanel> {
                 ),
               ),
               IconButton(
-                tooltip: 'Відкрити на avto.pro',
-                onPressed: () => launchUrl(
-                  Uri.parse(result.partUrl),
-                  mode: LaunchMode.externalApplication,
-                ),
-                icon: const HeroIcon(HeroIcons.arrowTopRightOnSquare, size: 17),
-              ),
-              IconButton(
                 tooltip: 'Сховати результати',
                 onPressed: widget.onClose,
                 icon: const HeroIcon(HeroIcons.xMark, size: 17),
               ),
             ],
           ),
-          if (result.offers.isEmpty) ...[
+          if (offers.isEmpty) ...[
             const SizedBox(height: MarkoSpace.md),
             const MarkoInlineMessage(
               message:
@@ -498,9 +513,9 @@ class _ResultsPanelState extends State<_ResultsPanel> {
           ] else ...[
             const SizedBox(height: MarkoSpace.lg),
             PriceSpreadBar(
-              min: result.minPrice,
-              median: result.medianPrice,
-              max: result.maxPrice,
+              min: stats.minPrice,
+              median: stats.medianPrice,
+              max: stats.maxPrice,
               currency: currency,
             ),
             const SizedBox(height: MarkoSpace.sm),
@@ -508,15 +523,13 @@ class _ResultsPanelState extends State<_ResultsPanel> {
               _OfferRow(offer: visible[index]),
               if (index < visible.length - 1) const Divider(),
             ],
-            if (result.offers.length > _collapsedCount) ...[
+            if (offers.length > _collapsedCount) ...[
               const SizedBox(height: 6),
               Center(
                 child: TextButton(
                   onPressed: () => setState(() => _expanded = !_expanded),
                   child: Text(
-                    _expanded
-                        ? 'Згорнути'
-                        : 'Показати всі ${result.offers.length}',
+                    _expanded ? 'Згорнути' : 'Показати всі ${offers.length}',
                   ),
                 ),
               ),
@@ -567,6 +580,7 @@ class PriceSpreadBar extends StatelessWidget {
       decoration: BoxDecoration(
         color: colors.surfaceMuted,
         borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.border),
       ),
       child: Column(
         children: [
@@ -600,7 +614,7 @@ class PriceSpreadBar extends StatelessWidget {
           const SizedBox(height: MarkoSpace.md),
           LayoutBuilder(
             builder: (context, constraints) {
-              const dot = 9.0;
+              const dot = 10.0;
               final offset = (constraints.maxWidth - dot) * _medianFraction;
               return SizedBox(
                 height: dot,
@@ -609,7 +623,7 @@ class PriceSpreadBar extends StatelessWidget {
                     Positioned.fill(
                       child: Center(
                         child: Container(
-                          height: 4,
+                          height: 5,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(999),
                             gradient: LinearGradient(
@@ -628,6 +642,13 @@ class PriceSpreadBar extends StatelessWidget {
                           shape: BoxShape.circle,
                           color: colors.ink,
                           border: Border.all(color: colors.surface, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 3,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -657,12 +678,26 @@ class _Stat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
     return Column(
       crossAxisAlignment: align,
       children: [
-        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        Text(
+          label,
+          style: MarkoType.caption.copyWith(
+            color: colors.muted,
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         const SizedBox(height: MarkoSpace.xs),
-        Text(value, style: MarkoType.price.copyWith(color: tone)),
+        Text(
+          value,
+          style: MarkoType.price.copyWith(
+            color: tone,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ],
     );
   }
@@ -671,46 +706,63 @@ class _Stat extends StatelessWidget {
 class _OfferRow extends StatelessWidget {
   const _OfferRow({required this.offer});
 
-  final CompetitorOffer offer;
+  final MarketPriceOffer offer;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: MarkoSpace.md),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  offer.partLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                if (offer.city != null) ...[
-                  const SizedBox(height: MarkoSpace.xxs),
-                  Text(
-                    offer.city!,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: colors.faint),
-                  ),
-                ],
-              ],
+    return InkWell(
+      onTap: offer.url.isEmpty
+          ? null
+          : () => launchUrl(
+              Uri.parse(offer.url),
+              mode: LaunchMode.externalApplication,
             ),
-          ),
-          if (offer.boosted) ...[
-            MarkoStatusPill(label: 'промо', tone: colors.warning),
-            const SizedBox(width: MarkoSpace.sm),
+      borderRadius: BorderRadius.circular(MarkoRadius.sm),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: MarkoSpace.md),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    offer.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: colors.ink,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (offer.subtitle.isNotEmpty) ...[
+                    const SizedBox(height: MarkoSpace.xxs),
+                    Text(
+                      offer.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: colors.muted),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (offer.isAnalog) ...[
+              MarkoStatusPill(label: 'аналог', tone: colors.warning),
+              const SizedBox(width: MarkoSpace.sm),
+            ],
+            Text(
+              offer.priceLabel,
+              style: MarkoType.price.copyWith(
+                color: colors.ink,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ],
-          Text(
-            offer.priceLabel,
-            style: MarkoType.price.copyWith(color: colors.ink),
-          ),
-        ],
+        ),
       ),
     );
   }

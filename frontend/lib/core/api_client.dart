@@ -54,6 +54,14 @@ class ApiClient {
     return _request('POST', path, body: body, authenticated: authenticated);
   }
 
+  Future<dynamic> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+    bool authenticated = true,
+  }) {
+    return _request('PATCH', path, body: body, authenticated: authenticated);
+  }
+
   Future<dynamic> deleteJson(String path, {bool authenticated = true}) {
     return _request('DELETE', path, authenticated: authenticated);
   }
@@ -77,6 +85,39 @@ class ApiClient {
     }
     final streamed = await client.send(request).timeout(timeout);
     return _decode(await http.Response.fromStream(streamed));
+  }
+
+  /// Server-sent events: yields each decoded `data:` payload as it arrives.
+  // ponytail: без повтору на 401 — токен беремо перед стартом потоку.
+  Stream<Map<String, dynamic>> streamJson(
+    String path, {
+    Map<String, String>? queryParameters,
+    Duration timeout = const Duration(minutes: 3),
+  }) async* {
+    final uri = Uri.parse(
+      '$baseUrl$path',
+    ).replace(queryParameters: queryParameters);
+    final request = http.Request('GET', uri)
+      ..headers['Accept'] = 'text/event-stream';
+    final accessToken = await _accessToken();
+    if (accessToken != null) {
+      request.headers['Authorization'] = 'Bearer $accessToken';
+    }
+    final response = await client.send(request).timeout(timeout);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'API returned HTTP ${response.statusCode}',
+        statusCode: response.statusCode,
+      );
+    }
+    final lines = response.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
+    await for (final line in lines) {
+      if (!line.startsWith('data:')) continue;
+      final payload = jsonDecode(line.substring(5).trim());
+      if (payload is Map<String, dynamic>) yield payload;
+    }
   }
 
   Future<dynamic> _request(
@@ -123,6 +164,7 @@ class ApiClient {
     final encodedBody = body == null ? null : jsonEncode(body);
     final request = switch (method) {
       'POST' => client.post(uri, headers: headers, body: encodedBody),
+      'PATCH' => client.patch(uri, headers: headers, body: encodedBody),
       'DELETE' => client.delete(uri, headers: headers),
       _ => client.get(uri, headers: headers),
     };

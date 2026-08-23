@@ -39,6 +39,25 @@ def test_from_raw_uses_fallback_keys():
     assert (p.model_id, p.seller_id) == ("NM", 99)
 
 
+def test_from_raw_reads_the_product_page_image():
+    """Картка товару віддає image, а imageAlt є тільки у видачі продавця."""
+    page = Product.from_raw(
+        {"id": 5, "image": "https://images.prom.ua/1_w700_h500.jpg"}, "ua"
+    )
+    listing = Product.from_raw(
+        {
+            "id": 5,
+            "imageAlt": "https://images.prom.ua/1_w640_h640.jpg",
+            "image": "https://images.prom.ua/1_w700_h500.jpg",
+        },
+        "ua",
+    )
+
+    assert page.image == "https://images.prom.ua/1_w700_h500.jpg"
+    # Основний шлях виграє у запасного.
+    assert listing.image == "https://images.prom.ua/1_w640_h640.jpg"
+
+
 def test_field_names_end_with_the_computed_columns():
     assert Product.field_names()[-2:] == ["url", "oem_numbers"]
 
@@ -92,3 +111,15 @@ def test_seller_from_url_invalid_raises():
 def test_seller_from_url_rejects_prom_lookalike_domain():
     with pytest.raises(ValueError):
         Seller.from_url("https://evil-prom.ua/ua/c4015921-avtobust.html")
+
+
+def test_effective_price_prefers_the_discounted_one():
+    """Prom показує discountedPrice, а price — це закреслена ціна до знижки."""
+    p = product(price="390", discountedPrice="382", hasDiscount=True)
+
+    assert p.effective_price == "382"
+
+
+def test_effective_price_falls_back_when_there_is_no_discount():
+    assert product(price="390", discountedPrice="382").effective_price == "390"
+    assert product(price=None, priceOriginal="390").effective_price == "390"

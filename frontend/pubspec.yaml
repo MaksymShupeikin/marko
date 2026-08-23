@@ -40,12 +40,15 @@ dependencies:
   firebase_core: ^4.12.0
   firebase_auth: 6.5.4
   google_sign_in: ^7.2.0
+  # Direct dependency for renderButton(): GIS is the only web sign-in flow.
+  google_sign_in_web: ^1.1.3
   cached_network_image: ^3.4.1
   crypto: ^3.0.7
   url_launcher: ^6.3.2
   file_picker: ^12.0.0
   heroicons: ^0.11.0
   shared_preferences: ^2.5.5
+  toastification: ^3.2.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -56,6 +59,26 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/logos/marko_icon.png"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/logos/marko_icon.png"
+    background_color: "#000000"
+    theme_color: "#0070F3"
+  macos:
+    generate: true
+    image_path: "assets/logos/marko_icon.png"
+  windows:
+    generate: true
+    image_path: "assets/logos/marko_icon.png"
+    icon_size: 48
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

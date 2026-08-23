@@ -8,6 +8,7 @@ import pytest
 
 from factories import html_with_state, raw_product
 from marko.parsers.prom.config import ScrapeConfig
+from marko.parsers.prom.exceptions import ParseError
 from marko.parsers.prom.gateway import PromGateway
 
 _SELLER_URL = "https://prom.ua/ua/c1-store.html"
@@ -179,6 +180,24 @@ async def test_product_group_pages_share_one_interleaved_queue():
 
 def test_default_page_concurrency_uses_eight_connections():
     assert ScrapeConfig().page_concurrency == 8
+
+
+async def test_page_without_catalog_is_retried_then_fails_loudly():
+    # Сторінка без блоку каталогу парситься як порожня — раніше імпорт мовчки
+    # зупинявся на ній і звітував "готово" з половиною каталогу.
+    FakeAsyncHttpClient.pages = {
+        (None, 1): listing_html([1, 2], 6),
+        (None, 2): html_with_state({"_FAST_CACHE": {}}),
+        (None, 3): listing_html([5, 6], 6),
+    }
+    gateway = PromGateway(
+        ScrapeConfig(delay=0, page_concurrency=1, max_retries=2)
+    )
+
+    with pytest.raises(ParseError):
+        await collect_product_ids(gateway)
+
+    assert FakeAsyncHttpClient.calls.count((None, 2)) == 2
 
 
 async def test_unknown_total_stops_when_prom_redirects_to_seen_page():

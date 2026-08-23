@@ -39,10 +39,13 @@ _FIELDS_PATH_MAP = {
     "url_text": "urlText",
 }
 
-# Raw keys used as fallbacks when the primary nested path is absent.
+# Raw keys tried in order when the primary nested path is absent.
 _FALLBACK_KEYS = {
-    "model_id": "newModelId",
-    "seller_id": "company_id",
+    "model_id": ("newModelId",),
+    "seller_id": ("company_id",),
+    # Картка товару не має imageAlt — головне фото лежить в image (700x500).
+    # Без цього оновлення за посиланням стирало зображення.
+    "image": ("image", "image400x400", "imageGallery"),
 }
 
 
@@ -90,9 +93,11 @@ class Product:
     def from_raw(cls, raw: dict, lang: str = "ua") -> Product:
         """Create a Product from a raw product object in the Apollo cache."""
         values = {name: get_nested(raw, path) for name, path in _FIELDS_PATH_MAP.items()}
-        for name, raw_key in _FALLBACK_KEYS.items():
+        for name, raw_keys in _FALLBACK_KEYS.items():
             if values[name] is None:
-                values[name] = raw.get(raw_key)
+                values[name] = next(
+                    (raw[key] for key in raw_keys if raw.get(key)), None
+                )
         values["url"] = cls._build_url(values["id"], values["url_text"], lang)
         return cls(**values)
 
@@ -101,6 +106,18 @@ class Product:
         if not product_id or not url_text:
             return None
         return f"https://prom.ua/{lang}/p{product_id}-{url_text}.html"
+
+    @property
+    def effective_price(self) -> str | None:
+        """Ціна, яку платить покупець.
+
+        У ``price`` лежить закреслена ціна до знижки — саме її показував
+        каталог, поки на сторінці стояла інша. Prom рендерить
+        ``discountedPrice``, коли ``hasDiscount``; робимо так само.
+        """
+        if self.has_discount and self.discounted_price:
+            return self.discounted_price
+        return self.price or self.price_original
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

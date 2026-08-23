@@ -18,20 +18,20 @@ void main() {
           body: Builder(
             builder: (context) => TextButton(
               onPressed: () => showHelpOverlay(context),
-              child: const Text('Інструкція'),
+              child: const Text('Відкрити інструкцію'),
             ),
           ),
         ),
       ),
     );
 
-    await tester.tap(find.text('Інструкція'));
+    await tester.tap(find.text('Відкрити інструкцію'));
     await tester.pumpAndSettle();
-    expect(find.text('Як працює Marko'), findsOneWidget);
+    expect(find.text('Інструкція'), findsOneWidget);
 
-    await tester.tap(find.text('Зрозуміло'));
+    await tester.tap(find.byTooltip('Закрити'));
     await tester.pumpAndSettle();
-    expect(find.text('Як працює Marko'), findsNothing);
+    expect(find.text('Інструкція'), findsNothing);
   });
 
   testWidgets('help overlay opens as branded bottom sheet on mobile', (
@@ -48,19 +48,19 @@ void main() {
           body: Builder(
             builder: (context) => TextButton(
               onPressed: () => showHelpOverlay(context),
-              child: const Text('Інструкція'),
+              child: const Text('Відкрити інструкцію'),
             ),
           ),
         ),
       ),
     );
 
-    await tester.tap(find.text('Інструкція'));
+    await tester.tap(find.text('Відкрити інструкцію'));
     await tester.pumpAndSettle();
-    expect(find.text('Як працює Marko'), findsOneWidget);
+    expect(find.text('Інструкція'), findsOneWidget);
 
-    await tester.tap(find.text('Зрозуміло'));
+    await tester.tap(find.byTooltip('Закрити'));
     await tester.pumpAndSettle();
-    expect(find.text('Як працює Marko'), findsNothing);
+    expect(find.text('Інструкція'), findsNothing);
   });
 }

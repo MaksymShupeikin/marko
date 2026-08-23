@@ -6,16 +6,13 @@ import '../../../core/app_theme.dart';
 import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_button.dart';
 import '../products_controller.dart';
-import '../products_models.dart';
 import '../products_page.dart';
 
 /// The two ways products get into the catalog: an Excel export or a Prom.ua
 /// store. Same modal as the OEM lookup, so both overlays behave alike.
 Future<void> showCatalogImport(BuildContext context) => showMarkoModal(
   context,
-  icon: HeroIcons.arrowDownTray,
   title: 'Імпорт каталогу',
-  subtitle: 'XLSX вивантаження або магазин Prom.ua',
   child: CatalogSourceCards(onDone: () => Navigator.of(context).pop()),
 );
 
@@ -107,13 +104,7 @@ class SourcePanel extends ConsumerWidget {
               child: const Text('Зрозуміло'),
             ),
           ),
-        if (importState?.activeSync != null) ...[
-          const SizedBox(height: MarkoSpace.md),
-          _SyncProgress(
-            job: importState!.activeJob,
-            status: importState.activeSync!.status,
-          ),
-        ],
+        // Поступ синхронізації показує плаваюча капсула над каталогом.
         if (importState?.error != null) ...[
           const SizedBox(height: MarkoSpace.md),
           MarkoInlineMessage(
@@ -247,77 +238,6 @@ class _PromForm extends StatelessWidget {
         const SizedBox(height: MarkoSpace.md),
         button,
       ],
-    );
-  }
-}
-
-class _SyncProgress extends StatelessWidget {
-  const _SyncProgress({required this.job, required this.status});
-
-  final SyncRun? job;
-  final String status;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    final current = job?.status ?? status;
-    final failed = current == 'failed';
-    final completed = current == 'completed';
-    final foreground = failed
-        ? colors.negative
-        : completed
-        ? colors.positive
-        : colors.brand;
-
-    return MarkoPanel(
-      padding: const EdgeInsets.all(MarkoSpace.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              HeroIcon(
-                failed
-                    ? HeroIcons.exclamationCircle
-                    : completed
-                    ? HeroIcons.checkCircle
-                    : HeroIcons.arrowPath,
-                size: 18,
-                color: foreground,
-              ),
-              const SizedBox(width: MarkoSpace.sm),
-              Expanded(
-                child: Text(
-                  'Імпорт каталогу: ${job?.statusLabel ?? current}',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-              Text(
-                '${job?.progressCurrent ?? 0} товарів',
-                style: MarkoType.caption.copyWith(color: colors.muted),
-              ),
-            ],
-          ),
-          const SizedBox(height: MarkoSpace.md),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(MarkoRadius.xs),
-            child: LinearProgressIndicator(
-              value: job?.progress,
-              color: foreground,
-              backgroundColor: colors.surfaceMuted,
-            ),
-          ),
-          if (job?.error != null) ...[
-            const SizedBox(height: MarkoSpace.sm),
-            Text(
-              job!.error!,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: colors.negative),
-            ),
-          ],
-        ],
-      ),
     );
   }
 }

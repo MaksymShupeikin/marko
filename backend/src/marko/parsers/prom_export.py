@@ -26,6 +26,7 @@ _CHARACTERISTIC_VALUE = "Значення_Характеристики"
 
 _MIN_OEM_LENGTH = 4  # shorter tokens are truncation noise, not part numbers
 _SELLER_HOST_RE = re.compile(r"^(?P<slug>[\w-]+?)-cs(?P<company_id>\d+)\.prom\.ua$", re.I)
+_PRODUCT_PATH_RE = re.compile(r"^/(?:[a-z]{2}/)?(?P<slug>p\d+-[^/]+)$", re.I)
 
 
 class ExportFormatError(ValueError):
@@ -42,6 +43,24 @@ def seller_from_export_url(url: str | None) -> Seller | None:
         slug=match.group("slug").lower(),
         lang="ua",
     )
+
+
+def is_export_url(url: str | None) -> bool:
+    """True for the seller-subdomain link an XLSX export carries."""
+    return seller_from_export_url(url) is not None
+
+
+def canonical_product_url(url: str | None) -> str:
+    """Marketplace link for a product, given either link shape.
+
+    A seller's own shop page renders without ``window.ApolloCacheState``, so
+    the parser cannot read it; the same product on prom.ua parses fine.
+    """
+    text = (url or "").strip()
+    if not is_export_url(text):
+        return text
+    match = _PRODUCT_PATH_RE.match(urlsplit(text).path)
+    return f"https://prom.ua/ua/{match.group('slug')}" if match else text
 
 
 def normalize_oem(value: object) -> str | None:

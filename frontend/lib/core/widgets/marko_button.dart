@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:heroicons/heroicons.dart';
 
 import '../app_theme.dart';
+import 'marko_loader.dart';
 
-enum MarkoButtonVariant { primary, secondary, ghost }
+enum MarkoButtonVariant { primary, secondary, ghost, danger }
 
 class MarkoButton extends StatefulWidget {
   const MarkoButton({
@@ -40,6 +41,17 @@ class MarkoButton extends StatefulWidget {
     super.key,
   }) : variant = MarkoButtonVariant.ghost;
 
+  const MarkoButton.danger({
+    required this.label,
+    required this.onPressed,
+    this.icon,
+    this.leading,
+    this.loading = false,
+    this.expand = false,
+    this.autofocus = false,
+    super.key,
+  }) : variant = MarkoButtonVariant.danger;
+
   final String label;
   final VoidCallback? onPressed;
   final HeroIcons? icon;
@@ -73,17 +85,27 @@ class _MarkoButtonState extends State<MarkoButton> {
     final isPrimary = widget.variant == MarkoButtonVariant.primary;
     final isSecondary = widget.variant == MarkoButtonVariant.secondary;
     final isGhost = widget.variant == MarkoButtonVariant.ghost;
+    final isDanger = widget.variant == MarkoButtonVariant.danger;
+    final isSolid = isPrimary || isDanger;
 
-    // Primary colors
-    final brand = colors.brand;
-    final primaryRing = Color.lerp(brand, Colors.black, 0.10)!;
-    final primaryHighlight = Color.lerp(brand, Colors.white, 0.30)!;
-    final primaryStart = Color.lerp(
-      brand,
+    // Solid (Primary / Danger) colors
+    final solidColor = isDanger ? colors.negative : colors.brand;
+    final solidRing = Color.lerp(solidColor, Colors.black, 0.16)!;
+    final solidHighlight = Color.lerp(
+      solidColor,
       Colors.white,
-      _hovered ? 0.30 : 0.15,
+      _hovered ? 0.45 : 0.35,
     )!;
-    final primaryEnd = Color.lerp(brand, Colors.black, _pressed ? 0.07 : 0)!;
+    final solidStart = Color.lerp(
+      solidColor,
+      Colors.white,
+      _hovered ? 0.14 : 0.06,
+    )!;
+    final solidEnd = Color.lerp(
+      solidColor,
+      Colors.black,
+      _pressed ? 0.14 : (_hovered ? 0.02 : 0.07),
+    )!;
 
     // Secondary / Ghost colors
     final secondaryBg = _pressed
@@ -97,13 +119,13 @@ class _MarkoButtonState extends State<MarkoButton> {
         ? colors.surfaceMuted
         : Colors.transparent;
 
-    final borderColor = isPrimary
-        ? (_focused ? primaryRing : primaryRing.withValues(alpha: 0.9))
+    final borderColor = isSolid
+        ? (_focused ? solidRing : solidRing.withValues(alpha: 0.9))
         : isSecondary
         ? (_hovered ? colors.borderStrong : colors.border)
         : Colors.transparent;
 
-    final textColor = isPrimary
+    final textColor = isSolid
         ? Colors.white
         : isGhost
         ? (_hovered ? colors.ink : colors.muted)
@@ -127,15 +149,15 @@ class _MarkoButtonState extends State<MarkoButton> {
             decoration: BoxDecoration(
               // The top highlight is the first 1px of the gradient, so it
               // follows the rounded corners instead of cutting across them.
-              gradient: isPrimary
+              gradient: isSolid
                   ? LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [primaryHighlight, primaryStart, primaryEnd],
+                      colors: [solidHighlight, solidStart, solidEnd],
                       stops: [0, 1 / height, 1],
                     )
                   : null,
-              color: isPrimary
+              color: isSolid
                   ? null
                   : isSecondary
                   ? secondaryBg
@@ -143,29 +165,41 @@ class _MarkoButtonState extends State<MarkoButton> {
               borderRadius: BorderRadius.circular(MarkoRadius.md),
               // Primary's ring sits outside the box, like Tailwind's `ring`:
               // a real border would paint over the 1px gradient highlight.
-              border: isPrimary
+              border: isSolid
                   ? null
                   : Border.all(color: borderColor, width: _focused ? 1.5 : 1),
               boxShadow: [
                 if (_focused)
                   BoxShadow(
-                    color: (isPrimary ? primaryRing : colors.brand).withValues(
-                      alpha: 0.25,
+                    color: (isSolid ? solidRing : colors.brand).withValues(
+                      alpha: 0.35,
                     ),
                     blurRadius: 0,
                     spreadRadius: 2,
                   ),
-                if (isPrimary || (isSecondary && !_pressed))
+                // 1. Soft Ambient Glow for optical depth and elevation
+                if (isSolid && _enabled && !_pressed)
+                  BoxShadow(
+                    color: solidColor.withValues(
+                      alpha: _hovered ? 0.35 : 0.20,
+                    ),
+                    blurRadius: _hovered ? 14 : 8,
+                    spreadRadius: _hovered ? 0 : -2,
+                    offset: Offset(0, _hovered ? 4 : 2),
+                  ),
+                // 2. Direct crisp tactile grounding shadow
+                if (isSolid || (isSecondary && !_pressed))
                   BoxShadow(
                     color: colors.ink.withValues(
-                      alpha: isPrimary
-                          ? (_pressed ? 0.08 : 0.13)
+                      alpha: isSolid
+                          ? (_pressed ? 0.10 : 0.18)
                           : (_pressed ? 0.02 : 0.04),
                     ),
-                    blurRadius: _pressed ? 1 : 2,
-                    offset: Offset(0, _pressed ? 0 : 1),
+                    blurRadius: _pressed ? 1 : 2.5,
+                    offset: Offset(0, _pressed ? 0 : 1.5),
                   ),
-                if (isPrimary)
+                // 3. Crisp outer hairline border
+                if (isSolid)
                   BoxShadow(
                     color: borderColor,
                     spreadRadius: _focused ? 1.5 : 1,
@@ -183,13 +217,7 @@ class _MarkoButtonState extends State<MarkoButton> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   if (widget.loading)
-                    SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: textColor,
-                      ),
-                    )
+                    MarkoLoader(size: 16, strokeWidth: 2, color: textColor)
                   else if (widget.leading != null)
                     widget.leading!
                   else if (widget.icon != null)
@@ -208,6 +236,15 @@ class _MarkoButtonState extends State<MarkoButton> {
                         fontSize: MarkoLayout.fieldFontSizeOf(context),
                         height: 1.15,
                         fontWeight: FontWeight.w600,
+                        shadows: isSolid
+                            ? const [
+                                Shadow(
+                                  color: Color(0x38000000),
+                                  offset: Offset(0, 1),
+                                  blurRadius: 1.5,
+                                ),
+                              ]
+                            : null,
                       ),
                     ),
                   ),

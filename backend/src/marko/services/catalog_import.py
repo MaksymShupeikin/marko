@@ -46,7 +46,7 @@ class ExportImportResult:
 
 
 def parse_product_price(product: Product) -> Decimal | None:
-    raw = product.price or product.discounted_price or product.price_original
+    raw = product.effective_price
     if raw is None:
         return None
     normalized = str(raw).replace("\u00a0", "").replace(" ", "").replace(",", ".")
@@ -135,6 +135,7 @@ async def import_export_file(
     await users_repo.ensure_default_workspace(session, workspace_id)
     store_id = await stores_repo.upsert_marketplace_store(
         session,
+        workspace_id=workspace_id,
         marketplace="prom",
         external_id=seller.company_id,
         name=seller.slug,

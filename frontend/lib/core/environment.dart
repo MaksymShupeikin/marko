@@ -14,10 +14,16 @@ abstract final class Environment {
     'FIREBASE_MESSAGING_SENDER_ID',
   );
   static const firebaseWebAppId = String.fromEnvironment('FIREBASE_WEB_APP_ID');
+
+  /// Web only: with it the page shows Google's own GIS button, without it the
+  /// Firebase popup.
   static const googleClientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
 
-  static bool get usesAndroidFirebaseConfig =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  static bool get usesNativeFirebaseConfig =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   static bool get hasFirebaseConfig =>
       firebaseApiKey.isNotEmpty &&

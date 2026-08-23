@@ -1,19 +1,28 @@
-import 'dart:ui';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:heroicons/heroicons.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
+import '../../core/widgets/marko_loader.dart';
+import '../../core/widgets/marko_toast.dart';
 import 'products_controller.dart';
 import 'products_models.dart';
+import 'widgets/dynamic_sync_island.dart';
 import 'widgets/help_overlay.dart';
 import 'widgets/product_card.dart';
 import 'widgets/product_details_panel.dart';
+import 'widgets/product_management_dialogs.dart';
 import 'widgets/source_panel.dart';
+
+/// Нижня панель дашборда (імпорт каталогу / ціни конкурентів) на мобілці.
+const _bottomBarHeight = 76.0;
+
+/// Висота плашки дій — потрібна, щоб розсунути те, що плаває над нею.
+const _selectionBarHeight = 56.0;
 
 /// The catalog toolbar's field controllers, kept outside the widget so the
 /// filters survive rebuilds.
@@ -34,6 +43,14 @@ final catalogPriceMaxFieldProvider = Provider<TextEditingController>((ref) {
   ref.onDispose(controller.dispose);
   return controller;
 });
+
+/// Clears the search box, price inputs, and resets all catalog filters to defaults.
+void resetCatalogFilters(WidgetRef ref) {
+  ref.read(catalogSearchFieldProvider).clear();
+  ref.read(catalogPriceMinFieldProvider).clear();
+  ref.read(catalogPriceMaxFieldProvider).clear();
+  ref.read(productsControllerProvider.notifier).resetFilters();
+}
 
 /// The catalog search input.
 class CatalogSearchField extends ConsumerWidget {
@@ -134,6 +151,14 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
     final catalog = ref.watch(productsControllerProvider);
     final controller = ref.read(productsControllerProvider.notifier);
     final state = catalog.value;
+    // Поки триває імпорт, каталог уже показуємо: товари прибувають у сітку.
+    final syncing = ref.watch(
+      catalogImportProvider.select((s) => s.value?.hasActiveJob ?? false),
+    );
+    // Той самий поріг, що й у нижньої панелі дашборда.
+    final compact = MediaQuery.sizeOf(context).width < 840;
+    final showSelection =
+        state != null && (state.hasSelection || state.bulkJob != null);
 
     return Material(
       color: Colors.transparent,
@@ -152,13 +177,23 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                         const SizedBox(height: MarkoSpace.xxl),
                         const SourcePanel(),
                         const SizedBox(height: MarkoSpace.md),
-                        if (state != null && state.isPristineEmpty)
+                        if (state != null && state.isPristineEmpty && !syncing)
                           const CatalogOnboarding()
                         else
                           _CatalogToolbar(
                             total: state?.page.total,
                             busy: state?.isRefreshing ?? false,
                           ),
+                        // На мобілці плашка плаває над нижніми кнопками.
+                        if (showSelection && !compact) ...[
+                          const SizedBox(height: MarkoSpace.md),
+                          _SelectionBar(
+                            count: state.actionCount,
+                            total: state.page.total,
+                            allMatching: state.allMatchingSelected,
+                            job: state.bulkJob,
+                          ),
+                        ],
                         if (state?.error != null) ...[
                           const SizedBox(height: MarkoSpace.md),
                           MarkoInlineMessage(
@@ -187,17 +222,51 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                       ),
                     ),
                   ],
-                  _ => _catalogSlivers(state!),
+                  _ => _catalogSlivers(state!, syncing),
                 },
-                const SliverToBoxAdapter(child: SizedBox(height: 72)),
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: compact && showSelection
+                        ? 72 + _selectionBarHeight
+                        : 72,
+                  ),
+                ),
               ],
             ),
           ),
-          // Centered floating capsule pill above the bottom edge / compact bar.
-          Positioned(
+          // Live import status; floats over the catalog without moving it.
+          const Positioned(
+            top: MarkoSpace.md,
             left: 0,
             right: 0,
-            bottom: MediaQuery.sizeOf(context).width < 840 ? 76 : MarkoSpace.xl,
+            child: Center(child: DynamicSyncIsland()),
+          ),
+          // Дії над вибраним: між кнопкою «наверх» і нижньою панеллю.
+          if (showSelection && compact)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _bottomBarHeight + MarkoSpace.sm,
+              // Той самий жолоб, що й у каталогу: плашка стає в один край з картками.
+              child: MarkoContentFrame(
+                child: _SelectionBar(
+                  count: state.actionCount,
+                  total: state.page.total,
+                  allMatching: state.allMatchingSelected,
+                  job: state.bulkJob,
+                ),
+              ),
+            ),
+          // Centered floating capsule pill above the bottom edge / compact bar.
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            left: 0,
+            right: 0,
+            bottom: compact
+                ? _bottomBarHeight +
+                      (showSelection ? _selectionBarHeight + MarkoSpace.md : 0)
+                : MarkoSpace.xl,
             child: Center(
               child: _ScrollTopButton(
                 visible: _showScrollTop,
@@ -210,13 +279,30 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
     );
   }
 
-  List<Widget> _catalogSlivers(CatalogState state) {
+  List<Widget> _catalogSlivers(CatalogState state, bool syncing) {
     // Onboarding already fills the screen and says the same thing.
-    if (state.isPristineEmpty) return const [];
+    if (state.isPristineEmpty && !syncing) return const [];
+
+    // При пошуку, фільтрації або початковому імпорті показуємо шимер карток
+    if (state.isRefreshing || (syncing && state.page.items.isEmpty)) {
+      return const [_GridSkeletonSliver()];
+    }
+
     if (state.page.items.isEmpty) {
       return [
-        SliverToBoxAdapter(
-          child: MarkoContentFrame(child: _EmptyCatalog(query: state.query)),
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 72),
+            child: MarkoContentFrame(
+              child: Center(
+                child: _EmptyCatalog(
+                  query: state.query,
+                  hasActiveFilters: state.hasActiveFilters,
+                ),
+              ),
+            ),
+          ),
         ),
       ];
     }
@@ -226,7 +312,13 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
           child: _ProductGrid(
             products: state.page.items,
             selectedId: state.selected?.id,
+            checkedIds: state.selectedIds,
+            // Ще не приїхали, але вже в дорозі.
+            ghostCount: syncing ? 4 : 0,
             onOpen: _openDetails,
+            onCheck: ref
+                .read(productsControllerProvider.notifier)
+                .toggleSelection,
           ),
         ),
       ),
@@ -234,7 +326,7 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
         const SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(child: MarkoLoader(size: 26)),
           ),
         ),
     ];
@@ -258,6 +350,7 @@ class _ScrollTopButtonState extends State<_ScrollTopButton> {
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
+    final height = MarkoLayout.fieldHeightOf(context);
     const duration = Duration(milliseconds: 220);
 
     return IgnorePointer(
@@ -281,72 +374,70 @@ class _ScrollTopButtonState extends State<_ScrollTopButton> {
                 onExit: (_) => setState(() => _hovered = false),
                 child: GestureDetector(
                   onTap: widget.onPressed,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    curve: Curves.easeOutCubic,
-                    transform: Matrix4.translationValues(
-                      0,
-                      _hovered ? -2.0 : 0,
-                      0,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: MarkoSpace.lg,
-                      vertical: 9.5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: colors.surface.withValues(alpha: 0.94),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: _hovered
-                            ? colors.brand.withValues(alpha: 0.8)
-                            : colors.borderStrong,
-                        width: _hovered ? 1.2 : 1.0,
+                  child: Center(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 160),
+                      curve: Curves.easeOutCubic,
+                      height: height,
+                      transform: Matrix4.translationValues(
+                        0,
+                        _hovered ? -2.0 : 0,
+                        0,
                       ),
-                      boxShadow: [
-                        if (_hovered)
-                          BoxShadow(
-                            color: colors.brand.withValues(alpha: 0.2),
-                            blurRadius: 20,
-                            offset: const Offset(0, 6),
-                          ),
-                        ...MarkoShadow.overlay,
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 160),
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: _hovered
-                                    ? colors.brandSoft
-                                    : colors.surfaceMuted,
-                                shape: BoxShape.circle,
-                              ),
-                              alignment: Alignment.center,
-                              child: HeroIcon(
-                                HeroIcons.arrowUp,
-                                size: 14,
-                                color: _hovered ? colors.brand : colors.ink,
-                              ),
-                            ),
-                            const SizedBox(width: MarkoSpace.sm),
-                            Text(
-                              'Повернутися вгору',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: _hovered ? colors.brand : colors.ink,
-                              ),
-                            ),
-                          ],
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: MarkoSpace.lg,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.surface.withValues(alpha: 0.94),
+                        borderRadius: BorderRadius.circular(MarkoRadius.md),
+                        border: Border.all(
+                          color: _hovered
+                              ? colors.brand.withValues(alpha: 0.8)
+                              : colors.borderStrong,
+                          width: _hovered ? 1.2 : 1.0,
                         ),
+                        boxShadow: [
+                          if (_hovered)
+                            BoxShadow(
+                              color: colors.brand.withValues(alpha: 0.2),
+                              blurRadius: 20,
+                              offset: const Offset(0, 6),
+                            ),
+                          ...MarkoShadow.overlay,
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 160),
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: _hovered
+                                  ? colors.brandSoft
+                                  : colors.surfaceMuted,
+                              borderRadius: BorderRadius.circular(
+                                MarkoRadius.sm,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: HeroIcon(
+                              HeroIcons.arrowUp,
+                              size: 14,
+                              color: _hovered ? colors.brand : colors.ink,
+                            ),
+                          ),
+                          const SizedBox(width: MarkoSpace.sm),
+                          Text(
+                            'Вгору',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: _hovered ? colors.brand : colors.ink,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -379,10 +470,7 @@ class _CatalogToolbar extends StatelessWidget {
             MarkoOemChip(total?.toString() ?? '—'),
             if (busy) ...[
               const SizedBox(width: MarkoSpace.md),
-              const SizedBox.square(
-                dimension: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
+              const MarkoLoader(size: 14),
             ],
           ],
         ),
@@ -390,6 +478,239 @@ class _CatalogToolbar extends StatelessWidget {
         const CatalogFilterBar(),
       ],
     );
+  }
+}
+
+/// Actions applied to every ticked card at once; shown only while something
+/// is ticked, so the catalog looks unchanged the rest of the time.
+class _SelectionBar extends ConsumerStatefulWidget {
+  const _SelectionBar({
+    required this.count,
+    required this.total,
+    required this.allMatching,
+    required this.job,
+  });
+
+  final int count;
+
+  /// Everything the current filter matches, loaded or not.
+  final int total;
+
+  /// The selection is the whole filtered catalog, not the ticked cards.
+  final bool allMatching;
+
+  /// A running catalog-wide refresh, if any.
+  final SyncRun? job;
+
+  @override
+  ConsumerState<_SelectionBar> createState() => _SelectionBarState();
+}
+
+class _SelectionBarState extends ConsumerState<_SelectionBar> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    // На вузькому екрані підписи кнопок не влазять у рядок — лишаються іконки.
+    final compact = MediaQuery.sizeOf(context).width < 840;
+    final actions = [
+      if (!widget.allMatching && widget.count < widget.total)
+        _action(
+          compact: compact,
+          icon: HeroIcons.checkCircle,
+          label: 'Усі ${widget.total} у каталозі',
+          onPressed: _busy
+              ? null
+              : ref.read(productsControllerProvider.notifier).selectAllMatching,
+        ),
+      _action(
+        compact: compact,
+        icon: HeroIcons.arrowPath,
+        label: 'Оновити за посиланням',
+        onPressed: _busy ? null : _refresh,
+        iconOverride: _busy ? const MarkoLoader(size: 15) : null,
+      ),
+      _action(
+        compact: compact,
+        icon: HeroIcons.trash,
+        label: 'Видалити',
+        color: colors.negative,
+        onPressed: _busy ? null : _delete,
+      ),
+      _action(
+        compact: compact,
+        icon: HeroIcons.xMark,
+        label: 'Скасувати',
+        onPressed: _busy
+            ? null
+            : ref.read(productsControllerProvider.notifier).clearSelection,
+      ),
+    ];
+    final box = DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.border),
+        boxShadow: MarkoShadow.overlay,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: MarkoSpace.lg,
+          vertical: MarkoSpace.sm,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.allMatching
+                        ? 'Вибрано всі ${widget.total}'
+                        : 'Вибрано ${widget.count}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: colors.ink,
+                    ),
+                  ),
+                  if (widget.job != null)
+                    Text(
+                      'Оновлення ${widget.job!.statusLabel}: '
+                      '${widget.job!.progressCurrent}'
+                      '${widget.job!.progressTotal == null ? '' : ' з ${widget.job!.progressTotal}'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: MarkoType.caption.copyWith(color: colors.faint),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: MarkoSpace.xs),
+            // Один рядок: іконки не переносяться, підпис зліва обрізається.
+            if (compact)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                spacing: MarkoSpace.xs,
+                children: actions,
+              )
+            else
+              Flexible(
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: MarkoSpace.sm,
+                  runSpacing: MarkoSpace.xs,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: actions,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    return box;
+  }
+
+  /// Кнопка дії: з підписом на широкому екрані, сама іконка на вузькому.
+  Widget _action({
+    required bool compact,
+    required HeroIcons icon,
+    required String label,
+    required VoidCallback? onPressed,
+    Color? color,
+    Widget? iconOverride,
+  }) {
+    final colors = MarkoTheme.of(context);
+    return compact
+        ? IconButton(
+            tooltip: label,
+            onPressed: onPressed,
+            style: IconButton.styleFrom(
+              foregroundColor: color ?? colors.ink,
+              backgroundColor: colors.surfaceMuted,
+              highlightColor: (color ?? colors.brand).withValues(alpha: 0.16),
+            ),
+            icon: iconOverride ?? HeroIcon(icon, size: 19),
+          )
+        : TextButton.icon(
+            onPressed: onPressed,
+            style: color == null
+                ? null
+                : TextButton.styleFrom(foregroundColor: color),
+            icon: iconOverride ?? HeroIcon(icon, size: 17),
+            label: Text(label),
+          );
+  }
+
+  Future<void> _refresh() async {
+    final total = widget.count;
+    final controller = ref.read(productsControllerProvider.notifier);
+    setState(() => _busy = true);
+    try {
+      // Весь каталог — це тисячі сторінок: працює фонове завдання, а плашка
+      // показує його поступ. Кілька позначених оновлюємо тут і зараз.
+      if (widget.allMatching) {
+        showMarkoToast(
+          context,
+          message: 'Оновлюємо $total товарів у фоні…',
+          tone: MarkoMessageTone.info,
+        );
+        await controller.refreshAllMatching();
+        return;
+      }
+      final failed = await controller.refreshSelected();
+      if (!mounted) return;
+      showMarkoToast(
+        context,
+        message: failed == 0
+            ? 'Оновлено товарів: ${total - failed}'
+            : 'Оновлено ${total - failed} з $total, не вдалося: $failed',
+        tone: failed == 0 ? MarkoMessageTone.success : MarkoMessageTone.warning,
+      );
+    } catch (error) {
+      if (mounted) {
+        showMarkoToast(
+          context,
+          title: 'Не вдалося оновити',
+          message: '$error',
+          tone: MarkoMessageTone.error,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _delete() async {
+    final total = widget.count;
+    if (!await confirmBulkProductDeletion(context, count: total)) return;
+    final controller = ref.read(productsControllerProvider.notifier);
+    setState(() => _busy = true);
+    try {
+      if (widget.allMatching) {
+        final deleted = await controller.deleteAllMatching();
+        if (!mounted) return;
+        showMarkoToast(context, message: 'Видалено товарів: $deleted');
+        return;
+      }
+      final failed = await controller.deleteSelected();
+      if (!mounted) return;
+      showMarkoToast(
+        context,
+        message: failed == 0
+            ? 'Видалено товарів: $total'
+            : 'Видалено ${total - failed} з $total, не вдалося: $failed',
+        tone: failed == 0 ? MarkoMessageTone.success : MarkoMessageTone.warning,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 }
 
@@ -408,11 +729,45 @@ class CatalogFilterBar extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final compact = constraints.maxWidth < 740;
+
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (showSearch) ...[
+                const CatalogSearchField(),
+                const SizedBox(height: MarkoSpace.sm),
+              ],
+              CatalogSourceToggle(
+                source: state?.source ?? ProductSource.all,
+                onChanged: controller.filterBySource,
+                fullWidth: true,
+              ),
+              const SizedBox(height: MarkoSpace.sm),
+              CatalogPriceRange(
+                onChanged: controller.filterByPrice,
+                fullWidth: true,
+              ),
+              const SizedBox(height: MarkoSpace.sm),
+              CatalogSortMenu(
+                sort: sort,
+                onChanged: controller.sortBy,
+                fullWidth: true,
+              ),
+            ],
+          );
+        }
+
         final filters = Wrap(
           spacing: MarkoSpace.sm,
           runSpacing: MarkoSpace.sm,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
+            CatalogSourceToggle(
+              source: state?.source ?? ProductSource.all,
+              onChanged: controller.filterBySource,
+            ),
             CatalogPriceRange(onChanged: controller.filterByPrice),
             CatalogSortMenu(sort: sort, onChanged: controller.sortBy),
           ],
@@ -422,22 +777,9 @@ class CatalogFilterBar extends ConsumerWidget {
           return filters;
         }
 
-        const searchField = CatalogSearchField();
-
-        if (constraints.maxWidth < 740) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              searchField,
-              const SizedBox(height: MarkoSpace.sm),
-              filters,
-            ],
-          );
-        }
-
         return Row(
           children: [
-            const Expanded(child: searchField),
+            const Expanded(child: CatalogSearchField()),
             const SizedBox(width: MarkoSpace.md),
             filters,
           ],
@@ -449,9 +791,14 @@ class CatalogFilterBar extends ConsumerWidget {
 
 /// Price bounds, in the catalog's currency. Empty means no bound.
 class CatalogPriceRange extends ConsumerWidget {
-  const CatalogPriceRange({required this.onChanged, super.key});
+  const CatalogPriceRange({
+    required this.onChanged,
+    this.fullWidth = false,
+    super.key,
+  });
 
   final void Function(double? min, double? max) onChanged;
+  final bool fullWidth;
 
   static double? _parse(String value) =>
       double.tryParse(value.trim().replaceAll(' ', '').replaceAll(',', '.'));
@@ -463,13 +810,57 @@ class CatalogPriceRange extends ConsumerWidget {
 
     void emit() => onChanged(_parse(min.text), _parse(max.text));
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _PriceField(controller: min, hint: 'Ціна від', onChanged: emit),
-        const SizedBox(width: MarkoSpace.sm),
-        _PriceField(controller: max, hint: 'Ціна до', onChanged: emit),
-      ],
+    if (fullWidth) {
+      return Row(
+        children: [
+          Expanded(
+            child: _PriceField(
+              width: double.infinity,
+              controller: min,
+              hint: 'Ціна від',
+              onChanged: emit,
+            ),
+          ),
+          const SizedBox(width: MarkoSpace.sm),
+          Expanded(
+            child: _PriceField(
+              width: double.infinity,
+              controller: max,
+              hint: 'Ціна до',
+              onChanged: emit,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final hasTightWidth =
+            constraints.maxWidth.isFinite && constraints.maxWidth < 320;
+        final fieldWidth = hasTightWidth
+            ? (constraints.maxWidth - MarkoSpace.sm) / 2
+            : 140.0;
+
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PriceField(
+              width: fieldWidth > 60 ? fieldWidth : 140.0,
+              controller: min,
+              hint: 'Ціна від',
+              onChanged: emit,
+            ),
+            const SizedBox(width: MarkoSpace.sm),
+            _PriceField(
+              width: fieldWidth > 60 ? fieldWidth : 140.0,
+              controller: max,
+              hint: 'Ціна до',
+              onChanged: emit,
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -479,16 +870,18 @@ class _PriceField extends StatelessWidget {
     required this.controller,
     required this.hint,
     required this.onChanged,
+    this.width = 140.0,
   });
 
   final TextEditingController controller;
   final String hint;
   final VoidCallback onChanged;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 150,
+      width: width,
       child: MarkoTextField(
         controller: controller,
         hintText: hint,
@@ -506,15 +899,146 @@ class _PriceField extends StatelessWidget {
   }
 }
 
+/// Where the products came from: everything, an uploaded XLSX, or a Prom sync.
+/// A segmented switch rather than a menu — there are only three states and the
+/// current one should be readable without opening anything.
+class CatalogSourceToggle extends StatelessWidget {
+  const CatalogSourceToggle({
+    required this.source,
+    required this.onChanged,
+    this.fullWidth = false,
+    super.key,
+  });
+
+  final ProductSource source;
+  final ValueChanged<ProductSource> onChanged;
+  final bool fullWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final selectedIndex = ProductSource.values.indexOf(source);
+    final count = ProductSource.values.length;
+    final alignmentX = count > 1
+        ? (2 * selectedIndex / (count - 1)) - 1.0
+        : 0.0;
+
+    return Container(
+      height: MarkoLayout.fieldHeightOf(context),
+      width: fullWidth ? double.infinity : 228,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.border),
+        boxShadow: MarkoShadow.card,
+      ),
+      child: Stack(
+        children: [
+          AnimatedAlign(
+            alignment: Alignment(alignmentX, 0.0),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            child: FractionallySizedBox(
+              widthFactor: 1.0 / count,
+              heightFactor: 1.0,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.surfaceMuted,
+                  borderRadius: BorderRadius.circular(MarkoRadius.sm),
+                  border: Border.all(
+                    color: colors.borderStrong.withValues(alpha: 0.5),
+                  ),
+                  boxShadow: MarkoShadow.segmentedItem,
+                ),
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              for (final option in ProductSource.values)
+                Expanded(
+                  child: _SourceSegment(
+                    label: option.label,
+                    selected: option == source,
+                    onPressed: () => onChanged(option),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SourceSegment extends StatefulWidget {
+  const _SourceSegment({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  State<_SourceSegment> createState() => _SourceSegmentState();
+}
+
+class _SourceSegmentState extends State<_SourceSegment> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final isSelected = widget.selected;
+    final baseStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontSize: MarkoLayout.fieldFontSizeOf(context),
+        ) ??
+        const TextStyle(fontSize: 13.5);
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onPressed,
+        child: Center(
+          child: AnimatedDefaultTextStyle(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            style: baseStyle.copyWith(
+              color: isSelected
+                  ? colors.ink
+                  : (_hovered ? colors.ink : colors.faint),
+            ),
+            child: Text(
+              widget.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class CatalogSortMenu extends StatefulWidget {
   const CatalogSortMenu({
     required this.sort,
     required this.onChanged,
+    this.fullWidth = false,
     super.key,
   });
 
   final ProductSort sort;
   final ValueChanged<ProductSort> onChanged;
+  final bool fullWidth;
 
   @override
   State<CatalogSortMenu> createState() => _CatalogSortMenuState();
@@ -527,6 +1051,12 @@ class _CatalogSortMenuState extends State<CatalogSortMenu> {
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
+    final textStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontSize: MarkoLayout.fieldFontSizeOf(context),
+        ) ??
+        const TextStyle(fontSize: 13.5);
+
     return MenuAnchor(
       controller: _menuController,
       alignmentOffset: const Offset(0, 4),
@@ -579,18 +1109,17 @@ class _CatalogSortMenuState extends State<CatalogSortMenu> {
                 Expanded(
                   child: Text(
                     option.label,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: option == widget.sort ? colors.brand : colors.ink,
+                    style: textStyle.copyWith(
+                      color: option == widget.sort ? colors.ink : colors.muted,
                       fontWeight: option == widget.sort
                           ? FontWeight.w600
                           : FontWeight.w400,
-                      fontSize: 13.5,
                     ),
                   ),
                 ),
                 const SizedBox(width: MarkoSpace.sm),
                 if (option == widget.sort)
-                  HeroIcon(HeroIcons.check, size: 16, color: colors.brand)
+                  HeroIcon(HeroIcons.check, size: 16, color: colors.ink)
                 else
                   const SizedBox(width: 16),
               ],
@@ -615,6 +1144,7 @@ class _CatalogSortMenuState extends State<CatalogSortMenu> {
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeInOut,
               height: MarkoLayout.fieldHeightOf(context),
+              width: widget.fullWidth ? double.infinity : null,
               padding: const EdgeInsets.symmetric(horizontal: MarkoSpace.md),
               decoration: BoxDecoration(
                 color: _hovered || isOpen
@@ -631,20 +1161,29 @@ class _CatalogSortMenuState extends State<CatalogSortMenu> {
                     : MarkoShadow.card,
               ),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisSize:
+                    widget.fullWidth ? MainAxisSize.max : MainAxisSize.min,
+                mainAxisAlignment: widget.fullWidth
+                    ? MainAxisAlignment.spaceBetween
+                    : MainAxisAlignment.start,
                 children: [
-                  HeroIcon(
-                    HeroIcons.arrowsUpDown,
-                    size: 15,
-                    color: _hovered || isOpen ? colors.ink : colors.faint,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    widget.sort.label,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      fontWeight: FontWeight.w500,
-                      fontSize: 13.5,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      HeroIcon(
+                        HeroIcons.arrowsUpDown,
+                        size: 15,
+                        color: _hovered || isOpen ? colors.ink : colors.faint,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        widget.sort.label,
+                        style: textStyle.copyWith(
+                          color: colors.ink,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(width: 6),
                   AnimatedRotation(
@@ -672,52 +1211,118 @@ const _cardTextHeight = 118.0;
 double _tileWidth(double available, int columns) =>
     (available - _gridSpacing * (columns - 1)) / columns;
 
+/// Один стовпчик означає горизонтальні картки — сітка з квадратних фото
+/// починається тільки там, де їх поміщається щонайменше три.
+int _columnsFor(double width) => switch (width) {
+  >= 1100 => 5,
+  >= 880 => 4,
+  >= 640 => 3,
+  _ => 1,
+};
+
 class _ProductGrid extends StatelessWidget {
   const _ProductGrid({
     required this.products,
     required this.selectedId,
+    required this.checkedIds,
     required this.onOpen,
+    required this.onCheck,
+    this.ghostCount = 0,
   });
 
   final List<StoreProduct> products;
   final String? selectedId;
+  final Set<String> checkedIds;
   final ValueChanged<StoreProduct> onOpen;
+  final ValueChanged<String> onCheck;
+
+  /// Shimmering placeholders tacked onto the end while an import is running.
+  final int ghostCount;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = switch (constraints.maxWidth) {
-          >= 1100 => 5,
-          >= 880 => 4,
-          >= 640 => 3,
-          >= 420 => 2,
-          _ => 1,
-        };
+        final columns = _columnsFor(constraints.maxWidth);
+        // На вузькому екрані — один стовпчик компактних рядків: більше товарів
+        // на екрані, ніж від картки з фото на всю ширину.
+        final horizontal = columns == 1;
+        final selecting = checkedIds.isNotEmpty;
         return GridView.builder(
           shrinkWrap: true,
           primary: false,
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            mainAxisSpacing: _gridSpacing,
+            mainAxisSpacing: horizontal ? MarkoSpace.sm : _gridSpacing,
             crossAxisSpacing: _gridSpacing,
             // Square image plus a fixed text block: an aspect ratio would
             // squeeze the text and overflow at some column counts.
-            mainAxisExtent:
-                _tileWidth(constraints.maxWidth, columns) + _cardTextHeight,
+            mainAxisExtent: horizontal
+                ? productRowHeight
+                : _tileWidth(constraints.maxWidth, columns) + _cardTextHeight,
           ),
-          itemCount: products.length,
+          itemCount: products.length + ghostCount,
           itemBuilder: (context, index) {
+            if (index >= products.length) {
+              return ProductCardSkeleton(horizontal: horizontal);
+            }
             final product = products[index];
-            return ProductCard(
-              product: product,
-              selected: product.id == selectedId,
-              onTap: () => onOpen(product),
+            // Ключ за id: щойно спарсений товар — новий елемент, і тільки він
+            // програє появу; решта карток лишаються на місці.
+            // Чужі магазини не редагуються — нема сенсу їх позначати.
+            final toggle = product.canManage
+                ? () {
+                    HapticFeedback.selectionClick();
+                    onCheck(product.id);
+                  }
+                : null;
+            return _Appear(
+              key: ValueKey(product.id),
+              child: ProductCard(
+                product: product,
+                horizontal: horizontal,
+                selected: product.id == selectedId,
+                checked: checkedIds.contains(product.id),
+                // На дотику ховера нема: позначки видно, поки триває вибір.
+                alwaysShowCheck: horizontal && selecting,
+                onCheckChanged: product.canManage
+                    ? () => onCheck(product.id)
+                    : null,
+                // Утримання починає вибір, далі тап позначає решту.
+                onLongPress: horizontal ? toggle : null,
+                onTap: horizontal && selecting && toggle != null
+                    ? toggle
+                    : () => onOpen(product),
+              ),
             );
           },
         );
       },
+    );
+  }
+}
+
+/// Fades and lifts a card in once, when it first lands in the grid.
+class _Appear extends StatelessWidget {
+  const _Appear({required this.child, super.key});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 12 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: child,
     );
   }
 }
@@ -727,32 +1332,28 @@ class _GridSkeletonSliver extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
     return SliverToBoxAdapter(
       child: MarkoContentFrame(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 880 ? 4 : 2;
-            return GridView.count(
+            final columns = _columnsFor(constraints.maxWidth);
+            final horizontal = columns == 1;
+            return GridView.builder(
               shrinkWrap: true,
               primary: false,
               physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: columns,
-              mainAxisSpacing: _gridSpacing,
-              crossAxisSpacing: _gridSpacing,
-              childAspectRatio:
-                  _tileWidth(constraints.maxWidth, columns) /
-                  (_tileWidth(constraints.maxWidth, columns) + _cardTextHeight),
-              children: List.generate(
-                columns * 2,
-                (_) => DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: colors.surfaceMuted,
-                    borderRadius: BorderRadius.circular(MarkoRadius.xl),
-                    border: Border.all(color: colors.border),
-                  ),
-                ),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                mainAxisSpacing: horizontal ? MarkoSpace.sm : _gridSpacing,
+                crossAxisSpacing: _gridSpacing,
+                mainAxisExtent: horizontal
+                    ? productRowHeight
+                    : _tileWidth(constraints.maxWidth, columns) +
+                          _cardTextHeight,
               ),
+              itemCount: horizontal ? 6 : columns * 3,
+              itemBuilder: (context, index) =>
+                  ProductCardSkeleton(horizontal: horizontal),
             );
           },
         ),
@@ -761,61 +1362,35 @@ class _GridSkeletonSliver extends StatelessWidget {
   }
 }
 
-class _EmptyCatalog extends StatelessWidget {
-  const _EmptyCatalog({required this.query});
+class _EmptyCatalog extends ConsumerWidget {
+  const _EmptyCatalog({required this.query, this.hasActiveFilters = false});
 
   final String query;
+  final bool hasActiveFilters;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
+  Widget build(BuildContext context, WidgetRef ref) {
     final searching = query.trim().isNotEmpty;
-    return MarkoPanel(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MarkoSpace.xxl,
-        vertical: MarkoSpace.huge,
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: colors.surfaceMuted,
-              borderRadius: BorderRadius.circular(MarkoRadius.lg),
-            ),
-            alignment: Alignment.center,
-            child: HeroIcon(
-              searching
-                  ? HeroIcons.magnifyingGlassCircle
-                  : HeroIcons.archiveBox,
-              color: colors.faint,
-              size: 20,
-            ),
-          ),
-          const SizedBox(height: MarkoSpace.md),
-          Text(
-            searching ? 'Нічого не знайдено' : 'Товарів поки немає',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: MarkoSpace.xs),
-          Text(
-            searching
-                ? 'Спробуйте інший запит або скиньте фільтри.'
-                : 'Додайте каталог із Prom або завантажте XLSX.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          if (!searching) ...[
-            const SizedBox(height: MarkoSpace.lg),
-            MarkoButton(
+    final filtered = hasActiveFilters || searching;
+
+    return MarkoEmptyState(
+      icon: filtered ? HeroIcons.magnifyingGlass : HeroIcons.archiveBox,
+      title: filtered ? 'Нічого не знайдено' : 'Товарів поки немає',
+      description: filtered
+          ? 'Спробуйте змінити пошуковий запит або скиньте активні фільтри.'
+          : 'Додайте каталог із Prom або завантажте XLSX.',
+      action: filtered
+          ? MarkoButton(
+              label: 'Скинути фільтри',
+              icon: HeroIcons.arrowPath,
+              variant: MarkoButtonVariant.secondary,
+              onPressed: () => resetCatalogFilters(ref),
+            )
+          : MarkoButton(
               label: 'Імпорт каталогу',
               icon: HeroIcons.arrowDownTray,
               onPressed: () => showCatalogImport(context),
             ),
-          ],
-        ],
-      ),
     );
   }
 }
@@ -891,16 +1466,10 @@ class CatalogOnboarding extends StatelessWidget {
 }
 
 class _Step {
-  const _Step({
-    required this.title,
-    required this.body,
-    required this.tag,
-    required this.icon,
-  });
+  const _Step({required this.title, required this.body, required this.icon});
 
   final String title;
   final String body;
-  final String tag;
   final HeroIcons icon;
 }
 
@@ -909,21 +1478,18 @@ const _steps = [
     title: 'Експортуйте файл XLSX або вкажіть магазин Prom',
     body:
         'Рекомендуємо XLSX експорт із кабінету Prom: він містить оригінальні номери OEM та артикули виробників для точної звірки.',
-    tag: 'Prom.ua XLSX',
     icon: HeroIcons.arrowDownTray,
   ),
   _Step(
     title: 'Автоматичне завантаження каталогу',
     body:
         'Сервер Marko обробляє файл за 1–2 хвилини, формує зручну сітку товарів, фільтри цін та створює структуру пошуку.',
-    tag: 'Швидка обробка',
     icon: HeroIcons.bolt,
   ),
   _Step(
     title: 'Миттєва аналітика цін на Avto.pro',
     body:
         'Клікайте на будь-яку картку товару або шукайте за OEM, щоб бачити мінімальні й медіанні ринкові ціни та пропозиції конкурентів.',
-    tag: 'Avto.pro Live',
     icon: HeroIcons.presentationChartLine,
   ),
 ];
@@ -1033,35 +1599,11 @@ class _StepRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        step.title,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: MarkoSpace.xs,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colors.surfaceMuted,
-                        borderRadius: BorderRadius.circular(MarkoRadius.sm),
-                        border: Border.all(color: colors.border),
-                      ),
-                      child: Text(
-                        step.tag,
-                        style: MarkoType.caption.copyWith(
-                          fontSize: 10.5,
-                          color: colors.faint,
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  step.title,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 3),
                 Text(

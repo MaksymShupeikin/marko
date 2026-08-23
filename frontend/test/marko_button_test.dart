@@ -77,4 +77,25 @@ void main() {
     );
     expect(gesture.onTap, isNull);
   });
+
+  testWidgets('MarkoButton.danger renders and invokes callback', (tester) async {
+    var pressed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: MarkoButton.danger(
+            label: 'Видалити',
+            icon: HeroIcons.trash,
+            onPressed: () => pressed = true,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Видалити'), findsOneWidget);
+    await tester.tap(find.text('Видалити'));
+    await tester.pumpAndSettle();
+    expect(pressed, isTrue);
+  });
 }

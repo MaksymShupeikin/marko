@@ -7,6 +7,7 @@ import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_models.dart';
+import '../auth/widgets/sign_out_dialog.dart';
 import '../products/products_controller.dart';
 import '../products/products_page.dart';
 import '../products/widgets/competitor_results.dart';
@@ -47,28 +48,31 @@ class DashboardPage extends ConsumerWidget {
                     border: Border(top: BorderSide(color: colors.border)),
                     boxShadow: MarkoShadow.overlay,
                   ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: MarkoSpace.md,
-                    vertical: MarkoSpace.sm,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: MarkoButton.secondary(
-                          label: 'Імпорт каталогу',
-                          icon: HeroIcons.arrowDownTray,
-                          onPressed: () => showCatalogImport(context),
-                        ),
+                  child: MarkoContentFrame(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: MarkoSpace.sm,
                       ),
-                      const SizedBox(width: MarkoSpace.sm),
-                      Expanded(
-                        child: MarkoButton(
-                          label: 'Ціни конкурентів',
-                          icon: HeroIcons.magnifyingGlass,
-                          onPressed: () => showOemLookup(context),
-                        ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: MarkoButton.secondary(
+                              label: 'Імпорт',
+                              icon: HeroIcons.arrowDownTray,
+                              onPressed: () => showCatalogImport(context),
+                            ),
+                          ),
+                          const SizedBox(width: MarkoSpace.sm),
+                          Expanded(
+                            child: MarkoButton(
+                              label: 'Конкуренти',
+                              icon: HeroIcons.magnifyingGlass,
+                              onPressed: () => showOemLookup(context),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -127,12 +131,16 @@ class _TopBar extends ConsumerWidget {
                 const Spacer(),
                 if (compact) ...[
                   const MarkoThemeToggle(),
+                  const SizedBox(width: MarkoSpace.xs),
                   if (user != null)
                     IconButton(
                       tooltip: 'Вийти з акаунта',
-                      onPressed: ref
-                          .read(authControllerProvider.notifier)
-                          .logout,
+                      onPressed: () async {
+                        final confirmed = await confirmSignOut(context, user: user);
+                        if (confirmed) {
+                          await ref.read(authControllerProvider.notifier).logout();
+                        }
+                      },
                       icon: HeroIcon(
                         HeroIcons.arrowRightStartOnRectangle,
                         size: 19,
@@ -164,9 +172,12 @@ class _TopBar extends ConsumerWidget {
                     _AccountButton(
                       user: user,
                       showName: true,
-                      onLogout: ref
-                          .read(authControllerProvider.notifier)
-                          .logout,
+                      onLogout: () async {
+                        final confirmed = await confirmSignOut(context, user: user);
+                        if (confirmed) {
+                          await ref.read(authControllerProvider.notifier).logout();
+                        }
+                      },
                     ),
                 ],
               ],

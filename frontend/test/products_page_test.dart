@@ -7,11 +7,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:marko_client/core/api_client.dart';
+import 'package:marko_client/core/app_theme.dart';
 import 'package:marko_client/core/marko_ui.dart';
+import 'package:marko_client/core/widgets/marko_button.dart';
 import 'package:marko_client/features/products/products_api.dart';
 import 'package:marko_client/features/products/products_page.dart';
 import 'package:marko_client/features/products/widgets/product_details_panel.dart';
 import 'package:marko_client/features/products/widgets/source_panel.dart';
+import 'package:toastification/toastification.dart';
+
+/// Toasts live in the root overlay: they outlive the action that raised them,
+/// so a test has to clear them before tapping whatever they cover.
+Future<void> _clearToasts(WidgetTester tester) async {
+  toastification.dismissAll(delayForAnimation: false);
+  await tester.pump(const Duration(milliseconds: 700));
+  await tester.pumpAndSettle();
+}
 
 Map<String, dynamic> _product(
   String id,
@@ -36,6 +47,7 @@ Map<String, dynamic> _product(
     'store_name': 'kemp',
     'marketplace': 'prom',
     'oem_numbers': oem,
+    'can_manage': true,
   };
 }
 
@@ -81,7 +93,10 @@ class _Recorder {
 Widget _app(ApiClient client) {
   return ProviderScope(
     overrides: [productsApiProvider.overrideWithValue(ProductsApi(client))],
-    child: const MaterialApp(home: ProductsPage()),
+    child: MaterialApp(
+      theme: AppTheme.light,
+      home: const Scaffold(body: ProductsPage()),
+    ),
   );
 }
 
@@ -193,10 +208,105 @@ void main() {
     );
 
     expect(inPanel('3 297'), findsOneWidget);
-    expect(inPanel('Відкрити на Prom'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(ProductDetailsPanel),
+        matching: find.byTooltip('Відкрити на Prom'),
+      ),
+      findsOneWidget,
+    );
     // The best number shows twice: as the search OEM and in the full list.
     expect(inPanel('93818439'), findsNWidgets(2));
     expect(inPanel('77643'), findsOneWidget);
+  });
+
+  testWidgets('a product can be refreshed by URL and deleted from its details', (
+    tester,
+  ) async {
+    var savedName = 'Радіатор Iveco';
+    var deleted = false;
+    final client = ApiClient(
+      client: MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path == '/api/v1/products/1/refresh') {
+          savedName = 'Радіатор Iveco Daily (оновлено)';
+          return http.Response.bytes(
+            utf8.encode(jsonEncode(_product('1', savedName, price: 3500))),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.method == 'DELETE' &&
+            request.url.path == '/api/v1/products/1') {
+          deleted = true;
+          return http.Response('', 204);
+        }
+        if (request.url.path == '/api/v1/products/1/competitor-prices') {
+          return http.Response.bytes(
+            utf8.encode(
+              jsonEncode({
+                'cached': false,
+                'observed_at': '2026-08-22T10:00:00Z',
+                'stats': {
+                  'offers_total': 0,
+                  'sources_total': 0,
+                  'min_price': null,
+                  'median_price': null,
+                  'max_price': null,
+                },
+                'sources': [],
+              }),
+            ),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.url.path == '/api/v1/products') {
+          return http.Response.bytes(
+            utf8.encode(
+              jsonEncode({
+                'items': deleted ? [] : [_product('1', savedName, price: 3500)],
+                'total': deleted ? 0 : 1,
+                'limit': 60,
+                'offset': 0,
+              }),
+            ),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+      baseUrl: 'http://api.test',
+    );
+
+    await tester.pumpWidget(_app(client));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Радіатор Iveco'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Оновити дані за посиланням'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(ProductDetailsPanel),
+        matching: find.text('Радіатор Iveco Daily (оновлено)'),
+      ),
+      findsOneWidget,
+    );
+
+    await _clearToasts(tester);
+    await tester.tap(find.byTooltip('Видалити товар'));
+    await tester.pumpAndSettle();
+    expect(find.text('Видалити товар?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(MarkoButton, 'Видалити'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(deleted, isTrue);
+    expect(find.byType(ProductDetailsPanel), findsNothing);
+    await _clearToasts(tester);
   });
 
   testWidgets(
@@ -340,5 +450,204 @@ void main() {
     // Nothing to search or sort yet.
     expect(find.text('Каталог'), findsNothing);
     expect(find.byType(CatalogSearchField), findsNothing);
+  });
+
+  testWidgets('ticking cards enables bulk refresh and delete', (tester) async {
+    final refreshed = <String>[];
+    final deleted = <String>[];
+    final client = ApiClient(
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (request.method == 'POST' && path.endsWith('/refresh')) {
+          final id = path.split('/')[4];
+          refreshed.add(id);
+          return http.Response.bytes(
+            utf8.encode(jsonEncode(_product(id, 'Оновлено $id', price: 999))),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.method == 'DELETE' && path.startsWith('/api/v1/products/')) {
+          deleted.add(path.split('/').last);
+          return http.Response('', 204);
+        }
+        if (path == '/api/v1/products') {
+          return http.Response.bytes(
+            utf8.encode(
+              jsonEncode({
+                'items': [
+                  _product('1', 'Радіатор Iveco', price: 3297),
+                  _product('2', 'Термостат Ford', price: 185),
+                ],
+                'total': 2,
+                'limit': 60,
+                'offset': 0,
+              }),
+            ),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+      baseUrl: 'http://api.test',
+    );
+
+    await tester.pumpWidget(_app(client));
+    await tester.pumpAndSettle();
+
+    // Позначки з'являються на картках і не чіпають відкриття деталей.
+    expect(find.byTooltip('Позначити'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('Позначити').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Вибрано 1'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Позначити').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Вибрано 2'), findsOneWidget);
+
+    await tester.tap(find.text('Оновити за посиланням'));
+    await tester.pumpAndSettle();
+    expect(refreshed, ['1', '2']);
+    // Після дії позначки знімаються, панель зникає.
+    expect(find.text('Вибрано 2'), findsNothing);
+    expect(find.text('Оновлено 1'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Позначити').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Вибрано 1'), findsOneWidget);
+    await tester.tap(find.text('Скасувати'));
+    await tester.pumpAndSettle();
+    expect(find.text('Вибрано 1'), findsNothing);
+
+    await tester.tap(find.byTooltip('Позначити').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Видалити'));
+    await tester.pumpAndSettle();
+    expect(find.text('Видалити товарів: 1?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(MarkoButton, 'Видалити'));
+    await tester.pumpAndSettle();
+
+    expect(deleted, ['1']);
+    expect(find.text('Оновлено 1'), findsNothing);
+    await _clearToasts(tester);
+  });
+
+  testWidgets('the source toggle filters the catalog and reaches the API', (
+    tester,
+  ) async {
+    final recorder = _Recorder();
+    await tester.pumpWidget(_app(recorder.client()));
+    await tester.pumpAndSettle();
+
+    expect(recorder.calls.last.containsKey('source'), isFalse);
+
+    await tester.tap(find.text('З файлу'));
+    await tester.pumpAndSettle();
+    expect(recorder.calls.last['source'], 'export');
+
+    await tester.tap(find.text('З Prom'));
+    await tester.pumpAndSettle();
+    expect(recorder.calls.last['source'], 'scrape');
+
+    await tester.tap(find.text('Усі'));
+    await tester.pumpAndSettle();
+    expect(recorder.calls.last.containsKey('source'), isFalse);
+  });
+
+  testWidgets('one tick offers acting on the whole catalog, not just the page', (
+    tester,
+  ) async {
+    final bulkCalls = <String>[];
+    var deletedAll = false;
+    final client = ApiClient(
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (request.method == 'POST' && path == '/api/v1/products/bulk/refresh') {
+          bulkCalls.add(utf8.decode(request.bodyBytes));
+          return http.Response(
+            jsonEncode({
+              'store_id': null,
+              'sync_run_id': 'job-1',
+              'status': 'queued',
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.method == 'POST' && path == '/api/v1/products/bulk/delete') {
+          deletedAll = true;
+          return http.Response(
+            jsonEncode({'deleted': 120}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (path == '/api/v1/jobs/job-1') {
+          return http.Response(
+            jsonEncode({
+              'status': 'completed',
+              'progress_current': 120,
+              'progress_total': 120,
+              'error': null,
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (path == '/api/v1/products') {
+          return http.Response.bytes(
+            utf8.encode(
+              jsonEncode({
+                'items': deletedAll
+                    ? []
+                    : [
+                        _product('1', 'Радіатор Iveco'),
+                        _product('2', 'Термостат Ford'),
+                      ],
+                // Завантажено дві картки, а в каталозі їх 120.
+                'total': deletedAll ? 0 : 120,
+                'limit': 60,
+                'offset': 0,
+              }),
+            ),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+      baseUrl: 'http://api.test',
+    );
+
+    await tester.pumpWidget(_app(client));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Позначити').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Вибрано 1'), findsOneWidget);
+
+    await tester.tap(find.text('Усі 120 у каталозі'));
+    await tester.pumpAndSettle();
+    expect(find.text('Вибрано всі 120'), findsOneWidget);
+
+    // Оновлення йде одним запитом на фільтр, а не 120 запитами на товар.
+    await tester.tap(find.text('Оновити за посиланням'));
+    await tester.pumpAndSettle();
+    expect(bulkCalls, hasLength(1));
+
+    await tester.tap(find.byTooltip('Позначити').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Усі 120 у каталозі'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Видалити'));
+    await tester.pumpAndSettle();
+    expect(find.text('Видалити товарів: 120?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(MarkoButton, 'Видалити'));
+    await tester.pumpAndSettle();
+
+    expect(deletedAll, isTrue);
+    expect(find.text('Радіатор Iveco'), findsNothing);
+    await _clearToasts(tester);
   });
 }

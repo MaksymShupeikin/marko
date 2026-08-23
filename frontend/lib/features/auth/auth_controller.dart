@@ -70,12 +70,24 @@ class AuthController extends AsyncNotifier<MarkoAuthState> {
     }
   }
 
-  Future<void> loginWithGoogle() async {
+  Future<void> loginWithGoogle() => _signInWithGoogle(_auth.loginWithGoogle);
+
+  /// The web GIS button signs in on its own and hands over the token.
+  Future<void> loginWithGoogleIdToken(String idToken) =>
+      _signInWithGoogle(() => _auth.loginWithGoogleIdToken(idToken));
+
+  /// GIS reports failures on its event stream, not from a call we awaited.
+  void failGoogleSignIn(Object error) {
+    if (_isUserCancellation(error)) return;
+    _setError(error);
+  }
+
+  Future<void> _signInWithGoogle(Future<AuthSession> Function() signIn) async {
     state = AsyncData(
       _current.copyWith(busy: true, clearError: true, clearNotice: true),
     );
     try {
-      final session = await _auth.loginWithGoogle();
+      final session = await signIn();
       await _syncSession(session);
     } catch (error) {
       if (_isUserCancellation(error)) {

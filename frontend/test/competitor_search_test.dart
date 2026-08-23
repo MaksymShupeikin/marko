@@ -9,39 +9,54 @@ import 'package:marko_client/core/api_client.dart';
 import 'package:marko_client/features/dashboard/dashboard_page.dart';
 import 'package:marko_client/features/products/products_api.dart';
 
-const _searchPayload = {
-  'query': 'W914/2',
-  'title': 'Mann-Filter W 9142',
-  'brand': 'Mann-Filter',
-  'is_original': false,
-  'part_url': 'https://avto.pro/part-W9142-MANN-79/',
-  'offers_total': 2,
-  'min_price': 100.91,
-  'median_price': 181.96,
-  'max_price': 263.0,
-  'offers': [
+const _report = {
+  'cached': false,
+  'observed_at': '2026-08-23T12:00:00Z',
+  'stats': {
+    'offers_total': 2,
+    'sources_total': 2,
+    'min_price': '100.91',
+    'median_price': '181.96',
+    'max_price': '263.00',
+  },
+  'sources': [
     {
-      'maker': 'Shafer',
-      'code': 'FOM384',
-      'description': 'Фильтр масляный',
-      'city': 'Киев',
-      'availability': 'В наличии',
-      'price': 100.91,
-      'currency': 'UAH',
-      'boosted': true,
-    },
-    {
-      'maker': 'Mann-Filter',
-      'code': 'W9142',
-      'description': 'Фильтр масляный',
-      'city': 'Днепр',
-      'availability': 'В наличии',
-      'price': 263.0,
-      'currency': 'UAH',
-      'boosted': false,
+      'source': 'avtopro',
+      'label': 'Avto.pro',
+      'status': 'ok',
+      'offers_total': 2,
+      'min_price': '100.91',
+      'median_price': '181.96',
+      'max_price': '263.00',
+      'offers': [
+        {
+          'source': 'avtopro',
+          'title': 'Shafer FOM384 Фильтр масляный',
+          'price': '100.91',
+          'currency': 'UAH',
+          'url': 'https://avto.pro/part-FOM384',
+          'city': 'Киев',
+          'is_analog': true,
+        },
+        {
+          'source': 'avtopro',
+          'title': 'Mann-Filter W9142 Фильтр масляный',
+          'price': '263.00',
+          'currency': 'UAH',
+          'url': 'https://avto.pro/part-W9142',
+          'city': 'Днепр',
+          'is_analog': false,
+        },
+      ],
     },
   ],
 };
+
+/// Потік подій так, як його віддає бекенд: стадії, потім готовий звіт.
+String _sse() => [
+  '{"stage":"source","message":"Збираємо пропозиції: Avto.pro"}',
+  '{"stage":"done","report":${jsonEncode(_report)}}',
+].map((event) => 'data: $event\n\n').join();
 
 ApiClient _clientWith(MockClientHandler handler) {
   return ApiClient(client: MockClient(handler), baseUrl: 'http://api.test');
@@ -51,29 +66,29 @@ ProductsApi _apiWith(MockClientHandler handler) =>
     ProductsApi(_clientWith(handler));
 
 void main() {
-  test(
-    'searchCompetitors queries avto.pro endpoint and parses stats',
-    () async {
-      final api = _apiWith((request) async {
-        expect(request.url.path, '/api/v1/competitors/avtopro');
-        expect(request.url.queryParameters, {'oem': 'W914/2', 'brand': 'MANN'});
-        return http.Response(
-          jsonEncode(_searchPayload),
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      });
+  test('competitorSearchEvents streams stages then the finished report', () async {
+    final api = _apiWith((request) async {
+      expect(request.url.path, '/api/v1/competitors/search/stream');
+      expect(request.url.queryParameters, {'oem': 'W914/2', 'brand': 'MANN'});
+      return http.Response(
+        _sse(),
+        200,
+        headers: {'content-type': 'text/event-stream; charset=utf-8'},
+      );
+    });
 
-      final result = await api.searchCompetitors('W914/2', brand: 'MANN');
+    final events = await api
+        .competitorSearchEvents('W914/2', brand: 'MANN')
+        .toList();
 
-      expect(result.title, 'Mann-Filter W 9142');
-      expect(result.minPrice, 100.91);
-      expect(result.offers, hasLength(2));
-      expect(result.offers.first.partLabel, 'Shafer FOM384');
-    },
-  );
+    expect(events, hasLength(2));
+    expect(events.first['stage'], 'source');
+    expect(events.first['message'], contains('Avto.pro'));
+    expect(events.last['stage'], 'done');
+    expect(events.last['report']['stats']['offers_total'], 2);
+  });
 
-  testWidgets('the OEM lookup searches avto.pro without touching the catalog', (
+  testWidgets('the OEM lookup runs the shared pipeline without touching the catalog', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 800);
@@ -101,7 +116,7 @@ void main() {
           'limit': 60,
           'offset': 0,
         }),
-        '/api/v1/competitors/avtopro' => jsonEncode(_searchPayload),
+        '/api/v1/competitors/search/stream' => _sse(),
         _ => '{}',
       };
       return http.Response(
@@ -131,14 +146,17 @@ void main() {
       'W914/2',
     );
     await tester.tap(find.text('Знайти ціни'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Mann-Filter W 9142'), findsOneWidget);
-    expect(find.text('101 UAH'), findsOneWidget);
+    // Потік читається через справжній event loop, тож pump його не прокручує.
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(find.text('Знайдено на ринку'), findsOneWidget);
+    expect(find.text('Avto.pro: 2'), findsOneWidget);
+    // Пропозиції з обох джерел в одній ціновій драбині, аналог позначено.
+    expect(find.text('Shafer FOM384 Фильтр масляный'), findsOneWidget);
+    expect(find.text('аналог'), findsOneWidget);
     expect(find.text('Мінімум'), findsOneWidget);
-
-    // "Приклади:" label is removed
-    expect(find.text('Приклади:'), findsNothing);
 
     // History section contains the recent query
     expect(find.text('Нещодавні пошуки'), findsOneWidget);

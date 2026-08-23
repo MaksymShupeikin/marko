@@ -96,12 +96,26 @@ class WorkspaceMember(Base):
 
 
 class MarketplaceStore(TimestampMixin, Base):
+    """Один магазин у межах воркспейсу.
+
+    Лістинги висять на store_id, тож спільний рядок магазину означав би спільний
+    каталог: чужий імпорт того самого продавця протікав би в інший акаунт.
+    """
+
     __tablename__ = "marketplace_stores"
     __table_args__ = (
-        UniqueConstraint("marketplace", "external_id", name="uq_store_marketplace_external"),
+        UniqueConstraint(
+            "workspace_id",
+            "marketplace",
+            "external_id",
+            name="uq_store_workspace_marketplace_external",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
     marketplace: Mapped[str] = mapped_column(String(32), default="prom", server_default="prom")
     external_id: Mapped[str] = mapped_column(String(100))
     name: Mapped[str | None] = mapped_column(String(255))
@@ -163,6 +177,32 @@ class Listing(TimestampMixin, Base):
         if not normalized.startswith(("https://", "http://")):
             return None
         return normalized
+
+
+class WorkspaceListingOverride(TimestampMixin, Base):
+    """Workspace-local catalog edits layered over a shared source listing."""
+
+    __tablename__ = "workspace_listing_overrides"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    name: Mapped[str | None] = mapped_column(Text)
+    sku: Mapped[str | None] = mapped_column(String(255))
+    brand: Mapped[str | None] = mapped_column(String(255))
+    current_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    is_available: Mapped[bool | None] = mapped_column(Boolean)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    oem_numbers: Mapped[list[str] | None] = mapped_column(JSON)
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    # Останнє перечитування сторінки товару. updated_at рухає будь-яка правка,
+    # тому час синхронізації живе окремо.
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PriceObservation(Base):

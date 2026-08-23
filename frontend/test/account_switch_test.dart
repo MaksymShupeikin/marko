@@ -94,6 +94,10 @@ class _FakeAuthClient implements AuthClient {
   Future<AuthSession> loginWithGoogle() => throw UnimplementedError();
 
   @override
+  Future<AuthSession> loginWithGoogleIdToken(String idToken) =>
+      throw UnimplementedError();
+
+  @override
   Future<void> register(String email, String password) =>
       throw UnimplementedError();
 }

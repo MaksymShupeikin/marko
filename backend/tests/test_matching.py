@@ -2,7 +2,7 @@ from marko.services.matching import (
     _MAX_QUERY_TOKENS,
     Match,
     _price_value,
-    _token_similarity,
+    token_similarity,
     brands_compatible,
     build_comparison,
     build_search_query,
@@ -28,22 +28,22 @@ def test_normalize_tokens_lowercases():
     assert normalize_tokens("Bosch ФАРА") == ["bosch", "фара"]
 
 
-# _token_similarity
+# token_similarity
 
-def test_token_similarity_identical_is_one():
-    assert _token_similarity({"a", "b"}, {"a", "b"}) == 1.0
-
-
-def test_token_similarity_disjoint_is_zero():
-    assert _token_similarity({"a"}, {"b"}) == 0.0
+def testtoken_similarity_identical_is_one():
+    assert token_similarity({"a", "b"}, {"a", "b"}) == 1.0
 
 
-def test_token_similarity_empty_is_zero():
-    assert _token_similarity(set(), {"a"}) == 0.0
+def testtoken_similarity_disjoint_is_zero():
+    assert token_similarity({"a"}, {"b"}) == 0.0
 
 
-def test_token_similarity_blends_jaccard_and_containment():
-    assert _token_similarity({"a", "b"}, {"a", "b", "c", "d"}) == 0.75
+def testtoken_similarity_empty_is_zero():
+    assert token_similarity(set(), {"a"}) == 0.0
+
+
+def testtoken_similarity_blends_jaccard_and_containment():
+    assert token_similarity({"a", "b"}, {"a", "b", "c", "d"}) == 0.75
 
 
 # laterality_conflict

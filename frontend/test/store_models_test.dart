@@ -23,23 +23,34 @@ void main() {
       'skipped': 2,
     });
 
-    final competitor = CompetitorSearch.fromJson({
-      'query': '701807101',
-      'title': 'Bumper',
-      'is_original': true,
-      'part_url': 'https://avto.pro/part-701807101',
-      'offers_total': 15,
-      'min_price': 100.0,
-      'median_price': 150.0,
-      'max_price': 200.0,
-      'offers': [
+    final competitor = CompetitorPriceReport.fromJson({
+      'cached': false,
+      'observed_at': '2026-08-23T12:00:00Z',
+      'stats': {
+        'offers_total': 15,
+        'sources_total': 2,
+        'min_price': '100.00',
+        'median_price': '150.00',
+        'max_price': '200.00',
+      },
+      'sources': [
         {
-          'maker': 'VW',
-          'code': '701807101',
-          'city': 'Kyiv',
-          'price': 100.0,
-          'currency': 'UAH',
-          'boosted': false,
+          'source': 'avtopro',
+          'label': 'Avto.pro',
+          'status': 'ok',
+          'offers_total': 1,
+          'min_price': '100.00',
+          'offers': [
+            {
+              'source': 'avtopro',
+              'title': 'VW 701807101 Бампер',
+              'price': '100.00',
+              'currency': 'UAH',
+              'url': 'https://avto.pro/part-701807101',
+              'city': 'Kyiv',
+              'is_analog': false,
+            },
+          ],
         },
       ],
     });
@@ -54,7 +65,9 @@ void main() {
     expect(fileImport.imported, 50);
     expect(fileImport.summary, contains('50 товарів'));
 
-    expect(competitor.offersTotal, 15);
-    expect(competitor.offers.first.partLabel, 'VW 701807101');
+    expect(competitor.stats.offersTotal, 15);
+    expect(competitor.stats.minPrice, 100.0);
+    expect(competitor.currency, 'UAH');
+    expect(competitor.sources.first.offers.first.title, 'VW 701807101 Бампер');
   });
 }

@@ -55,9 +55,26 @@ async def list_stores(
     return [(row[0], row[1], row[2]) for row in rows]
 
 
+async def list_workspace_stores_by_kind(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    kind: StoreKind,
+) -> list[MarketplaceStore]:
+    statement = (
+        select(MarketplaceStore)
+        .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
+        .where(
+            WorkspaceStore.workspace_id == workspace_id,
+            WorkspaceStore.kind == kind,
+        )
+    )
+    return list((await session.scalars(statement)).all())
+
+
 async def upsert_marketplace_store(
     session: AsyncSession,
     *,
+    workspace_id: uuid.UUID,
     marketplace: str,
     external_id: str,
     name: str | None,
@@ -67,13 +84,14 @@ async def upsert_marketplace_store(
         insert(MarketplaceStore)
         .values(
             id=uuid.uuid4(),
+            workspace_id=workspace_id,
             marketplace=marketplace,
             external_id=external_id,
             name=name,
             canonical_url=canonical_url,
         )
         .on_conflict_do_update(
-            constraint="uq_store_marketplace_external",
+            constraint="uq_store_workspace_marketplace_external",
             set_={
                 "canonical_url": canonical_url,
                 "updated_at": func.now(),
@@ -156,7 +174,7 @@ async def create_sync_run(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
-    store_id: uuid.UUID,
+    store_id: uuid.UUID | None,
     kind: str,
     status: SyncStatus = SyncStatus.queued,
 ) -> SyncRun:

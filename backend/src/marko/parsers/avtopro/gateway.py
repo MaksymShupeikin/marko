@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 from marko.parsers.prom.client import HttpClient
 from marko.parsers.prom.config import ScrapeConfig
+from marko.parsers.prom.exceptions import ParseError, RequestFailed
 
 from .parser import FeedPage, Offer, PartSuggestion, parse_feed, parse_search_suggestions
 
@@ -48,15 +49,27 @@ def _words(*values: str | None) -> set[str]:
 
 
 def pick_suggestion(
-    suggestions: list[PartSuggestion], brand: str | None, name: str | None = None
+    suggestions: list[PartSuggestion],
+    brand: str | None,
+    name: str | None = None,
+    *,
+    fallback_to_first: bool = False,
 ) -> PartSuggestion | None:
-    """The suggestion matching the brand, then the make named in `name`, else top-1."""
+    """The suggestion matching the brand, then the make named in `name`, else None.
+
+    `fallback_to_first` — для ручного пошуку: людина сама бачить, яку марку
+    підібрано (вона в title), тож топ-1 корисніший за «нічого не знайдено».
+    """
     if not suggestions:
         return None
     if brand:
         wanted = _norm(brand)
         for suggestion in suggestions:
-            if wanted in (_norm(suggestion.brand), _norm(suggestion.brand_path)):
+            # Марки в каталозі збірні («VAG/VW/Skoda/Seat/Audi»), тож окрім
+            # рівності перевіряємо і входження: «vw» знайдеться, «iveco» теж.
+            if wanted in (_norm(suggestion.brand), _norm(suggestion.brand_path)) or (
+                wanted in _norm(suggestion.title)
+            ):
                 return suggestion
     # Один номер часто висить на кількох марках, і топ-1 avto.pro регулярно
     # віддає чужу («China», «BENTLEY»). Назва товару зазвичай містить потрібну.
@@ -69,6 +82,10 @@ def pick_suggestion(
                 suggestion.brand, suggestion.brand_path, suggestion.title
             ):
                 return suggestion
+    # Є з чим звіряти, але жодна підказка не збіглася. В автозвірці каталогу
+    # краще нічого, ніж чужа марка; у ручному пошуку — навпаки.
+    if brand or name:
+        return suggestions[0] if fallback_to_first else None
     return suggestions[0]
 
 
@@ -95,11 +112,21 @@ class AvtoproGateway:
             return self._search(client, oem)
 
     def offers(
-        self, oem: str, brand: str | None = None, name: str | None = None
+        self,
+        oem: str,
+        brand: str | None = None,
+        name: str | None = None,
+        *,
+        fallback_to_first: bool = False,
     ) -> PartOffers | None:
         """Collect priced offers for the OEM, or None when nothing matched."""
         with HttpClient(self._config) as client:
-            suggestion = pick_suggestion(self._search(client, oem), brand, name)
+            suggestion = pick_suggestion(
+                self._search(client, oem),
+                brand,
+                name,
+                fallback_to_first=fallback_to_first,
+            )
             if suggestion is None:
                 log.info("avto.pro: нічого не знайдено для %r", oem)
                 return None
@@ -108,7 +135,13 @@ class AvtoproGateway:
             pages = 1
             max_pages = max(1, self._config.max_search_pages)
             while page.continuation_token and pages < max_pages:
-                page = self._continuation(client, page.continuation_token)
+                try:
+                    page = self._continuation(client, page.continuation_token)
+                except (RequestFailed, ParseError) as exc:
+                    # Продовження стрічки регулярно ловить 401 або антибот.
+                    # Перша сторінка вже зібрана — віддати її краще, ніж нічого.
+                    log.info("avto.pro: стрічку обірвано на сторінці %d: %s", pages + 1, exc)
+                    break
                 offers.extend(page.offers)
                 pages += 1
             return PartOffers(suggestion=suggestion, offers=offers, pages_fetched=pages)

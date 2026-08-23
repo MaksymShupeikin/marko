@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="marko_client"
+        android:label="Marko"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

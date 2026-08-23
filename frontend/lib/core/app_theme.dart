@@ -171,30 +171,30 @@ class MarkoTheme extends ThemeExtension<MarkoTheme> {
     panelRadius: MarkoRadius.xl,
   );
 
-  /// Same semantics on a black canvas: hairlines become translucent white,
-  /// the soft tints become low-alpha washes of their own hue.
+  /// Soft pastel neutral charcoal palette: comfortable contrast, zero cold blue tint,
+  /// clear borders, and harmonious pastel accents for dark mode.
   static const dark = MarkoTheme(
-    canvas: Color(0xFF09090B),
-    surface: Color(0xFF0F0F12),
-    surfaceMuted: Color(0xFF18181B),
-    ink: Color(0xFFF8FAFC),
-    muted: Color(0xD9F8FAFC),
-    faint: Color(0xFF94A3B8),
-    border: Color(0x14FFFFFF),
-    borderStrong: Color(0x29FFFFFF),
-    brand: Color(0xFF3B93FF),
-    brandSoft: Color(0x260070F3),
-    positive: Color(0xFF10B981),
-    positiveSoft: Color(0x2610B981),
+    canvas: Color(0xFF141416),
+    surface: Color(0xFF1C1C20),
+    surfaceMuted: Color(0xFF26262B),
+    ink: Color(0xFFF3F3F6),
+    muted: Color(0xFFA1A1AA),
+    faint: Color(0xFF71717A),
+    border: Color(0xFF33333A),
+    borderStrong: Color(0xFF474750),
+    brand: Color(0xFF60A5FA),
+    brandSoft: Color(0x24388BFD),
+    positive: Color(0xFF34D399),
+    positiveSoft: Color(0x2234D399),
     negative: Color(0xFFF87171),
-    negativeSoft: Color(0x26EF4444),
+    negativeSoft: Color(0x22F87171),
     warning: Color(0xFFFBBF24),
-    warningSoft: Color(0x26F59E0B),
-    inverseSurface: Color(0xFF18181B),
-    onInverse: Color(0xFFF8FAFC),
+    warningSoft: Color(0x22FBBF24),
+    inverseSurface: Color(0xFFF3F3F6),
+    onInverse: Color(0xFF141416),
     excelAccent: Color(0xFF34D399),
     promAccent: Color(0xFFA855F7),
-    oemAccent: Color(0xFF3B93FF),
+    oemAccent: Color(0xFF60A5FA),
     panelRadius: MarkoRadius.xl,
   );
 
@@ -325,6 +325,9 @@ abstract final class AppTheme {
     final height = MarkoLayout.fieldHeightOf(context);
     if (height == MarkoLayout.fieldHeight) return child!;
     final theme = Theme.of(context);
+    final colors = theme.brightness == Brightness.dark
+        ? MarkoTheme.dark
+        : MarkoTheme.light;
     ButtonStyle? grow(ButtonStyle? style, Size size) =>
         style?.copyWith(minimumSize: WidgetStatePropertyAll(size));
     final wide = Size(0, height);
@@ -340,7 +343,22 @@ abstract final class AppTheme {
           style: grow(theme.textButtonTheme.style, wide),
         ),
         iconButtonTheme: IconButtonThemeData(
-          style: grow(theme.iconButtonTheme.style, Size.square(height)),
+          style: (theme.iconButtonTheme.style ?? const ButtonStyle()).copyWith(
+            minimumSize: const WidgetStatePropertyAll(Size.square(38)),
+            backgroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
+                return colors.surfaceMuted.withValues(alpha: 0.4);
+              }
+              return colors.surfaceMuted;
+            }),
+            elevation: const WidgetStatePropertyAll(0),
+            shadowColor: const WidgetStatePropertyAll(Colors.transparent),
+            shape: WidgetStatePropertyAll(
+              RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(MarkoRadius.md),
+              ),
+            ),
+          ),
         ),
       ),
       child: child!,
@@ -429,7 +447,7 @@ abstract final class AppTheme {
         fontWeight: FontWeight.w500,
       ),
       labelMedium: TextStyle(
-        color: colors.faint,
+        color: colors.muted,
         fontSize: 12.5,
         height: 1.2,
         fontWeight: FontWeight.w500,

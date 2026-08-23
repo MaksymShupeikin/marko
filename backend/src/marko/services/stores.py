@@ -68,6 +68,7 @@ async def register_store(
 
     store_id = await stores_repo.upsert_marketplace_store(
         session,
+        workspace_id=workspace_id,
         marketplace="prom",
         external_id=seller.company_id,
         name=seller.slug,

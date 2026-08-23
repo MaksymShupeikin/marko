@@ -1,0 +1,219 @@
+[
+ {
+  "name": "Радіатор VW Golf 1,2 81-91/Passat В2 84-87 1,1-1.3 4",
+  "oem": [
+   "171121253CJ"
+  ],
+  "brand": null,
+  "sources": {
+   "avtopro": {
+    "status": "ok",
+    "n": 2,
+    "oem_in_title": 2,
+    "distinct_sellers": 2,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "2701.00",
+    "max": "14407.68"
+   },
+   "prom": {
+    "status": "ok",
+    "n": 6,
+    "oem_in_title": 4,
+    "distinct_sellers": 6,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "1633.00",
+    "max": "3280.00"
+   }
+  },
+  "total": 8,
+  "own_leak": [],
+  "cross_dupes": 0,
+  "sample": [
+   [
+    "avtopro",
+    "2701.00",
+    null,
+    "VAG 171121253CJ Радіатор охолодження vw passat/santana 80-"
+   ],
+   [
+    "avtopro",
+    "14407.68",
+    null,
+    "VAG 171121253CJ"
+   ],
+   [
+    "prom",
+    "1633.00",
+    "ПРОФПАРТС",
+    "Радіатор Вольксваген Гольф 1,2 81-91/пассат В2 84-87 1.1-1"
+   ],
+   [
+    "prom",
+    "1939.14",
+    "NEXPART",
+    "Радіатор двигуна THERMOTEC D7W033TT Volkswagen Passat, Sci"
+   ]
+  ]
+ },
+ {
+  "name": "Радіатор Opel Omega B 2,0-3,0 95-00 мех 653*460*34",
+  "oem": [
+   "1300165"
+  ],
+  "brand": "Omega",
+  "sources": {
+   "avtopro": {
+    "status": "ok",
+    "n": 1,
+    "oem_in_title": 1,
+    "distinct_sellers": 1,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "5498.92",
+    "max": "5498.92"
+   },
+   "prom": {
+    "status": "ok",
+    "n": 1,
+    "oem_in_title": 1,
+    "distinct_sellers": 1,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "299.00",
+    "max": "299.00"
+   }
+  },
+  "total": 2,
+  "own_leak": [],
+  "cross_dupes": 0,
+  "sample": [
+   [
+    "avtopro",
+    "5498.92",
+    null,
+    "Nissens 63072A Радіатор op omega b(94-)2.0 i(+)[oe 1300 16"
+   ],
+   [
+    "prom",
+    "299.00",
+    "ЕЛЕКТРОНОМ",
+    "Кнопка ручного керування Електронмаш КРУ «Підпор та димови"
+   ]
+  ]
+ },
+ {
+  "name": "Радіатор Opel Vectra B механіка 1,6-2,0 95-00 537*36",
+  "oem": [
+   "90528302"
+  ],
+  "brand": "Opel",
+  "sources": {
+   "avtopro": {
+    "status": "ok",
+    "n": 1,
+    "oem_in_title": 1,
+    "distinct_sellers": 1,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "2440.95",
+    "max": "2440.95"
+   },
+   "prom": {
+    "status": "empty",
+    "n": 0,
+    "oem_in_title": 0,
+    "distinct_sellers": 0,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "None",
+    "max": "None"
+   }
+  },
+  "total": 1,
+  "own_leak": [],
+  "cross_dupes": 0,
+  "sample": [
+   [
+    "avtopro",
+    "2440.95",
+    null,
+    "Nissens 630681 Радіатор op vectra b(95-)1.6(+)[oe 90 528 3"
+   ]
+  ]
+ },
+ {
+  "name": "Циліндр гальмівний задній Cheri Amulet",
+  "oem": [
+   "A11-3502190KEMP"
+  ],
+  "brand": "KEMP",
+  "sources": {
+   "avtopro": {
+    "status": "empty",
+    "n": 0,
+    "oem_in_title": 0,
+    "distinct_sellers": 0,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "None",
+    "max": "None"
+   },
+   "prom": {
+    "status": "empty",
+    "n": 0,
+    "oem_in_title": 0,
+    "distinct_sellers": 0,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "None",
+    "max": "None"
+   }
+  },
+  "total": 0,
+  "own_leak": [],
+  "cross_dupes": 0,
+  "sample": []
+ },
+ {
+  "name": "Амортизатор кришки багажника VW (Фольксваген) Passat",
+  "oem": [
+   "KEMP77644810"
+  ],
+  "brand": "KEMP",
+  "sources": {
+   "avtopro": {
+    "status": "empty",
+    "n": 0,
+    "oem_in_title": 0,
+    "distinct_sellers": 0,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "None",
+    "max": "None"
+   },
+   "prom": {
+    "status": "ok",
+    "n": 1,
+    "oem_in_title": 0,
+    "distinct_sellers": 1,
+    "dup_seller_rows": 0,
+    "dup_title_price": 0,
+    "min": "275.00",
+    "max": "275.00"
+   }
+  },
+  "total": 1,
+  "own_leak": [],
+  "cross_dupes": 0,
+  "sample": [
+   [
+    "prom",
+    "275.00",
+    "ПРОФПАРТС",
+    "Амортизатор кришки багажника Вольксваген пассат B5 00- Sup"
+   ]
+  ]
+ }
+]

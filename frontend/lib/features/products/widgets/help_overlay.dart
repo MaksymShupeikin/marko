@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:heroicons/heroicons.dart';
 
 import '../../../core/app_theme.dart';
-import '../../../core/widgets/marko_button.dart';
 
 /// Opens the concise, unified user manual and tips dialog.
 Future<void> showHelpOverlay(BuildContext context) {
@@ -24,9 +23,9 @@ Future<void> showHelpOverlay(BuildContext context) {
 enum _HelpSection {
   quickstart('Швидкий старт', HeroIcons.bolt),
   importCatalog('Імпорт каталогу', HeroIcons.arrowDownTray),
-  searchAndFilter('Пошук & OEM', HeroIcons.magnifyingGlass),
+  searchAndFilter('Пошук & Фільтри', HeroIcons.magnifyingGlass),
   competitors('Ціни Avto.pro', HeroIcons.presentationChartLine),
-  pricing('Ціноутворення', HeroIcons.banknotes);
+  management('Керування товарами', HeroIcons.adjustmentsHorizontal);
 
   const _HelpSection(this.label, this.icon);
   final String label;
@@ -87,7 +86,7 @@ class _HelpDialog extends StatelessWidget {
         vertical: MarkoSpace.xxl,
       ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 780, maxHeight: 720),
+        constraints: const BoxConstraints(maxWidth: 780, maxHeight: 740),
         child: Container(
           decoration: BoxDecoration(
             color: colors.surface,
@@ -128,68 +127,38 @@ class _HelpContentState extends State<_HelpContent> {
         const Divider(height: 1),
         Expanded(
           child: SingleChildScrollView(
-            padding: EdgeInsets.all(isCompact ? MarkoSpace.lg : MarkoSpace.xxl),
+            padding: EdgeInsets.all(isCompact ? MarkoSpace.lg : MarkoSpace.xl),
             child: _buildSection(context, colors),
           ),
         ),
-        const Divider(height: 1),
-        _buildFooter(context, colors, isCompact),
       ],
     );
   }
 
   Widget _buildHeader(BuildContext context, MarkoTheme colors) {
-    return Container(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(
         MarkoSpace.xl,
         MarkoSpace.lg,
-        MarkoSpace.lg,
         MarkoSpace.md,
-      ),
-      decoration: BoxDecoration(
-        color: colors.surfaceMuted.withValues(alpha: 0.5),
-        border: Border(bottom: BorderSide(color: colors.border)),
+        MarkoSpace.md,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: colors.surfaceMuted,
-              borderRadius: BorderRadius.circular(MarkoRadius.md),
-              border: Border.all(color: colors.border),
+          Expanded(
+            child: Text(
+              'Інструкція',
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            alignment: Alignment.center,
-            child: HeroIcon(HeroIcons.bookOpen, size: 17, color: colors.ink),
           ),
           const SizedBox(width: MarkoSpace.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Як працює Marko',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 18,
-                  ),
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  'Короткий довідник з імпорту, пошуку та аналізу цін конкурентів',
-                  style: MarkoType.caption.copyWith(color: colors.muted),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: MarkoSpace.sm),
           IconButton(
             tooltip: 'Закрити',
             onPressed: () => Navigator.of(context).pop(),
-            icon: const HeroIcon(HeroIcons.xMark, size: 18),
+            icon: const HeroIcon(HeroIcons.xMark, size: 20),
           ),
         ],
       ),
@@ -226,7 +195,7 @@ class _HelpContentState extends State<_HelpContent> {
                     color: _active == section ? colors.ink : colors.muted,
                   ),
                 ),
-                backgroundColor: Colors.transparent,
+                backgroundColor: colors.surfaceMuted,
                 selectedColor: colors.brandSoft,
                 side: BorderSide(
                   color: _active == section
@@ -234,7 +203,7 @@ class _HelpContentState extends State<_HelpContent> {
                       : colors.border,
                 ),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(999.0),
+                  borderRadius: BorderRadius.circular(MarkoRadius.md),
                 ),
                 onSelected: (_) => setState(() => _active = section),
               ),
@@ -251,7 +220,7 @@ class _HelpContentState extends State<_HelpContent> {
       _HelpSection.importCatalog => _buildImport(colors),
       _HelpSection.searchAndFilter => _buildSearch(colors),
       _HelpSection.competitors => _buildCompetitors(colors),
-      _HelpSection.pricing => _buildPricing(colors),
+      _HelpSection.management => _buildManagement(colors),
     };
   }
 
@@ -259,49 +228,44 @@ class _HelpContentState extends State<_HelpContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionBanner(
-          colors: colors,
-          icon: HeroIcons.bolt,
-          title: '3 кроки для швидкого старту',
+        const _SectionHeader(
+          title: '3 простих кроки для початку роботи',
           description:
-              'Завантажте асортимент один раз — Marko автоматично знайде ринкові пропозиції на авторинку України.',
+              'Marko автоматизує обробку каталогу та моніторинг ринкових цін на автозапчастини в Україні.',
         ),
-        const SizedBox(height: MarkoSpace.lg),
+        const SizedBox(height: MarkoSpace.md),
         _GuideCard(
           number: '01',
           icon: HeroIcons.arrowDownTray,
-          title: 'Завантажте каталог товарів',
-          tag: 'Крок 1',
+          title: 'Імпортуйте товари в каталог',
           body:
-              'Експортуйте файл XLSX з Prom.ua або вкажіть пряме посилання на ваш магазин. Каталог обробиться за 1–2 хвилини.',
+              'Завантажте XLSX-файл експорту з кабінету Prom.ua або вкажіть пряме посилання на ваш магазин. Сервер обробить асортимент за 1–2 хвилини.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '02',
           icon: HeroIcons.magnifyingGlass,
-          title: 'Знайдіть потрібну запчастину',
-          tag: 'Крок 2',
+          title: 'Зручний пошук та фільтри',
           body:
-              'Введіть будь-який OEM-номер, бренд або артикул у поле пошуку. Використовуйте фільтри діапазону цін у ₴.',
+              'Шукайте за OEM-номерами, брендом, артикулом або назвою. Використовуйте фільтри цінового коридору в ₴ та перемикач джерел.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '03',
           icon: HeroIcons.presentationChartLine,
-          title: 'Аналізуйте ціни конкурентів',
-          tag: 'Крок 3',
+          title: 'Аналітика цін на Avto.pro',
           body:
-              'Натисніть на товар у каталозі, щоб побачити мінімальну й медіанну ринкову ціну та список активних продавців на Avto.pro.',
+              'Клікніть на будь-який товар або скористайтесь кнопкою «Ціни конкурентів» у шапці, щоб побачити спред ринку (мін/медіана/макс) та всі активні пропозиції.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.md),
         _CalloutBox(
           colors: colors,
-          icon: HeroIcons.informationCircle,
+          icon: HeroIcons.lightBulb,
           text:
-              'Швидка перевірка: кнопку «Ціни конкурентів» у шапці можна використовувати для швидкої перевірки будь-якого OEM без імпорту.',
+              'Порада: Швидкий OEM-пошук у шапці працює автономно — ви можете перевіряти будь-які артикули навіть без попереднього імпорту.',
         ),
       ],
     );
@@ -311,49 +275,44 @@ class _HelpContentState extends State<_HelpContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionBanner(
-          colors: colors,
-          icon: HeroIcons.arrowDownTray,
-          title: 'Імпорт та оновлення каталогу',
+        const _SectionHeader(
+          title: 'Імпорт та синхронізація каталогу',
           description:
-              'Як правильно експортувати товари та зберігати оригінальні номери для точного моніторингу.',
+              'Як завантажувати товари та забезпечити точний автоматичний матчинг цін.',
         ),
-        const SizedBox(height: MarkoSpace.lg),
+        const SizedBox(height: MarkoSpace.md),
         _GuideCard(
           number: '01',
           icon: HeroIcons.documentText,
-          title: 'Чому саме файл XLSX з Prom',
-          tag: 'Рекомендовано',
+          title: 'Експорт файлу XLSX з Prom.ua',
           body:
-              'Вивантаження Prom.ua у форматі XLSX містить окрему колонку з OEM-номерами деталей. Це гарантує 100% точний матчинг цін на Avto.pro.',
+              'Файл експорту містить оригінальні номери OEM та артикули виробників у відповідних колонках, що гарантує 100% точний матчинг на Avto.pro.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '02',
           icon: HeroIcons.globeAlt,
-          title: 'Імпорт за посиланням на магазин',
-          tag: 'Швидкий старт',
+          title: 'Прямий імпорт за посиланням на магазин',
           body:
-              'Якщо файлу немає під рукою, вкажіть URL вашого магазину Prom. Сервер автоматично збере назви, фотографії та поточні ціни.',
+              'Вкажіть URL вашого магазину Prom.ua. Marko автоматично завантажить назви позицій, фотографії, наявність та поточні ціни.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '03',
           icon: HeroIcons.arrowPath,
-          title: 'Оновлення без дублікатів',
-          tag: 'Синхронізація',
+          title: 'Жива панель синхронізації (Dynamic Island)',
           body:
-              'При повторному імпорті того ж файлу або магазину оновлюються лише ціни та наявність. Нові дублі товарів не створюються.',
+              'Хід імпорту відображається у плаваючій панелі зверху з одометром кількості товарів. Нові позиції плавно з\'являються в каталозі в реальному часі.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.md),
         _CalloutBox(
           colors: colors,
-          icon: HeroIcons.informationCircle,
+          icon: HeroIcons.lightBulb,
           text:
-              'Інструкція Prom: Кабінет продавця -> розділ «Товари та послуги» -> кнопка «Експорт» -> формат XLSX.',
+              'Де завантажити файл: Кабінет Prom.ua -> «Товари та послуги» -> кнопка «Експорт» -> виберіть формат XLSX.',
         ),
       ],
     );
@@ -363,49 +322,44 @@ class _HelpContentState extends State<_HelpContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionBanner(
-          colors: colors,
-          icon: HeroIcons.magnifyingGlass,
-          title: 'Пошук, фільтрація та сортування',
+        const _SectionHeader(
+          title: 'Пошук, фільтри та сортування',
           description:
-              'Зручна робота з каталогом із тисячами товарних позицій.',
+              'Миттєва робота з великими каталогами без перезавантаження сторінки.',
         ),
-        const SizedBox(height: MarkoSpace.lg),
+        const SizedBox(height: MarkoSpace.md),
         _GuideCard(
           number: '01',
           icon: HeroIcons.bars3BottomLeft,
-          title: 'Універсальний рядок пошуку',
-          tag: 'Мульти-пошук',
+          title: 'Розумний мульти-пошук',
           body:
-              'Шукає одночасно за назвою деталі, брендом (Bosch, Valeo тощо), артикулом продавця (SKU) та всіма доступними OEM-кодами.',
+              'Рядок пошуку одночасно шукає за назвою товару, брендом виробника (Bosch, VAG, Valeo), внутрішнім SKU та будь-якими OEM-кодами запчастини.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '02',
           icon: HeroIcons.adjustmentsHorizontal,
-          title: 'Фільтри цін у гривнях (₴)',
-          tag: 'Цінові межі',
+          title: 'Фільтри цінового діапазону у ₴',
           body:
-              'Введіть значення у поля «Ціна від» та «Ціна до». Каталог миттєво відфільтрує товари без перезавантаження сторінки.',
+              'Вказуйте межі «Ціна від» та «Ціна до». Каталог миттєво відсікає зайві позиції з плавною анімацією завантаження.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '03',
-          icon: HeroIcons.arrowsUpDown,
-          title: 'Липка панель при скролі',
-          tag: 'Навігація',
+          icon: HeroIcons.funnel,
+          title: 'Перемикач джерела та сортування',
           body:
-              'Під час гортання списку товарів рядок пошуку та фільтри автоматично закріплюються у верхньому меню для швидкого доступу.',
+              'Фільтруйте товари за джерелом («Всі», «Prom.ua», «Ручні») та сортуйте за зростанням або спаданням ціни чи алфавітом.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.md),
         _CalloutBox(
           colors: colors,
-          icon: HeroIcons.informationCircle,
+          icon: HeroIcons.lightBulb,
           text:
-              'Порада: OEM-номери можна шукати як з дефісами та пробілами, так і суцільним текстом.',
+              'Порада: OEM-номери можна вводити у будь-якому форматі — пробіли та спецсимволи обробляються автоматично.',
         ),
       ],
     );
@@ -415,190 +369,128 @@ class _HelpContentState extends State<_HelpContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionBanner(
-          colors: colors,
-          icon: HeroIcons.presentationChartLine,
-          title: 'Моніторинг цін на Avto.pro',
+        const _SectionHeader(
+          title: 'Моніторинг ринку на Avto.pro',
           description:
-              'Як інтерпретувати ринкові пропозиції та цінові показники.',
+              'Аналітика цін продавців, спред ринку та визначення оптимальної вартості.',
         ),
-        const SizedBox(height: MarkoSpace.lg),
+        const SizedBox(height: MarkoSpace.md),
         _GuideCard(
           number: '01',
-          icon: HeroIcons.cpuChip,
-          title: 'Матчинг за OEM-номерами',
-          tag: 'Алгоритм',
+          icon: HeroIcons.chartBar,
+          title: 'Кольоровий спектр ринкових цін',
           body:
-              'Marko надсилає прямий запит на avto.pro за оригінальним номером деталі та формує повну цінову карту пропозицій продавців.',
+              'Градієнтна шкала наочно показує мінімальну, медіанну та максимальну ціну ринку, а також точне положення вашої ціни відносно конкурентів.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '02',
-          icon: HeroIcons.chartBar,
-          title: 'Мінімальна vs Медіанна ціна',
-          tag: 'Метрики',
+          icon: HeroIcons.buildingStorefront,
+          title: 'Детальний список пропозицій конкурентів',
           body:
-              'Мінімальна ціна показує демпінгові пропозиції. Медіанна ціна відображає реальний ринковий рівень і захищена від штучних занижень.',
+              'Переглядайте актуальних продавців на Avto.pro: назву магазину, місто знаходження, термін доставки та відсоток різниці з вашою ціною.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '03',
-          icon: HeroIcons.clock,
-          title: 'Історія та швидкий пошук',
-          tag: 'Швидкий OEM',
+          icon: HeroIcons.bolt,
+          title: 'Орієнтація на медіану ринку',
           body:
-              'Модал «Ціни конкурентів» зберігає останні пошуки, дозволяючи перевірити будь-який артикул або крос-номер в один клік.',
+              'Мінімальна ціна часто є демпінговою або містить приховані умови. Встановлення ціни на рівні ринкової медіани максимізує маржу без втрати продажів.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.md),
         _CalloutBox(
           colors: colors,
-          icon: HeroIcons.informationCircle,
+          icon: HeroIcons.lightBulb,
           text:
-              'Порада: Орієнтуйтеся саме на медіану ринку — це дозволяє утримувати високий прибуток без втрати замовлень.',
+              'Швидкий доступ: Перевіряйте історію останніх OEM-запитів у вікні «Ціни конкурентів» в один клік.',
         ),
       ],
     );
   }
 
-  Widget _buildPricing(MarkoTheme colors) {
+  Widget _buildManagement(MarkoTheme colors) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionBanner(
-          colors: colors,
-          icon: HeroIcons.banknotes,
-          title: 'Стратегії ціноутворення',
+        const _SectionHeader(
+          title: 'Керування та масові операції',
           description:
-              'Як максимізувати маржу та не втрачати позиції в авторинку.',
+              'Інструменти для швидкого оновлення та редагування каталогу товарів.',
         ),
-        const SizedBox(height: MarkoSpace.lg),
+        const SizedBox(height: MarkoSpace.md),
         _GuideCard(
           number: '01',
-          icon: HeroIcons.arrowTrendingUp,
-          title: 'Медіанний ціновий коридор',
-          tag: 'Маржинальність',
+          icon: HeroIcons.checkBadge,
+          title: 'Масовий вибір товарів',
           body:
-              'Не обов\'язково встановлювати найнижчу ціну на ринку. Встановлення ціни на рівні ринкової медіани зберігає на 10–15% більше маржі.',
+              'Виділяйте окремі картки чекбоксами або обирайте всі товари поточної вибірки фільтра в один клік через плаваючу панель вибору.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '02',
-          icon: HeroIcons.tag,
-          title: 'Крос-коди та взаємозамінники',
-          tag: 'Аналоги',
+          icon: HeroIcons.arrowPath,
+          title: 'Пакетне оновлення та видалення',
           body:
-              'Якщо основний номер дефіцитний, перевіряйте супутні OEM-номери замінників — це допоможе знайти прибуткові вільні ніші.',
+              'Оновлюйте актуальні ціни з Prom.ua або видаляйте застарілі позиції пакетами безпосередньо через сервер Marko.',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.sm),
         _GuideCard(
           number: '03',
-          icon: HeroIcons.devicePhoneMobile,
-          title: 'Повна мобільна оптимізація',
-          tag: 'Зручність',
+          icon: HeroIcons.pencilSquare,
+          title: 'Ручне редагування та створення',
           body:
-              'Інтерфейс повністю адаптовано для смартфонів: картки, фільтри та детальні звіти відкриваються у зручному повноекранному форматі.',
+              'Редагуйте назву, бренд, OEM-номери та ціну будь-якого товару через бічну панель або додавайте нові позиції через кнопку «Додати товар».',
           colors: colors,
         ),
         const SizedBox(height: MarkoSpace.md),
         _CalloutBox(
           colors: colors,
-          icon: HeroIcons.informationCircle,
+          icon: HeroIcons.lightBulb,
           text:
-              'Порада: Перемикайте світлу/темну тему кнопкою у шапці — ваші налаштування автоматично зберігаються на пристрої.',
+              'Зручність: Тема інтерфейсу (світла/темна) автоматично запам\'ятовується для вашого облікового запису на всіх пристроях.',
         ),
       ],
-    );
-  }
-
-  Widget _buildFooter(BuildContext context, MarkoTheme colors, bool isCompact) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: isCompact ? MarkoSpace.md : MarkoSpace.xl,
-        vertical: MarkoSpace.md,
-      ),
-      color: colors.surfaceMuted.withValues(alpha: 0.3),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              'Marko · Автоматична аналітика та ціноутворення',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: MarkoType.caption.copyWith(color: colors.faint),
-            ),
-          ),
-          const SizedBox(width: MarkoSpace.md),
-          MarkoButton(
-            label: 'Зрозуміло',
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-        ],
-      ),
     );
   }
 }
 
-class _SectionBanner extends StatelessWidget {
-  const _SectionBanner({
-    required this.colors,
-    required this.icon,
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({
     required this.title,
     required this.description,
   });
 
-  final MarkoTheme colors;
-  final HeroIcons icon;
   final String title;
   final String description;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(MarkoSpace.md),
-      decoration: BoxDecoration(
-        color: colors.surfaceMuted,
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: colors.border),
-      ),
-      child: Row(
+    final colors = MarkoTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MarkoSpace.xs),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(MarkoRadius.sm),
-              border: Border.all(color: colors.border),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+              fontSize: 17.5,
+              letterSpacing: -0.2,
             ),
-            alignment: Alignment.center,
-            child: HeroIcon(icon, size: 15, color: colors.ink),
           ),
-          const SizedBox(width: MarkoSpace.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colors.muted,
-                    height: 1.35,
-                  ),
-                ),
-              ],
+          const SizedBox(height: 4),
+          Text(
+            description,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: colors.muted,
+              height: 1.4,
             ),
           ),
         ],
@@ -612,7 +504,6 @@ class _GuideCard extends StatelessWidget {
     required this.number,
     required this.icon,
     required this.title,
-    required this.tag,
     required this.body,
     required this.colors,
   });
@@ -620,7 +511,6 @@ class _GuideCard extends StatelessWidget {
   final String number;
   final HeroIcons icon;
   final String title;
-  final String tag;
   final String body;
   final MarkoTheme colors;
 
@@ -659,36 +549,11 @@ class _GuideCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Wrap(
-                  spacing: MarkoSpace.sm,
-                  runSpacing: 2,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: MarkoSpace.xs,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colors.surfaceMuted,
-                        borderRadius: BorderRadius.circular(MarkoRadius.xs),
-                        border: Border.all(color: colors.border),
-                      ),
-                      child: Text(
-                        tag,
-                        style: MarkoType.caption.copyWith(
-                          fontSize: 10.5,
-                          color: colors.faint,
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Text(
@@ -720,22 +585,41 @@ class _CalloutBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const amber = Color(0xFFF59E0B);
+    final bg = isDark
+        ? amber.withValues(alpha: 0.09)
+        : const Color(0xFFFFFBEB);
+    final border = isDark
+        ? amber.withValues(alpha: 0.26)
+        : const Color(0xFFFDE68A);
+    final iconColor = isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706);
+    final textColor = isDark ? colors.ink : const Color(0xFF92400E);
+
     return Container(
-      padding: const EdgeInsets.all(MarkoSpace.md),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.md,
+        vertical: 11,
+      ),
       decoration: BoxDecoration(
-        color: colors.surfaceMuted,
+        color: bg,
         borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: colors.border),
+        border: Border.all(color: border),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          HeroIcon(icon, size: 16, color: colors.muted),
+          HeroIcon(icon, size: 17, color: iconColor),
           const SizedBox(width: MarkoSpace.sm),
           Expanded(
             child: Text(
               text,
-              style: TextStyle(fontSize: 12, color: colors.muted, height: 1.4),
+              style: TextStyle(
+                fontSize: 12.5,
+                color: textColor,
+                height: 1.42,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],

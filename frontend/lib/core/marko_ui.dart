@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:heroicons/heroicons.dart';
 
 import 'app_theme.dart';
+export 'formatters.dart';
 
 class MarkoWordmark extends StatelessWidget {
   const MarkoWordmark({this.compact = false, this.inverse = false, super.key});
@@ -22,15 +23,15 @@ class MarkoWordmark extends StatelessWidget {
     final strokeWidth = compact ? 1.2 : 1.35;
 
     final containerColor = inverse
-        ? colors.onInverse.withValues(alpha: 0.12)
+        ? Colors.white.withValues(alpha: 0.12)
         : (isDark ? const Color(0xFF1E1E22) : const Color(0xFF0C0C0E));
 
     final borderColor = inverse
-        ? colors.onInverse.withValues(alpha: 0.16)
+        ? Colors.white.withValues(alpha: 0.16)
         : (isDark ? const Color(0x2EFFFFFF) : const Color(0x18000000));
 
     final iconColor = inverse
-        ? colors.onInverse
+        ? Colors.white
         : (isDark ? const Color(0xFFF4F4F5) : const Color(0xFFFFFFFF));
 
     return Row(
@@ -70,7 +71,7 @@ class MarkoWordmark extends StatelessWidget {
             fontSize: compact ? 17 : 19,
             fontWeight: FontWeight.w700,
             letterSpacing: -0.5,
-            color: inverse ? colors.onInverse : colors.ink,
+            color: inverse ? Colors.white : colors.ink,
           ),
         ),
       ],
@@ -193,6 +194,21 @@ class MarkoTextField extends StatelessWidget {
         prefix ?? (prefixIcon == null ? null : HeroIcon(prefixIcon!, size: 16));
     final height = MarkoLayout.fieldHeightOf(context);
     final slot = BoxConstraints(minWidth: 34, minHeight: height);
+    final suffixChild = suffixIcon == null
+        ? null
+        : Theme(
+            data: Theme.of(context).copyWith(
+              iconButtonTheme: IconButtonThemeData(
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  elevation: 0,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ),
+            child: suffixIcon!,
+          );
     return SizedBox(
       height: height,
       child: TextField(
@@ -233,7 +249,7 @@ class MarkoTextField extends StatelessWidget {
                 ),
           prefixIconConstraints: slot,
           prefixText: prefixText,
-          suffixIcon: suffixIcon,
+          suffixIcon: suffixChild,
           suffixIconConstraints: slot,
         ),
       ),
@@ -363,12 +379,18 @@ class MarkoHotkey extends StatelessWidget {
   }
 }
 
-/// Status pill with a semantic dot: availability, sync state, quality.
+/// Status pill with optional semantic dot: availability, sync state, quality.
 class MarkoStatusPill extends StatelessWidget {
-  const MarkoStatusPill({required this.label, required this.tone, super.key});
+  const MarkoStatusPill({
+    required this.label,
+    required this.tone,
+    this.showDot = false,
+    super.key,
+  });
 
   final String label;
   final Color tone;
+  final bool showDot;
 
   @override
   Widget build(BuildContext context) {
@@ -379,22 +401,31 @@ class MarkoStatusPill extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: tone.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(MarkoRadius.sm),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: tone, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(color: tone),
+          if (showDot) ...[
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: tone, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.labelMedium?.copyWith(
+                color: tone,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         ],
       ),
@@ -474,6 +505,87 @@ class MarkoInlineMessage extends StatelessWidget {
   }
 }
 
+/// Standard empty state card across the app: icon inside a rounded surface,
+/// bold title, description, and optional action button.
+class MarkoEmptyState extends StatelessWidget {
+  const MarkoEmptyState({
+    required this.icon,
+    required this.title,
+    required this.description,
+    this.action,
+    this.compact = false,
+    this.maxWidth = 440,
+    super.key,
+  });
+
+  final HeroIcons icon;
+  final String title;
+  final String description;
+  final Widget? action;
+  final bool compact;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final iconBoxSize = compact ? 36.0 : 44.0;
+    final iconSize = compact ? 18.0 : 22.0;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: MarkoPanel(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? MarkoSpace.lg : MarkoSpace.xxl,
+          vertical: compact ? MarkoSpace.xl : MarkoSpace.huge,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: iconBoxSize,
+              height: iconBoxSize,
+              decoration: BoxDecoration(
+                color: colors.surfaceMuted,
+                borderRadius: BorderRadius.circular(
+                  compact ? MarkoRadius.md : MarkoRadius.lg,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: HeroIcon(
+                icon,
+                color: colors.faint,
+                size: iconSize,
+              ),
+            ),
+            SizedBox(height: compact ? MarkoSpace.sm : MarkoSpace.md),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: (compact
+                      ? Theme.of(context).textTheme.titleSmall
+                      : Theme.of(context).textTheme.titleMedium)
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: MarkoSpace.xs),
+            Text(
+              description,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.muted,
+                  ),
+            ),
+            if (action != null) ...[
+              SizedBox(height: compact ? MarkoSpace.md : MarkoSpace.lg),
+              action!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Formats raw digit input with thousand space separators (e.g. 1 000 000).
 class ThousandsPriceInputFormatter extends TextInputFormatter {
   const ThousandsPriceInputFormatter();
@@ -540,17 +652,16 @@ class ThousandsPriceInputFormatter extends TextInputFormatter {
 /// dialog above that. Everything overlaying the catalog goes through here.
 Future<void> showMarkoModal(
   BuildContext context, {
-  required HeroIcons icon,
+  HeroIcons? icon,
   Color? accent,
   required String title,
-  required String subtitle,
+  String? subtitle,
   required Widget child,
 }) {
   final header = _ModalHeader(
     icon: icon,
     accent: accent,
     title: title,
-    subtitle: subtitle,
   );
   if (MediaQuery.sizeOf(context).width < 700) {
     return showModalBottomSheet<void>(
@@ -583,7 +694,7 @@ class _Dialog extends StatelessWidget {
         vertical: MarkoSpace.xl,
       ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480, maxHeight: 840),
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 840),
         child: Container(
           decoration: BoxDecoration(
             color: colors.surface,
@@ -665,64 +776,40 @@ class _Sheet extends StatelessWidget {
 
 class _ModalHeader extends StatelessWidget {
   const _ModalHeader({
-    required this.icon,
+    this.icon,
     this.accent,
     required this.title,
-    required this.subtitle,
   });
 
-  final HeroIcons icon;
+  final HeroIcons? icon;
   final Color? accent;
   final String title;
-  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MarkoSpace.xl,
-        vertical: MarkoSpace.md,
+      padding: const EdgeInsets.fromLTRB(
+        MarkoSpace.xl,
+        MarkoSpace.lg,
+        MarkoSpace.md,
+        MarkoSpace.md,
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: accent != null
-                  ? accent!.withValues(alpha: 0.12)
-                  : colors.surfaceMuted,
-              borderRadius: BorderRadius.circular(MarkoRadius.md),
-              border: Border.all(
-                color: accent != null
-                    ? accent!.withValues(alpha: 0.28)
-                    : colors.border,
+          Expanded(
+            child: Text(
+              title,
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
             ),
-            alignment: Alignment.center,
-            child: HeroIcon(icon, size: 17, color: accent ?? colors.ink),
           ),
           const SizedBox(width: MarkoSpace.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 1),
-                Text(
-                  subtitle,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: colors.faint),
-                ),
-              ],
-            ),
-          ),
           IconButton(
             tooltip: 'Закрити',
             onPressed: () => Navigator.of(context).pop(),
-            icon: const HeroIcon(HeroIcons.xMark, size: 18),
+            icon: const HeroIcon(HeroIcons.xMark, size: 20),
           ),
         ],
       ),

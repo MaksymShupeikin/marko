@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "779526440182-peu677h0ki829c1a2glhovhj85re8ang.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.marko.marko_client",
+            "certificate_hash": "e18a769e5c5c3fc633141d603c4341e31085649e"
+          }
+        },
+        {
           "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
           "client_type": 3
         }
@@ -29,6 +37,13 @@
             {
               "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.mshupeikin.marko"
+              }
             }
           ]
         }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api_client.dart';
 import 'products_api.dart';
 import 'products_models.dart';
 
@@ -12,6 +13,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
 
   Timer? _debounce;
   int _generation = 0;
+  int _bulkGeneration = 0;
 
   ProductsApi get _api => ref.read(productsApiProvider);
   CatalogState get _current =>
@@ -22,14 +24,24 @@ class ProductsController extends AsyncNotifier<CatalogState> {
     ref.onDispose(() {
       _debounce?.cancel();
       _generation++;
+      _bulkGeneration++;
     });
-    return CatalogState(page: await ref.watch(productsApiProvider).search());
+    final page = await ref.watch(productsApiProvider).search();
+    return CatalogState(
+      page: page,
+      hasImportedProducts: page.total > 0 || page.items.isNotEmpty,
+    );
   }
 
   void search(String query) {
+    final trimmed = query.trim();
     state = AsyncData(_current.copyWith(query: query));
     _debounce?.cancel();
-    _debounce = Timer(_searchDebounce, _reload);
+    if (trimmed.isEmpty) {
+      _reload();
+    } else {
+      _debounce = Timer(_searchDebounce, _reload);
+    }
   }
 
   void sortBy(ProductSort sort) {
@@ -44,6 +56,19 @@ class ProductsController extends AsyncNotifier<CatalogState> {
     _debounce = Timer(_searchDebounce, _reload);
   }
 
+  void filterBySource(ProductSource source) {
+    if (_current.source == source) return;
+    // Позначки стосувалися інших карток — нова вибірка їх не успадковує.
+    state = AsyncData(
+      _current.copyWith(
+        source: source,
+        selectedIds: const {},
+        allMatchingSelected: false,
+      ),
+    );
+    _reload();
+  }
+
   void select(StoreProduct? product) {
     state = AsyncData(
       product == null
@@ -52,7 +77,218 @@ class ProductsController extends AsyncNotifier<CatalogState> {
     );
   }
 
+  void resetFilters() {
+    _debounce?.cancel();
+    state = AsyncData(
+      _current.copyWith(
+        query: '',
+        price: (null, null),
+        source: ProductSource.all,
+        selectedIds: const {},
+        allMatchingSelected: false,
+      ),
+    );
+    _reload();
+  }
+
   Future<void> refresh() => _reload();
+
+  Future<StoreProduct> updateProduct(
+    String productId,
+    ProductUpdate update,
+  ) async {
+    final updated = await _api.updateProduct(productId, update);
+    final current = _current;
+    state = AsyncData(
+      current.copyWith(
+        page: CatalogPage(
+          items: [
+            for (final item in current.page.items)
+              if (item.id == updated.id) updated else item,
+          ],
+          total: current.page.total,
+        ),
+        selected: updated,
+        clearError: true,
+      ),
+    );
+    return updated;
+  }
+
+  Future<StoreProduct> refreshProduct(String productId) async {
+    final updated = await _api.refreshProduct(productId);
+    final current = _current;
+    state = AsyncData(
+      current.copyWith(
+        page: CatalogPage(
+          items: [
+            for (final item in current.page.items)
+              if (item.id == updated.id) updated else item,
+          ],
+          total: current.page.total,
+        ),
+        selected: updated,
+        clearError: true,
+      ),
+    );
+    return updated;
+  }
+
+  void toggleSelection(String productId) {
+    final current = _current;
+    final ids = Set<String>.of(current.selectedIds);
+    if (!ids.remove(productId)) ids.add(productId);
+    state = AsyncData(current.copyWith(selectedIds: ids));
+  }
+
+  /// Switches the selection to "everything the current filter matches" —
+  /// including pages that were never loaded. Actions then run server-side.
+  void selectAllMatching() {
+    state = AsyncData(
+      _current.copyWith(selectedIds: const {}, allMatchingSelected: true),
+    );
+  }
+
+  void clearSelection() {
+    if (!_current.hasSelection) return;
+    state = AsyncData(
+      _current.copyWith(selectedIds: const {}, allMatchingSelected: false),
+    );
+  }
+
+  /// Hides every product the filter matches. One request, whatever the count.
+  Future<int> deleteAllMatching() async {
+    final current = _current;
+    final deleted = await _api.deleteAllMatching(
+      query: current.query,
+      priceMin: current.priceMin,
+      priceMax: current.priceMax,
+      source: current.source,
+    );
+    state = AsyncData(
+      current.copyWith(
+        selectedIds: const {},
+        allMatchingSelected: false,
+        clearSelected: true,
+        clearError: true,
+      ),
+    );
+    await _reload();
+    return deleted;
+  }
+
+  /// Queues a catalog-wide re-read and follows the job until it finishes.
+  Future<void> refreshAllMatching() async {
+    final current = _current;
+    final sync = await _api.refreshAllMatching(
+      query: current.query,
+      priceMin: current.priceMin,
+      priceMax: current.priceMax,
+      source: current.source,
+    );
+    state = AsyncData(
+      current.copyWith(
+        selectedIds: const {},
+        allMatchingSelected: false,
+        clearError: true,
+      ),
+    );
+    final generation = ++_bulkGeneration;
+    while (generation == _bulkGeneration) {
+      final job = await _api.getJob(sync.syncRunId);
+      if (generation != _bulkGeneration) return;
+      state = AsyncData(_current.copyWith(bulkJob: job));
+      if (job.isFinished) {
+        await _reload();
+        state = AsyncData(_current.copyWith(clearBulkJob: true));
+        return;
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+  }
+
+  /// Re-reads every ticked product from its own URL. Returns how many failed.
+  Future<int> refreshSelected() async {
+    final ids = _current.selectedIds.toList();
+    final updated = <String, StoreProduct>{};
+    var failed = 0;
+    for (final id in ids) {
+      try {
+        final product = await _api.refreshProduct(id);
+        updated[product.id] = product;
+      } catch (_) {
+        failed++;
+      }
+    }
+    final current = _current;
+    state = AsyncData(
+      current.copyWith(
+        page: CatalogPage(
+          items: [
+            for (final item in current.page.items) updated[item.id] ?? item,
+          ],
+          total: current.page.total,
+        ),
+        selectedIds: const {},
+        clearError: true,
+      ),
+    );
+    return failed;
+  }
+
+  /// Removes every ticked product from the catalog. Returns how many failed.
+  Future<int> deleteSelected() async {
+    final ids = _current.selectedIds.toList();
+    final removed = <String>{};
+    var failed = 0;
+    for (final id in ids) {
+      try {
+        await _api.deleteProduct(id);
+        removed.add(id);
+      } catch (_) {
+        failed++;
+      }
+    }
+    _generation++;
+    final current = _current;
+    final items = current.page.items
+        .where((item) => !removed.contains(item.id))
+        .toList(growable: false);
+    state = AsyncData(
+      current.copyWith(
+        page: CatalogPage(
+          items: items,
+          total: (current.page.total - removed.length).clamp(
+            0,
+            current.page.total,
+          ),
+        ),
+        selectedIds: const {},
+        clearSelected: true,
+        clearError: true,
+      ),
+    );
+    return failed;
+  }
+
+  Future<void> deleteProduct(String productId) async {
+    await _api.deleteProduct(productId);
+    _generation++;
+    final current = _current;
+    final items = current.page.items
+        .where((item) => item.id != productId)
+        .toList(growable: false);
+    state = AsyncData(
+      current.copyWith(
+        page: CatalogPage(
+          items: items,
+          total: current.page.total > 0 ? current.page.total - 1 : 0,
+        ),
+        clearSelected: true,
+        clearError: true,
+      ),
+    );
+  }
 
   Future<void> loadMore() async {
     final current = _current;
@@ -65,6 +301,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         sort: current.sort,
         priceMin: current.priceMin,
         priceMax: current.priceMax,
+        source: current.source,
         offset: current.page.items.length,
       );
       if (generation != _generation) return;
@@ -98,10 +335,19 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         sort: current.sort,
         priceMin: current.priceMin,
         priceMax: current.priceMax,
+        source: current.source,
         limit: _pageSize,
       );
       if (generation != _generation) return;
-      state = AsyncData(_current.copyWith(page: page, isRefreshing: false));
+      final hasImported =
+          current.hasImportedProducts || page.total > 0 || page.items.isNotEmpty;
+      state = AsyncData(
+        _current.copyWith(
+          page: page,
+          isRefreshing: false,
+          hasImportedProducts: hasImported,
+        ),
+      );
     } catch (error) {
       if (generation != _generation) return;
       state = AsyncData(
@@ -171,6 +417,12 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     state = AsyncData(_current.copyWith(clearImport: true));
   }
 
+  /// Hides the sync capsule and stops following the job.
+  void dismissSync() {
+    _pollGeneration++;
+    state = AsyncData(_current.copyWith(clearSync: true, clearJob: true));
+  }
+
   void dismissError() {
     state = AsyncData(_current.copyWith(clearError: true));
   }
@@ -198,13 +450,21 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
   }
 
   Future<void> _followSync(StoreSync sync, int generation) async {
+    var seen = -1;
     while (generation == _pollGeneration) {
       try {
         final job = await _api.getJob(sync.syncRunId);
         if (generation != _pollGeneration) return;
         state = AsyncData(_current.copyWith(activeJob: job, clearError: true));
-        if (job.isFinished) {
+        // Товари, що вже приїхали, вливаються в сітку, не чекаючи кінця імпорту.
+        if (job.progressCurrent != seen || job.isFinished) {
+          seen = job.progressCurrent;
           await ref.read(productsControllerProvider.notifier).refresh();
+        }
+        if (job.isFinished) {
+          // Капсула ще мить показує підсумок, потім зникає сама.
+          await Future<void>.delayed(_lingerAfterFinish);
+          if (generation == _pollGeneration) dismissSync();
           return;
         }
       } catch (error) {
@@ -213,6 +473,8 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
       await Future<void>.delayed(const Duration(seconds: 2));
     }
   }
+
+  static const _lingerAfterFinish = Duration(seconds: 4);
 }
 
 final catalogImportProvider =
@@ -223,19 +485,25 @@ final catalogImportProvider =
 /// Alias for backwards compatibility if needed
 final storesControllerProvider = catalogImportProvider;
 
-/// Live avto.pro lookup; `AsyncData(null)` means "not searched yet".
-class CompetitorSearchController extends AsyncNotifier<CompetitorSearch?> {
+/// Ключ стадії для ручного пошуку — товару в каталозі за ним немає.
+const manualSearchKey = 'manual';
+
+/// Live OEM/brand lookup; `AsyncData(null)` means "not searched yet".
+class CompetitorSearchController extends AsyncNotifier<CompetitorPriceReport?> {
   @override
-  Future<CompetitorSearch?> build() async => null;
+  Future<CompetitorPriceReport?> build() async => null;
 
   Future<void> search(String oem, {String? brand}) async {
     final query = oem.trim();
     if (query.isEmpty) return;
     state = const AsyncLoading();
     state = await AsyncValue.guard(
-      () => ref
-          .read(productsApiProvider)
-          .searchCompetitors(query, brand: brand?.trim()),
+      () => _readReport(
+        ref
+            .read(productsApiProvider)
+            .competitorSearchEvents(query, brand: brand?.trim()),
+        ref.read(competitorStageProvider(manualSearchKey).notifier),
+      ),
     );
   }
 
@@ -245,5 +513,69 @@ class CompetitorSearchController extends AsyncNotifier<CompetitorSearch?> {
 final competitorSearchProvider =
     AsyncNotifierProvider.autoDispose<
       CompetitorSearchController,
-      CompetitorSearch?
+      CompetitorPriceReport?
     >(CompetitorSearchController.new);
+
+/// Підпис поточної стадії пошуку конкурентів; null — поки нічого не йде.
+class CompetitorStageController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void show(String? message) => state = message;
+}
+
+final competitorStageProvider =
+    NotifierProvider.family<CompetitorStageController, String?, String>(
+      (productId) => CompetitorStageController(),
+    );
+
+class CompetitorPricesController extends AsyncNotifier<CompetitorPriceReport> {
+  CompetitorPricesController(this._productId);
+
+  final String _productId;
+  ProductsApi get _api => ref.read(productsApiProvider);
+
+  @override
+  Future<CompetitorPriceReport> build() => _collect();
+
+  Future<void> refresh() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() => _collect(refresh: true));
+  }
+
+  Future<CompetitorPriceReport> _collect({bool refresh = false}) => _readReport(
+    _api.competitorPriceEvents(_productId, refresh: refresh),
+    ref.read(competitorStageProvider(_productId).notifier),
+  );
+}
+
+/// Веде звіт по подіях SSE, дорогою оновлюючи підпис стадії.
+Future<CompetitorPriceReport> _readReport(
+  Stream<Map<String, dynamic>> events,
+  CompetitorStageController stage,
+) async {
+  try {
+    await for (final event in events) {
+      switch (event['stage']) {
+        case 'done':
+          return CompetitorPriceReport.fromJson(
+            event['report'] as Map<String, dynamic>,
+          );
+        case 'error':
+          throw ApiException(
+            event['message']?.toString() ?? 'Не вдалося зібрати ціни',
+          );
+        default:
+          stage.show(event['message']?.toString());
+      }
+    }
+  } finally {
+    stage.show(null);
+  }
+  throw const ApiException('Пошук перервано');
+}
+
+final competitorPricesProvider = AsyncNotifierProvider.autoDispose
+    .family<CompetitorPricesController, CompetitorPriceReport, String>(
+      (productId) => CompetitorPricesController(productId),
+    );

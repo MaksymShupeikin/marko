@@ -29,7 +29,7 @@ def normalize_tokens(name: str | None) -> list[str]:
     ]
 
 
-def _token_similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
+def token_similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
     """Token-set similarity in [0, 1]: an equal blend of Jaccard and containment."""
     if not tokens_a or not tokens_b:
         return 0.0
@@ -108,7 +108,7 @@ def match_offer(seed: Product, cand: Product, threshold: float) -> Match | None:
     cand_tokens = normalize_tokens(cand.name)
     if laterality_conflict(seed_tokens, cand_tokens):
         return None
-    score = _token_similarity(set(seed_tokens), set(cand_tokens))
+    score = token_similarity(set(seed_tokens), set(cand_tokens))
     if score >= threshold:
         return Match("fuzzy", score)
     return None
@@ -116,7 +116,7 @@ def match_offer(seed: Product, cand: Product, threshold: float) -> Match | None:
 
 def _price_value(product: Product) -> float | None:
     """Best-effort numeric price for comparison, or None if unusable."""
-    raw = product.price or product.price_original
+    raw = product.effective_price
     try:
         return float(raw) if raw is not None else None
     except (TypeError, ValueError):

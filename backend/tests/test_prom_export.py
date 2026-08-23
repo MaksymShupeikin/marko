@@ -113,3 +113,19 @@ def test_reads_the_seller_from_product_urls():
 )
 def test_normalize_oem(raw, expected):
     assert normalize_oem(raw) == expected
+
+
+def test_export_url_is_rewritten_to_the_marketplace_link():
+    """Сторінка магазину рендериться без ApolloCacheState — парсер її не читає."""
+    from marko.parsers.prom_export import canonical_product_url, is_export_url
+
+    export_url = "https://kemp-cs2847093.prom.ua/p1153725504-bendiks-audi-100.html"
+    assert is_export_url(export_url)
+    assert canonical_product_url(export_url) == (
+        "https://prom.ua/ua/p1153725504-bendiks-audi-100.html"
+    )
+
+    marketplace_url = "https://prom.ua/ua/p2749847098-knopka.html"
+    assert not is_export_url(marketplace_url)
+    assert canonical_product_url(marketplace_url) == marketplace_url
+    assert canonical_product_url(None) == ""

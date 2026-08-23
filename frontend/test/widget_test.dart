@@ -40,6 +40,10 @@ class _SignedOutAuthClient implements AuthClient {
   Future<AuthSession> loginWithGoogle() => throw UnimplementedError();
 
   @override
+  Future<AuthSession> loginWithGoogleIdToken(String idToken) =>
+      throw UnimplementedError();
+
+  @override
   Future<void> logout() async {}
 
   @override

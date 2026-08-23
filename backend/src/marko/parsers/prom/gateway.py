@@ -276,9 +276,31 @@ class PromGateway:
         client: AsyncHttpClient,
         request: _ListingRequest,
     ) -> _FetchedListing:
-        html = await client.get_html(request.seller.listing_url, params=request.params)
-        page = parse_listing(html, request.seller.lang)
-        return _FetchedListing(request=request, page=page, html=html)
+        """Fetch one catalog page, retrying while Prom serves it without a catalog.
+
+        A page whose listing block is missing (антибот, інша розмітка) parses as
+        empty — і виглядає для викликача точно як кінець каталогу. Мовчазний
+        стоп на такій сторінці обрізав би імпорт на пів шляху, тому тут вона
+        або перечитується, або падає.
+        """
+        for attempt in range(1, self._config.max_retries + 1):
+            html = await client.get_html(
+                request.seller.listing_url, params=request.params
+            )
+            page = parse_listing(html, request.seller.lang)
+            if page.total is not None or page.products:
+                return _FetchedListing(request=request, page=page, html=html)
+            log.warning(
+                "Група %s, сторінка %d: сторінка без каталогу (спроба %d).",
+                request.label,
+                request.page_number,
+                attempt,
+            )
+            await asyncio.sleep(self._config.delay * self._config.backoff_factor**attempt)
+        raise ParseError(
+            f"Сторінка {request.page_number} (група {request.label}) не містить "
+            f"каталогу після {self._config.max_retries} спроб."
+        )
 
     def _known_final_page(self, listing: _FetchedListing) -> int | None:
         product_count = len(listing.page.products)
