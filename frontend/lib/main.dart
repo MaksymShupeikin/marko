@@ -1,6 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:toastification/toastification.dart';
 
 import 'core/app_router.dart';
@@ -13,6 +14,7 @@ import 'features/auth/auth_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  usePathUrlStrategy();
   if (!Environment.usesNativeFirebaseConfig &&
       !Environment.hasFirebaseConfig) {
     runApp(

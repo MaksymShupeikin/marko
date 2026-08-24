@@ -44,6 +44,20 @@ class _SignedOutAuthClient implements AuthClient {
       throw UnimplementedError();
 
   @override
+  Future<void> resetPassword(String email) => throw UnimplementedError();
+
+  @override
+  Future<String> verifyPasswordResetCode(String code) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> confirmPasswordReset(String code, String newPassword) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> applyActionCode(String code) => throw UnimplementedError();
+
+  @override
   Future<void> logout() async {}
 
   @override

@@ -6,16 +6,16 @@ import logging
 from functools import lru_cache
 from typing import Sequence
 
-import anthropic
 import openai
 
 from marko.core.config import get_settings
 
 log = logging.getLogger(__name__)
 
-# Більше кандидатів в одному запиті не дає користі: далі йде вже сміття,
-# яке евристика й так поставила в кінець.
-MAX_CANDIDATES = 80
+# Має покривати всі можливі пропозиції (_AVTOPRO_MAX_OFFERS + _PROM_MAX_OFFERS
+# + _GOOGLE_MAX_OFFERS): кандидат поза лімітом не отримує вердикту і проходив
+# у видачу без перевірки.
+MAX_CANDIDATES = 120
 
 _SYSTEM = (
     "Ти підбираєш конкурентні пропозиції для автозапчастини на українському ринку.\n"
@@ -25,50 +25,21 @@ _SYSTEM = (
     "  analog — інший виробник чи артикул, але деталь взаємозамінна з нашою;\n"
     "  no     — інший вузол, інша сторона, інша машина, інший розмір,\n"
     "           комплект замість однієї деталі, вживана деталь замість нової,\n"
-    "           аксесуар до деталі (кріплення, прокладка) або зовсім інший товар.\n"
+    "           аксесуар до деталі (кріплення, прокладка), зовсім інший товар\n"
+    "           або взагалі не автозапчастина (одяг, взуття, сумки, побут).\n"
     "Сумніваєшся — став no: краще менше пропозицій, ніж чужі в порівнянні цін.\n"
     'Відповідь — лише JSON: {"verdicts": [{"index": 0, "verdict": "same"}, ...]},'
     " по одному запису на кожного кандидата, без пояснень."
 )
 
-_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "verdicts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "index": {"type": "integer"},
-                    "verdict": {"type": "string", "enum": ["same", "analog", "no"]},
-                },
-                "required": ["index", "verdict"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["verdicts"],
-    "additionalProperties": False,
-}
-
-
-def _is_claude() -> bool:
-    return get_settings().competitor_filter_model.startswith("claude")
-
 
 def is_enabled() -> bool:
-    settings = get_settings()
-    return bool(settings.anthropic_api_key if _is_claude() else settings.openai_api_key)
-
-
-@lru_cache
-def _anthropic() -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+    return bool(get_settings().openai_api_key)
 
 
 @lru_cache
 def _openai() -> openai.AsyncOpenAI:
-    """Один клієнт на всі OpenAI-сумісні API — DeepSeek відрізняє лише base_url."""
+    """Клієнт OpenAI або сумісний провайдер (наприклад, DeepSeek або проксі)."""
     settings = get_settings()
     return openai.AsyncOpenAI(
         api_key=settings.openai_api_key,
@@ -100,27 +71,23 @@ async def classify(
         return {}
     prompt = _prompt(name, brand, oem_numbers, titles[:MAX_CANDIDATES])
     try:
-        ask = _ask_claude if _is_claude() else _ask_openai
-        verdicts = json.loads(await ask(prompt))["verdicts"]
+        verdicts = json.loads(await _ask_openai(prompt))["verdicts"]
     except Exception as exc:  # фільтр не критичний — краще без нього, ніж без цін
         log.warning("LLM-фільтр пропозицій не спрацював: %s", exc)
         return {}
-    return {
+    result = {
         item["index"]: item["verdict"]
         for item in verdicts
         if isinstance(item.get("index"), int) and 0 <= item["index"] < len(titles)
     }
-
-
-async def _ask_claude(prompt: str) -> str:
-    response = await _anthropic().messages.create(
-        model=get_settings().competitor_filter_model,
-        max_tokens=4000,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-        output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
-    )
-    return next(block.text for block in response.content if block.type == "text")
+    if not result:
+        return {}
+    # Модель мала оцінити кожного посланого кандидата: пропущений нею index
+    # раніше проходив у видачу без перевірки — тепер він «не підтверджений».
+    return {
+        index: result.get(index, "no")
+        for index in range(min(len(titles), MAX_CANDIDATES))
+    }
 
 
 async def _ask_openai(prompt: str) -> str:
@@ -141,3 +108,4 @@ async def _ask_openai(prompt: str) -> str:
         **extra,
     )
     return response.choices[0].message.content or ""
+

@@ -15,17 +15,23 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
     competitor_price_cache_url: str = "redis://localhost:6379/2"
     cors_origins: str = "http://localhost:8080,http://localhost:3000"
+    # На інстанс: pool_size + max_overflow одночасних з'єднань. Сумарно по всіх
+    # інстансах має лишатися нижче max_connections Postgres (типово 100).
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    # Скільки звітів конкурентів збирається одночасно (на процес): захищає
+    # і власний event loop, і джерела від шквалу скрейпів.
+    competitor_report_concurrency: int = 8
     firebase_project_id: str = ""
     competitor_price_cache_ttl_seconds: int = 21_600
     # Кілька сторінок пошуку на термін — джерелу треба більше, ніж один запит.
     competitor_price_source_timeout_seconds: float = 25.0
-    # Жодного ключа = відсіювання лишається суто евристичним.
-    # Назва моделі і є перемикачем: "claude-*" іде в Anthropic, решта — в
-    # OpenAI-сумісний API (сам OpenAI, DeepSeek, будь-що з таким же протоколом).
-    competitor_filter_model: str = "claude-haiku-4-5"
-    anthropic_api_key: str = ""
+    # OpenAI API / GPT модель для фільтрації пропозицій конкурентів
+    competitor_filter_model: str = "gpt-5-nano"
+    # Порожньо = джерело Google (Serper.dev) вимкнене.
+    serper_api_key: str = ""
     openai_api_key: str = ""
-    openai_base_url: str = ""  # напр. https://api.deepseek.com для DeepSeek
+    openai_base_url: str = ""  # напр. https://api.deepseek.com для DeepSeek або проксі
 
     model_config = SettingsConfigDict(
         env_file=".env",

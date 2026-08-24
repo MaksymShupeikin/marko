@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
@@ -34,6 +37,16 @@ abstract interface class AuthClient {
 
   /// For the web GIS button, which produces the token itself.
   Future<AuthSession> loginWithGoogleIdToken(String idToken);
+
+  /// Also how a Google-only account gets a password: the reset link adds
+  /// the password provider to the same Firebase user.
+  Future<void> resetPassword(String email);
+
+  /// Email action links land on our /reset-password page, which finishes
+  /// them with these calls instead of Firebase's default handler page.
+  Future<String> verifyPasswordResetCode(String code);
+  Future<void> confirmPasswordReset(String code, String newPassword);
+  Future<void> applyActionCode(String code);
   Future<void> logout();
   Future<String?> idToken({bool forceRefresh = false});
 }
@@ -43,6 +56,15 @@ class FirebaseAuthClient implements AuthClient {
 
   final FirebaseAuth _auth;
   Future<void>? _googleInitialization;
+
+  /// Editing the console email templates is blocked for this project
+  /// (EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED), so instead the default handler at
+  /// firebaseapp.com redirects straight here with mode/oobCode — our
+  /// /reset-password page finishes the action.
+  static final _brandedLink = ActionCodeSettings(
+    url: 'https://markoprice.com/',
+    handleCodeInApp: true,
+  );
 
   @override
   AuthSession? get currentSession => _toSession(_auth.currentUser);
@@ -60,7 +82,7 @@ class FirebaseAuthClient implements AuthClient {
       );
       final user = _requireUser(credential.user);
       if (!user.emailVerified) {
-        await user.sendEmailVerification();
+        await user.sendEmailVerification(_brandedLink);
         await _auth.signOut();
         throw const AuthClientException(
           'Підтвердіть пошту. Ми повторно надіслали лист із посиланням.',
@@ -68,6 +90,12 @@ class FirebaseAuthClient implements AuthClient {
       }
       return _requireSession(user);
     } on FirebaseAuthException catch (error) {
+      if (await _isGoogleOnlyAccount(email, error)) {
+        throw const AuthClientException(
+          'Цей акаунт створено через Google. '
+          'Скористайтеся кнопкою «Продовжити з Google».',
+        );
+      }
       throw AuthClientException(_firebaseMessage(error));
     }
   }
@@ -80,10 +108,54 @@ class FirebaseAuthClient implements AuthClient {
         password: password,
       );
       final user = _requireUser(credential.user);
-      await user.sendEmailVerification();
+      await user.sendEmailVerification(_brandedLink);
       await _auth.signOut();
     } on FirebaseAuthException catch (error) {
+      if (await _isGoogleOnlyAccount(email, error)) {
+        throw const AuthClientException(
+          'Цей акаунт уже створено через Google. '
+          'Скористайтеся кнопкою «Продовжити з Google».',
+        );
+      }
       throw AuthClientException(_firebaseMessage(error));
+    }
+  }
+
+  /// firebase_auth 6 removed fetchSignInMethodsForEmail, so we ask the same
+  /// Identity Toolkit endpoint directly. Needs email enumeration protection
+  /// disabled in Firebase, otherwise signinMethods always comes back empty.
+  Future<bool> _isGoogleOnlyAccount(
+    String email,
+    FirebaseAuthException error,
+  ) async {
+    const relevant = {
+      'invalid-credential',
+      'wrong-password',
+      'user-not-found',
+      'email-already-in-use',
+    };
+    if (!relevant.contains(error.code)) return false;
+    try {
+      final response = await http.post(
+        Uri.parse(
+          'https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri'
+          '?key=${_auth.app.options.apiKey}',
+        ),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'identifier': email,
+          'continueUri': 'http://localhost',
+        }),
+      );
+      if (response.statusCode != 200) return false;
+      final methods =
+          ((jsonDecode(response.body) as Map<String, dynamic>)['signinMethods']
+                  as List?)
+              ?.cast<String>() ??
+          const [];
+      return methods.contains('google.com') && !methods.contains('password');
+    } on Exception {
+      return false;
     }
   }
 
@@ -156,6 +228,45 @@ class FirebaseAuthClient implements AuthClient {
   }
 
   @override
+  Future<void> resetPassword(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(
+        email: email,
+        actionCodeSettings: _brandedLink,
+      );
+    } on FirebaseAuthException catch (error) {
+      throw AuthClientException(_firebaseMessage(error));
+    }
+  }
+
+  @override
+  Future<String> verifyPasswordResetCode(String code) async {
+    try {
+      return await _auth.verifyPasswordResetCode(code);
+    } on FirebaseAuthException catch (error) {
+      throw AuthClientException(_firebaseMessage(error));
+    }
+  }
+
+  @override
+  Future<void> confirmPasswordReset(String code, String newPassword) async {
+    try {
+      await _auth.confirmPasswordReset(code: code, newPassword: newPassword);
+    } on FirebaseAuthException catch (error) {
+      throw AuthClientException(_firebaseMessage(error));
+    }
+  }
+
+  @override
+  Future<void> applyActionCode(String code) async {
+    try {
+      await _auth.applyActionCode(code);
+    } on FirebaseAuthException catch (error) {
+      throw AuthClientException(_firebaseMessage(error));
+    }
+  }
+
+  @override
   Future<void> logout() async {
     await _auth.signOut();
     try {
@@ -213,6 +324,8 @@ class FirebaseAuthClient implements AuthClient {
       'cancelled-popup-request' => 'Вхід через Google скасовано.',
       'popup-blocked' => 'Браузер заблокував вікно входу через Google.',
       'network-request-failed' => 'Немає з’єднання з Firebase.',
+      'expired-action-code' => 'Посилання застаріло. Запросіть новий лист.',
+      'invalid-action-code' => 'Посилання недійсне або вже використане.',
       'account-exists-with-different-credential' =>
         'Акаунт із цією поштою вже використовує інший спосіб входу.',
       _ => error.message ?? 'Помилка Firebase Authentication.',

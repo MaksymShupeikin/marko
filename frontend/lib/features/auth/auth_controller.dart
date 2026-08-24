@@ -70,6 +70,28 @@ class AuthController extends AsyncNotifier<MarkoAuthState> {
     }
   }
 
+  Future<void> resetPassword(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (!normalized.contains('@')) {
+      state = AsyncData(_current.copyWith(error: 'Введіть коректну пошту'));
+      return;
+    }
+    state = AsyncData(
+      _current.copyWith(busy: true, clearError: true, clearNotice: true),
+    );
+    try {
+      await _auth.resetPassword(normalized);
+      state = AsyncData(
+        _current.copyWith(
+          busy: false,
+          notice: 'Надіслали лист для встановлення пароля на $normalized.',
+        ),
+      );
+    } catch (error) {
+      _setError(error);
+    }
+  }
+
   Future<void> loginWithGoogle() => _signInWithGoogle(_auth.loginWithGoogle);
 
   /// The web GIS button signs in on its own and hands over the token.

@@ -9,7 +9,16 @@ from marko.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+engine = create_async_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    # Швидкий відмов кращий за 30 секунд мовчазної черги під навантаженням.
+    pool_timeout=10,
+    # Оновлюємо з'єднання до того, як їх приб'є сервер чи балансувальник.
+    pool_recycle=1800,
+)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 

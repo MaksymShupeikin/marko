@@ -180,38 +180,14 @@ class _OemLookupContentState extends ConsumerState<_OemLookupContent> {
           expand: true,
         ),
         if (history.isNotEmpty) ...[
-          const SizedBox(height: MarkoSpace.md),
-          Row(
-            children: [
-              HeroIcon(HeroIcons.clock, size: 14, color: colors.faint),
-              const SizedBox(width: 5),
-              Text(
-                'Нещодавні пошуки',
-                style: MarkoType.caption.copyWith(color: colors.faint),
-              ),
-              const Spacer(),
-              InkWell(
-                onTap: searchBusy
-                    ? null
-                    : () => ref.read(oemHistoryProvider.notifier).clear(),
-                borderRadius: BorderRadius.circular(MarkoRadius.xs),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 2,
-                  ),
-                  child: Text(
-                    'Очистити',
-                    style: MarkoType.caption.copyWith(
-                      color: colors.faint,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          const SizedBox(height: MarkoSpace.lg),
+          Text(
+            'Останні пошуки',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
-          const SizedBox(height: MarkoSpace.xs),
+          const SizedBox(height: MarkoSpace.sm),
           Wrap(
             spacing: MarkoSpace.sm,
             runSpacing: MarkoSpace.sm,
@@ -363,7 +339,7 @@ class CompetitorResults extends ConsumerWidget {
       ),
       data: (result) => result == null
           ? const SizedBox.shrink()
-          : _ResultsPanel(
+          : CompetitorResultsPanel(
               result: result,
               onClose: () =>
                   ref.read(competitorSearchProvider.notifier).reset(),
@@ -425,22 +401,24 @@ class _ResultsSkeleton extends ConsumerWidget {
   }
 }
 
-class _ResultsPanel extends StatefulWidget {
-  const _ResultsPanel({required this.result, required this.onClose});
+/// The market report panel itself, reusable outside the lookup flow
+/// (the auth page shows it with canned demo data).
+class CompetitorResultsPanel extends StatefulWidget {
+  const CompetitorResultsPanel({required this.result, this.onClose, super.key});
 
   final CompetitorPriceReport result;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
 
   @override
-  State<_ResultsPanel> createState() => _ResultsPanelState();
+  State<CompetitorResultsPanel> createState() => _CompetitorResultsPanelState();
 }
 
-class _ResultsPanelState extends State<_ResultsPanel> {
+class _CompetitorResultsPanelState extends State<CompetitorResultsPanel> {
   static const _collapsedCount = 8;
   bool _expanded = false;
 
   @override
-  void didUpdateWidget(covariant _ResultsPanel oldWidget) {
+  void didUpdateWidget(covariant CompetitorResultsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.result != widget.result) _expanded = false;
   }
@@ -497,11 +475,12 @@ class _ResultsPanelState extends State<_ResultsPanel> {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Сховати результати',
-                onPressed: widget.onClose,
-                icon: const HeroIcon(HeroIcons.xMark, size: 17),
-              ),
+              if (widget.onClose != null)
+                IconButton(
+                  tooltip: 'Сховати результати',
+                  onPressed: widget.onClose,
+                  icon: const HeroIcon(HeroIcons.xMark, size: 17),
+                ),
             ],
           ),
           if (offers.isEmpty) ...[

@@ -1,15 +1,24 @@
 name: marko
 
+# Bounded logs so long-running celery/uvicorn output can't fill the VPS disk.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+# Defaults match local development; the VPS overrides via its .env
+# (ENVIRONMENT=production, CORS_ORIGINS=https://…, API_BASE_URL=https://…).
 x-backend-environment: &backend-environment
-  ENVIRONMENT: development
+  ENVIRONMENT: ${ENVIRONMENT:-development}
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-marko}:${POSTGRES_PASSWORD:-marko}@db:5432/${POSTGRES_DB:-marko}
   CELERY_BROKER_URL: redis://broker:6379/0
   CELERY_RESULT_BACKEND: redis://broker:6379/1
   COMPETITOR_PRICE_CACHE_URL: redis://broker:6379/2
-  CORS_ORIGINS: http://localhost:${WEB_PORT:-8080}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-8080}}
   FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
-  COMPETITOR_FILTER_MODEL: ${COMPETITOR_FILTER_MODEL:-claude-haiku-4-5}
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  COMPETITOR_FILTER_MODEL: ${COMPETITOR_FILTER_MODEL:-gpt-5-nano}
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
   PYTHONDONTWRITEBYTECODE: 1
@@ -18,6 +27,7 @@ x-backend: &backend
   build:
     context: ./backend
   environment: *backend-environment
+  logging: *default-logging
   restart: unless-stopped
 
 services:
@@ -27,8 +37,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-marko}
       POSTGRES_USER: ${POSTGRES_USER:-marko}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marko}
+    # Loopback only: the containers reach it as db:5432 over the docker
+    # network; nothing on a public VPS IP should.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,6 +48,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
     restart: unless-stopped
 
   broker:
@@ -50,6 +63,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging: *default-logging
     restart: unless-stopped
 
   migrate:
@@ -129,7 +143,9 @@ services:
     build:
       context: ./frontend
       args:
-        API_BASE_URL: http://localhost:${API_PORT:-8000}
+        # Baked into the web bundle at build time — MUST be the public API
+        # URL when building for the VPS.
+        API_BASE_URL: ${API_BASE_URL:-http://localhost:${API_PORT:-8000}}
         FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
         FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
         FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
@@ -141,6 +157,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

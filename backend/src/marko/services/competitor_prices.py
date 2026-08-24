@@ -14,6 +14,7 @@ from statistics import median
 from typing import Any, Callable, Iterable, Iterator, Protocol
 from urllib.parse import urlsplit
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
@@ -61,6 +62,16 @@ _PROM_MAX_OFFERS = 60
 _AVTOPRO_MAX_OFFERS = 40
 _MAX_OEM_TERMS = 2  # другий номер приводить інших продавців, ніж перший
 _MAX_NAME_TOKENS = 8
+
+SERPER_URL = "https://google.serper.dev/search"
+_SERP_RESULTS_PER_TERM = 20
+_GOOGLE_MAX_OFFERS = 20
+# Сторінок докачуємо небагато: більшість цін уже в сніпетах, а кожен GET —
+# чужий сайт зі своїм часом відповіді.
+_SERP_MAX_PAGE_FETCHES = 12
+_SERP_TIMEOUT = 6.0
+# Ці маркетплейси вже є окремими джерелами — з Google вони лише дублюють.
+_SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro")
 
 _NON_ALNUM_RE = re.compile(r"[^0-9A-ZА-ЯІЇЄЁ]+", re.I)
 _PROM_PRODUCT_ID_RE = re.compile(r"/(?:[a-z]{2}/)?p(?P<id>\d+)-", re.I)
@@ -256,6 +267,10 @@ class CompetitorPriceCache:
 
 _cache = CompetitorPriceCache(get_settings().competitor_price_cache_url)
 
+# ponytail: ліміт на процес; якщо інстансів стане багато і джерела почнуть
+# банити — переносити ліміт у Redis-семафор.
+_collect_slots = asyncio.Semaphore(get_settings().competitor_report_concurrency)
+
 
 async def listing_search_query(
     session: AsyncSession,
@@ -306,9 +321,18 @@ async def competitor_prices_for_query(
         if cached is not None:
             return cached
 
-    report = await _collect(query, on_event)
-    payload = report.as_json()
-    await _cache.set(cache_key, payload, settings.competitor_price_cache_ttl_seconds)
+    async with _collect_slots:
+        # Поки чекали на слот, той самий звіт міг зібрати хтось інший.
+        if not refresh:
+            cached = await _cache.get(cache_key)
+            if cached is not None:
+                return cached
+        report = await _collect(query, on_event)
+        payload = report.as_json()
+        # Запис у кеш ще під слотом: наступний у черзі має його вже побачити.
+        await _cache.set(
+            cache_key, payload, settings.competitor_price_cache_ttl_seconds
+        )
     return payload
 
 
@@ -330,6 +354,7 @@ async def _collect(
     sources: tuple[PriceSource, ...] = (
         AvtoproPriceSource(),
         PromPriceSource(),
+        GooglePriceSource(),
     )
     emit("start", "Готуємо пошукові запити")
     timeout = get_settings().competitor_price_source_timeout_seconds
@@ -602,6 +627,211 @@ class PromPriceSource:
                 # Номер не збігся — знайшли за назвою, тобто аналог.
                 is_analog=score < _OEM_HIT_SCORE,
             )
+
+
+class GooglePriceSource:
+    """Serper.dev: незалежні магазини, які не живуть на маркетплейсах.
+
+    Ціна — з тексту сніпета видачі; нема в сніпеті — один GET сторінки і
+    structured data (JSON-LD, microdata, og:price). Окремих LLM-викликів
+    джерело не робить: зібрані тайтли фільтрує спільний llm_filter далі.
+    """
+
+    source = "google"
+    label = "Google"
+
+    async def search(self, query: PartSearchQuery) -> SourceResult:
+        api_key = get_settings().serper_api_key
+        if not api_key:
+            return SourceResult(self.source, self.label, "skipped", error="No API key")
+
+        async with httpx.AsyncClient(
+            timeout=_SERP_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+        ) as client:
+            batches = await asyncio.gather(
+                *(self._serp(client, api_key, term) for term in _search_terms(query))
+            )
+            candidates = self._candidates(query, batches)
+            offers = await self._priced_offers(client, candidates)
+
+        unique = _cheapest_by_key(offers, key=lambda offer: offer.seller or offer.url)
+        kept = sorted(unique, key=_by_confidence_then_price)[:_GOOGLE_MAX_OFFERS]
+        return SourceResult(
+            self.source,
+            self.label,
+            "ok" if kept else "empty",
+            tuple(sorted(kept, key=_by_price)),
+        )
+
+    async def _serp(
+        self, client: httpx.AsyncClient, api_key: str, term: str
+    ) -> list[dict]:
+        response = await client.post(
+            SERPER_URL,
+            json={"q": term, "gl": "ua", "hl": "uk", "num": _SERP_RESULTS_PER_TERM},
+            headers={"X-API-KEY": api_key},
+        )
+        response.raise_for_status()
+        return response.json().get("organic") or []
+
+    def _candidates(
+        self, query: PartSearchQuery, batches: Iterable[list[dict]]
+    ) -> list[tuple[dict, str, float]]:
+        own_domain = _serp_domain(query.source_url)
+        seen: set[str] = set()
+        picked: list[tuple[dict, str, float]] = []
+        for item in (entry for batch in batches for entry in batch):
+            url = item.get("link") or ""
+            domain = _serp_domain(url)
+            if not domain or url in seen:
+                continue
+            if domain == own_domain or _covered_elsewhere(domain):
+                continue
+            seen.add(url)
+            score = _match_score(
+                query,
+                item.get("title"),
+                item.get("snippet"),
+                name=item.get("title"),
+            )
+            if score:
+                picked.append((item, domain, score))
+        return picked
+
+    async def _priced_offers(
+        self,
+        client: httpx.AsyncClient,
+        candidates: list[tuple[dict, str, float]],
+    ) -> list[MarketOffer]:
+        offers: list[MarketOffer] = []
+        pending: list[tuple[dict, str, float]] = []
+        for item, domain, score in candidates:
+            snippet = f"{item.get('title') or ''} {item.get('snippet') or ''}"
+            price = _price_from_text(snippet)
+            if price is not None:
+                offers.append(self._offer(item, domain, score, price, "UAH"))
+            else:
+                pending.append((item, domain, score))
+
+        priced_pages = await asyncio.gather(
+            *(
+                self._page_price(client, item.get("link") or "")
+                for item, _, _ in pending[:_SERP_MAX_PAGE_FETCHES]
+            )
+        )
+        for (item, domain, score), priced in zip(pending, priced_pages):
+            if priced is not None:
+                offers.append(self._offer(item, domain, score, *priced))
+        return offers
+
+    async def _page_price(
+        self, client: httpx.AsyncClient, url: str
+    ) -> tuple[Decimal, str] | None:
+        """Чужий сайт, що не відповів — просто без ціни, а не без джерела."""
+        try:
+            response = await client.get(url)
+            if response.status_code != 200:
+                return None
+            return _structured_price(response.text)
+        except Exception as exc:
+            log.info("Google: сторінка %r без ціни: %s", url, exc)
+            return None
+
+    def _offer(
+        self, item: dict, domain: str, score: float, price: Decimal, currency: str
+    ) -> MarketOffer:
+        return MarketOffer(
+            source=self.source,
+            title=item.get("title") or item.get("link") or "",
+            price=price,
+            currency=_norm_currency(currency),
+            url=item.get("link") or "",
+            seller=domain,
+            confidence=score,
+            is_analog=score < _OEM_HIT_SCORE,
+        )
+
+
+_TEXT_PRICE_RE = re.compile(
+    r"(\d[\d\s ]{0,9}(?:[.,]\d{1,2})?)\s*(?:грн|₴|uah)", re.I
+)
+_LD_JSON_RE = re.compile(
+    r"<script[^>]*application/ld\+json[^>]*>(.*?)</script>", re.I | re.S
+)
+
+
+def _price_from_text(text: str) -> Decimal | None:
+    match = _TEXT_PRICE_RE.search(text)
+    return parse_price(match.group(1)) if match else None
+
+
+def _structured_price(html: str) -> tuple[Decimal, str] | None:
+    """Ціна з розмітки сторінки: JSON-LD, потім microdata, потім OpenGraph."""
+    for block in _LD_JSON_RE.findall(html):
+        try:
+            found = _ld_price(json.loads(block.strip()))
+        except ValueError:
+            continue
+        if found:
+            return found
+    flat = re.sub(r"\s+", " ", html)
+    for pattern in (
+        r'<[^>]*itemprop="price"[^>]*>',
+        r"<meta[^>]*og:price:amount[^>]*>",
+    ):
+        for match in re.finditer(pattern, flat, re.I):
+            tag = match.group(0)
+            content = re.search(r'content="([^"]*)"', tag)
+            raw = (
+                content.group(1)
+                if content
+                else flat[match.end() : match.end() + 40].split("<", 1)[0]
+            )
+            price = parse_price(raw)
+            if price is not None:
+                # Валюти в microdata поруч може й не бути; ринок — гривневий.
+                return price, "UAH"
+    return None
+
+
+def _ld_price(node: Any) -> tuple[Decimal, str] | None:
+    if isinstance(node, list):
+        return next(filter(None, map(_ld_price, node)), None)
+    if not isinstance(node, dict):
+        return None
+    if node.get("@type") in ("Offer", "AggregateOffer"):
+        price = parse_price(node.get("price") or node.get("lowPrice"))
+        if price is not None:
+            return price, _norm_currency(str(node.get("priceCurrency") or ""))
+    return next(
+        filter(
+            None,
+            (
+                _ld_price(value)
+                for value in node.values()
+                if isinstance(value, (dict, list))
+            ),
+        ),
+        None,
+    )
+
+
+def _norm_currency(value: str | None) -> str:
+    text = (value or "").strip().upper()
+    return "UAH" if text in ("", "ГРН", "ГРН.", "₴") else text
+
+
+def _serp_domain(url: str | None) -> str:
+    return (urlsplit(url or "").hostname or "").lower().removeprefix("www.")
+
+
+def _covered_elsewhere(domain: str) -> bool:
+    return any(
+        domain == covered or domain.endswith("." + covered)
+        for covered in _SERP_COVERED_DOMAINS
+    )
 
 
 def _source_config() -> ScrapeConfig:

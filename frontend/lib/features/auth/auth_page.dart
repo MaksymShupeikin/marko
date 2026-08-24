@@ -1,5 +1,6 @@
-import 'dart:math' as math;
+import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:heroicons/heroicons.dart';
@@ -8,6 +9,8 @@ import '../../core/app_theme.dart';
 import '../../core/environment.dart';
 import '../../core/marko_ui.dart';
 import '../../core/widgets/marko_button.dart';
+import '../products/products_models.dart';
+import '../products/widgets/product_details_panel.dart';
 import 'auth_controller.dart';
 import 'auth_models.dart';
 import 'widgets/google_auth_button.dart';
@@ -24,6 +27,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
   final _passwordController = TextEditingController();
   bool _register = false;
   bool _obscurePassword = true;
+  bool _rememberMe = true;
 
   @override
   void dispose() {
@@ -48,9 +52,12 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             if (!wide) {
               return _MobileAuthLayout(form: _buildForm(context, auth, busy));
             }
+            // RTL child order paints the form side first and the story last,
+            // so the app-window preview overhanging the panel edge draws on
+            // top of the form column's background pattern instead of under it.
             return Row(
+              textDirection: TextDirection.rtl,
               children: [
-                const Expanded(flex: 9, child: _AuthStory()),
                 Expanded(
                   flex: 11,
                   child: Stack(
@@ -81,6 +88,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                     ],
                   ),
                 ),
+                const Expanded(flex: 9, child: _AuthStory()),
               ],
             );
           },
@@ -168,6 +176,79 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                 ),
               ),
             ),
+            if (!_register) ...[
+              const SizedBox(height: MarkoSpace.xs),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(MarkoRadius.xs),
+                      onTap: busy
+                          ? null
+                          : () => setState(() => _rememberMe = !_rememberMe),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: Checkbox(
+                                value: _rememberMe,
+                                onChanged: busy
+                                    ? null
+                                    : (v) => setState(
+                                        () => _rememberMe = v ?? false,
+                                      ),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                "Запам'ятати мене",
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: colors.muted,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: MarkoSpace.xs),
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => ref
+                              .read(authControllerProvider.notifier)
+                              .resetPassword(_emailController.text),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 4,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: const Text('Забули пароль?'),
+                  ),
+                ],
+              ),
+            ],
             if (auth?.error != null) ...[
               const SizedBox(height: MarkoSpace.md),
               MarkoInlineMessage(
@@ -259,54 +340,6 @@ class _MobileAuthLayout extends StatelessWidget {
   }
 }
 
-class _StoryPill extends StatelessWidget {
-  const _StoryPill({required this.label, this.icon, this.logo});
-
-  /// Або гліф, або готовий логотип джерела — Prom впізнають саме по ньому.
-  final HeroIcons? icon;
-  final String? logo;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MarkoSpace.md,
-        vertical: MarkoSpace.sm,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (logo != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(MarkoRadius.xs),
-              child: Image.asset(logo!, width: 15, height: 15),
-            )
-          else
-            HeroIcon(
-              icon!,
-              size: 15,
-              color: Colors.white.withValues(alpha: 0.85),
-            ),
-          const SizedBox(width: MarkoSpace.sm),
-          Text(
-            label,
-            style: MarkoType.caption.copyWith(
-              color: Colors.white.withValues(alpha: 0.85),
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _AuthStory extends StatelessWidget {
   const _AuthStory();
 
@@ -329,15 +362,18 @@ class _AuthStory extends StatelessWidget {
           ),
         ],
       ),
-      clipBehavior: Clip.antiAlias,
+      // No clip: the app-window preview deliberately sticks out of the panel
+      // towards the auth card. The painter clips itself to the rounded rect.
       child: Stack(
         children: [
-          // Monochrome geometric background lines & rings
           Positioned.fill(
             child: IgnorePointer(
-              child: CustomPaint(
-                painter: _MonochromeGeometryPainter(
-                  lineColor: Colors.white.withValues(alpha: 0.035),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(MarkoRadius.xl),
+                child: CustomPaint(
+                  painter: _MonochromeGeometryPainter(
+                    lineColor: Colors.white.withValues(alpha: 0.035),
+                  ),
                 ),
               ),
             ),
@@ -351,18 +387,9 @@ class _AuthStory extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const MarkoWordmark(inverse: true),
-                    SizedBox(height: compact ? MarkoSpace.md : MarkoSpace.lg),
-                    const Expanded(
-                      child: Center(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: _AuthProductPreview(),
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: compact ? MarkoSpace.sm : MarkoSpace.md),
+                    SizedBox(height: compact ? MarkoSpace.lg : MarkoSpace.xxl),
                     Text(
-                      'Ціни під\nконтролем.',
+                      'Ціни під контролем',
                       style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         color: Colors.white,
                         fontSize: compact ? 28 : 36,
@@ -374,29 +401,22 @@ class _AuthStory extends StatelessWidget {
                     const SizedBox(height: MarkoSpace.xs),
                     Text(
                       'Стежте за конкурентами, знаходьте розбіжності та ухвалюйте '
-                      'рішення на основі актуальних даних.',
+                      'рішення на основі актуальних даних',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: Colors.white.withValues(alpha: 0.72),
                       ),
                     ),
                     SizedBox(height: compact ? MarkoSpace.md : MarkoSpace.lg),
-                    Wrap(
-                      spacing: MarkoSpace.sm,
-                      runSpacing: MarkoSpace.sm,
-                      children: [
-                        const _StoryPill(
-                          logo: 'assets/logos/prom.png',
-                          label: 'Імпорт каталогу Prom.ua',
+                    // Overhangs the panel edge to the right, towards the
+                    // auth card.
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.bottomRight,
+                        child: Transform.translate(
+                          offset: const Offset(60, 0),
+                          child: const _AuthProductPreview(),
                         ),
-                        const _StoryPill(
-                          icon: HeroIcons.bolt,
-                          label: 'Ціни конкурентів за OEM',
-                        ),
-                        const _StoryPill(
-                          icon: HeroIcons.presentationChartLine,
-                          label: 'Спред ринку: мін · медіана · макс',
-                        ),
-                      ],
+                      ),
                     ),
                   ],
                 );
@@ -417,12 +437,117 @@ class _AuthProductPreview extends StatefulWidget {
 }
 
 class _AuthProductPreviewState extends State<_AuthProductPreview>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _animController;
+  late final AnimationController _autoScroll;
+  final _scroll = ScrollController();
+  Timer? _resumeTimer;
   Offset _hoverOffset = Offset.zero;
   bool _isHovered = false;
 
-  static const _searchQuery = '06A 115 561 B';
+  static const _searchQuery = 'markoprice.com';
+
+  /// Canned catalog product + market report: the preview renders the exact
+  /// product details sheet the app shows, scrollable, with results in place.
+  /// Photo: Wikimedia Commons "Bosch Oil Filter.JPG", CC BY-SA 4.0.
+  static const _demoProduct = StoreProduct(
+    id: 'demo',
+    name: 'Фільтр масляний Bosch P 2023 (оригінал)',
+    url: '',
+    sku: '0986452023',
+    brand: 'BOSCH',
+    price: 265,
+    currency: 'UAH',
+    isAvailable: true,
+    imageUrl: 'assets/demo/oil_filter.jpg',
+    storeName: 'Мій магазин на Prom',
+    oemNumbers: ['P 2023', '06A 115 561 B', 'W 719/30'],
+  );
+
+  static const _demoReport = CompetitorPriceReport(
+    cached: true,
+    observedAt: null,
+    stats: CompetitorPriceStats(
+      offersTotal: 28,
+      sourcesTotal: 1,
+      minPrice: 210,
+      medianPrice: 285,
+      maxPrice: 390,
+    ),
+    sources: [
+      SourcePriceResult(
+        source: 'avtopro',
+        label: 'Avto.pro',
+        status: 'completed',
+        offersTotal: 28,
+        minPrice: 210,
+        medianPrice: 285,
+        maxPrice: 390,
+        offers: [
+          MarketPriceOffer(
+            source: 'avtopro',
+            title: 'Фільтр масляний VAG 06A 115 561 B',
+            price: 210,
+            currency: 'UAH',
+            url: '',
+            seller: 'AvtoParts',
+            city: 'Київ',
+            condition: 'new',
+          ),
+          MarketPriceOffer(
+            source: 'avtopro',
+            title: 'Фільтр оливний 06A115561B для Golf IV',
+            price: 235,
+            currency: 'UAH',
+            url: '',
+            seller: 'VAG Detali',
+            city: 'Одеса',
+            condition: 'new',
+          ),
+          MarketPriceOffer(
+            source: 'avtopro',
+            title: 'MANN-FILTER W 719/30 фільтр оливний',
+            price: 265,
+            currency: 'UAH',
+            url: '',
+            seller: 'FilterMaster',
+            city: 'Львів',
+            isAnalog: true,
+          ),
+          MarketPriceOffer(
+            source: 'avtopro',
+            title: 'Фільтр масляний 06A115561B VAG (оригінал)',
+            price: 285,
+            currency: 'UAH',
+            url: '',
+            seller: 'InterTrade',
+            city: 'Дніпро',
+            condition: 'new',
+          ),
+          MarketPriceOffer(
+            source: 'avtopro',
+            title: 'KNECHT OC 264 масляний фільтр',
+            price: 340,
+            currency: 'UAH',
+            url: '',
+            seller: 'AutoLider',
+            city: 'Харків',
+            isAnalog: true,
+          ),
+          MarketPriceOffer(
+            source: 'avtopro',
+            title: 'Оригінальний фільтр VAG 06A 115 561 B',
+            price: 390,
+            currency: 'UAH',
+            url: '',
+            seller: 'PremiumParts',
+            city: 'Київ',
+            condition: 'new',
+          ),
+        ],
+      ),
+    ],
+  );
 
   @override
   void initState() {
@@ -431,12 +556,43 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
       vsync: this,
       duration: const Duration(seconds: 8),
     )..repeat();
+    // Slow ping-pong through the sheet; pauses while the user scrolls.
+    _autoScroll = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 22),
+    )..addListener(_tickAutoScroll);
+    _autoScroll.repeat(reverse: true);
   }
 
   @override
   void dispose() {
+    _resumeTimer?.cancel();
     _animController.dispose();
+    _autoScroll.dispose();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  void _tickAutoScroll() {
+    if (!_scroll.hasClients) return;
+    final max = _scroll.position.maxScrollExtent;
+    if (max <= 0) return;
+    _scroll.jumpTo(max * _autoScroll.value);
+  }
+
+  /// Any pointer activity hands the scroll to the user; the auto-scroll
+  /// resumes from wherever they left it after a short idle pause.
+  void _pauseAutoScroll() {
+    _autoScroll.stop();
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      if (_scroll.hasClients && _scroll.position.maxScrollExtent > 0) {
+        _autoScroll.value = (_scroll.offset / _scroll.position.maxScrollExtent)
+            .clamp(0.0, 1.0);
+      }
+      _autoScroll.repeat(reverse: true);
+    });
   }
 
   @override
@@ -472,46 +628,48 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
           // 1. Typing animation (0.0 .. 0.35 typing, 0.35 .. 0.85 visible, 0.85 .. 1.0 pause/reset)
           String displayedText;
           if (t < 0.35) {
-            final charCount =
-                ((t / 0.35) * _searchQuery.length).floor().clamp(0, _searchQuery.length);
+            final charCount = ((t / 0.35) * _searchQuery.length).floor().clamp(
+              0,
+              _searchQuery.length,
+            );
             displayedText = _searchQuery.substring(0, charCount);
           } else if (t < 0.85) {
             displayedText = _searchQuery;
           } else {
-            final charCount =
-                (((1.0 - t) / 0.15) * _searchQuery.length).floor().clamp(0, _searchQuery.length);
+            final charCount = (((1.0 - t) / 0.15) * _searchQuery.length)
+                .floor()
+                .clamp(0, _searchQuery.length);
             displayedText = _searchQuery.substring(0, charCount);
           }
 
           final showCursor = (t * 16).floor() % 2 == 0;
 
-          // 2. Smooth oscillating user price pin (min 220, max 340)
-          // Sine wave oscillation for smooth natural price exploration
-          final double dynamicPriceFraction = (0.35 + 0.30 * (0.5 + 0.5 * math.sin(t * 2 * math.pi))).clamp(0.15, 0.85);
-          final dynamicUserPrice = (210 + dynamicPriceFraction * (390 - 210)).round();
-          final diffPct = (((dynamicUserPrice - 285) / 285) * 100).round();
-
-          // 3. 3D Matrix tilt with smooth mouse hover tracking
-          final targetRotX = 0.035 - (_hoverOffset.dy * 0.04);
-          final targetRotY = -0.045 + (_hoverOffset.dx * 0.05);
+          // 2. 3D tilt only follows the mouse; at rest the window sits flat.
+          final targetRotX = -(_hoverOffset.dy * 0.04);
+          final targetRotY = _hoverOffset.dx * 0.05;
 
           return Transform(
             transform: Matrix4.identity()
               ..setEntry(3, 2, 0.0006)
               ..rotateX(targetRotX)
-              ..rotateY(targetRotY)
-              ..rotateZ(-0.012),
+              ..rotateY(targetRotY),
             alignment: Alignment.center,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
+              // The real app's details sheet is 480 wide — same proportions
+              // here keep the demo honest and the composition balanced.
+              constraints: const BoxConstraints(maxWidth: 500, maxHeight: 660),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF191A22) : const Color(0xFF111319),
+                  color: isDark
+                      ? const Color(0xFF191A22)
+                      : const Color(0xFF111319),
                   borderRadius: BorderRadius.circular(MarkoRadius.xl),
                   border: Border.all(color: border, width: 1.2),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: _isHovered ? 0.75 : 0.60),
+                      color: Colors.black.withValues(
+                        alpha: _isHovered ? 0.75 : 0.60,
+                      ),
                       blurRadius: _isHovered ? 48 : 36,
                       spreadRadius: -4,
                       offset: const Offset(0, 20),
@@ -523,481 +681,173 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
                     ),
                   ],
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // macOS-style App Window Header
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      decoration: const BoxDecoration(
-                        border: Border(bottom: BorderSide(color: Color(0x1AFFFFFF))),
-                      ),
-                      child: Row(
-                        children: [
-                          const _WindowDot(color: Color(0x55FF5F56)),
-                          const SizedBox(width: 6),
-                          const _WindowDot(color: Color(0x55FFBD2E)),
-                          const SizedBox(width: 6),
-                          const _WindowDot(color: Color(0x5527C93F)),
-                          const SizedBox(width: 14),
-                          // Simulated Search Bar in header
-                          Expanded(
-                            child: Container(
-                              height: 26,
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.40),
-                                borderRadius: BorderRadius.circular(MarkoRadius.sm),
-                                border: Border.all(color: const Color(0x22FFFFFF)),
-                              ),
-                              child: Row(
-                                children: [
-                                  HeroIcon(
-                                    HeroIcons.magnifyingGlass,
-                                    size: 13,
-                                    color: Colors.white.withValues(alpha: 0.5),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: RichText(
-                                      overflow: TextOverflow.ellipsis,
-                                      text: TextSpan(
-                                        text: displayedText,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w500,
-                                          fontFamily: 'monospace',
-                                        ),
-                                        children: [
-                                          if (showCursor)
-                                            const TextSpan(
-                                              text: '|',
-                                              style: TextStyle(
-                                                color: Color(0xFF60A5FA),
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(MarkoRadius.xl),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // macOS-style App Window Header
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: const BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(color: Color(0x1AFFFFFF)),
                           ),
-                        ],
-                      ),
-                    ),
-
-                    // Inner Live UI Demonstration
-                    Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // 1. Live Product Header
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Container(
-                                width: 34,
-                                height: 34,
+                        ),
+                        child: Row(
+                          children: [
+                            const _WindowDot(color: Color(0x55FF5F56)),
+                            const SizedBox(width: 6),
+                            const _WindowDot(color: Color(0x55FFBD2E)),
+                            const SizedBox(width: 6),
+                            const _WindowDot(color: Color(0x5527C93F)),
+                            const SizedBox(width: 12),
+                            // Simulated Search Bar in header
+                            Expanded(
+                              child: Container(
+                                height: 22,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.circular(MarkoRadius.sm),
-                                  border: Border.all(color: const Color(0x24FFFFFF)),
+                                  color: Colors.black.withValues(alpha: 0.40),
+                                  borderRadius: BorderRadius.circular(
+                                    MarkoRadius.sm,
+                                  ),
+                                  border: Border.all(
+                                    color: const Color(0x22FFFFFF),
+                                  ),
                                 ),
-                                alignment: Alignment.center,
-                                child: const HeroIcon(
-                                  HeroIcons.cube,
-                                  size: 18,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                child: Row(
                                   children: [
-                                    const Text(
-                                      'Фільтр масляний VAG',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
+                                    HeroIcon(
+                                      HeroIcons.magnifyingGlass,
+                                      size: 13,
+                                      color: Colors.white.withValues(
+                                        alpha: 0.5,
                                       ),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 5,
-                                            vertical: 1,
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: RichText(
+                                        overflow: TextOverflow.ellipsis,
+                                        text: TextSpan(
+                                          text: displayedText,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w500,
+                                            fontFamily: 'monospace',
                                           ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withValues(alpha: 0.1),
-                                            borderRadius: BorderRadius.circular(3),
-                                          ),
-                                          child: const Text(
-                                            '06A 115 561 B',
-                                            style: TextStyle(
-                                              color: Color(0xFF94A3B8),
-                                              fontSize: 10,
-                                              fontFamily: 'monospace',
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
+                                          children: [
+                                            if (showCursor)
+                                              const TextSpan(
+                                                text: '|',
+                                                style: TextStyle(
+                                                  color: Color(0xFF60A5FA),
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                          ],
                                         ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          '· 28 пропозицій на ринку',
-                                          style: TextStyle(
-                                            color: Colors.white.withValues(alpha: 0.5),
-                                            fontSize: 11,
-                                          ),
-                                        ),
-                                      ],
+                                      ),
                                     ),
                                   ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // The product UI itself: the exact details sheet the app
+                      // renders for a catalog product, auto-scrolling until
+                      // the user takes over, with results already in place.
+                      Expanded(
+                        child: Listener(
+                          behavior: HitTestBehavior.translucent,
+                          onPointerDown: (_) => _pauseAutoScroll(),
+                          onPointerSignal: (event) {
+                            if (event is PointerScrollEvent) _pauseAutoScroll();
+                          },
+                          child: Stack(
+                            children: [
+                              ProductDetailsPreview(
+                                product: _demoProduct,
+                                report: _demoReport,
+                                controller: _scroll,
+                              ),
+                              // Scroll affordance: fades away once past the top.
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 12,
+                                child: Center(
+                                  child: IgnorePointer(
+                                    child: AnimatedBuilder(
+                                      animation: _scroll,
+                                      builder: (context, child) =>
+                                          AnimatedOpacity(
+                                            duration: const Duration(
+                                              milliseconds: 250,
+                                            ),
+                                            opacity:
+                                                !_scroll.hasClients ||
+                                                    _scroll.offset < 60
+                                                ? 1
+                                                : 0,
+                                            child: child,
+                                          ),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 5,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withValues(
+                                            alpha: 0.65,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const HeroIcon(
+                                              HeroIcons.chevronDown,
+                                              size: 13,
+                                              color: Colors.white,
+                                            ),
+                                            const SizedBox(width: 5),
+                                            Text(
+                                              'Гортайте',
+                                              style: MarkoType.caption.copyWith(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
                           ),
-
-                          const SizedBox(height: 12),
-
-                          // 2. Animated Spectrum Gauge Box
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.28),
-                              borderRadius: BorderRadius.circular(MarkoRadius.md),
-                              border: Border.all(color: const Color(0x1FFFFFFF)),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                // Stats 3 cards
-                                const Row(
-                                  children: [
-                                    Expanded(
-                                      child: _DemoStat(
-                                        label: 'Мінімум',
-                                        value: '210 ₴',
-                                        color: Color(0xFF34D399),
-                                      ),
-                                    ),
-                                    SizedBox(width: 6),
-                                    Expanded(
-                                      child: _DemoStat(
-                                        label: 'Медіана',
-                                        value: '285 ₴',
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                    SizedBox(width: 6),
-                                    Expanded(
-                                      child: _DemoStat(
-                                        label: 'Максимум',
-                                        value: '390 ₴',
-                                        color: Color(0xFFF87171),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-
-                                // Animated Spectrum Track with floating user badge
-                                LayoutBuilder(
-                                  builder: (context, gaugeConstraints) {
-                                    final gw = gaugeConstraints.maxWidth;
-                                    final pinPos = (dynamicPriceFraction * (gw - 12))
-                                        .clamp(0.0, gw - 12);
-                                    final pillPos = (pinPos - 38).clamp(0.0, gw - 86);
-
-                                    return Column(
-                                      children: [
-                                        SizedBox(
-                                          height: 20,
-                                          child: Stack(
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              Positioned(
-                                                left: pillPos,
-                                                child: Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                    horizontal: 6,
-                                                    vertical: 2,
-                                                  ),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFF60A5FA),
-                                                    borderRadius: BorderRadius.circular(4),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: const Color(0xFF60A5FA)
-                                                            .withValues(alpha: 0.4),
-                                                        blurRadius: 6,
-                                                        offset: const Offset(0, 2),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  child: Row(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      Container(
-                                                        width: 4,
-                                                        height: 4,
-                                                        decoration: const BoxDecoration(
-                                                          color: Colors.white,
-                                                          shape: BoxShape.circle,
-                                                        ),
-                                                      ),
-                                                      const SizedBox(width: 4),
-                                                      Text(
-                                                        'Ви: $dynamicUserPrice ₴ (${diffPct >= 0 ? '+$diffPct' : diffPct}%)',
-                                                        style: const TextStyle(
-                                                          color: Colors.white,
-                                                          fontSize: 10,
-                                                          fontWeight: FontWeight.w700,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(height: 3),
-                                        SizedBox(
-                                          height: 10,
-                                          child: Stack(
-                                            alignment: Alignment.centerLeft,
-                                            children: [
-                                              Container(
-                                                height: 5,
-                                                decoration: BoxDecoration(
-                                                  borderRadius: BorderRadius.circular(999),
-                                                  gradient: const LinearGradient(
-                                                    colors: [
-                                                      Color(0xFF34D399),
-                                                      Color(0xFF60A5FA),
-                                                      Color(0xFFFBBF24),
-                                                      Color(0xFFF87171),
-                                                    ],
-                                                    stops: [0.0, 0.4, 0.75, 1.0],
-                                                  ),
-                                                ),
-                                              ),
-                                              // Median Line (0.42 fraction)
-                                              Positioned(
-                                                left: (gw - 2) * 0.42,
-                                                child: Container(
-                                                  width: 2,
-                                                  height: 10,
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.white,
-                                                    borderRadius: BorderRadius.circular(1),
-                                                  ),
-                                                ),
-                                              ),
-                                              // Dynamic Pin Dot
-                                              Positioned(
-                                                left: pinPos,
-                                                child: Container(
-                                                  width: 12,
-                                                  height: 12,
-                                                  decoration: BoxDecoration(
-                                                    shape: BoxShape.circle,
-                                                    color: const Color(0xFF60A5FA),
-                                                    border: Border.all(
-                                                      color: Colors.white,
-                                                      width: 2,
-                                                    ),
-                                                    boxShadow: const [
-                                                      BoxShadow(
-                                                        color: Color(0x66000000),
-                                                        blurRadius: 4,
-                                                        offset: Offset(0, 1),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          const SizedBox(height: 10),
-
-                          // 3. Competitor Live Offers List
-                          const _DemoOfferRow(
-                            seller: 'AvtoParts Київ',
-                            city: 'Київ (в наявності)',
-                            price: '235 ₴',
-                            tag: '-17% нижче',
-                            isCheaper: true,
-                          ),
-                          const SizedBox(height: 4),
-                          const _DemoOfferRow(
-                            seller: 'InterTrade Дніпро',
-                            city: 'Дніпро (1 день)',
-                            price: '285 ₴',
-                            tag: 'медіана',
-                            isCheaper: null,
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-class _DemoStat extends StatelessWidget {
-  const _DemoStat({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.5),
-              fontSize: 9.5,
-            ),
-          ),
-          const SizedBox(height: 1),
-          Text(
-            value,
-            style: TextStyle(
-              color: color,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DemoOfferRow extends StatelessWidget {
-  const _DemoOfferRow({
-    required this.seller,
-    required this.city,
-    required this.price,
-    required this.tag,
-    required this.isCheaper,
-  });
-
-  final String seller;
-  final String city;
-  final String price;
-  final String tag;
-  final bool? isCheaper;
-
-  @override
-  Widget build(BuildContext context) {
-    final tagColor = isCheaper == true
-        ? const Color(0xFF34D399)
-        : isCheaper == false
-        ? const Color(0xFFF87171)
-        : const Color(0xFF94A3B8);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0x14FFFFFF)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  seller,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                Text(
-                  city,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.45),
-                    fontSize: 9.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-            decoration: BoxDecoration(
-              color: tagColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(3),
-              border: Border.all(color: tagColor.withValues(alpha: 0.28)),
-            ),
-            child: Text(
-              tag,
-              style: TextStyle(
-                color: tagColor,
-                fontSize: 9,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            price,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1011,12 +861,9 @@ class _WindowDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 9,
-      height: 9,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -243,6 +244,100 @@ async def test_avtopro_keeps_analogues_out_of_the_stats(monkeypatch):
     assert result.min_price == Decimal("300.00")
 
 
+async def test_google_source_prices_from_snippet_and_page(monkeypatch):
+    """Ціна зі сніпета — без GET; без ціни в сніпеті — JSON-LD зі сторінки."""
+    serp = {
+        "organic": [
+            {
+                "title": "Фільтр масляний Bosch 0451103316",
+                "link": "https://to24.com.ua/buy/bosch-0451103316",
+                "snippet": "Купити за 204 грн. Доставка по Україні.",
+            },
+            {
+                "title": "Фільтр масляний 0 451 103 316 Bosch",
+                "link": "https://partsplus.com.ua/detail/0451103316/bosch/",
+                "snippet": "Оригінальні запчастини у наявності.",
+            },
+            {   # prom.ua вже покрито власним джерелом
+                "title": "Фільтр масляний Bosch 0451103316",
+                "link": "https://prom.ua/p123-filtr.html",
+                "snippet": "Ціна 150 грн",
+            },
+            {   # зовсім не наша деталь
+                "title": "Куртка зимова чоловіча",
+                "link": "https://shop.example/kurtka",
+                "snippet": "1200 грн",
+            },
+        ]
+    }
+    page_html = (
+        '<script type="application/ld+json">'
+        '{"@type": "Product", "offers": {"@type": "Offer", "price": "193",'
+        ' "priceCurrency": "UAH"}}'
+        "</script>"
+    )
+    fetched_pages: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, payload=None, text=""):
+            self.status_code = 200
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            pass
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+        async def post(self, _url, json=None, headers=None):
+            return FakeResponse(payload=serp)
+
+        async def get(self, url):
+            fetched_pages.append(url)
+            return FakeResponse(text=page_html)
+
+    monkeypatch.setattr(
+        competitor_prices_module, "httpx", SimpleNamespace(AsyncClient=FakeAsyncClient)
+    )
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(serper_api_key="test-key"),
+    )
+
+    result = await competitor_prices_module.GooglePriceSource().search(part_query())
+
+    assert result.status == "ok"
+    assert {(offer.seller, str(offer.price)) for offer in result.offers} == {
+        ("to24.com.ua", "204.00"),
+        ("partsplus.com.ua", "193.00"),
+    }
+    # Сторінку качали лише для кандидата без ціни у сніпеті.
+    assert fetched_pages == ["https://partsplus.com.ua/detail/0451103316/bosch/"]
+
+
+async def test_google_source_is_skipped_without_api_key(monkeypatch):
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(serper_api_key=""),
+    )
+    result = await competitor_prices_module.GooglePriceSource().search(part_query())
+    assert result.status == "skipped"
+    assert result.offers == ()
+
+
 def test_minority_currency_offers_are_dropped():
     uah = [
         MarketOffer("prom", "A", Decimal("200"), "UAH", "https://prom.ua/a"),
@@ -473,6 +568,37 @@ async def test_price_service_caches_each_product_and_refreshes(monkeypatch):
     assert collect_calls == ["p1", "p2", "p1"]
     assert len(redis.values) == 2
 
+
+async def test_queued_identical_report_reuses_fresh_cache(monkeypatch):
+    """Другий такий самий запит, що чекав на слот, бере готовий звіт із кешу."""
+    redis = FakeRedis()
+    cache = CompetitorPriceCache("redis://unused/2", client=redis)
+    collect_calls: list[str] = []
+
+    async def slow_collect(query, _on_event=None):
+        collect_calls.append(query.listing_id)
+        await asyncio.sleep(0.01)
+        return CompetitorPriceReport(
+            query=query,
+            sources=(SourceResult("prom", "Prom.ua", "empty"),),
+            observed_at=datetime.fromtimestamp(1, UTC),
+        )
+
+    monkeypatch.setattr(competitor_prices_module, "_cache", cache)
+    monkeypatch.setattr(competitor_prices_module, "_collect", slow_collect)
+    monkeypatch.setattr(
+        competitor_prices_module, "_collect_slots", asyncio.Semaphore(1)
+    )
+
+    query = part_query("p1")
+    first, second = await asyncio.gather(
+        competitor_prices_module.competitor_prices_for_query(query),
+        competitor_prices_module.competitor_prices_for_query(query),
+    )
+
+    assert collect_calls == ["p1"]
+    assert {first["cached"], second["cached"]} == {False, True}
+
 async def test_llm_filter_drops_foreign_offers_and_regrades_the_rest(monkeypatch):
     """Вердикт моделі вирішує долю пропозиції; джерело без збігів стає порожнім."""
     def offer(title: str, price: str) -> MarketOffer:
@@ -523,28 +649,46 @@ async def test_llm_filter_keeps_everything_when_the_model_is_off(monkeypatch):
     ) == sources
 
 
-def test_model_name_picks_the_provider(monkeypatch):
-    """Назва моделі — єдиний перемикач: свій ключ вмикає свого провайдера."""
+async def test_classify_treats_missing_verdicts_as_no(monkeypatch):
+    """Кандидат без вердикту раніше проходив у видачу без перевірки."""
+    from marko.services import llm_filter
+
+    monkeypatch.setattr(llm_filter, "is_enabled", lambda: True)
+
+    async def fake_ask(_prompt: str) -> str:
+        return '{"verdicts": [{"index": 0, "verdict": "same"}]}'
+
+    monkeypatch.setattr(llm_filter, "_ask_openai", fake_ask)
+    verdicts = await llm_filter.classify(
+        name="Фільтр", brand=None, oem_numbers=(), titles=["Фільтр", "Тапочки", "Сумка"]
+    )
+    assert verdicts == {0: "same", 1: "no", 2: "no"}
+
+    async def empty_ask(_prompt: str) -> str:
+        return '{"verdicts": []}'
+
+    monkeypatch.setattr(llm_filter, "_ask_openai", empty_ask)
+    # Жодного вердикту — це збій моделі, а не «все чуже»: фільтр вимикається.
+    assert await llm_filter.classify(
+        name="Фільтр", brand=None, oem_numbers=(), titles=["Фільтр"]
+    ) == {}
+
+
+def test_openai_api_key_enables_llm_filter(monkeypatch):
+    """Наявність openai_api_key вмикає LLM-фільтр."""
     from marko.core.config import get_settings
     from marko.services import llm_filter
 
-    def settings(model: str, **keys):
+    def settings(model: str = "gpt-5-nano", key: str = ""):
         get_settings.cache_clear()
-        for name, value in {"anthropic_api_key": "", "openai_api_key": "", **keys}.items():
-            monkeypatch.setenv(name.upper(), value)
+        monkeypatch.setenv("OPENAI_API_KEY", key)
         monkeypatch.setenv("COMPETITOR_FILTER_MODEL", model)
         return get_settings()
 
-    settings("claude-haiku-4-5", anthropic_api_key="k")
-    assert llm_filter.is_enabled() and llm_filter._is_claude()
+    settings(key="sk-test")
+    assert llm_filter.is_enabled()
 
-    settings("claude-haiku-4-5", openai_api_key="k")
-    assert not llm_filter.is_enabled()  # ключ не від того провайдера
-
-    settings("deepseek-v4-flash", openai_api_key="k")
-    assert llm_filter.is_enabled() and not llm_filter._is_claude()
-
-    settings("gpt-5-nano")
+    settings(key="")
     assert not llm_filter.is_enabled()
     get_settings.cache_clear()
 

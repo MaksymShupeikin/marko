@@ -30,6 +30,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -94,6 +96,8 @@ flutter:
   # Monochrome source glyphs, tinted at runtime with the integration accent.
   assets:
     - assets/logos/
+    # Demo photo on the auth page: Wikimedia Commons "Bosch Oil Filter.JPG", CC BY-SA 4.0.
+    - assets/demo/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

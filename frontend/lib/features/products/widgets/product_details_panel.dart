@@ -185,6 +185,92 @@ class ProductDetailsPanel extends ConsumerWidget {
   }
 }
 
+/// The same details sheet, but built from data already in hand — no
+/// providers, no backend. The auth page renders it inside the demo window so
+/// the marketing preview is the real product UI, not a mock.
+class ProductDetailsPreview extends StatelessWidget {
+  const ProductDetailsPreview({
+    required this.product,
+    required this.report,
+    this.controller,
+    super.key,
+  });
+
+  final StoreProduct product;
+  final CompetitorPriceReport report;
+
+  /// Lets the host drive the scroll (auth page auto-scrolls the demo).
+  final ScrollController? controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return ColoredBox(
+      color: colors.canvas,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _Header(
+            product: product,
+            onClose: () {},
+            isMobile: false,
+            dense: true,
+          ),
+          Expanded(
+            child: Scrollbar(
+              controller: controller,
+              thumbVisibility: true,
+              child: ListView(
+                controller: controller,
+                padding: const EdgeInsets.fromLTRB(
+                  MarkoSpace.xl,
+                  MarkoSpace.lg,
+                  MarkoSpace.xl,
+                  MarkoSpace.xxl,
+                ),
+                children: [
+                  _Preview(product: product),
+                  const SizedBox(height: MarkoSpace.lg),
+                  _Facts(product: product),
+                  if (product.oemNumbers.length > 1) ...[
+                    const SizedBox(height: MarkoSpace.lg),
+                    _OemNumbers(numbers: product.oemNumbers),
+                  ],
+                  const SizedBox(height: MarkoSpace.lg),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: colors.surface,
+                      borderRadius: BorderRadius.circular(colors.panelRadius),
+                      border: Border.all(color: colors.border),
+                      boxShadow: MarkoShadow.card,
+                    ),
+                    padding: const EdgeInsets.all(MarkoSpace.lg),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Ціни конкурентів',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: MarkoSpace.md),
+                        _CompetitorPricesReport(
+                          report: report,
+                          product: product,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Header extends StatelessWidget {
   const _Header({
     required this.product,
@@ -192,6 +278,7 @@ class _Header extends StatelessWidget {
     required this.isMobile,
     this.onRefresh,
     this.onDelete,
+    this.dense = false,
   });
 
   final StoreProduct product;
@@ -199,6 +286,9 @@ class _Header extends StatelessWidget {
   final bool isMobile;
   final Future<void> Function()? onRefresh;
   final VoidCallback? onDelete;
+
+  /// Tighter paddings and type for the auth-page demo window.
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
@@ -316,9 +406,8 @@ class _Header extends StatelessWidget {
                             'Ціна не вказана',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(
-                              context,
-                            ).textTheme.bodySmall?.copyWith(color: colors.faint),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colors.faint),
                           ),
                         ),
                       const SizedBox(width: MarkoSpace.xs),
@@ -349,12 +438,21 @@ class _Header extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(
-        MarkoSpace.xl,
-        MarkoSpace.lg,
-        MarkoSpace.lg,
-        MarkoSpace.lg,
-      ),
+      // Dense keeps the content's horizontal rhythm: left edge matches the
+      // list padding (xl), right leaves room for the compact close button.
+      padding: dense
+          ? const EdgeInsets.fromLTRB(
+              MarkoSpace.xl,
+              MarkoSpace.sm,
+              MarkoSpace.md,
+              MarkoSpace.sm,
+            )
+          : const EdgeInsets.fromLTRB(
+              MarkoSpace.xl,
+              MarkoSpace.lg,
+              MarkoSpace.lg,
+              MarkoSpace.lg,
+            ),
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(bottom: BorderSide(color: colors.border)),
@@ -369,12 +467,12 @@ class _Header extends StatelessWidget {
               Expanded(
                 child: Text(
                   product.name,
-                  maxLines: 2,
+                  maxLines: dense ? 1 : 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w400,
                     height: 1.3,
-                    fontSize: 18,
+                    fontSize: dense ? 15 : 18,
                   ),
                 ),
               ),
@@ -408,13 +506,14 @@ class _Header extends StatelessWidget {
                   IconButton(
                     tooltip: 'Закрити',
                     onPressed: onClose,
-                    icon: const HeroIcon(HeroIcons.xMark, size: 20),
+                    visualDensity: dense ? VisualDensity.compact : null,
+                    icon: HeroIcon(HeroIcons.xMark, size: dense ? 17 : 20),
                   ),
                 ],
               ),
             ],
           ),
-          const SizedBox(height: MarkoSpace.md),
+          SizedBox(height: dense ? MarkoSpace.xs : MarkoSpace.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -433,7 +532,7 @@ class _Header extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: MarkoType.price.copyWith(
                             color: colors.ink,
-                            fontSize: 22,
+                            fontSize: dense ? 17 : 22,
                             height: 1,
                             letterSpacing: -0.4,
                           ),
@@ -445,7 +544,7 @@ class _Header extends StatelessWidget {
                         style: MarkoType.caption.copyWith(
                           color: colors.faint,
                           fontWeight: FontWeight.w600,
-                          fontSize: 13,
+                          fontSize: dense ? 12 : 13,
                         ),
                       ),
                     ],
@@ -475,7 +574,7 @@ class _Header extends StatelessWidget {
                         ? colors.negative
                         : colors.faint,
                     fontWeight: FontWeight.w500,
-                    fontSize: 13,
+                    fontSize: dense ? 12 : 13,
                   ),
                 ),
               ),
@@ -566,19 +665,16 @@ class _Facts extends StatelessWidget {
         children: [
           Text(
             'Інформація про товар',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: MarkoSpace.md),
           _Fact(label: 'Артикул', value: product.sku, mono: true),
           _Fact(label: 'Бренд', value: product.brand),
           _Fact(label: 'OEM для пошуку', value: product.primaryOem, mono: true),
           _Fact(label: 'Магазин', value: product.storeName),
-          _Fact(
-            label: 'Синхронізовано',
-            value: updated,
-          ),
+          _Fact(label: 'Синхронізовано', value: updated),
         ],
       ),
     );
@@ -642,9 +738,9 @@ class _OemNumbers extends StatelessWidget {
         children: [
           Text(
             'Усі номери запчастини',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: MarkoSpace.md),
           Wrap(
@@ -715,10 +811,8 @@ class _CompetitorPrices extends ConsumerWidget {
                 child: const Text('Повторити'),
               ),
             ),
-            data: (report) => _CompetitorPricesReport(
-              report: report,
-              product: product,
-            ),
+            data: (report) =>
+                _CompetitorPricesReport(report: report, product: product),
           ),
         ],
       ),
@@ -776,7 +870,8 @@ class _CompetitorPricesLoadingState
                 borderRadius: BorderRadius.circular(MarkoRadius.md),
                 border: Border.all(
                   color: colors.brand.withValues(
-                    alpha: 0.15 +
+                    alpha:
+                        0.15 +
                         0.25 *
                             (0.5 + 0.5 * math.sin(shimmerValue * 2 * math.pi)),
                   ),
@@ -831,11 +926,7 @@ class _CompetitorPricesLoadingState
     double? radius,
   }) {
     final baseColor = colors.surfaceMuted;
-    final highlightColor = Color.lerp(
-      baseColor,
-      colors.border,
-      0.6,
-    )!;
+    final highlightColor = Color.lerp(baseColor, colors.border, 0.6)!;
 
     return Container(
       height: height,
@@ -853,10 +944,7 @@ class _CompetitorPricesLoadingState
 }
 
 class _CompetitorPricesReport extends StatefulWidget {
-  const _CompetitorPricesReport({
-    required this.report,
-    required this.product,
-  });
+  const _CompetitorPricesReport({required this.report, required this.product});
 
   final CompetitorPriceReport report;
   final StoreProduct product;
@@ -912,9 +1000,9 @@ class _CompetitorPricesReportState extends State<_CompetitorPricesReport> {
           const SizedBox(height: MarkoSpace.xxl),
           Text(
             'Пропозиції на ринку',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: MarkoSpace.md),
           for (final offer in visibleOffers) ...[
@@ -1138,8 +1226,10 @@ class _MarketSpectrumGauge extends StatelessWidget {
               final userLeft = userFraction == null
                   ? 0.0
                   : (userFraction * (w - 14)).clamp(0.0, w - 14);
-              final userPillLeft =
-                  (userLeft - pinWidth / 2 + 7).clamp(0.0, w - pinWidth);
+              final userPillLeft = (userLeft - pinWidth / 2 + 7).clamp(
+                0.0,
+                w - pinWidth,
+              );
 
               return Column(
                 children: [
@@ -1161,9 +1251,7 @@ class _MarketSpectrumGauge extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(
                                   MarkoRadius.xs,
                                 ),
-                                border: Border.all(
-                                  color: colors.border,
-                                ),
+                                border: Border.all(color: colors.border),
                                 boxShadow: MarkoShadow.card,
                               ),
                               child: Text(
@@ -1468,10 +1556,12 @@ class _ModernOfferCard extends StatelessWidget {
           const SizedBox(width: 4),
           IconButton(
             tooltip: 'Відкрити пропозицію',
-            onPressed: () => launchUrl(
-              Uri.parse(offer.url),
-              mode: LaunchMode.externalApplication,
-            ),
+            onPressed: offer.url.isEmpty
+                ? null
+                : () => launchUrl(
+                    Uri.parse(offer.url),
+                    mode: LaunchMode.externalApplication,
+                  ),
             icon: const HeroIcon(HeroIcons.arrowTopRightOnSquare, size: 19),
           ),
         ],

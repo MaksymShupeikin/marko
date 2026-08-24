@@ -159,6 +159,7 @@ void main() {
     expect(find.text('Мінімум'), findsOneWidget);
 
     // History section contains the recent query
-    expect(find.text('Нещодавні пошуки'), findsOneWidget);
+    expect(find.text('Останні пошуки'), findsOneWidget);
   });
 }
+

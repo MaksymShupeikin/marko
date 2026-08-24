@@ -55,6 +55,16 @@ class MarkoCachedImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final url = imageUrl?.trim();
+    if (url != null && url.startsWith('assets/')) {
+      return Image.asset(
+        url,
+        width: double.infinity,
+        height: double.infinity,
+        fit: fit,
+        alignment: alignment,
+        errorBuilder: (_, _, _) => const _ImageFallback(),
+      );
+    }
     if (url == null || !_isHttpUrl(url)) return const _ImageFallback();
 
     return CachedNetworkImage(
