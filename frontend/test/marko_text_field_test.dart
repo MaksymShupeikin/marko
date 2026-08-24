@@ -59,4 +59,35 @@ void main() {
       MarkoLayout.touchFieldHeight,
     );
   });
+
+  testWidgets('a suffix icon button stays transparent on touch layouts', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        builder: AppTheme.touchTargets,
+        home: Scaffold(
+          body: MarkoTextField(
+            controller: TextEditingController(),
+            suffixIcon: IconButton(
+              onPressed: () {},
+              icon: const Icon(Icons.visibility, size: 18),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final material = tester.widget<Material>(
+      find
+          .descendant(of: find.byType(IconButton), matching: find.byType(Material))
+          .first,
+    );
+    expect(material.color?.a, 0);
+  });
 }

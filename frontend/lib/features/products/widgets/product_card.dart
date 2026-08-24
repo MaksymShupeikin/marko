@@ -184,8 +184,7 @@ class _ProductCardState extends State<ProductCard> {
         if (widget.onCheckChanged != null)
           Positioned(
             top: widget.horizontal ? 6 : MarkoSpace.sm,
-            left: widget.horizontal ? 6 : null,
-            right: widget.horizontal ? null : MarkoSpace.sm,
+            left: widget.horizontal ? 6 : MarkoSpace.sm,
             child: AnimatedOpacity(
               duration: const Duration(milliseconds: 160),
               // Ticked marks stay visible: the selection has to be readable

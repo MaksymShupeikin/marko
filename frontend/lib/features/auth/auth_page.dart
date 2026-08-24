@@ -105,8 +105,8 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             const SizedBox(height: MarkoSpace.sm),
             Text(
               _register
-                  ? 'Підключіть магазини, щоб додати товари для відстеження цін.'
-                  : 'Увійдіть, щоб додати товари для відстеження цін.',
+                  ? 'Створіть обліковий запис для моніторингу цін'
+                  : 'Увійдіть для моніторингу цін конкурентів',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: colors.muted),
@@ -134,21 +134,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                 tone: MarkoMessageTone.warning,
               ),
             const SizedBox(height: MarkoSpace.xl),
-            Row(
-              children: [
-                const Expanded(child: Divider()),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: MarkoSpace.md,
-                  ),
-                  child: Text(
-                    'або через пошту',
-                    style: MarkoType.caption.copyWith(color: colors.faint),
-                  ),
-                ),
-                const Expanded(child: Divider()),
-              ],
-            ),
+            const MarkoLabelledDivider(label: 'або через пошту'),
             const SizedBox(height: MarkoSpace.xl),
             MarkoTextField(
               controller: _emailController,
@@ -274,9 +260,11 @@ class _MobileAuthLayout extends StatelessWidget {
 }
 
 class _StoryPill extends StatelessWidget {
-  const _StoryPill({required this.icon, required this.label});
+  const _StoryPill({required this.label, this.icon, this.logo});
 
-  final HeroIcons icon;
+  /// Або гліф, або готовий логотип джерела — Prom впізнають саме по ньому.
+  final HeroIcons? icon;
+  final String? logo;
   final String label;
 
   @override
@@ -294,11 +282,17 @@ class _StoryPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          HeroIcon(
-            icon,
-            size: 15,
-            color: Colors.white.withValues(alpha: 0.85),
-          ),
+          if (logo != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(MarkoRadius.xs),
+              child: Image.asset(logo!, width: 15, height: 15),
+            )
+          else
+            HeroIcon(
+              icon!,
+              size: 15,
+              color: Colors.white.withValues(alpha: 0.85),
+            ),
           const SizedBox(width: MarkoSpace.sm),
           Text(
             label,
@@ -390,18 +384,18 @@ class _AuthStory extends StatelessWidget {
                       spacing: MarkoSpace.sm,
                       runSpacing: MarkoSpace.sm,
                       children: [
-                        for (final line in const [
-                          (
-                            HeroIcons.buildingStorefront,
-                            'Імпорт каталогу Prom.ua',
-                          ),
-                          (HeroIcons.bolt, 'Ціни конкурентів за OEM'),
-                          (
-                            HeroIcons.presentationChartLine,
-                            'Спред ринку: мін · медіана · макс',
-                          ),
-                        ])
-                          _StoryPill(icon: line.$1, label: line.$2),
+                        const _StoryPill(
+                          logo: 'assets/logos/prom.png',
+                          label: 'Імпорт каталогу Prom.ua',
+                        ),
+                        const _StoryPill(
+                          icon: HeroIcons.bolt,
+                          label: 'Ціни конкурентів за OEM',
+                        ),
+                        const _StoryPill(
+                          icon: HeroIcons.presentationChartLine,
+                          label: 'Спред ринку: мін · медіана · макс',
+                        ),
                       ],
                     ),
                   ],

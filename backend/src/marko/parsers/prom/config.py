@@ -36,9 +36,6 @@ class ScrapeConfig:
     page_concurrency: int = 8
     catalog_result_limit: int = 10_000
     expand_product_groups: bool = True
-    # Cross-seller comparison knobs.
-    max_sellers: int = 10          # cap of distinct sellers in a comparison
-    similarity_threshold: float = 0.55  # min fuzzy name score to accept a match
     max_search_pages: int = 3      # search pages to scan while collecting offers
     user_agents: tuple[str, ...] = USER_AGENTS
     base_headers: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_HEADERS))

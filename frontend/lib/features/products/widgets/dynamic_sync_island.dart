@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:heroicons/heroicons.dart';
 
 import '../../../core/app_theme.dart';
+import '../../../core/widgets/marko_button.dart';
 import '../products_controller.dart';
 import '../products_models.dart';
 import 'product_card.dart' show formatPriceNumber;
@@ -42,13 +43,90 @@ class DynamicSyncIsland extends ConsumerWidget {
           : _Capsule(
               job: import!.activeJob,
               status: sync.status,
-              onDismiss: ref.read(catalogImportProvider.notifier).dismissSync,
+              onDismiss: () => _dismiss(context, ref),
             ),
     );
   }
+
+  /// Готовий чи впалий імпорт просто ховаємо; живий — зупиняємо, але лише
+  /// після підтвердження, бо закриття капсули скасовує завантаження.
+  Future<void> _dismiss(BuildContext context, WidgetRef ref) async {
+    final notifier = ref.read(catalogImportProvider.notifier);
+    final job = ref.read(catalogImportProvider).value?.activeJob;
+    if (job?.isFinished ?? false) {
+      notifier.dismissSync();
+      return;
+    }
+    if (await _confirmCancel(context)) await notifier.cancelSync();
+  }
+
+  Future<bool> _confirmCancel(BuildContext context) async {
+    final colors = MarkoTheme.of(context);
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(colors.panelRadius),
+              side: BorderSide(color: colors.border),
+            ),
+            backgroundColor: colors.surface,
+            surfaceTintColor: Colors.transparent,
+            icon: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: colors.negative.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: HeroIcon(
+                HeroIcons.stopCircle,
+                color: colors.negative,
+                size: 22,
+              ),
+            ),
+            title: Text(
+              'Зупинити імпорт?',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 18,
+                  ),
+            ),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: Text(
+                'Завантаження каталогу з магазину зупиниться. '
+                'Уже імпортовані товари залишаться в каталозі.',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: MarkoTheme.of(context).muted),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(
+              MarkoSpace.lg,
+              0,
+              MarkoSpace.lg,
+              MarkoSpace.lg,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Продовжити імпорт'),
+              ),
+              MarkoButton.danger(
+                label: 'Зупинити',
+                icon: HeroIcons.stopCircle,
+                onPressed: () => Navigator.of(context).pop(true),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
 }
 
-class _Capsule extends StatefulWidget {
+class _Capsule extends StatelessWidget {
   const _Capsule({
     required this.job,
     required this.status,
@@ -62,35 +140,19 @@ class _Capsule extends StatefulWidget {
   final VoidCallback onDismiss;
 
   @override
-  State<_Capsule> createState() => _CapsuleState();
-}
-
-class _CapsuleState extends State<_Capsule> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1600),
-  )..repeat();
-
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    final job = widget.job;
-    final status = job?.status ?? widget.status;
-    final failed = status == 'failed';
-    final done = status == 'completed';
+    final currentJob = job;
+    final currentStatus = currentJob?.status ?? status;
+    final failed = currentStatus == 'failed' || currentStatus == 'cancelled';
+    final done = currentStatus == 'completed';
     final accent = failed
         ? colors.negative
         : done
         ? colors.positive
         : colors.promAccent;
-    final count = job?.progressCurrent ?? 0;
-    final progress = job?.progress;
+    final count = currentJob?.progressCurrent ?? 0;
+    final progress = currentJob?.progress;
 
     return Container(
       constraints: const BoxConstraints(maxWidth: 520),
@@ -118,10 +180,8 @@ class _CapsuleState extends State<_Capsule> with SingleTickerProviderStateMixin 
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _PulseBadge(
-                  pulse: _pulse,
+                _SourceBadge(
                   accent: accent,
-                  active: !done && !failed,
                   icon: failed
                       ? HeroIcons.exclamationTriangle
                       : done
@@ -131,7 +191,9 @@ class _CapsuleState extends State<_Capsule> with SingleTickerProviderStateMixin 
                 const SizedBox(width: MarkoSpace.sm),
                 Flexible(
                   child: Text(
-                    failed
+                    currentStatus == 'cancelled'
+                        ? 'Імпорт зупинено'
+                        : failed
                         ? 'Імпорт не вдався'
                         : done
                         ? 'Каталог оновлено'
@@ -154,7 +216,7 @@ class _CapsuleState extends State<_Capsule> with SingleTickerProviderStateMixin 
                   _MiniProgress(value: progress, accent: accent),
                 ],
                 const SizedBox(width: MarkoSpace.xs),
-                _DismissButton(onPressed: widget.onDismiss),
+                _DismissButton(onPressed: onDismiss),
               ],
             ),
           ),
@@ -164,65 +226,45 @@ class _CapsuleState extends State<_Capsule> with SingleTickerProviderStateMixin 
   }
 }
 
-/// The source mark with a radar ring around it while the job runs.
-class _PulseBadge extends StatelessWidget {
-  const _PulseBadge({
-    required this.pulse,
+/// The source logo badge on the left of the capsule (or status icon when done/failed).
+class _SourceBadge extends StatelessWidget {
+  const _SourceBadge({
     required this.accent,
-    required this.active,
     required this.icon,
   });
 
-  final Animation<double> pulse;
   final Color accent;
-  final bool active;
 
   /// Replaces the source logo once the job has an outcome.
   final HeroIcons? icon;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 30,
-      height: 30,
-      child: Stack(
+    if (icon != null) {
+      return Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(MarkoRadius.sm),
+          border: Border.all(color: accent.withValues(alpha: 0.3)),
+        ),
         alignment: Alignment.center,
-        children: [
-          if (active)
-            AnimatedBuilder(
-              animation: pulse,
-              builder: (context, _) => Transform.scale(
-                scale: 1 + pulse.value * 0.55,
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: accent.withValues(alpha: 0.5 * (1 - pulse.value)),
-                      width: 1.5,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.14),
-              shape: BoxShape.circle,
-              border: Border.all(color: accent.withValues(alpha: 0.3)),
-            ),
-            alignment: Alignment.center,
-            child: icon == null
-                ? Image.asset(
-                    'assets/logos/prom.png',
-                    width: 14,
-                    color: accent,
-                    colorBlendMode: BlendMode.srcIn,
-                  )
-                : HeroIcon(icon!, size: 15, color: accent),
-          ),
-        ],
+        child: HeroIcon(icon!, size: 16, color: accent),
+      );
+    }
+
+    return Container(
+      width: 28,
+      height: 28,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(MarkoRadius.sm),
+      ),
+      child: Image.asset(
+        'assets/logos/prom.png',
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
       ),
     );
   }

@@ -102,7 +102,10 @@ void main() {
     await tester.pumpAndSettle();
 
     // Порожній каталог — онбординг, ані капсули, ані скелетонів.
-    expect(find.text('Почніть з імпорту каталогу'), findsOneWidget);
+    expect(
+      find.text('Додайте товари з XLSX-вивантаження'),
+      findsOneWidget,
+    );
     expect(find.byType(ProductCardSkeleton), findsNothing);
 
     await tester.enterText(
@@ -115,7 +118,10 @@ void main() {
 
     // Онбординг поступився каталогу: капсула зверху, привиди в сітці.
     expect(find.text('Синхронізація Prom.ua'), findsOneWidget);
-    expect(find.text('Почніть з імпорту каталогу'), findsNothing);
+    expect(
+      find.text('Додайте товари з XLSX-вивантаження'),
+      findsNothing,
+    );
     expect(find.byType(ProductCardSkeleton), findsWidgets);
     expect(find.text('Товар 0'), findsOneWidget);
 

@@ -8,6 +8,7 @@ avto.pro price check tries them in order.
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import BinaryIO, Iterator
 from urllib.parse import urlsplit
@@ -61,6 +62,23 @@ def canonical_product_url(url: str | None) -> str:
         return text
     match = _PRODUCT_PATH_RE.match(urlsplit(text).path)
     return f"https://prom.ua/ua/{match.group('slug')}" if match else text
+
+
+_PRICE_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def parse_price(value: object) -> Decimal | None:
+    """Число з цінового рядка ("1 234,56 грн") як Decimal, або None."""
+    if value is None:
+        return None
+    normalized = str(value).replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    match = _PRICE_NUMBER_RE.search(normalized)
+    if match is None:
+        return None
+    try:
+        return Decimal(match.group()).quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None
 
 
 def normalize_oem(value: object) -> str | None:
@@ -202,6 +220,7 @@ __all__ = [
     "ExportFormatError",
     "normalize_oem",
     "parse_export",
+    "parse_price",
     "seller_from_export_url",
     "seller_of",
 ]

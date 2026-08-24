@@ -28,7 +28,10 @@ class DashboardPage extends ConsumerWidget {
         ref.watch(productsControllerProvider).value?.isPristineEmpty ?? false;
 
     return Scaffold(
+      // Статус-бар зафарбовує сам топбар, а низ віддано скролу — тому лише боки.
       body: SafeArea(
+        top: false,
+        bottom: false,
         child: Stack(
           children: [
             const Column(
@@ -50,8 +53,11 @@ class DashboardPage extends ConsumerWidget {
                   ),
                   child: MarkoContentFrame(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: MarkoSpace.sm,
+                      padding: EdgeInsets.fromLTRB(
+                        0,
+                        MarkoSpace.sm,
+                        0,
+                        MarkoSpace.sm + MediaQuery.paddingOf(context).bottom,
                       ),
                       child: Row(
                         children: [
@@ -96,6 +102,8 @@ class _TopBar extends ConsumerWidget {
         ref.watch(productsControllerProvider).value?.isPristineEmpty ?? false;
 
     return Container(
+      // Смуга статус-бара — це продовження топбара, а не сірий полотняний фон.
+      padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(bottom: BorderSide(color: colors.border)),
@@ -131,7 +139,8 @@ class _TopBar extends ConsumerWidget {
                 const Spacer(),
                 if (compact) ...[
                   const MarkoThemeToggle(),
-                  const SizedBox(width: MarkoSpace.xs),
+                  // Дотикові кнопки й так по 38px — між ними вистачає волосини.
+                  const SizedBox(width: MarkoSpace.xxs),
                   if (user != null)
                     IconButton(
                       tooltip: 'Вийти з акаунта',
@@ -163,9 +172,9 @@ class _TopBar extends ConsumerWidget {
                       onPressed: () => showOemLookup(context),
                     ),
                     const SizedBox(width: MarkoSpace.md),
+                    _Divider(color: colors.border),
+                    const SizedBox(width: MarkoSpace.sm),
                   ],
-                  _Divider(color: colors.border),
-                  const SizedBox(width: MarkoSpace.sm),
                   const MarkoThemeToggle(),
                   const SizedBox(width: MarkoSpace.xs),
                   if (user != null)

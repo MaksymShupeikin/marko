@@ -19,7 +19,6 @@ from marko.infrastructure.db.models import (
 )
 from marko.services.parser_models import Seller
 
-import marko.repositories.users as users_repo
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
 
@@ -64,8 +63,6 @@ async def register_store(
     celery_app: Celery,
 ) -> tuple[UUID, SyncRun]:
     seller = Seller.from_url(url)
-    await users_repo.ensure_default_workspace(session, workspace_id)
-
     store_id = await stores_repo.upsert_marketplace_store(
         session,
         workspace_id=workspace_id,
@@ -166,19 +163,11 @@ async def delete_store(
     store_id: UUID,
     workspace_id: UUID,
 ) -> None:
-    link = await _get_workspace_store(
-        session,
-        store_id=store_id,
-        workspace_id=workspace_id,
-    )
-    used_by_another_workspace = await stores_repo.delete_workspace_store(
-        session,
-        link,
-    )
-    if not used_by_another_workspace:
-        store = await session.get(MarketplaceStore, store_id)
-        if store is not None:
-            await session.delete(store)
+    """Магазини тепер належать одному воркспейсу: видаляємо разом з лінком і лістингами."""
+    await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
+    store = await session.get(MarketplaceStore, store_id)
+    if store is not None:
+        await session.delete(store)
     await session.commit()
 
 
@@ -202,6 +191,37 @@ async def get_sync_run(
     sync_run = await stores_repo.get_sync_run_by_id(session, sync_run_id, workspace_id)
     if sync_run is None:
         raise SyncRunNotFoundError(str(sync_run_id))
+    return sync_run
+
+
+async def list_active_sync_runs(
+    session: AsyncSession, workspace_id: UUID
+) -> list[SyncRun]:
+    return await stores_repo.list_active_sync_runs(session, workspace_id)
+
+
+async def cancel_sync_run(
+    session: AsyncSession,
+    *,
+    sync_run_id: UUID,
+    workspace_id: UUID,
+    celery_app: Celery,
+) -> SyncRun:
+    """Stop a queued or running import and mark the run cancelled."""
+    sync_run = await get_sync_run(
+        session, sync_run_id=sync_run_id, workspace_id=workspace_id
+    )
+    if sync_run.status not in (SyncStatus.queued, SyncStatus.running):
+        return sync_run
+
+    if sync_run.task_id:
+        # terminate вбиває вже запущену задачу; для черги достатньо revoke.
+        await asyncio.to_thread(
+            celery_app.control.revoke, sync_run.task_id, terminate=True
+        )
+    sync_run.status = SyncStatus.cancelled
+    sync_run.finished_at = datetime.now(UTC)
+    await session.commit()
     return sync_run
 
 

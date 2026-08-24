@@ -20,7 +20,7 @@ class MarkoWordmark extends StatelessWidget {
     final innerChartSize = compact
         ? const Size(14.5, 12.5)
         : const Size(16.5, 14.0);
-    final strokeWidth = compact ? 1.2 : 1.35;
+    final strokeWidth = compact ? 1.1 : 1.25;
 
     final containerColor = inverse
         ? Colors.white.withValues(alpha: 0.12)
@@ -99,16 +99,14 @@ class MarkoChartPainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.fill;
 
-    final tip = Offset(size.width * 0.93, size.height * 0.12);
+    final tip = Offset(size.width * 0.90, size.height * 0.16);
 
     final path = Path()
-      ..moveTo(size.width * 0.07, size.height * 0.88)
-      ..lineTo(size.width * 0.22, size.height * 0.65)
-      ..lineTo(size.width * 0.31, size.height * 0.73)
-      ..lineTo(size.width * 0.49, size.height * 0.26)
-      ..lineTo(size.width * 0.62, size.height * 0.63)
-      ..lineTo(size.width * 0.72, size.height * 0.47)
-      ..lineTo(size.width * 0.79, size.height * 0.57)
+      ..moveTo(size.width * 0.08, size.height * 0.84)
+      ..lineTo(size.width * 0.28, size.height * 0.40)
+      ..lineTo(size.width * 0.44, size.height * 0.68)
+      ..lineTo(size.width * 0.60, size.height * 0.28)
+      ..lineTo(size.width * 0.75, size.height * 0.74)
       ..lineTo(tip.dx, tip.dy);
 
     canvas.drawPath(path, linePaint);
@@ -194,20 +192,28 @@ class MarkoTextField extends StatelessWidget {
         prefix ?? (prefixIcon == null ? null : HeroIcon(prefixIcon!, size: 16));
     final height = MarkoLayout.fieldHeightOf(context);
     final slot = BoxConstraints(minWidth: 34, minHeight: height);
+    // InputDecorator installs its own IconButtonTheme *around* the suffix, and
+    // `IconButtonTheme.of` prefers that widget over any ThemeData above it — so
+    // the opt-out has to sit inside the decoration and copy what it found.
     final suffixChild = suffixIcon == null
         ? null
-        : Theme(
-            data: Theme.of(context).copyWith(
-              iconButtonTheme: IconButtonThemeData(
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.transparent,
-                  shadowColor: Colors.transparent,
-                  elevation: 0,
-                  visualDensity: VisualDensity.compact,
-                ),
+        : Builder(
+            builder: (context) => IconButtonTheme(
+              data: IconButtonThemeData(
+                style: (IconButtonTheme.of(context).style ?? const ButtonStyle())
+                    .copyWith(
+                      backgroundColor: const WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                      shadowColor: const WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                      elevation: const WidgetStatePropertyAll(0),
+                      visualDensity: VisualDensity.compact,
+                    ),
               ),
+              child: suffixIcon!,
             ),
-            child: suffixIcon!,
           );
     return SizedBox(
       height: height,
@@ -328,6 +334,27 @@ class MarkoSectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     return Text(text, style: MarkoType.caption.copyWith(color: colors.faint));
+  }
+}
+
+/// A hairline split by a caption: «—— або через пошту ——».
+class MarkoLabelledDivider extends StatelessWidget {
+  const MarkoLabelledDivider({required this.label, super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Expanded(child: Divider()),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: MarkoSpace.md),
+          child: MarkoSectionLabel(label),
+        ),
+        const Expanded(child: Divider()),
+      ],
+    );
   }
 }
 

@@ -150,22 +150,7 @@ async def update_product(
         )
 
     listing, store, override = row
-    if override is None:
-        raw_data = listing.raw_data if isinstance(listing.raw_data, dict) else {}
-        override = WorkspaceListingOverride(
-            workspace_id=current.workspace_id,
-            listing_id=listing.id,
-            name=listing.name,
-            sku=listing.sku,
-            brand=listing.brand,
-            current_price=listing.current_price,
-            is_available=listing.is_available,
-            image_url=listing.image_url,
-            oem_numbers=[
-                str(value) for value in (raw_data.get("oem_numbers") or []) if value
-            ],
-        )
-        session.add(override)
+    override = ensure_override(session, current.workspace_id, listing, override)
     changes = payload.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(override, field, value)
@@ -192,7 +177,7 @@ async def refresh_product(
             detail="Товар не знайдено або його не можна оновити.",
         )
     listing, store, override = row
-    target_url = (override.url if override and getattr(override, "url", None) else None) or listing.url
+    target_url = listing.url
     if not target_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -235,12 +220,7 @@ async def delete_product(
             detail="Товар не знайдено або його не можна видалити.",
         )
     listing, _, override = row
-    if override is None:
-        override = WorkspaceListingOverride(
-            workspace_id=current.workspace_id,
-            listing_id=listing.id,
-        )
-        session.add(override)
+    override = ensure_override(session, current.workspace_id, listing, override)
     override.is_deleted = True
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

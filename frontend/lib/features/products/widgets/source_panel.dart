@@ -40,7 +40,10 @@ class _SourceGridState extends ConsumerState<CatalogSourceCards> {
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    final busy = ref.watch(catalogImportProvider).value?.isSubmitting ?? false;
+    final importState = ref.watch(catalogImportProvider).value;
+    final busy = importState?.isSubmitting ?? false;
+    final fileLoading = importState?.isSubmittingFile ?? false;
+    final promLoading = importState?.isSubmittingProm ?? false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -48,9 +51,15 @@ class _SourceGridState extends ConsumerState<CatalogSourceCards> {
         _SourceTile(
           accent: colors.excelAccent,
           logo: 'assets/logos/excel.png',
+          monoLogo: true,
           title: 'XLSX вивантаження',
           subtitle: 'Візьмемо назву, ціну, бренд та всі номери запчастини',
-          child: _FileDrop(busy: busy, inline: false, onPick: _importFile),
+          child: _FileDrop(
+            busy: busy,
+            loading: fileLoading,
+            inline: false,
+            onPick: _importFile,
+          ),
         ),
         const SizedBox(height: MarkoSpace.md),
         _SourceTile(
@@ -61,6 +70,7 @@ class _SourceGridState extends ConsumerState<CatalogSourceCards> {
           child: _PromForm(
             controller: _urlController,
             busy: busy,
+            loading: promLoading,
             inline: false,
             onSubmit: _connectStore,
           ),
@@ -125,11 +135,13 @@ class SourcePanel extends ConsumerWidget {
 class _FileDrop extends StatelessWidget {
   const _FileDrop({
     required this.busy,
+    required this.loading,
     required this.inline,
     required this.onPick,
   });
 
   final bool busy;
+  final bool loading;
 
   /// Desktop can drag a file in; touch only ever taps.
   final bool inline;
@@ -139,10 +151,10 @@ class _FileDrop extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final button = MarkoButton(
-      label: busy ? 'Завантажуємо...' : 'Обрати на диску',
+      label: loading ? 'Завантажуємо...' : 'Обрати файл',
       onPressed: busy ? null : onPick,
       icon: HeroIcons.folderOpen,
-      loading: busy,
+      loading: loading,
       expand: !inline,
     );
 
@@ -190,12 +202,14 @@ class _PromForm extends StatelessWidget {
   const _PromForm({
     required this.controller,
     required this.busy,
+    required this.loading,
     required this.inline,
     required this.onSubmit,
   });
 
   final TextEditingController controller;
   final bool busy;
+  final bool loading;
 
   /// Desktop puts the button next to the field; mobile stacks them.
   final bool inline;
@@ -216,7 +230,7 @@ class _PromForm extends StatelessWidget {
       label: 'Імпортувати каталог',
       onPressed: busy ? null : onSubmit,
       icon: HeroIcons.arrowDownTray,
-      loading: busy,
+      loading: loading,
       expand: !inline,
     );
 
@@ -251,10 +265,14 @@ class _SourceTile extends StatefulWidget {
     required this.title,
     required this.subtitle,
     required this.child,
+    this.monoLogo = false,
   });
 
   final Color accent;
   final String logo;
+
+  /// Одноколірний гліф без полів — його фарбуємо акцентом джерела.
+  final bool monoLogo;
   final String title;
   final String subtitle;
   final Widget child;
@@ -311,14 +329,19 @@ class _SourceTileState extends State<_SourceTile> {
         child: Stack(
           children: [
             Positioned(
-              right: -28,
-              bottom: -26,
+              right: -16,
+              bottom: -16,
               child: IgnorePointer(
-                child: Image.asset(
-                  widget.logo,
-                  width: 190,
-                  color: accent.withValues(alpha: _hovered ? 0.16 : 0.09),
-                  colorBlendMode: BlendMode.srcIn,
+                child: Opacity(
+                  opacity: _hovered ? 0.16 : 0.08,
+                  child: Image.asset(
+                    widget.logo,
+                    width: 140,
+                    height: 140,
+                    fit: BoxFit.contain,
+                    color: widget.monoLogo ? accent : null,
+                    filterQuality: FilterQuality.medium,
+                  ),
                 ),
               ),
             ),
@@ -329,22 +352,26 @@ class _SourceTileState extends State<_SourceTile> {
                 children: [
                   Row(
                     children: [
+                      // Гліф іде від краю до краю, тому живе в полях на
+                      // підкладці; готовий логотип сам займає весь чіп.
                       Container(
-                        width: 30,
-                        height: 30,
+                        width: 28,
+                        height: 28,
+                        clipBehavior: Clip.antiAlias,
+                        padding: widget.monoLogo
+                            ? const EdgeInsets.all(4)
+                            : EdgeInsets.zero,
                         decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(MarkoRadius.md),
-                          border: Border.all(
-                            color: accent.withValues(alpha: 0.28),
-                          ),
+                          color: widget.monoLogo
+                              ? accent.withValues(alpha: 0.12)
+                              : null,
+                          borderRadius: BorderRadius.circular(MarkoRadius.sm),
                         ),
-                        alignment: Alignment.center,
                         child: Image.asset(
                           widget.logo,
-                          width: 15,
-                          color: accent,
-                          colorBlendMode: BlendMode.srcIn,
+                          fit: BoxFit.contain,
+                          color: widget.monoLogo ? accent : null,
+                          filterQuality: FilterQuality.medium,
                         ),
                       ),
                       const SizedBox(width: MarkoSpace.md),
@@ -361,8 +388,9 @@ class _SourceTileState extends State<_SourceTile> {
                               widget.subtitle,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: colors.faint),
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: colors.faint,
+                                  ),
                             ),
                           ],
                         ),

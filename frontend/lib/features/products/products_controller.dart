@@ -136,9 +136,15 @@ class ProductsController extends AsyncNotifier<CatalogState> {
 
   void toggleSelection(String productId) {
     final current = _current;
-    final ids = Set<String>.of(current.selectedIds);
+    // Зняття позначки у режимі "вибрано все" повертає до явного вибору
+    // завантажених карток — серверні сторінки в нього не потрапляють.
+    final ids = current.allMatchingSelected
+        ? {for (final item in current.page.items) item.id}
+        : Set<String>.of(current.selectedIds);
     if (!ids.remove(productId)) ids.add(productId);
-    state = AsyncData(current.copyWith(selectedIds: ids));
+    state = AsyncData(
+      current.copyWith(selectedIds: ids, allMatchingSelected: false),
+    );
   }
 
   /// Switches the selection to "everything the current filter matches" —
@@ -305,11 +311,17 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         offset: current.page.items.length,
       );
       if (generation != _generation) return;
+      // Поки триває імпорт, offset-вікно зсувається — нові рядки лягають перед
+      // поточною позицією, і сторінка повертає вже показані товари ще раз.
+      final loaded = {for (final item in _current.page.items) item.id};
       state = AsyncData(
         _current.copyWith(
           isLoadingMore: false,
           page: CatalogPage(
-            items: [..._current.page.items, ...next.items],
+            items: [
+              ..._current.page.items,
+              ...next.items.where((item) => !loaded.contains(item.id)),
+            ],
             total: next.total,
           ),
         ),
@@ -371,6 +383,18 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
   @override
   Future<CatalogImportState> build() async {
     ref.onDispose(() => _pollGeneration++);
+    // Імпорт живе на сервері — після перезавантаження сторінки капсула
+    // повертається і далі стежить за тим самим запуском.
+    try {
+      final active = await _api.getActiveJobs();
+      if (active.isNotEmpty) {
+        final sync = active.first;
+        unawaited(_followSync(sync, ++_pollGeneration));
+        return CatalogImportState(activeSync: sync);
+      }
+    } catch (_) {
+      // Не змогли спитати про активні імпорти — стартуємо порожніми.
+    }
     return const CatalogImportState();
   }
 
@@ -393,7 +417,7 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
   Future<bool> importFile(String filename, List<int> bytes) async {
     state = AsyncData(
       _current.copyWith(
-        isSubmitting: true,
+        submittingType: ImportSubmittingType.file,
         clearError: true,
         clearImport: true,
       ),
@@ -401,13 +425,19 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     try {
       final result = await _api.importCatalogFile(filename, bytes);
       state = AsyncData(
-        _current.copyWith(isSubmitting: false, lastImport: result),
+        _current.copyWith(
+          submittingType: ImportSubmittingType.none,
+          lastImport: result,
+        ),
       );
       await ref.read(productsControllerProvider.notifier).refresh();
       return true;
     } catch (error) {
       state = AsyncData(
-        _current.copyWith(isSubmitting: false, error: error.toString()),
+        _current.copyWith(
+          submittingType: ImportSubmittingType.none,
+          error: error.toString(),
+        ),
       );
       return false;
     }
@@ -423,17 +453,38 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     state = AsyncData(_current.copyWith(clearSync: true, clearJob: true));
   }
 
+  /// Stops the import on the server, then hides the capsule.
+  Future<void> cancelSync() async {
+    final sync = _current.activeSync;
+    if (sync == null) return;
+    _pollGeneration++;
+    try {
+      await _api.cancelJob(sync.syncRunId);
+      state = AsyncData(_current.copyWith(clearSync: true, clearJob: true));
+      await ref.read(productsControllerProvider.notifier).refresh();
+    } catch (error) {
+      // Скасувати не вдалося — капсула лишається і далі стежить за запуском.
+      state = AsyncData(_current.copyWith(error: error.toString()));
+      unawaited(_followSync(sync, ++_pollGeneration));
+    }
+  }
+
   void dismissError() {
     state = AsyncData(_current.copyWith(clearError: true));
   }
 
   Future<bool> _startSync(Future<StoreSync> Function() request) async {
-    state = AsyncData(_current.copyWith(isSubmitting: true, clearError: true));
+    state = AsyncData(
+      _current.copyWith(
+        submittingType: ImportSubmittingType.prom,
+        clearError: true,
+      ),
+    );
     try {
       final sync = await request();
       state = AsyncData(
         _current.copyWith(
-          isSubmitting: false,
+          submittingType: ImportSubmittingType.none,
           activeSync: sync,
           clearJob: true,
         ),
@@ -443,7 +494,10 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
       return true;
     } catch (error) {
       state = AsyncData(
-        _current.copyWith(isSubmitting: false, error: error.toString()),
+        _current.copyWith(
+          submittingType: ImportSubmittingType.none,
+          error: error.toString(),
+        ),
       );
       return false;
     }
@@ -455,7 +509,10 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
       try {
         final job = await _api.getJob(sync.syncRunId);
         if (generation != _pollGeneration) return;
-        state = AsyncData(_current.copyWith(activeJob: job, clearError: true));
+        // activeSync теж пишемо: перший поll може випередити результат build().
+        state = AsyncData(
+          _current.copyWith(activeSync: sync, activeJob: job, clearError: true),
+        );
         // Товари, що вже приїхали, вливаються в сітку, не чекаючи кінця імпорту.
         if (job.progressCurrent != seen || job.isFinished) {
           seen = job.progressCurrent;

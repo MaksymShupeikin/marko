@@ -109,6 +109,23 @@ class ProductsApi {
     return SyncRun.fromJson(payload as Map<String, dynamic>);
   }
 
+  /// Незавершені імпорти каталогу — щоб показати капсулу після перезавантаження.
+  Future<List<StoreSync>> getActiveJobs() async {
+    final payload = await _client.getJson('/api/v1/jobs/active');
+    return [
+      for (final item in payload as List<dynamic>)
+        StoreSync(
+          storeId: (item as Map<String, dynamic>)['store_id'] as String?,
+          syncRunId: item['id'] as String,
+          status: item['status'] as String,
+        ),
+    ];
+  }
+
+  Future<void> cancelJob(String id) async {
+    await _client.postJson('/api/v1/jobs/$id/cancel');
+  }
+
   /// Ручний пошук за OEM/брендом — той самий конвеєр, що й у картці товару.
   Stream<Map<String, dynamic>> competitorSearchEvents(
     String oem, {

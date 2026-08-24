@@ -444,7 +444,10 @@ void main() {
     await tester.pumpAndSettle();
 
     // Instructions plus both source cards, right there — no modal to find.
-    expect(find.text('Почніть з імпорту каталогу'), findsOneWidget);
+    expect(
+      find.text('Додайте товари з XLSX-вивантаження'),
+      findsOneWidget,
+    );
     expect(find.text('XLSX вивантаження'), findsOneWidget);
     expect(find.text('Магазин Prom.ua'), findsOneWidget);
     // Nothing to search or sort yet.

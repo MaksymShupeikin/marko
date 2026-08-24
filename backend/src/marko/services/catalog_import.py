@@ -4,9 +4,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from io import BytesIO
-import re
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,15 +20,18 @@ from marko.infrastructure.db.models import (
 )
 from marko.infrastructure.db.session import async_session_factory
 from marko.parsers.prom.gateway import PromGateway
-from marko.parsers.prom_export import ExportFormatError, parse_export, seller_of
+from marko.parsers.prom_export import (
+    ExportFormatError,
+    parse_export,
+    parse_price,
+    seller_of,
+)
 from marko.services.parser_models import Product
 
-import marko.repositories.users as users_repo
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
 
 _BATCH_SIZE = 500
-_PRICE_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 class CatalogImportError(RuntimeError):
@@ -46,17 +48,7 @@ class ExportImportResult:
 
 
 def parse_product_price(product: Product) -> Decimal | None:
-    raw = product.effective_price
-    if raw is None:
-        return None
-    normalized = str(raw).replace("\u00a0", "").replace(" ", "").replace(",", ".")
-    match = _PRICE_NUMBER_RE.search(normalized)
-    if match is None:
-        return None
-    try:
-        return Decimal(match.group()).quantize(Decimal("0.01"))
-    except InvalidOperation:
-        return None
+    return parse_price(product.effective_price)
 
 
 async def import_store_catalog(sync_run_id: UUID, *, task_id: str | None = None) -> int:
@@ -107,6 +99,10 @@ async def _run_import(
         if imported == 0:
             raise CatalogImportError("Prom returned no valid products for this store")
 
+        await listings_repo.undelete_listings_for_store(
+            session, sync_run.workspace_id, store.id
+        )
+
         now = datetime.now(UTC)
         store.last_synced_at = now
         sync_run.status = SyncStatus.completed
@@ -132,7 +128,6 @@ async def import_export_file(
             "Не вдалось визначити магазин: у файлі немає посилань на товари Prom."
         )
 
-    await users_repo.ensure_default_workspace(session, workspace_id)
     store_id = await stores_repo.upsert_marketplace_store(
         session,
         workspace_id=workspace_id,
@@ -155,6 +150,9 @@ async def import_export_file(
         imported += await persist_products(
             session, store_id, products[start : start + _BATCH_SIZE]
         )
+
+    # Re-activate any previously deleted listing overrides for this store in this workspace
+    await listings_repo.undelete_listings_for_store(session, workspace_id, store_id)
 
     store = await session.get(MarketplaceStore, store_id)
     if store is not None:
@@ -260,6 +258,9 @@ async def _mark_failed(
     async with async_session_factory() as session:
         sync_run = await session.get(SyncRun, sync_run_id)
         if sync_run is None:
+            return
+        # Скасований запуск падає, коли celery вбиває задачу — це не помилка.
+        if sync_run.status == SyncStatus.cancelled:
             return
         sync_run.status = SyncStatus.failed
         sync_run.error = f"{type(error).__name__}: {error}"[:4000]

@@ -325,13 +325,15 @@ class SyncRun {
   final int? progressTotal;
   final String? error;
 
-  bool get isFinished => status == 'completed' || status == 'failed';
+  bool get isFinished =>
+      status == 'completed' || status == 'failed' || status == 'cancelled';
 
   String get statusLabel => switch (status) {
     'queued' => 'в черзі',
     'running' => 'виконується',
     'completed' => 'готово',
     'failed' => 'помилка',
+    'cancelled' => 'скасовано',
     _ => status,
   };
 
@@ -520,25 +522,34 @@ class CompetitorPriceReport {
   }
 }
 
+enum ImportSubmittingType {
+  none,
+  file,
+  prom,
+}
+
 class CatalogImportState {
   const CatalogImportState({
-    this.isSubmitting = false,
+    this.submittingType = ImportSubmittingType.none,
     this.activeSync,
     this.activeJob,
     this.error,
     this.lastImport,
   });
 
-  final bool isSubmitting;
+  final ImportSubmittingType submittingType;
   final StoreSync? activeSync;
   final SyncRun? activeJob;
   final String? error;
   final FileImportResult? lastImport;
 
+  bool get isSubmitting => submittingType != ImportSubmittingType.none;
+  bool get isSubmittingFile => submittingType == ImportSubmittingType.file;
+  bool get isSubmittingProm => submittingType == ImportSubmittingType.prom;
   bool get hasActiveJob => activeSync != null && activeJob?.isFinished != true;
 
   CatalogImportState copyWith({
-    bool? isSubmitting,
+    ImportSubmittingType? submittingType,
     StoreSync? activeSync,
     SyncRun? activeJob,
     String? error,
@@ -549,7 +560,7 @@ class CatalogImportState {
     bool clearImport = false,
   }) {
     return CatalogImportState(
-      isSubmitting: isSubmitting ?? this.isSubmitting,
+      submittingType: submittingType ?? this.submittingType,
       activeSync: clearSync ? null : activeSync ?? this.activeSync,
       activeJob: clearJob ? null : activeJob ?? this.activeJob,
       error: clearError ? null : error ?? this.error,
@@ -557,3 +568,4 @@ class CatalogImportState {
     );
   }
 }
+

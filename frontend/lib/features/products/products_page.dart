@@ -12,7 +12,6 @@ import '../../core/widgets/marko_toast.dart';
 import 'products_controller.dart';
 import 'products_models.dart';
 import 'widgets/dynamic_sync_island.dart';
-import 'widgets/help_overlay.dart';
 import 'widgets/product_card.dart';
 import 'widgets/product_details_panel.dart';
 import 'widgets/product_management_dialogs.dart';
@@ -159,6 +158,9 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
     final compact = MediaQuery.sizeOf(context).width < 840;
     final showSelection =
         state != null && (state.hasSelection || state.bulkJob != null);
+    final onboarding = state != null && state.isPristineEmpty && !syncing;
+    // Нижня панель дашборда плюс жест-бар пристрою.
+    final bottomBar = _bottomBarHeight + MediaQuery.paddingOf(context).bottom;
 
     return Material(
       color: Colors.transparent,
@@ -177,23 +179,13 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                         const SizedBox(height: MarkoSpace.xxl),
                         const SourcePanel(),
                         const SizedBox(height: MarkoSpace.md),
-                        if (state != null && state.isPristineEmpty && !syncing)
+                        if (onboarding)
                           const CatalogOnboarding()
                         else
                           _CatalogToolbar(
                             total: state?.page.total,
                             busy: state?.isRefreshing ?? false,
                           ),
-                        // На мобілці плашка плаває над нижніми кнопками.
-                        if (showSelection && !compact) ...[
-                          const SizedBox(height: MarkoSpace.md),
-                          _SelectionBar(
-                            count: state.actionCount,
-                            total: state.page.total,
-                            allMatching: state.allMatchingSelected,
-                            job: state.bulkJob,
-                          ),
-                        ],
                         if (state?.error != null) ...[
                           const SizedBox(height: MarkoSpace.md),
                           MarkoInlineMessage(
@@ -224,11 +216,14 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                   ],
                   _ => _catalogSlivers(state!, syncing),
                 },
+                // Каталог доїжджає до самого низу екрана: місце лишаємо під плаваючими панелями.
                 SliverToBoxAdapter(
                   child: SizedBox(
-                    height: compact && showSelection
-                        ? 72 + _selectionBarHeight
-                        : 72,
+                    height: showSelection
+                        ? (compact
+                              ? bottomBar + _selectionBarHeight
+                              : _selectionBarHeight + MarkoSpace.xl * 2)
+                        : (compact ? bottomBar : 0),
                   ),
                 ),
               ],
@@ -241,12 +236,12 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
             right: 0,
             child: Center(child: DynamicSyncIsland()),
           ),
-          // Дії над вибраним: між кнопкою «наверх» і нижньою панеллю.
-          if (showSelection && compact)
+          // Дії над вибраним: плашка внизу екрана в Stack для мобілки й десктопу.
+          if (showSelection)
             Positioned(
               left: 0,
               right: 0,
-              bottom: _bottomBarHeight + MarkoSpace.sm,
+              bottom: compact ? bottomBar + MarkoSpace.sm : MarkoSpace.xl,
               // Той самий жолоб, що й у каталогу: плашка стає в один край з картками.
               child: MarkoContentFrame(
                 child: _SelectionBar(
@@ -264,12 +259,15 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
             left: 0,
             right: 0,
             bottom: compact
-                ? _bottomBarHeight +
+                ? bottomBar +
                       (showSelection ? _selectionBarHeight + MarkoSpace.md : 0)
-                : MarkoSpace.xl,
+                : (showSelection
+                      ? _selectionBarHeight + MarkoSpace.xxl
+                      : MarkoSpace.xl),
             child: Center(
               child: _ScrollTopButton(
-                visible: _showScrollTop,
+                // На порожньому каталозі гортати нічого — кнопка зайва.
+                visible: _showScrollTop && !onboarding,
                 onPressed: _scrollToTop,
               ),
             ),
@@ -312,7 +310,10 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
           child: _ProductGrid(
             products: state.page.items,
             selectedId: state.selected?.id,
-            checkedIds: state.selectedIds,
+            // "Вибрано все" позначає й видимі картки, хоч selectedIds порожній.
+            checkedIds: state.allMatchingSelected
+                ? {for (final item in state.page.items) item.id}
+                : state.selectedIds,
             // Ще не приїхали, але вже в дорозі.
             ghostCount: syncing ? 4 : 0,
             onOpen: _openDetails,
@@ -591,24 +592,13 @@ class _SelectionBarState extends ConsumerState<_SelectionBar> {
                 ],
               ),
             ),
-            const SizedBox(width: MarkoSpace.xs),
-            // Один рядок: іконки не переносяться, підпис зліва обрізається.
-            if (compact)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                spacing: MarkoSpace.xs,
-                children: actions,
-              )
-            else
-              Flexible(
-                child: Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: MarkoSpace.sm,
-                  runSpacing: MarkoSpace.xs,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: actions,
-                ),
-              ),
+            const SizedBox(width: MarkoSpace.md),
+            // Один рядок: кнопки дій не переносяться.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              spacing: compact ? MarkoSpace.xs : MarkoSpace.sm,
+              children: actions,
+            ),
           ],
         ),
       ),
@@ -708,6 +698,15 @@ class _SelectionBarState extends ConsumerState<_SelectionBar> {
             : 'Видалено ${total - failed} з $total, не вдалося: $failed',
         tone: failed == 0 ? MarkoMessageTone.success : MarkoMessageTone.warning,
       );
+    } catch (error) {
+      if (mounted) {
+        showMarkoToast(
+          context,
+          title: 'Не вдалося видалити',
+          message: '$error',
+          tone: MarkoMessageTone.error,
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1413,8 +1412,6 @@ class _RetryView extends StatelessWidget {
   }
 }
 
-/// Kept so the file picker lives next to the page that owns the catalog.
-/// Returns whether products actually landed in the catalog.
 Future<bool> pickAndImportCatalog(WidgetRef ref) async {
   final file = await FilePicker.pickFile(
     type: FileType.custom,
@@ -1422,6 +1419,7 @@ Future<bool> pickAndImportCatalog(WidgetRef ref) async {
   );
   if (file == null) return false;
   final bytes = await file.readAsBytes();
+  if (bytes.isEmpty) return false;
   final imported = await ref
       .read(catalogImportProvider.notifier)
       .importFile(file.name, bytes);
@@ -1442,22 +1440,35 @@ class CatalogOnboarding extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         const cards = CatalogSourceCards();
+        // На вузькому екрані спершу дають імпортувати, і лише тим, у кого не
+        // вийшло, показують кроки — за роздільником, як «або через пошту».
         if (constraints.maxWidth < 900) {
           return const Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _Instructions(),
-              SizedBox(height: MarkoSpace.xxl),
+              _Instructions(steps: false),
+              SizedBox(height: MarkoSpace.xl),
               cards,
+              SizedBox(height: MarkoSpace.xxl),
+              MarkoLabelledDivider(label: 'Інструкція, якщо щось не виходить'),
+              SizedBox(height: MarkoSpace.xl),
+              _Instructions(intro: false),
             ],
           );
         }
-        return const Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        return const Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(flex: 6, child: _Instructions()),
-            SizedBox(width: MarkoSpace.xxxl),
-            Expanded(flex: 5, child: cards),
+            _Instructions(steps: false),
+            SizedBox(height: MarkoSpace.xl),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 5, child: cards),
+                SizedBox(width: MarkoSpace.xxxl),
+                Expanded(flex: 6, child: _Instructions(intro: false)),
+              ],
+            ),
           ],
         );
       },
@@ -1475,27 +1486,32 @@ class _Step {
 
 const _steps = [
   _Step(
-    title: 'Експортуйте файл XLSX або вкажіть магазин Prom',
+    title: 'Експортуйте каталог із Prom.ua',
     body:
-        'Рекомендуємо XLSX експорт із кабінету Prom: він містить оригінальні номери OEM та артикули виробників для точної звірки.',
+        'У кабінеті Prom.ua відкрийте «Товари та послуги», натисніть «Експорт» і виберіть формат XLSX.',
     icon: HeroIcons.arrowDownTray,
   ),
   _Step(
-    title: 'Автоматичне завантаження каталогу',
+    title: 'Завантажте XLSX-файл у Marko',
     body:
-        'Сервер Marko обробляє файл за 1–2 хвилини, формує зручну сітку товарів, фільтри цін та створює структуру пошуку.',
+        'Оберіть експортований XLSX-файл на пристрої. Marko імпортує назви, ціни, бренди, OEM-номери та артикули виробників.',
     icon: HeroIcons.bolt,
   ),
   _Step(
-    title: 'Миттєва аналітика цін на Avto.pro',
+    title: 'Перевіряйте ціни конкурентів',
     body:
-        'Клікайте на будь-яку картку товару або шукайте за OEM, щоб бачити мінімальні й медіанні ринкові ціни та пропозиції конкурентів.',
+        'Відкрийте товар або знайдіть його за OEM, щоб побачити мінімальну й медіанну ціни та пропозиції на Avto.pro.',
     icon: HeroIcons.presentationChartLine,
   ),
 ];
 
 class _Instructions extends StatelessWidget {
-  const _Instructions();
+  const _Instructions({this.intro = true, this.steps = true});
+
+  /// Заголовок із підзаголовком і самі кроки на мобілці роз'їжджаються
+  /// в різні кінці екрана, тому кожну половину можна показати окремо.
+  final bool intro;
+  final bool steps;
 
   @override
   Widget build(BuildContext context) {
@@ -1503,55 +1519,28 @@ class _Instructions extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Почніть з імпорту каталогу',
-          style: Theme.of(
-            context,
-          ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: MarkoSpace.sm),
-        Text(
-          'Товарів поки немає. Завантажте ваш асортимент один раз — і відкриється '
-          'повноцінний каталог, швидкий пошук, фільтри за ₴ та аналітика цін конкурентів.',
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(color: colors.muted, height: 1.45),
-        ),
-        const SizedBox(height: MarkoSpace.xl),
-        for (var i = 0; i < _steps.length; i++) ...[
-          if (i > 0) const SizedBox(height: MarkoSpace.md),
-          _StepRow(index: i + 1, step: _steps[i]),
+        if (intro) ...[
+          Text(
+            'Додайте товари з XLSX-вивантаження',
+            style: Theme.of(
+              context,
+            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: MarkoSpace.sm),
+          Text(
+            'Експортуйте асортимент із кабінету Prom.ua та завантажте '
+            'файл у Marko. Після обробки стануть доступні каталог, пошук, фільтри й аналітика цін конкурентів.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: colors.muted, height: 1.45),
+          ),
         ],
-        const SizedBox(height: MarkoSpace.xl),
-        Container(
-          padding: const EdgeInsets.all(MarkoSpace.md),
-          decoration: BoxDecoration(
-            color: colors.surfaceMuted,
-            borderRadius: BorderRadius.circular(MarkoRadius.md),
-            border: Border.all(color: colors.border),
-          ),
-          child: Row(
-            children: [
-              HeroIcon(HeroIcons.bookOpen, size: 18, color: colors.muted),
-              const SizedBox(width: MarkoSpace.sm),
-              Expanded(
-                child: Text(
-                  'Потрібна допомога? Перегляньте короткий довідник.',
-                  style: TextStyle(fontSize: 12.5, color: colors.ink),
-                ),
-              ),
-              const SizedBox(width: MarkoSpace.sm),
-              TextButton.icon(
-                onPressed: () => showHelpOverlay(context),
-                icon: const HeroIcon(HeroIcons.bookOpen, size: 16),
-                label: const Text('Інструкція'),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                ),
-              ),
-            ],
-          ),
-        ),
+        if (intro && steps) const SizedBox(height: MarkoSpace.xl),
+        if (steps)
+          for (var i = 0; i < _steps.length; i++) ...[
+            if (i > 0) const SizedBox(height: MarkoSpace.md),
+            _StepRow(index: i + 1, step: _steps[i]),
+          ],
       ],
     );
   }

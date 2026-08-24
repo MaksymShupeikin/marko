@@ -1,36 +1,20 @@
-"""Orchestrates catalog scraping and cross-seller price comparison."""
+"""Orchestrates seller catalog scraping."""
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 import logging
 from math import ceil
-import re
-from typing import Any, AsyncIterator, Iterator
+from typing import AsyncIterator, Iterator
 
-from .config import BASE_URL, ScrapeConfig
+from .config import ScrapeConfig
 from .exceptions import ParseError, RequestFailed
-from marko.services.matching import (
-    ComparisonParams,
-    PriceComparison,
-    build_comparison,
-    build_search_query,
-)
-from marko.services.parser_models import ListingPage, Product, SeedInfo, Seller
+from marko.services.parser_models import ListingPage, Product, Seller
 
-from .client import AsyncHttpClient, HttpClient
-from .parser import (
-    parse_listing,
-    parse_product_group_ids,
-    parse_product_page,
-    parse_search,
-)
+from .client import AsyncHttpClient
+from .parser import parse_listing, parse_product_group_ids
 
 log = logging.getLogger(__name__)
-
-_PRODUCT_URL_RE = re.compile(
-    r"prom\.ua/(?:(?P<lang>[a-z]{2})/)?p(?P<product_id>\d+)-(?P<word>[\w-]+)\.html", re.I
-)
 
 
 @dataclass(frozen=True)
@@ -61,7 +45,7 @@ class _FetchedListing:
 
 
 class PromGateway:
-    """Access seller catalogs and comparable offers on prom.ua."""
+    """Access seller catalogs on prom.ua."""
 
     def __init__(self, config: ScrapeConfig | None = None) -> None:
         self._config = config or ScrapeConfig()
@@ -354,67 +338,3 @@ class PromGateway:
             len(listing.page.products),
             listing.page.total,
         )
-
-    # -- Cross-seller price comparison --
-
-    def compare(self, seed_url: str, query: str | None = None) -> PriceComparison:
-        """Compare a seed product against similar offers from other sellers."""
-        match = _PRODUCT_URL_RE.search(seed_url)
-        if not match:
-            raise ValueError(
-                f"Не схоже на URL товару prom.ua: {seed_url!r}\n"
-                "Очікую щось на кшталт https://prom.ua/ua/p1483068331-slug.html"
-            )
-        lang = (match.group("lang") or "ua").lower()
-
-        with HttpClient(self._config) as client:
-            seed = self._fetch_seed(client, seed_url, lang)
-            search_query = query or build_search_query(seed.product)
-            log.info("Seed: %s | бренд=%s | model_id=%s | buyBox=%s продавців (%s–%s)",
-                     seed.product.name, seed.product.brand, seed.product.model_id,
-                     seed.seller_count, seed.min_price, seed.max_price)
-            log.info("Пошуковий запит: %r", search_query)
-
-            candidates = self._collect_candidates(client, search_query, lang)
-            comparison = build_comparison(
-                seed,
-                candidates,
-                ComparisonParams(
-                    query=search_query,
-                    threshold=self._config.similarity_threshold,
-                    max_sellers=self._config.max_sellers,
-                ),
-            )
-
-        log.info("Порівняно продавців: %d (переглянуто кандидатів: %d)",
-                 len(comparison.offers), comparison.candidates_scanned)
-        return comparison
-
-    def _fetch_seed(self, client: HttpClient, seed_url: str, lang: str) -> SeedInfo:
-        html = client.get_html(seed_url)
-        return parse_product_page(html, lang)
-
-    def _collect_candidates(
-        self, client: HttpClient, query: str, lang: str
-    ) -> Iterator[Product]:
-        """Yield search-result products across up to max_search_pages pages."""
-        search_url = f"{BASE_URL}/{lang}/search"
-        for page_num in range(1, self._config.max_search_pages + 1):
-            params: dict[str, Any] = {"search_term": query}
-            if page_num > 1:
-                params["page"] = page_num
-            try:
-                html = client.get_html(search_url, params=params)
-                page = parse_search(html, lang)
-            except RequestFailed as exc:
-                log.error("Пошукову сторінку %d не завантажено: %s", page_num, exc)
-                return
-            except ParseError as exc:
-                log.error("Пошукову сторінку %d не розібрано: %s", page_num, exc)
-                return
-            if page.is_empty:
-                log.info("Пошукова сторінка %d порожня — кінець.", page_num)
-                return
-            log.info("Пошук, стор. %d: %d кандидатів (total: %s)",
-                     page_num, len(page.products), page.total)
-            yield from page.products

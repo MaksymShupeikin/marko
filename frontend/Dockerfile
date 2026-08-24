@@ -14,6 +14,7 @@ ARG FIREBASE_MESSAGING_SENDER_ID
 ARG FIREBASE_WEB_APP_ID
 ARG GOOGLE_CLIENT_ID
 RUN flutter build web --release \
+    --pwa-strategy=none \
     --dart-define=API_BASE_URL=${API_BASE_URL} \
     --dart-define=FIREBASE_API_KEY=${FIREBASE_API_KEY} \
     --dart-define=FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN} \
@@ -25,4 +26,5 @@ RUN flutter build web --release \
 FROM nginx:alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/build/web /usr/share/nginx/html
+COPY web/flutter_service_worker.js /usr/share/nginx/html/flutter_service_worker.js
 EXPOSE 80

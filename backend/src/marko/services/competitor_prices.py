@@ -25,7 +25,11 @@ from marko.parsers.avtopro.gateway import BASE_URL as AVTOPRO_BASE_URL
 from marko.parsers.prom.client import AsyncHttpClient
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.parser import parse_search
-from marko.parsers.prom_export import normalize_oem, seller_from_export_url
+from marko.parsers.prom_export import (
+    normalize_oem,
+    parse_price,
+    seller_from_export_url,
+)
 from marko.repositories.listings import get_workspace_listing
 from marko.services import llm_filter
 from marko.services.matching import (
@@ -59,7 +63,6 @@ _MAX_OEM_TERMS = 2  # другий номер приводить інших пр
 _MAX_NAME_TOKENS = 8
 
 _NON_ALNUM_RE = re.compile(r"[^0-9A-ZА-ЯІЇЄЁ]+", re.I)
-_PRICE_RE = re.compile(r"(\d[\d\s\u00a0.,]*)\s*(грн|₴|uah|\$|€)?", re.I)
 _PROM_PRODUCT_ID_RE = re.compile(r"/(?:[a-z]{2}/)?p(?P<id>\d+)-", re.I)
 
 
@@ -582,7 +585,7 @@ class PromPriceSource:
             )
             if not score or _is_own_prom_product(query, product):
                 continue
-            price = _decimal_price(product.effective_price)
+            price = parse_price(product.effective_price)
             if price is None or not product.url:
                 continue
             yield MarketOffer(
@@ -812,19 +815,6 @@ def _normalized_slug(value: Any) -> str | None:
 def _text_value(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
-
-
-def _decimal_price(value: Any) -> Decimal | None:
-    if value is None:
-        return None
-    match = _PRICE_RE.search(str(value).replace("\u00a0", " "))
-    if match is None:
-        return None
-    normalized = match.group(1).replace(" ", "").replace("\u00a0", "").replace(",", ".")
-    try:
-        return Decimal(normalized).quantize(Decimal("0.01"))
-    except Exception:
-        return None
 
 
 def _norm_code(value: str | None) -> str:

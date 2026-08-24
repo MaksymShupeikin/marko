@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
-    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -39,22 +38,12 @@ class StoreKind(str, enum.Enum):
     competitor = "competitor"
 
 
-class MatchSource(str, enum.Enum):
-    manual = "manual"
-    automatic = "automatic"
-
-
-class MatchStatus(str, enum.Enum):
-    candidate = "candidate"
-    approved = "approved"
-    rejected = "rejected"
-
-
 class SyncStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class User(TimestampMixin, Base):
@@ -221,35 +210,6 @@ class PriceObservation(Base):
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-
-
-class ProductMatch(TimestampMixin, Base):
-    __tablename__ = "product_matches"
-    __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "source_listing_id", "candidate_listing_id", name="uq_product_match"
-        ),
-        CheckConstraint(
-            "source_listing_id <> candidate_listing_id", name="ck_product_match_distinct"
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
-    )
-    source_listing_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("listings.id", ondelete="CASCADE"), index=True
-    )
-    candidate_listing_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("listings.id", ondelete="CASCADE"), index=True
-    )
-    source: Mapped[MatchSource] = mapped_column(Enum(MatchSource, name="match_source"))
-    status: Mapped[MatchStatus] = mapped_column(
-        Enum(MatchStatus, name="match_status"), default=MatchStatus.candidate
-    )
-    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
-    matcher_version: Mapped[str | None] = mapped_column(String(50))
 
 
 class SyncRun(TimestampMixin, Base):

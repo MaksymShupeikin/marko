@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
@@ -11,10 +10,6 @@ from marko.infrastructure.db.models import (
     WorkspaceMember,
     WorkspaceRole,
 )
-
-
-async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
-    return await session.get(User, user_id)
 
 
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
@@ -47,12 +42,6 @@ async def create_user(
     )
     session.add(user)
     return user
-
-
-async def get_workspace_member(
-    session: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID
-) -> WorkspaceMember | None:
-    return await session.get(WorkspaceMember, (workspace_id, user_id))
 
 
 async def get_first_workspace_id_by_user_id(
@@ -88,12 +77,3 @@ async def create_workspace_member(
     member = WorkspaceMember(workspace_id=workspace_id, user_id=user_id, role=role)
     session.add(member)
     return member
-
-
-async def ensure_default_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> None:
-    statement = insert(Workspace).values(
-        id=workspace_id,
-        name="Development Workspace",
-        slug="development",
-    )
-    await session.execute(statement.on_conflict_do_nothing())

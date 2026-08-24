@@ -11,7 +11,6 @@ import asyncio
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
@@ -32,7 +31,7 @@ from marko.parsers.prom.client import AsyncHttpClient
 from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.exceptions import ParseError, RequestFailed
 from marko.parsers.prom.parser import parse_product_page
-from marko.parsers.prom_export import canonical_product_url
+from marko.parsers.prom_export import canonical_product_url, parse_price
 from marko.services.parser_models import Product
 
 log = logging.getLogger(__name__)
@@ -91,18 +90,20 @@ async def delete_matching(
     ids = await _matching_ids(session, workspace_id, catalog_filter)
     if not ids:
         return 0
-    statement = pg_insert(WorkspaceListingOverride).values(
-        [
-            {"workspace_id": workspace_id, "listing_id": listing_id, "is_deleted": True}
-            for listing_id in ids
-        ]
-    )
-    await session.execute(
-        statement.on_conflict_do_update(
-            index_elements=["workspace_id", "listing_id"],
-            set_={"is_deleted": True},
+    # asyncpg обмежує запит 32767 параметрами — 50к+ рядків шлемо частинами.
+    for chunk in _chunks(ids, 5000):
+        statement = pg_insert(WorkspaceListingOverride).values(
+            [
+                {"workspace_id": workspace_id, "listing_id": listing_id, "is_deleted": True}
+                for listing_id in chunk
+            ]
         )
-    )
+        await session.execute(
+            statement.on_conflict_do_update(
+                index_elements=["workspace_id", "listing_id"],
+                set_={"is_deleted": True},
+            )
+        )
     await session.commit()
     return len(ids)
 
@@ -253,7 +254,7 @@ def apply_scraped_product(
     # Порожня назва — це зламаний парс, а не товар без назви.
     if product.name:
         override.name = product.name
-    override.current_price = _price(product.effective_price)
+    override.current_price = parse_price(product.effective_price)
     override.sku = product.sku
     override.brand = product.brand
     override.image_url = product.image
@@ -264,12 +265,3 @@ def apply_scraped_product(
         override.oem_numbers = list(dict.fromkeys(product.oem_numbers))
     override.is_deleted = False
     override.synced_at = datetime.now(UTC)
-
-
-def _price(value: Any) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value).replace(" ", "").replace(",", "."))
-    except (InvalidOperation, ValueError):
-        return None

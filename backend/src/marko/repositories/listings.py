@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import uuid
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
@@ -346,3 +346,39 @@ async def add_listing(session: AsyncSession, listing: Listing) -> None:
 
 async def add_price_observation(session: AsyncSession, observation: PriceObservation) -> None:
     session.add(observation)
+
+
+async def undelete_listings_for_store(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    store_id: uuid.UUID,
+) -> None:
+    """Restore visibility of store listings for a workspace upon re-import or sync."""
+    subquery = select(Listing.id).where(Listing.store_id == store_id)
+    # Remove tombstone overrides that had no field edits
+    delete_statement = (
+        delete(WorkspaceListingOverride)
+        .where(
+            WorkspaceListingOverride.workspace_id == workspace_id,
+            WorkspaceListingOverride.listing_id.in_(subquery),
+            WorkspaceListingOverride.is_deleted.is_(True),
+            WorkspaceListingOverride.name.is_(None),
+            WorkspaceListingOverride.current_price.is_(None),
+            WorkspaceListingOverride.sku.is_(None),
+            WorkspaceListingOverride.brand.is_(None),
+        )
+    )
+    await session.execute(delete_statement)
+
+    # For any remaining overrides with field edits, unset is_deleted flag
+    update_statement = (
+        update(WorkspaceListingOverride)
+        .where(
+            WorkspaceListingOverride.workspace_id == workspace_id,
+            WorkspaceListingOverride.listing_id.in_(subquery),
+            WorkspaceListingOverride.is_deleted.is_(True),
+        )
+        .values(is_deleted=False)
+    )
+    await session.execute(update_statement)
+
