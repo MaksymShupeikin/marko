@@ -421,17 +421,18 @@ async def _refine(
 
 
 def _single_currency(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, ...]:
-    """Drop offers priced in a minority currency — 50 USD is not below 200 UAH.
+    """Drop offers priced in a foreign currency — 50 USD is not below 200 UAH.
 
-    Without exchange rates the only honest comparison is within one currency,
-    so the report keeps the one most offers already use.
+    Without exchange rates the only honest comparison is within one currency.
+    The catalog is priced in UAH, so any UAH offers win even as a minority;
+    only a report with no UAH at all falls back to the most common currency.
     """
     counts = Counter(
         offer.currency for source in sources for offer in source.offers
     )
     if len(counts) < 2:
         return sources
-    main, _ = counts.most_common(1)[0]
+    main = "UAH" if counts.get("UAH") else counts.most_common(1)[0][0]
     log.info(
         "Competitor prices: kept %s, dropped %d offer(s) in other currencies",
         main,

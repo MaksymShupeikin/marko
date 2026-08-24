@@ -43,7 +43,9 @@ def _openai() -> openai.AsyncOpenAI:
     settings = get_settings()
     return openai.AsyncOpenAI(
         api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url or None,
+        # Явний дефолт: з base_url=None бібліотека читає env OPENAI_BASE_URL,
+        # а compose завжди прокидає його — хай і порожнім рядком.
+        base_url=settings.openai_base_url or "https://api.openai.com/v1",
     )
 
 

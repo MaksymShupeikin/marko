@@ -358,6 +358,26 @@ def test_minority_currency_offers_are_dropped():
     assert sources[1].status == "empty"
 
 
+def test_uah_offers_win_even_as_minority():
+    """Каталог гривневий: доларова більшість не має перемикати звіт у USD."""
+    uah = MarketOffer("prom", "A", Decimal("200"), "UAH", "https://prom.ua/a")
+    usd = [
+        MarketOffer("avtopro", "B", Decimal("50"), "USD", "https://avto.pro/b"),
+        MarketOffer("avtopro", "C", Decimal("60"), "USD", "https://avto.pro/c"),
+    ]
+
+    sources = competitor_prices_module._single_currency(
+        (
+            SourceResult("prom", "Prom.ua", "ok", (uah,)),
+            SourceResult("avtopro", "Avto.pro", "ok", tuple(usd)),
+        )
+    )
+
+    assert sources[0].offers == (uah,)
+    assert sources[1].offers == ()
+    assert sources[1].status == "empty"
+
+
 def test_report_stats_use_all_sources_and_cache_flag():
     query = PartSearchQuery(
         listing_id="p1",
