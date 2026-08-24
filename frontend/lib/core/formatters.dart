@@ -10,6 +10,14 @@ String formatPriceNumber(double price) {
   return parts.length > 1 ? '$whole.${parts[1]}' : whole;
 }
 
+/// Parses user price input back into a number: tolerates the space grouping
+/// [ThousandsPriceInputFormatter] inserts and a comma decimal separator.
+/// Empty or unparsable input means no value.
+double? parsePrice(String value) {
+  final normalized = value.trim().replaceAll(' ', '').replaceAll(',', '.');
+  return normalized.isEmpty ? null : double.tryParse(normalized);
+}
+
 /// Normalizes currency strings into standard symbols (UAH -> ₴, USD -> $, EUR -> €).
 String formatCurrency(String currency) {
   switch (currency.toUpperCase()) {

@@ -22,7 +22,7 @@ class DashboardPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = MarkoTheme.of(context);
     final width = MediaQuery.sizeOf(context).width;
-    final compact = width < 840;
+    final compact = width < MarkoLayout.compactWidth;
     // The onboarding screen carries its own import cards.
     final emptyCatalog =
         ref.watch(productsControllerProvider).value?.isPristineEmpty ?? false;
@@ -111,7 +111,7 @@ class _TopBar extends ConsumerWidget {
       child: MarkoContentFrame(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final compact = constraints.maxWidth < 840;
+            final compact = constraints.maxWidth < MarkoLayout.compactWidth;
 
             final bar = Row(
               crossAxisAlignment: CrossAxisAlignment.center,

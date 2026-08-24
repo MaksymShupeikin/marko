@@ -288,7 +288,7 @@ class _ProductEditFormState extends ConsumerState<_ProductEditForm> {
             textInputAction: TextInputAction.next,
             validator: (value) {
               if (value == null || value.trim().isEmpty) return null;
-              return _parsePrice(value) == null
+              return parsePrice(value) == null
                   ? 'Вкажіть коректну ціну'
                   : null;
             },
@@ -393,7 +393,7 @@ class _ProductEditFormState extends ConsumerState<_ProductEditForm> {
               name: _name.text.trim(),
               sku: _emptyToNull(_sku.text),
               brand: _emptyToNull(_brand.text),
-              price: _parsePrice(_price.text),
+              price: parsePrice(_price.text),
               isAvailable: switch (_availability) {
                 'available' => true,
                 'unavailable' => false,
@@ -664,11 +664,6 @@ class _DeleteProductDialogState extends ConsumerState<_DeleteProductDialog> {
 String? _emptyToNull(String value) {
   final normalized = value.trim();
   return normalized.isEmpty ? null : normalized;
-}
-
-double? _parsePrice(String value) {
-  final normalized = value.trim().replaceAll(' ', '').replaceAll(',', '.');
-  return normalized.isEmpty ? null : double.tryParse(normalized);
 }
 
 String _editablePrice(double value) => value == value.truncateToDouble()

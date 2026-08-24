@@ -12,6 +12,7 @@ import 'package:marko_client/core/marko_ui.dart';
 import 'package:marko_client/core/widgets/marko_button.dart';
 import 'package:marko_client/features/products/products_api.dart';
 import 'package:marko_client/features/products/products_page.dart';
+import 'package:marko_client/features/products/widgets/catalog_filters.dart';
 import 'package:marko_client/features/products/widgets/product_details_panel.dart';
 import 'package:marko_client/features/products/widgets/source_panel.dart';
 import 'package:toastification/toastification.dart';

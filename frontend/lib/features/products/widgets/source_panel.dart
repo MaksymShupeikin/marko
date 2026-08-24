@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:heroicons/heroicons.dart';
@@ -6,7 +7,23 @@ import '../../../core/app_theme.dart';
 import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_button.dart';
 import '../products_controller.dart';
-import '../products_page.dart';
+
+Future<bool> pickAndImportCatalog(WidgetRef ref) async {
+  final file = await FilePicker.pickFile(
+    type: FileType.custom,
+    allowedExtensions: const ['xlsx'],
+  );
+  if (file == null) return false;
+  final bytes = await file.readAsBytes();
+  if (bytes.isEmpty) return false;
+  final imported = await ref
+      .read(catalogImportProvider.notifier)
+      .importFile(file.name, bytes);
+  if (imported) {
+    await ref.read(productsControllerProvider.notifier).refresh();
+  }
+  return imported;
+}
 
 /// The two ways products get into the catalog: an Excel export or a Prom.ua
 /// store. Same modal as the OEM lookup, so both overlays behave alike.

@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/firebase_auth_client.dart';
 import '../products/products_controller.dart';
-import '../products/products_page.dart'
+import '../products/widgets/catalog_filters.dart'
     show
         catalogSearchFieldProvider,
         catalogPriceMinFieldProvider,

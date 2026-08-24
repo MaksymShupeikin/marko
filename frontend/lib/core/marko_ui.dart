@@ -226,11 +226,7 @@ class MarkoTextField extends StatelessWidget {
         inputFormatters: inputFormatters,
         textInputAction: textInputAction,
         autofillHints: autofillHints,
-        style:
-            style ??
-            Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontSize: MarkoLayout.fieldFontSizeOf(context),
-            ),
+        style: style ?? MarkoLayout.fieldTextStyleOf(context),
         textAlignVertical: TextAlignVertical.center,
         onChanged: onChanged,
         onSubmitted: onSubmitted,

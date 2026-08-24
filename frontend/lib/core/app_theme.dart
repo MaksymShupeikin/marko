@@ -35,6 +35,19 @@ abstract final class MarkoLayout {
   /// Body/label text inside those controls, scaled with them.
   static double fieldFontSizeOf(BuildContext context) =>
       MediaQuery.sizeOf(context).width < 700 ? 15.0 : 13.5;
+
+  /// That text as a ready style, on top of the theme's body font.
+  static TextStyle fieldTextStyleOf(BuildContext context) =>
+      Theme.of(context).textTheme.bodyMedium?.copyWith(
+        fontSize: fieldFontSizeOf(context),
+      ) ??
+      TextStyle(fontSize: fieldFontSizeOf(context));
+
+  /// Дашборд і плаваючі панелі каталогу згортаються нижче цієї ширини.
+  static const compactWidth = 840.0;
+
+  static bool compactOf(BuildContext context) =>
+      MediaQuery.sizeOf(context).width < compactWidth;
 }
 
 /// Corner radii. Nothing in the product invents its own value.
