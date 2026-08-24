@@ -140,6 +140,7 @@ services:
     command: ["pytest", "-q"]
 
   frontend:
+    profiles: ["local", "frontend"]
     build:
       context: ./frontend
       args:
