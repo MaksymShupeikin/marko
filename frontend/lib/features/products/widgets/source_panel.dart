@@ -67,7 +67,7 @@ class _SourceGridState extends ConsumerState<CatalogSourceCards> {
       children: [
         _SourceTile(
           accent: colors.excelAccent,
-          logo: 'assets/logos/excel.png',
+          logo: 'assets/logos/excel.webp',
           monoLogo: true,
           title: 'XLSX вивантаження',
           subtitle: 'Візьмемо назву, ціну, бренд та всі номери запчастини',
@@ -81,7 +81,7 @@ class _SourceGridState extends ConsumerState<CatalogSourceCards> {
         const SizedBox(height: MarkoSpace.md),
         _SourceTile(
           accent: colors.promAccent,
-          logo: 'assets/logos/prom.png',
+          logo: 'assets/logos/prom.webp',
           title: 'Магазин Prom.ua',
           subtitle: 'Каталог за посиланням на магазин',
           child: _PromForm(

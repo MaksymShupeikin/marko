@@ -459,7 +459,7 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
     price: 265,
     currency: 'UAH',
     isAvailable: true,
-    imageUrl: 'assets/demo/oil_filter.jpg',
+    imageUrl: 'assets/demo/oil_filter.webp',
     storeName: 'Мій магазин на Prom',
     oemNumbers: ['P 2023', '06A 115 561 B', 'W 719/30'],
   );

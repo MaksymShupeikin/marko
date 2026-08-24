@@ -262,7 +262,7 @@ class _SourceBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(MarkoRadius.sm),
       ),
       child: Image.asset(
-        'assets/logos/prom.png',
+        'assets/logos/prom.webp',
         fit: BoxFit.contain,
         filterQuality: FilterQuality.medium,
       ),
