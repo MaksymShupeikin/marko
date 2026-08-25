@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from .routers.v1.auth import router as auth_router
 from .routers.v1.avtopro import router as avtopro_router
+from .routers.v1.billing import router as billing_router
 from .routers.v1.health import router as health_router
 from .routers.v1.jobs import router as jobs_router
 from .routers.v1.products import router as products_router
@@ -17,3 +18,4 @@ api_router.include_router(stores_router, prefix="/stores", tags=["stores"])
 api_router.include_router(products_router, prefix="/products", tags=["products"])
 api_router.include_router(jobs_router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(avtopro_router, prefix="/competitors", tags=["competitors"])
+api_router.include_router(billing_router, prefix="/billing", tags=["billing"])

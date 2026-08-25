@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser
+from marko.api.dependencies import CurrentUser, get_session
 from marko.api.schemas.competitor_prices import CompetitorPriceReportResponse
 from marko.api.sse import competitor_price_stream
+from marko.services.billing import consume_check
 from marko.services.competitor_prices import (
     competitor_prices_for_query,
     manual_search_query,
@@ -29,12 +31,14 @@ NameQuery = Annotated[str | None, Query(max_length=512)]
 
 @router.get("/search", response_model=CompetitorPriceReportResponse)
 async def search_competitors(
-    _current: CurrentUser,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
     oem: OemQuery,
     brand: BrandQuery = None,
     name: NameQuery = None,
     refresh: bool = False,
 ) -> CompetitorPriceReportResponse:
+    await consume_check(session, current.workspace_id)
     payload = await competitor_prices_for_query(
         manual_search_query(oem, brand, name), refresh=refresh
     )
@@ -48,13 +52,16 @@ async def search_competitors(
 
 @router.get("/search/stream")
 async def search_competitors_stream(
-    _current: CurrentUser,
+    current: CurrentUser,
+    session: Annotated[AsyncSession, Depends(get_session)],
     oem: OemQuery,
     brand: BrandQuery = None,
     name: NameQuery = None,
     refresh: bool = False,
 ) -> StreamingResponse:
     """Те саме, але з підписами стадій, поки джерела ще збираються."""
+    # Пейвол — до старту потоку: у генераторі сесії вже немає (див. sse.py).
+    await consume_check(session, current.workspace_id)
     return competitor_price_stream(
         manual_search_query(oem, brand, name), refresh=refresh
     )

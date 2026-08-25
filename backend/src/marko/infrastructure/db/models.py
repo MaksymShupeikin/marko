@@ -65,6 +65,17 @@ class Workspace(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(160))
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # Пейвол: скільки перевірок цін уже витрачено на цей воркспейс.
+    checks_used: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    # Білий список: постійний доступ без підписки (оновлюється вручну в БД).
+    has_free_access: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    # Коли воркспейс попросив повний доступ (null = не просив). Перший запит
+    # фіксується назавжди, повторні — no-op, тож дублів не буває.
+    access_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class WorkspaceMember(Base):

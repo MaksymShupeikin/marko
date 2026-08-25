@@ -47,6 +47,13 @@ logs-worker:
 migrate:
 	docker compose run --rm migrate
 
+# Whitelist: permanent free access for an account, e.g. `make grant-access EMAIL=x@y.com`
+grant-access:
+	docker compose exec -T db psql -U marko -d marko -c "UPDATE workspaces SET has_free_access = true WHERE id IN (SELECT wm.workspace_id FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE u.email = '$(EMAIL)');"
+
+revoke-access:
+	docker compose exec -T db psql -U marko -d marko -c "UPDATE workspaces SET has_free_access = false WHERE id IN (SELECT wm.workspace_id FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE u.email = '$(EMAIL)');"
+
 backup:
 	@mkdir -p backups
 	docker compose exec -T db pg_dump -U marko marko | gzip > backups/marko_$$(date +%Y%m%d_%H%M%S).sql.gz
@@ -76,6 +83,16 @@ deploy-frontend:
 		--dart-define=GOOGLE_CLIENT_ID=779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com
 	cp frontend/web/_redirects frontend/build/web/_redirects 2>/dev/null || true
 	cd frontend && npx wrangler pages deploy build/web --project-name=marko
+
+build-android:
+	cd frontend && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" flutter build appbundle --release \
+		--dart-define=API_BASE_URL=https://api.markoprice.com \
+		--dart-define=FIREBASE_API_KEY=AIzaSyB3z6DdrNqhHnMw6fwsrni8vhJ1Z66cgtA \
+		--dart-define=FIREBASE_AUTH_DOMAIN=marko-4941e.firebaseapp.com \
+		--dart-define=FIREBASE_PROJECT_ID=marko-4941e \
+		--dart-define=FIREBASE_MESSAGING_SENDER_ID=779526440182 \
+		--dart-define=FIREBASE_WEB_APP_ID=1:779526440182:web:050d87e4d64dccb57cd8d7 \
+		--dart-define=GOOGLE_CLIENT_ID=779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com
 
 update:
 	git pull

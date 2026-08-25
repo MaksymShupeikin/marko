@@ -21,6 +21,7 @@ x-backend-environment: &backend-environment
   SERPER_API_KEY: ${SERPER_API_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  FREE_CHECK_LIMIT: ${FREE_CHECK_LIMIT:-30}
   PYTHONDONTWRITEBYTECODE: 1
 
 x-backend: &backend

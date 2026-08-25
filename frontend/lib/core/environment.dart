@@ -19,7 +19,11 @@ abstract final class Environment {
 
   /// Web only: with it the page shows Google's own GIS button, without it the
   /// Firebase popup.
-  static const googleClientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
+  static const googleClientId = String.fromEnvironment(
+    'GOOGLE_CLIENT_ID',
+    defaultValue:
+        '779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com',
+  );
 
   static bool get isApplePlatform =>
       !kIsWeb &&

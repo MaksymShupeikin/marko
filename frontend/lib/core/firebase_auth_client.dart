@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'environment.dart';
+
 class AuthSession {
   const AuthSession({
     required this.uid,
@@ -171,7 +173,12 @@ class FirebaseAuthClient implements AuthClient {
         credential = await _auth.signInWithProvider(GoogleAuthProvider());
       } else if (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS) {
-        _googleInitialization ??= GoogleSignIn.instance.initialize();
+        _googleInitialization ??= GoogleSignIn.instance.initialize(
+          serverClientId: Environment.googleClientId,
+          clientId: defaultTargetPlatform == TargetPlatform.iOS
+              ? '779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8.apps.googleusercontent.com'
+              : Environment.googleClientId,
+        );
         await _googleInitialization;
         final account = await GoogleSignIn.instance.authenticate();
         final googleAuthentication = account.authentication;

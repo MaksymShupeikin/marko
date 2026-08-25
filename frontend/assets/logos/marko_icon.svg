@@ -1,11 +1,10 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Solid Full-Bleed Dark Background -->
   <rect width="1024" height="1024" fill="#09090B"/>
-  
-  <!-- Marko M-Chart: 4th down-stroke extended deeper before breakout surge -->
-  <polyline points="190,720 320,360 440,560 570,280 700,620 834,110"
-            style="fill:none;stroke:#FFFFFF;stroke-width:28;stroke-linecap:round;stroke-linejoin:round"/>
-  
-  <!-- Breakout Target Price Dot -->
-  <circle cx="834" cy="110" r="20" fill="#FFFFFF"/>
+  <polyline points="220,700 340,390 450,570 570,330 690,630 804,260"
+            fill="none"
+            stroke="#FFFFFF"
+            stroke-width="36"
+            stroke-linecap="round"
+            stroke-linejoin="round"/>
+  <circle cx="804" cy="260" r="26" fill="#FFFFFF"/>
 </svg>

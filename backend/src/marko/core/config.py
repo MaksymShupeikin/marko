@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     # Порожньо = джерело Google (Serper.dev) вимкнене.
     serper_api_key: str = ""
     openai_api_key: str = ""
+    # Пейвол: безкоштовні перевірки цін на воркспейс, далі — запит доступу.
+    free_check_limit: int = 30
     openai_base_url: str = ""  # напр. https://api.deepseek.com для DeepSeek або проксі
 
     model_config = SettingsConfigDict(

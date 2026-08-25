@@ -117,7 +117,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     // Онбординг поступився каталогу: капсула зверху, привиди в сітці.
-    expect(find.text('Синхронізація Prom.ua'), findsOneWidget);
+    expect(find.text('Синхронізація'), findsOneWidget);
     expect(
       find.text('Додайте товари з XLSX-вивантаження'),
       findsNothing,

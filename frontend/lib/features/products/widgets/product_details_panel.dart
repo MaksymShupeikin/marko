@@ -10,6 +10,7 @@ import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_cached_image.dart';
 import '../../../core/widgets/marko_loader.dart';
 import '../../../core/widgets/marko_toast.dart';
+import '../../billing/paywall.dart';
 import '../products_controller.dart';
 import '../products_models.dart';
 import 'product_management_dialogs.dart';
@@ -265,7 +266,7 @@ class ProductDetailsPreview extends StatelessWidget {
                             stage: searchStage,
                           )
                         else
-                          _CompetitorPricesReport(
+                          CompetitorPricesReport(
                             report: report,
                             product: product,
                           ),
@@ -811,20 +812,25 @@ class _CompetitorPrices extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: MarkoSpace.md),
-          prices.when(
-            loading: () => _CompetitorPricesLoading(productId: product.id),
-            error: (error, _) => MarkoInlineMessage(
-              message: error.toString(),
-              tone: MarkoMessageTone.error,
-              action: TextButton(
-                onPressed: () =>
-                    ref.refresh(competitorPricesProvider(product.id)),
-                child: const Text('Повторити'),
-              ),
+          if (showPaywallDemo)
+            const Center(child: PaywallCard())
+          else
+            prices.when(
+              loading: () => _CompetitorPricesLoading(productId: product.id),
+              error: (error, _) => isPaywallError(error)
+                  ? const Center(child: PaywallCard())
+                  : MarkoInlineMessage(
+                      message: error.toString(),
+                      tone: MarkoMessageTone.error,
+                      action: TextButton(
+                        onPressed: () =>
+                            ref.refresh(competitorPricesProvider(product.id)),
+                        child: const Text('Повторити'),
+                      ),
+                    ),
+              data: (report) =>
+                  CompetitorPricesReport(report: report, product: product),
             ),
-            data: (report) =>
-                _CompetitorPricesReport(report: report, product: product),
-          ),
         ],
       ),
     );
@@ -969,18 +975,20 @@ class _CompetitorPricesLoadingState
   }
 }
 
-class _CompetitorPricesReport extends StatefulWidget {
-  const _CompetitorPricesReport({required this.report, required this.product});
+/// Market report body: benchmark banner, min/median/max gauge and offer
+/// cards. Reused by the OEM lookup modal, where there is no own product
+/// (pass `product: null` — the "your price" comparisons just disappear).
+class CompetitorPricesReport extends StatefulWidget {
+  const CompetitorPricesReport({required this.report, this.product, super.key});
 
   final CompetitorPriceReport report;
-  final StoreProduct product;
+  final StoreProduct? product;
 
   @override
-  State<_CompetitorPricesReport> createState() =>
-      _CompetitorPricesReportState();
+  State<CompetitorPricesReport> createState() => _CompetitorPricesReportState();
 }
 
-class _CompetitorPricesReportState extends State<_CompetitorPricesReport> {
+class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
   bool _expanded = false;
 
   @override
@@ -988,7 +996,7 @@ class _CompetitorPricesReportState extends State<_CompetitorPricesReport> {
     final colors = MarkoTheme.of(context);
     final stats = widget.report.stats;
     final currency = widget.report.currency;
-    final userPrice = widget.product.price;
+    final userPrice = widget.product?.price;
 
     if (stats.offersTotal == 0) {
       return const MarkoInlineMessage(

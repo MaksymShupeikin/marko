@@ -36,6 +36,7 @@ from marko.services.bulk_products import (
     ensure_override,
     queue_refresh,
 )
+from marko.services.billing import consume_check
 from marko.services.competitor_prices import (
     competitor_prices_for_listing,
     listing_search_query,
@@ -236,6 +237,7 @@ async def competitor_prices(
     current: CurrentUser,
     refresh: bool = False,
 ) -> CompetitorPriceReportResponse:
+    await consume_check(session, current.workspace_id)
     try:
         payload = await competitor_prices_for_listing(
             session,
@@ -267,6 +269,8 @@ async def competitor_prices_stream(
             detail=str(exc),
         ) from exc
 
+    # Пейвол — до старту потоку: у генераторі сесії вже немає (див. sse.py).
+    await consume_check(session, current.workspace_id)
     return competitor_price_stream(query, refresh=refresh)
 
 
