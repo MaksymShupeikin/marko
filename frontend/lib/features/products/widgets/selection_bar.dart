@@ -10,6 +10,8 @@ import '../products_controller.dart';
 import '../products_models.dart';
 import 'product_management_dialogs.dart';
 
+enum _SelectionOp { none, refresh, delete }
+
 /// Actions applied to every ticked card at once; shown only while something
 /// is ticked, so the catalog looks unchanged the rest of the time.
 class SelectionBar extends ConsumerStatefulWidget {
@@ -37,7 +39,11 @@ class SelectionBar extends ConsumerStatefulWidget {
 }
 
 class _SelectionBarState extends ConsumerState<SelectionBar> {
-  bool _busy = false;
+  _SelectionOp _currentOp = _SelectionOp.none;
+
+  bool get _busy => _currentOp != _SelectionOp.none;
+  bool get _refreshing => _currentOp == _SelectionOp.refresh;
+  bool get _deleting => _currentOp == _SelectionOp.delete;
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +65,9 @@ class _SelectionBarState extends ConsumerState<SelectionBar> {
         icon: HeroIcons.arrowPath,
         label: 'Оновити за посиланням',
         onPressed: _busy ? null : _refresh,
-        iconOverride: _busy ? const MarkoLoader(size: 15) : null,
+        iconOverride: _refreshing
+            ? MarkoLoader(size: 15, color: colors.brand)
+            : null,
       ),
       _action(
         compact: compact,
@@ -67,6 +75,9 @@ class _SelectionBarState extends ConsumerState<SelectionBar> {
         label: 'Видалити',
         color: colors.negative,
         onPressed: _busy ? null : _delete,
+        iconOverride: _deleting
+            ? MarkoLoader(size: 15, color: colors.negative)
+            : null,
       ),
       _action(
         compact: compact,
@@ -168,8 +179,12 @@ class _SelectionBarState extends ConsumerState<SelectionBar> {
   }
 
   /// Блокує плашку на час дії та показує тост, якщо дія впала.
-  Future<void> _run(String errorTitle, Future<void> Function() action) async {
-    setState(() => _busy = true);
+  Future<void> _run(
+    String errorTitle,
+    _SelectionOp op,
+    Future<void> Function() action,
+  ) async {
+    setState(() => _currentOp = op);
     try {
       await action();
     } catch (error) {
@@ -182,7 +197,7 @@ class _SelectionBarState extends ConsumerState<SelectionBar> {
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _currentOp = _SelectionOp.none);
     }
   }
 
@@ -201,7 +216,7 @@ class _SelectionBarState extends ConsumerState<SelectionBar> {
   Future<void> _refresh() {
     final total = widget.count;
     final controller = ref.read(productsControllerProvider.notifier);
-    return _run('Не вдалося оновити', () async {
+    return _run('Не вдалося оновити', _SelectionOp.refresh, () async {
       // Весь каталог — це тисячі сторінок: працює фонове завдання, а плашка
       // показує його поступ. Кілька позначених оновлюємо тут і зараз.
       if (widget.allMatching) {
@@ -221,7 +236,7 @@ class _SelectionBarState extends ConsumerState<SelectionBar> {
     final total = widget.count;
     if (!await confirmBulkProductDeletion(context, count: total)) return;
     final controller = ref.read(productsControllerProvider.notifier);
-    await _run('Не вдалося видалити', () async {
+    await _run('Не вдалося видалити', _SelectionOp.delete, () async {
       if (widget.allMatching) {
         final deleted = await controller.deleteAllMatching();
         if (!mounted) return;

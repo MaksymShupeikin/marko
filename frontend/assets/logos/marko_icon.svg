@@ -3,9 +3,9 @@
   <rect width="1024" height="1024" fill="#09090B"/>
   
   <!-- Marko M-Chart: 4th down-stroke extended deeper before breakout surge -->
-  <polyline points="190,720 320,360 440,560 570,280 700,620 834,210" 
+  <polyline points="190,720 320,360 440,560 570,280 700,620 834,110"
             style="fill:none;stroke:#FFFFFF;stroke-width:28;stroke-linecap:round;stroke-linejoin:round"/>
   
   <!-- Breakout Target Price Dot -->
-  <circle cx="834" cy="210" r="20" fill="#FFFFFF"/>
+  <circle cx="834" cy="110" r="20" fill="#FFFFFF"/>
 </svg>

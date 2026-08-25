@@ -16,6 +16,14 @@
 				<string>marko</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleIconFile</key>
 	<string></string>

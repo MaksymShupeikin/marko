@@ -1,4 +1,4 @@
-package com.marko.marko_client
+package com.mshupeikin.marko
 
 import io.flutter.embedding.android.FlutterActivity
 

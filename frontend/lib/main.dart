@@ -1,5 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:toastification/toastification.dart';
@@ -15,6 +16,12 @@ import 'features/auth/auth_controller.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   usePathUrlStrategy();
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+    ),
+  );
   if (!Environment.usesNativeFirebaseConfig &&
       !Environment.hasFirebaseConfig) {
     runApp(
@@ -79,29 +86,53 @@ class MarkoApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     final themeMode = ref.watch(themeModeProvider);
+
+    final isDark = switch (themeMode) {
+      ThemeMode.dark => true,
+      ThemeMode.light => false,
+      ThemeMode.system =>
+        MediaQuery.platformBrightnessOf(context) == Brightness.dark,
+    };
+
+    final overlayStyle = SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness:
+          isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarDividerColor: Colors.transparent,
+    );
+
     if (auth.isLoading) {
-      return MaterialApp(
-        title: 'Marko',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.light,
-        darkTheme: AppTheme.dark,
-        themeMode: themeMode,
-        builder: AppTheme.touchTargets,
-        home: const Scaffold(body: _AppLoading()),
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: overlayStyle,
+        child: MaterialApp(
+          title: 'Marko',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: themeMode,
+          builder: AppTheme.touchTargets,
+          home: const Scaffold(body: _AppLoading()),
+        ),
       );
     }
-    return ToastificationWrapper(
-      child: MaterialApp.router(
-        title: 'Marko',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.light,
-        darkTheme: AppTheme.dark,
-        themeMode: themeMode,
-        builder: (context, child) => ToastificationConfigProvider(
-          config: markoToastConfig(context),
-          child: _AuthToasts(child: AppTheme.touchTargets(context, child)),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: ToastificationWrapper(
+        child: MaterialApp.router(
+          title: 'Marko',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: themeMode,
+          builder: (context, child) => ToastificationConfigProvider(
+            config: markoToastConfig(context),
+            child: _AuthToasts(child: AppTheme.touchTargets(context, child)),
+          ),
+          routerConfig: ref.watch(appRouterProvider),
         ),
-        routerConfig: ref.watch(appRouterProvider),
       ),
     );
   }

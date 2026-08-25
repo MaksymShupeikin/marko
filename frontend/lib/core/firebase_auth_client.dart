@@ -167,9 +167,10 @@ class FirebaseAuthClient implements AuthClient {
         // google_sign_in has no programmatic sign-in on the web — it only
         // renders its own button. Firebase's popup does the same job here.
         credential = await _auth.signInWithPopup(GoogleAuthProvider());
+      } else if (defaultTargetPlatform == TargetPlatform.macOS) {
+        credential = await _auth.signInWithProvider(GoogleAuthProvider());
       } else if (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.macOS) {
+          defaultTargetPlatform == TargetPlatform.iOS) {
         _googleInitialization ??= GoogleSignIn.instance.initialize();
         await _googleInitialization;
         final account = await GoogleSignIn.instance.authenticate();

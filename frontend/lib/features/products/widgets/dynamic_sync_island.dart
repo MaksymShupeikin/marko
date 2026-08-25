@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -11,8 +12,7 @@ import '../products_models.dart';
 import 'product_card.dart' show formatPriceNumber;
 
 /// A floating capsule reporting the running import: it hovers over the catalog
-/// instead of pushing it down, counts products as they land, and dissolves a
-/// few seconds after the job finishes.
+/// in the Stack, counts products as they land, and animates a glowing border beam.
 class DynamicSyncIsland extends ConsumerWidget {
   const DynamicSyncIsland({super.key});
 
@@ -41,6 +41,7 @@ class DynamicSyncIsland extends ConsumerWidget {
       child: sync == null
           ? const SizedBox.shrink()
           : _Capsule(
+              key: ValueKey(sync.syncRunId),
               job: import!.activeJob,
               status: sync.status,
               onDismiss: () => _dismiss(context, ref),
@@ -48,8 +49,7 @@ class DynamicSyncIsland extends ConsumerWidget {
     );
   }
 
-  /// Готовий чи впалий імпорт просто ховаємо; живий — зупиняємо, але лише
-  /// після підтвердження, бо закриття капсули скасовує завантаження.
+  /// Готовий чи впалий імпорт просто ховаємо; живий — зупиняємо після підтвердження.
   Future<void> _dismiss(BuildContext context, WidgetRef ref) async {
     final notifier = ref.read(catalogImportProvider.notifier);
     final job = ref.read(catalogImportProvider).value?.activeJob;
@@ -79,14 +79,14 @@ class DynamicSyncIsland extends ConsumerWidget {
                 shape: BoxShape.circle,
               ),
               alignment: Alignment.center,
-              child: HeroIcon(
+              child: const HeroIcon(
                 HeroIcons.stopCircle,
-                color: colors.negative,
+                color: Colors.redAccent,
                 size: 22,
               ),
             ),
             title: Text(
-              'Зупинити імпорт?',
+              'Зупинити синхронізацію?',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                     fontSize: 18,
@@ -95,8 +95,8 @@ class DynamicSyncIsland extends ConsumerWidget {
             content: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 380),
               child: Text(
-                'Завантаження каталогу з магазину зупиниться. '
-                'Уже імпортовані товари залишаться в каталозі.',
+                'Завантаження каталогу зупиниться. '
+                'Уже синхронізовані товари залишаться в каталозі.',
                 style: Theme.of(context)
                     .textTheme
                     .bodySmall
@@ -112,7 +112,7 @@ class DynamicSyncIsland extends ConsumerWidget {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Продовжити імпорт'),
+                child: const Text('Продовжити'),
               ),
               MarkoButton.danger(
                 label: 'Зупинити',
@@ -126,116 +126,274 @@ class DynamicSyncIsland extends ConsumerWidget {
   }
 }
 
-class _Capsule extends StatelessWidget {
+class _Capsule extends StatefulWidget {
   const _Capsule({
+    super.key,
     required this.job,
     required this.status,
     required this.onDismiss,
   });
 
   final SyncRun? job;
-
-  /// The status the sync was queued with, until the first poll answers.
   final String status;
   final VoidCallback onDismiss;
 
   @override
+  State<_Capsule> createState() => _CapsuleState();
+}
+
+class _CapsuleState extends State<_Capsule>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _beamController;
+
+  @override
+  void initState() {
+    super.initState();
+    _beamController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _Capsule oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final currentStatus = widget.job?.status ?? widget.status;
+    final isFinished = currentStatus == 'completed' ||
+        currentStatus == 'failed' ||
+        currentStatus == 'cancelled';
+    if (isFinished && _beamController.isAnimating) {
+      _beamController.stop();
+    } else if (!isFinished && !_beamController.isAnimating) {
+      _beamController.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _beamController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
-    final currentJob = job;
-    final currentStatus = currentJob?.status ?? status;
+    final currentJob = widget.job;
+    final currentStatus = currentJob?.status ?? widget.status;
     final failed = currentStatus == 'failed' || currentStatus == 'cancelled';
     final done = currentStatus == 'completed';
+    final inProgress = !done && !failed;
+
     final accent = failed
         ? colors.negative
         : done
-        ? colors.positive
-        : colors.promAccent;
+            ? colors.positive
+            : colors.promAccent;
+
     final count = currentJob?.progressCurrent ?? 0;
     final progress = currentJob?.progress;
+    final borderRadius = MarkoRadius.md;
 
     return Container(
       constraints: const BoxConstraints(maxWidth: 520),
       margin: const EdgeInsets.symmetric(horizontal: MarkoSpace.lg),
-      decoration: BoxDecoration(
-        color: colors.surface.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: accent.withValues(alpha: 0.45)),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.18),
-            blurRadius: 24,
-            spreadRadius: -6,
-            offset: const Offset(0, 8),
-          ),
-          ...MarkoShadow.overlay,
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(6, 6, MarkoSpace.sm, 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _SourceBadge(
-                  accent: accent,
-                  icon: failed
-                      ? HeroIcons.exclamationTriangle
-                      : done
-                      ? HeroIcons.check
-                      : null,
+      child: Stack(
+        children: [
+          // 1. Background surface with blur
+          Container(
+            decoration: BoxDecoration(
+              color: colors.surface.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(borderRadius),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: inProgress ? 0.18 : 0.12),
+                  blurRadius: inProgress ? 24 : 16,
+                  spreadRadius: -4,
+                  offset: const Offset(0, 6),
                 ),
-                const SizedBox(width: MarkoSpace.sm),
-                Flexible(
-                  child: Text(
-                    currentStatus == 'cancelled'
-                        ? 'Імпорт зупинено'
-                        : failed
-                        ? 'Імпорт не вдався'
-                        : done
-                        ? 'Каталог оновлено'
-                        : 'Синхронізація Prom.ua',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: colors.ink,
-                    ),
-                  ),
-                ),
-                if (!failed) ...[
-                  const SizedBox(width: MarkoSpace.sm),
-                  _CountChip(count: count, accent: accent, done: done),
-                ],
-                if (!done && !failed) ...[
-                  const SizedBox(width: MarkoSpace.sm),
-                  _MiniProgress(value: progress, accent: accent),
-                ],
-                const SizedBox(width: MarkoSpace.xs),
-                _DismissButton(onPressed: onDismiss),
+                ...MarkoShadow.overlay,
               ],
             ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(borderRadius),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 7, MarkoSpace.sm, 7),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _SyncBadge(
+                        accent: accent,
+                        icon: failed
+                            ? HeroIcons.exclamationTriangle
+                            : done
+                                ? HeroIcons.check
+                                : null,
+                      ),
+                      const SizedBox(width: MarkoSpace.sm),
+                      Flexible(
+                        child: Text(
+                          currentStatus == 'cancelled'
+                              ? 'Синхронізацію зупинено'
+                              : failed
+                                  ? 'Помилка синхронізації'
+                                  : done
+                                      ? 'Каталог оновлено'
+                                      : 'Синхронізація',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: colors.ink,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      if (!failed) ...[
+                        const SizedBox(width: MarkoSpace.sm),
+                        _CountChip(count: count, accent: accent, done: done),
+                      ],
+                      if (inProgress && progress != null) ...[
+                        const SizedBox(width: MarkoSpace.xs),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: colors.surfaceMuted,
+                            borderRadius:
+                                BorderRadius.circular(MarkoRadius.xs),
+                          ),
+                          child: Text(
+                            '${(progress * 100).round()}%',
+                            style: MarkoType.caption.copyWith(
+                              color: colors.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: MarkoSpace.xs),
+                      _DismissButton(onPressed: widget.onDismiss),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
+
+          // 2. Animated border beam (spinning around container perimeter while in progress)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedBuilder(
+                animation: _beamController,
+                builder: (context, _) {
+                  return CustomPaint(
+                    painter: _AnimatedBorderBeamPainter(
+                      progress: _beamController.value,
+                      accentColor: accent,
+                      radius: borderRadius,
+                      borderWidth: inProgress ? 1.8 : 1.0,
+                      inProgress: inProgress,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// The source logo badge on the left of the capsule (or status icon when done/failed).
-class _SourceBadge extends StatelessWidget {
-  const _SourceBadge({
+/// Custom painter that creates a neon traveling beam running along the rounded border.
+class _AnimatedBorderBeamPainter extends CustomPainter {
+  _AnimatedBorderBeamPainter({
+    required this.progress,
+    required this.accentColor,
+    required this.radius,
+    required this.borderWidth,
+    required this.inProgress,
+  });
+
+  final double progress;
+  final Color accentColor;
+  final double radius;
+  final double borderWidth;
+  final bool inProgress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(
+      rect.deflate(borderWidth / 2),
+      Radius.circular(radius),
+    );
+
+    if (!inProgress) {
+      // Solid settled border when finished/failed
+      final solidPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = borderWidth
+        ..color = accentColor.withValues(alpha: 0.45);
+      canvas.drawRRect(rrect, solidPaint);
+      return;
+    }
+
+    // 1. Subtle background track border
+    final basePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderWidth
+      ..color = accentColor.withValues(alpha: 0.18);
+    canvas.drawRRect(rrect, basePaint);
+
+    // 2. Rotating beam sweep gradient around the border
+    final startAngle = progress * 2 * math.pi;
+    final sweepGradient = SweepGradient(
+      center: Alignment.center,
+      startAngle: 0.0,
+      endAngle: math.pi * 2,
+      transform: GradientRotation(startAngle),
+      colors: [
+        accentColor.withValues(alpha: 0.0),
+        accentColor.withValues(alpha: 0.0),
+        accentColor.withValues(alpha: 0.25),
+        accentColor,
+        accentColor.withValues(alpha: 0.0),
+      ],
+      stops: const [0.0, 0.52, 0.76, 0.96, 1.0],
+    );
+
+    final beamPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderWidth + 0.6
+      ..shader = sweepGradient.createShader(rect);
+
+    canvas.drawRRect(rrect, beamPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _AnimatedBorderBeamPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.accentColor != accentColor ||
+      oldDelegate.inProgress != inProgress;
+}
+
+/// Dynamic sync badge: animated rotating icon while syncing, checkmark when done.
+class _SyncBadge extends StatelessWidget {
+  const _SyncBadge({
     required this.accent,
     required this.icon,
   });
 
   final Color accent;
-
-  /// Replaces the source logo once the job has an outcome.
   final HeroIcons? icon;
 
   @override
@@ -247,25 +405,19 @@ class _SourceBadge extends StatelessWidget {
         decoration: BoxDecoration(
           color: accent.withValues(alpha: 0.14),
           borderRadius: BorderRadius.circular(MarkoRadius.sm),
-          border: Border.all(color: accent.withValues(alpha: 0.3)),
+          border: Border.all(color: accent.withValues(alpha: 0.28)),
         ),
         alignment: Alignment.center,
         child: HeroIcon(icon!, size: 16, color: accent),
       );
     }
 
-    return Container(
+    return Image.asset(
+      'assets/logos/prom.webp',
       width: 28,
       height: 28,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(MarkoRadius.sm),
-      ),
-      child: Image.asset(
-        'assets/logos/prom.webp',
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-      ),
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.high,
     );
   }
 }
@@ -306,48 +458,6 @@ class _CountChip extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// A short bar plus a percentage; indeterminate while the total is unknown.
-class _MiniProgress extends StatelessWidget {
-  const _MiniProgress({required this.value, required this.accent});
-
-  final double? value;
-  final Color accent;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: SizedBox(
-            width: 64,
-            height: 4,
-            child: TweenAnimationBuilder<double>(
-              tween: Tween(end: value ?? 0),
-              duration: const Duration(milliseconds: 650),
-              curve: Curves.easeOutCubic,
-              builder: (context, animated, _) => LinearProgressIndicator(
-                value: value == null ? null : animated,
-                color: accent,
-                backgroundColor: colors.surfaceMuted,
-              ),
-            ),
-          ),
-        ),
-        if (value != null) ...[
-          const SizedBox(width: 6),
-          Text(
-            '${(value! * 100).round()}%',
-            style: MarkoType.caption.copyWith(color: colors.muted, fontSize: 11),
-          ),
-        ],
-      ],
     );
   }
 }

@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_button.dart';
+import '../../../core/widgets/marko_loader.dart';
 import '../products_controller.dart';
 import '../products_models.dart';
 
@@ -370,25 +371,35 @@ class _ResultsSkeleton extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(MarkoRadius.xs),
-            child: LinearProgressIndicator(
-              minHeight: 3,
-              color: colors.brand,
-              backgroundColor: colors.surfaceMuted,
-            ),
-          ),
-          const SizedBox(height: MarkoSpace.lg),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 250),
-            child: Text(
-              stage,
-              key: ValueKey(stage),
-              style: MarkoType.caption.copyWith(
-                color: colors.ink,
-                fontWeight: FontWeight.w500,
+          Row(
+            children: [
+              const MarkoLoader(size: 14),
+              const SizedBox(width: MarkoSpace.sm),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  layoutBuilder: (currentChild, previousChildren) => Stack(
+                    alignment: Alignment.centerLeft,
+                    children: <Widget>[
+                      ...previousChildren,
+                      ?currentChild,
+                    ],
+                  ),
+                  child: SizedBox(
+                    key: ValueKey(stage),
+                    width: double.infinity,
+                    child: Text(
+                      stage,
+                      textAlign: TextAlign.left,
+                      style: MarkoType.caption.copyWith(
+                        color: colors.ink,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
           const SizedBox(height: MarkoSpace.lg),
           for (final width in const [400.0, 320.0, 260.0]) ...[

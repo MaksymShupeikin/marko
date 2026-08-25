@@ -399,11 +399,16 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
   }
 
   Future<bool> addStore(String rawUrl) async {
-    final url = rawUrl.trim();
+    var url = rawUrl.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://$url';
+    }
     final uri = Uri.tryParse(url);
-    if (uri == null ||
-        !uri.hasScheme ||
-        (uri.host != 'prom.ua' && uri.host != 'www.prom.ua')) {
+    final host = uri?.host.toLowerCase() ?? '';
+    final isValidProm = host == 'prom.ua' ||
+        host == 'www.prom.ua' ||
+        host.endsWith('.prom.ua');
+    if (uri == null || !isValidProm) {
       state = AsyncData(
         _current.copyWith(
           error: 'Введіть коректне посилання магазину на prom.ua',
@@ -412,6 +417,10 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
       return false;
     }
     return _startSync(() => _api.addStore(url));
+  }
+
+  void setError(String error) {
+    state = AsyncData(_current.copyWith(error: error));
   }
 
   Future<bool> importFile(String filename, List<int> bytes) async {

@@ -193,6 +193,7 @@ class ProductDetailsPreview extends StatelessWidget {
     required this.product,
     required this.report,
     this.controller,
+    this.searchStage,
     super.key,
   });
 
@@ -201,6 +202,10 @@ class ProductDetailsPreview extends StatelessWidget {
 
   /// Lets the host drive the scroll (auth page auto-scrolls the demo).
   final ScrollController? controller;
+
+  /// Non-null — show the search-in-progress state with this stage caption
+  /// instead of the report (the auth demo loops a canned search).
+  final String? searchStage;
 
   @override
   Widget build(BuildContext context) {
@@ -254,10 +259,16 @@ class ProductDetailsPreview extends StatelessWidget {
                               ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: MarkoSpace.md),
-                        _CompetitorPricesReport(
-                          report: report,
-                          product: product,
-                        ),
+                        if (searchStage != null)
+                          _CompetitorPricesLoading(
+                            productId: product.id,
+                            stage: searchStage,
+                          )
+                        else
+                          _CompetitorPricesReport(
+                            report: report,
+                            product: product,
+                          ),
                       ],
                     ),
                   ),
@@ -503,12 +514,12 @@ class _Header extends StatelessWidget {
                         color: colors.negative,
                       ),
                     ),
-                  IconButton(
-                    tooltip: 'Закрити',
-                    onPressed: onClose,
-                    visualDensity: dense ? VisualDensity.compact : null,
-                    icon: HeroIcon(HeroIcons.xMark, size: dense ? 17 : 20),
-                  ),
+                  if (!dense)
+                    IconButton(
+                      tooltip: 'Закрити',
+                      onPressed: onClose,
+                      icon: const HeroIcon(HeroIcons.xMark, size: 20),
+                    ),
                 ],
               ),
             ],
@@ -821,9 +832,12 @@ class _CompetitorPrices extends ConsumerWidget {
 }
 
 class _CompetitorPricesLoading extends ConsumerStatefulWidget {
-  const _CompetitorPricesLoading({required this.productId});
+  const _CompetitorPricesLoading({required this.productId, this.stage});
 
   final String productId;
+
+  /// Canned stage caption (auth-page demo); null — live provider value.
+  final String? stage;
 
   @override
   ConsumerState<_CompetitorPricesLoading> createState() =>
@@ -854,6 +868,7 @@ class _CompetitorPricesLoadingState
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final stage =
+        widget.stage ??
         ref.watch(competitorStageProvider(widget.productId)) ??
         'Скануємо актуальні ціни на ринку...';
     return AnimatedBuilder(
@@ -884,12 +899,23 @@ class _CompetitorPricesLoadingState
                   Expanded(
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 250),
-                      child: Text(
-                        stage,
+                      layoutBuilder: (currentChild, previousChildren) => Stack(
+                        alignment: Alignment.centerLeft,
+                        children: <Widget>[
+                          ...previousChildren,
+                          ?currentChild,
+                        ],
+                      ),
+                      child: SizedBox(
                         key: ValueKey(stage),
-                        style: MarkoType.caption.copyWith(
-                          color: colors.ink,
-                          fontWeight: FontWeight.w500,
+                        width: double.infinity,
+                        child: Text(
+                          stage,
+                          textAlign: TextAlign.left,
+                          style: MarkoType.caption.copyWith(
+                            color: colors.ink,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
                     ),

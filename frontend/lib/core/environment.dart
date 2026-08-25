@@ -14,31 +14,65 @@ abstract final class Environment {
     'FIREBASE_MESSAGING_SENDER_ID',
   );
   static const firebaseWebAppId = String.fromEnvironment('FIREBASE_WEB_APP_ID');
+  static const firebaseIosAppId = String.fromEnvironment('FIREBASE_IOS_APP_ID');
+  static const firebaseIosApiKey = String.fromEnvironment('FIREBASE_IOS_API_KEY');
 
   /// Web only: with it the page shows Google's own GIS button, without it the
   /// Firebase popup.
   static const googleClientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
 
+  static bool get isApplePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
   static bool get usesNativeFirebaseConfig =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.macOS);
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   static bool get hasFirebaseConfig =>
-      firebaseApiKey.isNotEmpty &&
-      firebaseAuthDomain.isNotEmpty &&
-      firebaseProjectId.isNotEmpty &&
-      firebaseMessagingSenderId.isNotEmpty &&
-      firebaseWebAppId.isNotEmpty;
+      isApplePlatform ||
+      (firebaseApiKey.isNotEmpty &&
+          firebaseAuthDomain.isNotEmpty &&
+          firebaseProjectId.isNotEmpty &&
+          firebaseMessagingSenderId.isNotEmpty &&
+          firebaseWebAppId.isNotEmpty);
 
-  static FirebaseOptions get firebaseOptions => FirebaseOptions(
-    apiKey: firebaseApiKey,
-    appId: firebaseWebAppId,
-    messagingSenderId: firebaseMessagingSenderId,
-    projectId: firebaseProjectId,
-    authDomain: firebaseAuthDomain,
-  );
+  static FirebaseOptions get firebaseOptions {
+    if (isApplePlatform) {
+      return FirebaseOptions(
+        apiKey: firebaseIosApiKey.isNotEmpty
+            ? firebaseIosApiKey
+            : (firebaseApiKey.isNotEmpty
+                ? firebaseApiKey
+                : 'AIzaSyDhdhtX-CGLyR-PxOQbJOWC4Hu7L4AvjBY'),
+        appId: firebaseIosAppId.isNotEmpty
+            ? firebaseIosAppId
+            : '1:779526440182:ios:46665092bb7e5ed97cd8d7',
+        messagingSenderId: firebaseMessagingSenderId.isNotEmpty
+            ? firebaseMessagingSenderId
+            : '779526440182',
+        projectId: firebaseProjectId.isNotEmpty
+            ? firebaseProjectId
+            : 'marko-4941e',
+        authDomain: firebaseAuthDomain.isNotEmpty
+            ? firebaseAuthDomain
+            : 'marko-4941e.firebaseapp.com',
+        iosBundleId: 'com.mshupeikin.marko',
+        iosClientId:
+            '779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8.apps.googleusercontent.com',
+        storageBucket: 'marko-4941e.firebasestorage.app',
+      );
+    }
+    return FirebaseOptions(
+      apiKey: firebaseApiKey,
+      appId: firebaseWebAppId,
+      messagingSenderId: firebaseMessagingSenderId,
+      projectId: firebaseProjectId,
+      authDomain: firebaseAuthDomain,
+    );
+  }
 
   static bool get supportsGoogleSignIn =>
       kIsWeb ||
@@ -48,9 +82,6 @@ abstract final class Environment {
 
   static String get apiBaseUrl {
     if (_configuredApiUrl.isNotEmpty) return _configuredApiUrl;
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000';
-    }
-    return 'http://localhost:8000';
+    return 'https://api.markoprice.com';
   }
 }

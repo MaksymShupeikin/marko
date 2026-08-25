@@ -9,20 +9,28 @@ import '../../../core/widgets/marko_button.dart';
 import '../products_controller.dart';
 
 Future<bool> pickAndImportCatalog(WidgetRef ref) async {
-  final file = await FilePicker.pickFile(
-    type: FileType.custom,
-    allowedExtensions: const ['xlsx'],
-  );
-  if (file == null) return false;
-  final bytes = await file.readAsBytes();
-  if (bytes.isEmpty) return false;
-  final imported = await ref
-      .read(catalogImportProvider.notifier)
-      .importFile(file.name, bytes);
-  if (imported) {
-    await ref.read(productsControllerProvider.notifier).refresh();
+  try {
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['xlsx', 'csv'],
+    );
+    if (file == null) return false;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) {
+      ref.read(catalogImportProvider.notifier).setError('Не вдалося прочитати обраний файл');
+      return false;
+    }
+    final imported = await ref
+        .read(catalogImportProvider.notifier)
+        .importFile(file.name, bytes);
+    if (imported) {
+      await ref.read(productsControllerProvider.notifier).refresh();
+    }
+    return imported;
+  } catch (error) {
+    ref.read(catalogImportProvider.notifier).setError('Помилка імпорту файлу: $error');
+    return false;
   }
-  return imported;
 }
 
 /// The two ways products get into the catalog: an Excel export or a Prom.ua
@@ -369,28 +377,30 @@ class _SourceTileState extends State<_SourceTile> {
                 children: [
                   Row(
                     children: [
-                      // Гліф іде від краю до краю, тому живе в полях на
-                      // підкладці; готовий логотип сам займає весь чіп.
-                      Container(
-                        width: 28,
-                        height: 28,
-                        clipBehavior: Clip.antiAlias,
-                        padding: widget.monoLogo
-                            ? const EdgeInsets.all(4)
-                            : EdgeInsets.zero,
-                        decoration: BoxDecoration(
-                          color: widget.monoLogo
-                              ? accent.withValues(alpha: 0.12)
-                              : null,
-                          borderRadius: BorderRadius.circular(MarkoRadius.sm),
-                        ),
-                        child: Image.asset(
+                      if (widget.monoLogo)
+                        Container(
+                          width: 28,
+                          height: 28,
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: accent.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(MarkoRadius.sm),
+                          ),
+                          child: Image.asset(
+                            widget.logo,
+                            fit: BoxFit.contain,
+                            color: accent,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        )
+                      else
+                        Image.asset(
                           widget.logo,
+                          width: 28,
+                          height: 28,
                           fit: BoxFit.contain,
-                          color: widget.monoLogo ? accent : null,
-                          filterQuality: FilterQuality.medium,
+                          filterQuality: FilterQuality.high,
                         ),
-                      ),
                       const SizedBox(width: MarkoSpace.md),
                       Expanded(
                         child: Column(

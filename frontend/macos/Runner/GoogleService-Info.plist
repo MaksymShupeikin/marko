@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>779526440182-06j0k6j6e40pjg08uek8tghg9ti8g9h6.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyDhdhtX-CGLyR-PxOQbJOWC4Hu7L4AvjBY</string>
+	<key>GCM_SENDER_ID</key>
+	<string>779526440182</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.mshupeikin.marko</string>
+	<key>PROJECT_ID</key>
+	<string>marko-4941e</string>
+	<key>STORAGE_BUCKET</key>
+	<string>marko-4941e.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:779526440182:ios:46665092bb7e5ed97cd8d7</string>
+</dict>
+</plist>

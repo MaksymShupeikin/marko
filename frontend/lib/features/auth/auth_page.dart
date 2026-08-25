@@ -442,17 +442,41 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
   late final AnimationController _autoScroll;
   final _scroll = ScrollController();
   Timer? _resumeTimer;
+  Timer? _stageTimer;
   Offset _hoverOffset = Offset.zero;
   bool _isHovered = false;
+  String? _searchStage;
 
   static const _searchQuery = 'markoprice.com';
+
+  /// The real backend stages, canned: the demo loops the exact captions the
+  /// live search emits, then shows the report and re-runs every 10 seconds.
+  static const _searchStages = [
+    ('Готуємо пошукові запити', Duration(milliseconds: 1400)),
+    ('Збираємо пропозиції: Avto.pro', Duration(milliseconds: 2400)),
+    ('Avto.pro: знайдено 28', Duration(milliseconds: 1100)),
+    ('Звіряємо 34 варіанти з нашою деталлю', Duration(milliseconds: 2400)),
+    ('Відсіяли 6 чужих позицій', Duration(milliseconds: 900)),
+  ];
+
+  void _runDemoSearch([int step = 0]) {
+    if (!mounted) return;
+    if (step >= _searchStages.length) {
+      setState(() => _searchStage = null);
+      _stageTimer = Timer(const Duration(seconds: 10), _runDemoSearch);
+      return;
+    }
+    final (caption, duration) = _searchStages[step];
+    setState(() => _searchStage = caption);
+    _stageTimer = Timer(duration, () => _runDemoSearch(step + 1));
+  }
 
   /// Canned catalog product + market report: the preview renders the exact
   /// product details sheet the app shows, scrollable, with results in place.
   /// Photo: Wikimedia Commons "Bosch Oil Filter.JPG", CC BY-SA 4.0.
   static const _demoProduct = StoreProduct(
     id: 'demo',
-    name: 'Фільтр масляний Bosch P 2023 (оригінал)',
+    name: 'Фільтр масляний Bosch P 2023 для VW Golf IV / Skoda Octavia Tour 1.6-1.8T (оригінал)',
     url: '',
     sku: '0986452023',
     brand: 'BOSCH',
@@ -562,11 +586,13 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
       duration: const Duration(seconds: 22),
     )..addListener(_tickAutoScroll);
     _autoScroll.repeat(reverse: true);
+    _stageTimer = Timer(const Duration(seconds: 10), _runDemoSearch);
   }
 
   @override
   void dispose() {
     _resumeTimer?.cancel();
+    _stageTimer?.cancel();
     _animController.dispose();
     _autoScroll.dispose();
     _scroll.dispose();
@@ -779,6 +805,7 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
                                 product: _demoProduct,
                                 report: _demoReport,
                                 controller: _scroll,
+                                searchStage: _searchStage,
                               ),
                               // Scroll affordance: fades away once past the top.
                               Positioned(

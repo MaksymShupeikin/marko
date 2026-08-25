@@ -99,7 +99,7 @@ class MarkoChartPainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.fill;
 
-    final tip = Offset(size.width * 0.90, size.height * 0.16);
+    final tip = Offset(size.width * 0.90, size.height * 0.06);
 
     final path = Path()
       ..moveTo(size.width * 0.08, size.height * 0.84)

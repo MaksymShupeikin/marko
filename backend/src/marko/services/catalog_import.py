@@ -91,6 +91,11 @@ async def _run_import(
                 imported += await persist_products(session, store.id, batch)
                 batch.clear()
                 sync_run.progress_current = imported
+                # Тумбстоуни знімаємо кожним батчем, а не лише в кінці — інакше
+                # при повторному імпорті картки не з'являються до завершення.
+                await listings_repo.undelete_listings_for_store(
+                    session, sync_run.workspace_id, store.id
+                )
                 await session.commit()
 
         if batch:

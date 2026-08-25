@@ -48,6 +48,42 @@
           ]
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:779526440182:android:14d8865ab0ce438b7cd8d7",
+        "android_client_info": {
+          "package_name": "com.mshupeikin.marko"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBLG7S64Q6FD2udmZB0ysXkc4jfhyHe80s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.mshupeikin.marko"
+              }
+            }
+          ]
+        }
+      }
     }
   ],
   "configuration_version": "1"

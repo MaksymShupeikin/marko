@@ -8,7 +8,7 @@
 PRODUCT_NAME = marko
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.marko.markoClient
+PRODUCT_BUNDLE_IDENTIFIER = com.mshupeikin.marko
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.marko. All rights reserved.
