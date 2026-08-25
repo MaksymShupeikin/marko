@@ -7,56 +7,28 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:779526440182:android:42d76d7fcc81d3767cd8d7",
-        "android_client_info": {
-          "package_name": "com.marko.marko_client"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "779526440182-peu677h0ki829c1a2glhovhj85re8ang.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.marko.marko_client",
-            "certificate_hash": "e18a769e5c5c3fc633141d603c4341e31085649e"
-          }
-        },
-        {
-          "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBLG7S64Q6FD2udmZB0ysXkc4jfhyHe80s"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "779526440182-jkqhf08di79ts3r5ngol2v22d6234tu8.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.mshupeikin.marko"
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
         "mobilesdk_app_id": "1:779526440182:android:14d8865ab0ce438b7cd8d7",
         "android_client_info": {
           "package_name": "com.mshupeikin.marko"
         }
       },
       "oauth_client": [
+        {
+          "client_id": "779526440182-fbue8vedm8jm72emd1n7efmfpcmcgsc5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mshupeikin.marko",
+            "certificate_hash": "e18a769e5c5c3fc633141d603c4341e31085649e"
+          }
+        },
+        {
+          "client_id": "779526440182-quos0kdvd30e7467is3vfk58nvrcnrip.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mshupeikin.marko",
+            "certificate_hash": "0f717a573e6f7cc83f1cb96da61588839fbeefef"
+          }
+        },
         {
           "client_id": "779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com",
           "client_type": 3
