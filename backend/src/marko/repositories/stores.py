@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from sqlalchemy import select, func
+from sqlalchemy import and_, or_, select, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,26 +11,44 @@ from marko.infrastructure.db.models import (
     StoreKind,
     SyncRun,
     SyncStatus,
+    WorkspaceListingOverride,
     WorkspaceStore,
 )
+
+
+def _store_with_count_query(workspace_id: uuid.UUID):
+    """Stores with the count of listings the workspace actually sees.
+
+    Приховані (is_deleted) товари не рахуємо — інакше лічильник показує
+    більше, ніж є в каталозі.
+    """
+    visible = func.count(Listing.id).filter(
+        or_(
+            WorkspaceListingOverride.is_deleted.is_(None),
+            WorkspaceListingOverride.is_deleted.is_(False),
+        )
+    )
+    return (
+        select(MarketplaceStore, WorkspaceStore.kind, visible.label("product_count"))
+        .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
+        .outerjoin(Listing, Listing.store_id == MarketplaceStore.id)
+        .outerjoin(
+            WorkspaceListingOverride,
+            and_(
+                WorkspaceListingOverride.listing_id == Listing.id,
+                WorkspaceListingOverride.workspace_id == workspace_id,
+            ),
+        )
+        .where(WorkspaceStore.workspace_id == workspace_id)
+        .group_by(MarketplaceStore.id, WorkspaceStore.kind)
+    )
 
 
 async def get_store_by_id(
     session: AsyncSession, store_id: uuid.UUID, workspace_id: uuid.UUID
 ) -> tuple[MarketplaceStore, StoreKind, int] | None:
-    statement = (
-        select(
-            MarketplaceStore,
-            WorkspaceStore.kind,
-            func.count(Listing.id).label("product_count"),
-        )
-        .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
-        .outerjoin(Listing, Listing.store_id == MarketplaceStore.id)
-        .where(
-            WorkspaceStore.workspace_id == workspace_id,
-            MarketplaceStore.id == store_id,
-        )
-        .group_by(MarketplaceStore.id, WorkspaceStore.kind)
+    statement = _store_with_count_query(workspace_id).where(
+        MarketplaceStore.id == store_id
     )
     row = (await session.execute(statement)).one_or_none()
     return row  # Returns a tuple (store, kind, product_count) or None
@@ -39,17 +57,8 @@ async def get_store_by_id(
 async def list_stores(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> list[tuple[MarketplaceStore, StoreKind, int]]:
-    statement = (
-        select(
-            MarketplaceStore,
-            WorkspaceStore.kind,
-            func.count(Listing.id).label("product_count"),
-        )
-        .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
-        .outerjoin(Listing, Listing.store_id == MarketplaceStore.id)
-        .where(WorkspaceStore.workspace_id == workspace_id)
-        .group_by(MarketplaceStore.id, WorkspaceStore.kind)
-        .order_by(MarketplaceStore.created_at.desc())
+    statement = _store_with_count_query(workspace_id).order_by(
+        MarketplaceStore.created_at.desc()
     )
     rows = (await session.execute(statement)).all()
     return [(row[0], row[1], row[2]) for row in rows]

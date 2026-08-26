@@ -137,6 +137,44 @@ class ProductUpdate {
 
 typedef Product = StoreProduct;
 
+/// One connected store from which the catalog was imported.
+class StoreInfo {
+  const StoreInfo({
+    required this.id,
+    required this.name,
+    required this.url,
+    required this.productCount,
+    this.logoUrl,
+  });
+
+  factory StoreInfo.fromJson(Map<String, dynamic> json) {
+    return StoreInfo(
+      id: json['id'] as String,
+      name: json['name'] as String? ?? '',
+      url: json['url'] as String? ?? '',
+      productCount: (json['product_count'] as num?)?.toInt() ?? 0,
+      logoUrl: json['logo_url'] as String?,
+    );
+  }
+
+  final String id;
+  final String name;
+  final String url;
+  final int productCount;
+  final String? logoUrl;
+
+  String get productCountLabel {
+    final n = productCount;
+    final mod10 = n % 10, mod100 = n % 100;
+    final word = (mod10 == 1 && mod100 != 11)
+        ? 'товар'
+        : (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14))
+        ? 'товари'
+        : 'товарів';
+    return '$n $word';
+  }
+}
+
 class CatalogPage {
   const CatalogPage({required this.items, required this.total});
 
@@ -169,6 +207,7 @@ class CatalogState {
     this.allMatchingSelected = false,
     this.bulkJob,
     this.source = ProductSource.all,
+    this.storeIds = const {},
     this.hasImportedProducts = false,
     this.error,
   });
@@ -192,6 +231,9 @@ class CatalogState {
   /// Progress of a running catalog-wide refresh.
   final SyncRun? bulkJob;
   final ProductSource source;
+
+  /// Ticked store cards above the catalog; empty — every store.
+  final Set<String> storeIds;
   final bool hasImportedProducts;
   final String? error;
 
@@ -206,17 +248,13 @@ class CatalogState {
       query.trim().isNotEmpty ||
       priceMin != null ||
       priceMax != null ||
-      source != ProductSource.all;
+      source != ProductSource.all ||
+      storeIds.isNotEmpty;
 
   /// Nothing imported yet, as opposed to a search or a filter that found
   /// nothing: only then is the whole catalog UI pointless.
   bool get isPristineEmpty =>
-      !hasImportedProducts &&
-      page.items.isEmpty &&
-      query.trim().isEmpty &&
-      priceMin == null &&
-      priceMax == null &&
-      source == ProductSource.all;
+      !hasImportedProducts && page.items.isEmpty && !hasActiveFilters;
 
   CatalogState copyWith({
     CatalogPage? page,
@@ -230,6 +268,7 @@ class CatalogState {
     bool? allMatchingSelected,
     SyncRun? bulkJob,
     ProductSource? source,
+    Set<String>? storeIds,
     bool? hasImportedProducts,
     String? error,
     bool clearSelected = false,
@@ -249,6 +288,7 @@ class CatalogState {
       allMatchingSelected: allMatchingSelected ?? this.allMatchingSelected,
       bulkJob: clearBulkJob ? null : bulkJob ?? this.bulkJob,
       source: source ?? this.source,
+      storeIds: storeIds ?? this.storeIds,
       hasImportedProducts: hasImportedProducts ?? this.hasImportedProducts,
       error: clearError ? null : error ?? this.error,
     );
@@ -462,6 +502,7 @@ class CompetitorPriceStats {
     this.minPrice,
     this.medianPrice,
     this.maxPrice,
+    this.recommendedPrice,
   });
 
   factory CompetitorPriceStats.fromJson(Map<String, dynamic> json) {
@@ -476,6 +517,7 @@ class CompetitorPriceStats {
       minPrice: price('min_price'),
       medianPrice: price('median_price'),
       maxPrice: price('max_price'),
+      recommendedPrice: price('recommended_price'),
     );
   }
 
@@ -484,6 +526,9 @@ class CompetitorPriceStats {
   final double? minPrice;
   final double? medianPrice;
   final double? maxPrice;
+
+  /// Конкретна сума до виставлення: трохи нижче мінімуму конкурентів.
+  final double? recommendedPrice;
 }
 
 class CompetitorPriceReport {

@@ -12,7 +12,7 @@ from .exceptions import ParseError, RequestFailed
 from marko.services.parser_models import ListingPage, Product, Seller
 
 from .client import AsyncHttpClient
-from .parser import parse_listing, parse_product_group_ids
+from .parser import parse_company_logo, parse_listing, parse_product_group_ids
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ class PromGateway:
 
     def __init__(self, config: ScrapeConfig | None = None) -> None:
         self._config = config or ScrapeConfig()
+        # Лого продавця з першої сторінки останнього scrape — без зайвого GET.
+        self.company_logo: str | None = None
 
     def scrape(self, seller_url: str, *, strict: bool = False) -> Iterator[Product]:
         """Return unique seller products for synchronous CLI callers."""
@@ -84,6 +86,7 @@ class PromGateway:
         first_request = _ListingRequest(seller, self._config.start_page)
         async with AsyncHttpClient(self._config) as client:
             first_listing = await self._fetch_listing(client, first_request)
+            self.company_logo = parse_company_logo(first_listing.html)
             if first_listing.page.is_empty:
                 log.info("Каталог продавця порожній.")
                 return

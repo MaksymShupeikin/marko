@@ -36,6 +36,7 @@ class StoreResponse(BaseModel):
     external_id: str
     name: str | None
     url: str
+    logo_url: str | None = None
     kind: str
     product_count: int
     last_synced_at: datetime | None
@@ -55,6 +56,7 @@ class CatalogFilterRequest(BaseModel):
     price_min: float | None = Field(default=None, ge=0)
     price_max: float | None = Field(default=None, ge=0)
     source: Literal["export", "scrape"] | None = None
+    store_ids: list[UUID] = Field(default_factory=list, max_length=50)
 
     def to_filter(self) -> CatalogFilter:
         return CatalogFilter(
@@ -62,6 +64,7 @@ class CatalogFilterRequest(BaseModel):
             price_min=self.price_min,
             price_max=self.price_max,
             source=self.source,
+            store_ids=tuple(str(value) for value in self.store_ids),
         )
 
 

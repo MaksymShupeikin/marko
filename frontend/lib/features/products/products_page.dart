@@ -15,6 +15,7 @@ import 'widgets/product_details_panel.dart';
 import 'widgets/product_grid.dart';
 import 'widgets/selection_bar.dart';
 import 'widgets/source_panel.dart';
+import 'widgets/stores_strip.dart';
 
 /// Нижня панель дашборда (імпорт каталогу / ціни конкурентів) на мобілці.
 const _bottomBarHeight = 76.0;
@@ -109,30 +110,44 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                       children: [
                         const SizedBox(height: MarkoSpace.xxl),
                         const SourcePanel(),
-                        const SizedBox(height: MarkoSpace.md),
-                        if (onboarding)
-                          const CatalogOnboarding()
-                        else
-                          _CatalogToolbar(
-                            total: state?.page.total,
-                            busy: state?.isRefreshing ?? false,
-                          ),
-                        if (state?.error != null) ...[
+                        if (onboarding) ...[
                           const SizedBox(height: MarkoSpace.md),
-                          MarkoInlineMessage(
-                            message: state!.error!,
-                            tone: MarkoMessageTone.error,
-                            action: TextButton(
-                              onPressed: controller.dismissError,
-                              child: const Text('Закрити'),
-                            ),
-                          ),
+                          const CatalogOnboarding(),
                         ],
-                        const SizedBox(height: MarkoSpace.lg),
                       ],
                     ),
                   ),
                 ),
+                if (!onboarding) ...[
+                  const SliverToBoxAdapter(
+                    child: StoresStrip(),
+                  ),
+                  SliverToBoxAdapter(
+                    child: MarkoContentFrame(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _CatalogToolbar(
+                            total: state?.page.total,
+                            busy: state?.isRefreshing ?? false,
+                          ),
+                          if (state?.error != null) ...[
+                            const SizedBox(height: MarkoSpace.md),
+                            MarkoInlineMessage(
+                              message: state!.error!,
+                              tone: MarkoMessageTone.error,
+                              action: TextButton(
+                                onPressed: controller.dismissError,
+                                child: const Text('Закрити'),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: MarkoSpace.lg),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
                 ...switch (catalog) {
                   AsyncLoading() => [const GridSkeletonSliver()],
                   AsyncError(:final error) => [

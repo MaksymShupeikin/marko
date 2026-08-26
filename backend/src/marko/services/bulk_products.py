@@ -55,9 +55,13 @@ class CatalogFilter:
     price_min: float | None = None
     price_max: float | None = None
     source: str | None = None
+    # Рядки, а не UUID: фільтр їде в celery-таску через JSON.
+    store_ids: tuple[str, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["store_ids"] = list(self.store_ids)
+        return data
 
     @classmethod
     def from_json(cls, data: dict[str, Any] | None) -> CatalogFilter:
@@ -67,7 +71,12 @@ class CatalogFilter:
             price_min=data.get("price_min"),
             price_max=data.get("price_max"),
             source=data.get("source"),
+            store_ids=tuple(data.get("store_ids") or ()),
         )
+
+    @property
+    def store_uuids(self) -> list[UUID]:
+        return [UUID(value) for value in self.store_ids]
 
 
 async def _matching_ids(
@@ -80,6 +89,7 @@ async def _matching_ids(
         price_min=catalog_filter.price_min,
         price_max=catalog_filter.price_max,
         source=catalog_filter.source,
+        store_ids=catalog_filter.store_uuids,
     )
 
 
@@ -160,6 +170,7 @@ async def refresh_matching(sync_run_id: UUID, catalog_filter: CatalogFilter) -> 
             price_min=catalog_filter.price_min,
             price_max=catalog_filter.price_max,
             source=catalog_filter.source,
+            store_ids=catalog_filter.store_uuids,
         )
         sync_run.status = SyncStatus.running
         sync_run.started_at = datetime.now(UTC)

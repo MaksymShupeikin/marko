@@ -63,6 +63,7 @@ def _workspace_listings_query(
     price_min: float | None,
     price_max: float | None,
     source: str | None = None,
+    store_ids: list[uuid.UUID] | None = None,
 ):
     statement = (
         select(
@@ -101,6 +102,8 @@ def _workspace_listings_query(
         statement = statement.where(Listing.url.ilike(_EXPORT_URL_PATTERN))
     elif source == "scrape":
         statement = statement.where(~Listing.url.ilike(_EXPORT_URL_PATTERN))
+    if store_ids:
+        statement = statement.where(Listing.store_id.in_(store_ids))
     if price_min is not None:
         statement = statement.where(
             _effective(
@@ -142,6 +145,7 @@ async def count_workspace_listings(
     price_min: float | None = None,
     price_max: float | None = None,
     source: str | None = None,
+    store_ids: list[uuid.UUID] | None = None,
 ) -> int:
     statement = _workspace_listings_query(
         workspace_id,
@@ -149,6 +153,7 @@ async def count_workspace_listings(
         price_min=price_min,
         price_max=price_max,
         source=source,
+        store_ids=store_ids,
     ).with_only_columns(func.count(Listing.id))
     return (await session.execute(statement)).scalar_one()
 
@@ -161,6 +166,7 @@ async def search_workspace_listings(
     price_min: float | None = None,
     price_max: float | None = None,
     source: str | None = None,
+    store_ids: list[uuid.UUID] | None = None,
     order: str = "name",
     limit: int = 60,
     offset: int = 0,
@@ -179,6 +185,7 @@ async def search_workspace_listings(
             price_min=price_min,
             price_max=price_max,
             source=source,
+            store_ids=store_ids,
         )
         .order_by(_listing_order(order), Listing.id)
         .limit(limit)
@@ -273,6 +280,7 @@ async def manageable_workspace_listings(
     price_min: float | None = None,
     price_max: float | None = None,
     source: str | None = None,
+    store_ids: list[uuid.UUID] | None = None,
 ) -> list[tuple[Listing, WorkspaceListingOverride | None]]:
     """Every product in the workspace's own stores that the filter matches.
 
@@ -284,6 +292,7 @@ async def manageable_workspace_listings(
         price_min=price_min,
         price_max=price_max,
         source=source,
+        store_ids=store_ids,
     ).where(WorkspaceStore.kind == StoreKind.owned)
     rows = (
         await session.execute(
@@ -301,6 +310,7 @@ async def manageable_workspace_listing_ids(
     price_min: float | None = None,
     price_max: float | None = None,
     source: str | None = None,
+    store_ids: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     statement = (
         _workspace_listings_query(
@@ -309,6 +319,7 @@ async def manageable_workspace_listing_ids(
             price_min=price_min,
             price_max=price_max,
             source=source,
+            store_ids=store_ids,
         )
         .where(WorkspaceStore.kind == StoreKind.owned)
         .with_only_columns(Listing.id)

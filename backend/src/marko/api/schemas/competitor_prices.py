@@ -47,6 +47,7 @@ class CompetitorPriceStatsResponse(BaseModel):
     min_price: str | None = None
     median_price: str | None = None
     max_price: str | None = None
+    recommended_price: str | None = None
 
 
 class CompetitorPriceReportResponse(BaseModel):

@@ -1,6 +1,7 @@
 """Відсіювання чужих товарів дешевою моделлю: один виклик, помилка = без фільтра."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from functools import lru_cache
@@ -16,6 +17,11 @@ log = logging.getLogger(__name__)
 # + _GOOGLE_MAX_OFFERS): кандидат поза лімітом не отримує вердикту і проходив
 # у видачу без перевірки.
 MAX_CANDIDATES = 120
+
+# Латентність моделі росте з кількістю вердиктів у відповіді (заміряно:
+# 48 кандидатів одним викликом — 15 с). Паралельні шматки повертаються
+# за час найбільшого — вдвічі-втричі швидше на великих списках.
+_CHUNK_SIZE = 25
 
 _SYSTEM = (
     "Ти підбираєш конкурентні пропозиції для автозапчастини на українському ринку.\n"
@@ -68,28 +74,50 @@ async def classify(
     oem_numbers: Sequence[str],
     titles: Sequence[str],
 ) -> dict[int, str]:
-    """index -> "same" | "analog" | "no"; порожньо, якщо модель недоступна."""
+    """index -> "same" | "analog" | "no"; порожньо, якщо модель недоступна.
+
+    Кандидат зі шматка, що не відповів, лишається без вердикту — джерело
+    покаже його неперевіреним, а не втратить.
+    """
     if not titles or not is_enabled():
         return {}
-    prompt = _prompt(name, brand, oem_numbers, titles[:MAX_CANDIDATES])
+    capped = list(titles[:MAX_CANDIDATES])
+    chunks = [
+        (start, capped[start : start + _CHUNK_SIZE])
+        for start in range(0, len(capped), _CHUNK_SIZE)
+    ]
+    batches = await asyncio.gather(
+        *(_classify_chunk(name, brand, oem_numbers, chunk) for _, chunk in chunks)
+    )
+    result: dict[int, str] = {}
+    for (start, chunk), verdicts in zip(chunks, batches):
+        if verdicts is None:
+            continue
+        # Модель мала оцінити кожного посланого кандидата: пропущений нею index
+        # раніше проходив у видачу без перевірки — тепер він «не підтверджений».
+        for index in range(len(chunk)):
+            result[start + index] = verdicts.get(index, "no")
+    return result
+
+
+async def _classify_chunk(
+    name: str,
+    brand: str | None,
+    oem_numbers: Sequence[str],
+    titles: Sequence[str],
+) -> dict[int, str] | None:
+    prompt = _prompt(name, brand, oem_numbers, titles)
     try:
         verdicts = json.loads(await _ask_openai(prompt))["verdicts"]
     except Exception as exc:  # фільтр не критичний — краще без нього, ніж без цін
         log.warning("LLM-фільтр пропозицій не спрацював: %s", exc)
-        return {}
+        return None
     result = {
         item["index"]: item["verdict"]
         for item in verdicts
         if isinstance(item.get("index"), int) and 0 <= item["index"] < len(titles)
     }
-    if not result:
-        return {}
-    # Модель мала оцінити кожного посланого кандидата: пропущений нею index
-    # раніше проходив у видачу без перевірки — тепер він «не підтверджений».
-    return {
-        index: result.get(index, "no")
-        for index in range(min(len(titles), MAX_CANDIDATES))
-    }
+    return result or None
 
 
 async def _ask_openai(prompt: str) -> str:

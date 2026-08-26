@@ -51,6 +51,16 @@ SortOption = Literal["name", "price_asc", "price_desc", "updated"]
 SourceOption = Literal["export", "scrape"]
 
 
+def _parse_store_ids(raw: str | None) -> list[UUID]:
+    try:
+        return [UUID(value.strip()) for value in (raw or "").split(",") if value.strip()]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="store_ids має бути списком UUID через кому",
+        ) from exc
+
+
 @router.get("", response_model=CatalogPageResponse)
 async def search_products(
     session: Annotated[AsyncSession, Depends(get_session)],
@@ -60,9 +70,12 @@ async def search_products(
     price_min: Annotated[float | None, Query(ge=0)] = None,
     price_max: Annotated[float | None, Query(ge=0)] = None,
     source: SourceOption | None = None,
+    # UUID магазинів через кому: "id1,id2" — фільтр за кількома одразу.
+    store_ids: Annotated[str | None, Query(max_length=2000)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 60,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CatalogPageResponse:
+    stores_filter = _parse_store_ids(store_ids)
     rows = await listings_repo.search_workspace_listings(
         session,
         current.workspace_id,
@@ -70,6 +83,7 @@ async def search_products(
         price_min=price_min,
         price_max=price_max,
         source=source,
+        store_ids=stores_filter,
         order=sort,
         limit=limit,
         offset=offset,
@@ -81,6 +95,7 @@ async def search_products(
         price_min=price_min,
         price_max=price_max,
         source=source,
+        store_ids=stores_filter,
     )
     return CatalogPageResponse(
         items=[

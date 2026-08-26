@@ -4,6 +4,7 @@ from marko.parsers.prom.exceptions import ParseError
 from marko.parsers.prom.parser import (
     _extract_apollo_state,
     _slice_balanced_json,
+    parse_company_logo,
     parse_listing,
     parse_product_group_ids,
     parse_product_page,
@@ -92,3 +93,21 @@ def test_parse_product_page_without_product_raises():
     state = {"_FAST_CACHE": {"ProductCardPageQuery({})": {"result": {"product": None}}}}
     with pytest.raises(ParseError):
         parse_product_page(html_with_state(state))
+
+
+# parse_company_logo
+
+def test_parse_company_logo_from_ld_json():
+    html = (
+        '<html><script type="application/ld+json">'
+        '{"@context":"https://schema.org/","@type":"Organization","name":"KEMP",'
+        '"logo":"https://images.prom.ua/1_w120_h120_kemp.jpg"}'
+        "</script></html>"
+    )
+    assert parse_company_logo(html) == "https://images.prom.ua/1_w120_h120_kemp.jpg"
+
+
+def test_parse_company_logo_missing_or_broken_returns_none():
+    assert parse_company_logo("<html>no ld json</html>") is None
+    broken = '<script type="application/ld+json">{not json</script>'
+    assert parse_company_logo(broken) is None

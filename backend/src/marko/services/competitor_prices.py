@@ -207,6 +207,9 @@ class CompetitorPriceReport:
                     else None
                 ),
                 "max_price": _decimal_json(max(prices) if prices else None),
+                "recommended_price": _decimal_json(
+                    _recommended_price(prices) if prices else None
+                ),
             },
             "sources": [source.as_json() for source in self.sources],
         }
@@ -293,11 +296,15 @@ async def listing_search_query(
 
 
 def manual_search_query(
-    oem: str, brand: str | None = None, name: str | None = None
+    oem: str,
+    brand: str | None = None,
+    name: str | None = None,
+    owned_stores: Iterable[MarketplaceStore] = (),
 ) -> PartSearchQuery:
     """Запит із форми ручного пошуку: жодного товару в каталозі за ним немає."""
     number = normalize_oem(oem)
     numbers = (number,) if number else ()
+    owner_ids, owner_slugs = _owner_identity(owned_stores)
     return PartSearchQuery(
         # Свій ключ кешу на кожну комбінацію — саме її і бачить користувач.
         listing_id=f"manual:{_norm_code(oem)}",
@@ -306,8 +313,26 @@ def manual_search_query(
         # Без номера шукати все одно є що: назвою за Prom.
         name=(name or "").strip() or oem.strip(),
         source_url="",
+        owner_seller_ids=owner_ids,
+        owner_seller_slugs=owner_slugs,
         manual=True,
     )
+
+
+def _owner_identity(
+    owned_stores: Iterable[MarketplaceStore],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Ідентичність власних Prom-магазинів: їхні пропозиції — не конкуренти."""
+    prom_stores = [
+        store for store in owned_stores if store.marketplace.casefold() == "prom"
+    ]
+    ids = tuple(
+        sorted({v for v in (_text_value(s.external_id) for s in prom_stores) if v})
+    )
+    slugs = tuple(
+        sorted({v for v in (_normalized_slug(s.name) for s in prom_stores) if v})
+    )
+    return ids, slugs
 
 
 async def competitor_prices_for_query(
@@ -360,43 +385,50 @@ async def _collect(
     )
     emit("start", "Готуємо пошукові запити")
     timeout = get_settings().competitor_price_source_timeout_seconds
+    # Кожне джерело фільтрується моделлю одразу, як віддало пропозиції, —
+    # LLM працює, поки найповільніше джерело ще збирає. Це половина часу звіту.
     results = await asyncio.gather(
-        *(_run_source(source, query, timeout, emit) for source in sources)
+        *(_refined_source(source, query, timeout, emit) for source in sources)
     )
-    refined = await _refine(query, tuple(results), emit)
     return CompetitorPriceReport(
         query=query,
-        sources=_single_currency(refined),
+        sources=_single_currency(tuple(results)),
         observed_at=datetime.now(UTC),
     )
 
 
-async def _refine(
+async def _refined_source(
+    source: PriceSource,
     query: PartSearchQuery,
-    sources: tuple[SourceResult, ...],
+    timeout: float,
     emit: ProgressCallback,
-) -> tuple[SourceResult, ...]:
-    """Пропустити зібране крізь дешеву модель: вона бачить те, чого не бачать токени."""
-    indexed = [
-        (position, offer)
-        for position, source in enumerate(sources)
-        for offer in source.offers
-    ]
-    if not indexed or not llm_filter.is_enabled():
-        return sources
+) -> SourceResult:
+    return await _refine_source(
+        query, await _run_source(source, query, timeout, emit), emit
+    )
 
-    emit("filter", f"Звіряємо {len(indexed)} варіантів з нашою деталлю")
+
+async def _refine_source(
+    query: PartSearchQuery,
+    result: SourceResult,
+    emit: ProgressCallback,
+) -> SourceResult:
+    """Пропустити зібране крізь дешеву модель: вона бачить те, чого не бачать токени."""
+    if not result.offers or not llm_filter.is_enabled():
+        return result
+
+    emit("filter", f"{result.label}: звіряємо {len(result.offers)} варіантів")
     verdicts = await llm_filter.classify(
         name=query.name,
         brand=query.brand,
         oem_numbers=query.oem_numbers,
-        titles=[offer.title for _, offer in indexed],
+        titles=[offer.title for offer in result.offers],
     )
     if not verdicts:
-        return sources
+        return result
 
-    kept: dict[int, list[MarketOffer]] = {index: [] for index in range(len(sources))}
-    for index, (position, offer) in enumerate(indexed):
+    kept: list[MarketOffer] = []
+    for index, offer in enumerate(result.offers):
         match verdicts.get(index):
             case "no":
                 continue
@@ -408,17 +440,15 @@ async def _refine(
                 )
             case "analog":
                 offer = replace(offer, confidence=_ANALOG_CONFIDENCE, is_analog=True)
-        kept[position].append(offer)
+        kept.append(offer)
 
-    dropped = len(indexed) - sum(len(offers) for offers in kept.values())
-    emit("filter", f"Відсіяли {dropped} чужих позицій")
-    return tuple(
-        replace(
-            source,
-            offers=tuple(kept[index]),
-            status="empty" if not kept[index] and source.status == "ok" else source.status,
-        )
-        for index, source in enumerate(sources)
+    dropped = len(result.offers) - len(kept)
+    if dropped:
+        emit("filter", f"{result.label}: відсіяли {dropped} чужих позицій")
+    return replace(
+        result,
+        offers=tuple(kept),
+        status="empty" if not kept and result.status == "ok" else result.status,
     )
 
 
@@ -883,15 +913,13 @@ def _query_from_listing(
         dict.fromkeys(filter(None, (normalize_oem(value) for value in candidates)))
     )
     export_seller = seller_from_export_url(listing.url)
-    prom_stores = [
-        store for store in owned_stores if store.marketplace.casefold() == "prom"
-    ]
+    store_ids, store_slugs = _owner_identity(owned_stores)
     owner_seller_ids = tuple(
         sorted(
             {
                 value
                 for value in (
-                    *(_text_value(store.external_id) for store in prom_stores),
+                    *store_ids,
                     _text_value(raw.get("seller_id")),
                     export_seller.company_id if export_seller else None,
                 )
@@ -904,7 +932,7 @@ def _query_from_listing(
             {
                 value
                 for value in (
-                    *(_normalized_slug(store.name) for store in prom_stores),
+                    *store_slugs,
                     _normalized_slug(raw.get("seller_slug")),
                     export_seller.slug if export_seller else None,
                 )
@@ -1070,6 +1098,15 @@ def _norm_code(value: str | None) -> str:
     return _NON_ALNUM_RE.sub("", (value or "").upper())
 
 
+def _recommended_price(prices: list[Decimal]) -> Decimal:
+    """Конкретна сума до виставлення: на 1% нижче мінімуму впевнених збігів.
+
+    ponytail: наївне правило "трохи дешевше за найдешевшого"; коли з'явиться
+    маржа/собівартість — рахувати від неї, а не лише від ринку.
+    """
+    return (min(prices) * Decimal("0.99")).quantize(Decimal("1"))
+
+
 def _stats_prices(offers: Iterable[MarketOffer]) -> list[Decimal]:
     """Prices of confident matches only; all of them when none is confident."""
     offers = list(offers)
@@ -1114,4 +1151,4 @@ def _cache_key(query: PartSearchQuery) -> str:
         ]
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    return f"competitor-prices:v4:{query.listing_id}:{digest}"
+    return f"competitor-prices:v5:{query.listing_id}:{digest}"

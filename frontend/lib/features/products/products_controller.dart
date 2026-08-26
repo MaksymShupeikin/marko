@@ -69,6 +69,29 @@ class ProductsController extends AsyncNotifier<CatalogState> {
     _reload();
   }
 
+  /// Вмикає/вимикає магазин у фільтрі; можна тримати кілька одразу.
+  void toggleStoreFilter(String storeId) {
+    final ids = Set<String>.of(_current.storeIds);
+    if (!ids.remove(storeId)) ids.add(storeId);
+    _setStoreFilter(ids);
+  }
+
+  void clearStoreFilter() {
+    if (_current.storeIds.isEmpty) return;
+    _setStoreFilter(const {});
+  }
+
+  void _setStoreFilter(Set<String> ids) {
+    state = AsyncData(
+      _current.copyWith(
+        storeIds: ids,
+        selectedIds: const {},
+        allMatchingSelected: false,
+      ),
+    );
+    _reload();
+  }
+
   void select(StoreProduct? product) {
     state = AsyncData(
       product == null
@@ -84,6 +107,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         query: '',
         price: (null, null),
         source: ProductSource.all,
+        storeIds: const {},
         selectedIds: const {},
         allMatchingSelected: false,
       ),
@@ -170,6 +194,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
       priceMin: current.priceMin,
       priceMax: current.priceMax,
       source: current.source,
+      storeIds: current.storeIds,
     );
     state = AsyncData(
       current.copyWith(
@@ -191,6 +216,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
       priceMin: current.priceMin,
       priceMax: current.priceMax,
       source: current.source,
+      storeIds: current.storeIds,
     );
     state = AsyncData(
       current.copyWith(
@@ -308,6 +334,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         priceMin: current.priceMin,
         priceMax: current.priceMax,
         source: current.source,
+        storeIds: current.storeIds,
         offset: current.page.items.length,
       );
       if (generation != _generation) return;
@@ -348,6 +375,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         priceMin: current.priceMin,
         priceMax: current.priceMax,
         source: current.source,
+        storeIds: current.storeIds,
         limit: _pageSize,
       );
       if (generation != _generation) return;

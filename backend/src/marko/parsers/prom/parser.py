@@ -14,6 +14,9 @@ _LISTING_KEY_PREFIX = "CompanyListingQuery"   # a single seller's catalog
 _SEARCH_KEY_PREFIX = "SearchListingQuery"     # site-wide search (many sellers)
 _PRODUCT_KEY_PREFIX = "ProductCardPageQuery"  # a single product card (seed)
 _PRODUCT_GROUP_RE = re.compile(r"(?:[?&]|&amp;)product_group=(\d+)")
+_LD_JSON_RE = re.compile(
+    r"<script[^>]*application/ld\+json[^>]*>(.*?)</script>", re.I | re.S
+)
 
 
 def _slice_balanced_json(text: str, start: int) -> str:
@@ -99,6 +102,21 @@ def parse_listing(html: str, lang: str = "ua") -> ListingPage:
 def parse_product_group_ids(html: str) -> tuple[str, ...]:
     """Return the distinct seller product-group identifiers linked by a page."""
     return tuple(dict.fromkeys(_PRODUCT_GROUP_RE.findall(html)))
+
+
+def parse_company_logo(html: str) -> str | None:
+    """The seller's logo from the JSON-LD Organization block of its page."""
+    for block in _LD_JSON_RE.findall(html):
+        try:
+            node = json.loads(block.strip())
+        except ValueError:
+            continue
+        for item in node if isinstance(node, list) else [node]:
+            if isinstance(item, dict) and item.get("@type") == "Organization":
+                logo = item.get("logo")
+                if isinstance(logo, str) and logo.startswith(("https://", "http://")):
+                    return logo
+    return None
 
 
 def parse_search(html: str, lang: str = "ua") -> ListingPage:

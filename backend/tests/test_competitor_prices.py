@@ -410,6 +410,8 @@ def test_report_stats_use_all_sources_and_cache_flag():
     assert payload["stats"]["min_price"] == "100"
     assert payload["stats"]["median_price"] == "200.00"
     assert payload["stats"]["max_price"] == "300"
+    # Рекомендація — конкретна сума: на 1% нижче мінімуму конкурентів.
+    assert payload["stats"]["recommended_price"] == "99"
 
 
 def test_cheapest_by_key_keeps_lowest_offer_per_seller():
@@ -503,6 +505,24 @@ def test_query_contains_all_owned_prom_stores():
 
     assert query.owner_seller_ids == ("2231191", "2847093")
     assert query.owner_seller_slugs == ("kemp", "motor-avto")
+
+
+def test_manual_search_query_excludes_owned_prom_stores():
+    owned_stores = [
+        SimpleNamespace(marketplace="prom", external_id="2847093", name="kemp"),
+        SimpleNamespace(marketplace="olx", external_id="olx-shop", name="olx-shop"),
+    ]
+
+    query = competitor_prices_module.manual_search_query(
+        "0451103316", "Bosch", owned_stores=owned_stores
+    )
+
+    assert query.owner_seller_ids == ("2847093",)
+    assert query.owner_seller_slugs == ("kemp",)
+    own_product = SimpleNamespace(
+        seller_id=2847093, seller_slug="kemp", url="https://prom.ua/ua/p1-a.html"
+    )
+    assert _is_own_prom_product(query, own_product)
 
 
 async def test_redis_cache_keeps_multiple_products_independently():
@@ -627,46 +647,55 @@ async def test_llm_filter_drops_foreign_offers_and_regrades_the_rest(monkeypatch
             url=f"https://prom.ua/{price}", seller=title, confidence=0.55,
         )
 
-    sources = (
-        SourceResult("prom", "Prom.ua", "ok", (
-            offer("Фільтр масляний Bosch 0451103316", "300"),
-            offer("Фільтр масляний Mann аналог", "280"),
-            offer("Пакети для сміття 1300115", "40"),
-        )),
-        SourceResult("avtopro", "Avto.pro", "ok", (offer("Шафа ВРА-03", "900"),)),
-    )
+    prom = SourceResult("prom", "Prom.ua", "ok", (
+        offer("Фільтр масляний Bosch 0451103316", "300"),
+        offer("Фільтр масляний Mann аналог", "280"),
+        offer("Пакети для сміття 1300115", "40"),
+    ))
+    avtopro = SourceResult("avtopro", "Avto.pro", "ok", (offer("Шафа ВРА-03", "900"),))
     monkeypatch.setattr(competitor_prices_module.llm_filter, "is_enabled", lambda: True)
 
-    async def fake_classify(**_kwargs):
-        return {0: "same", 1: "analog", 2: "no", 3: "no"}
+    verdict_by_title = {
+        "Фільтр масляний Bosch 0451103316": "same",
+        "Фільтр масляний Mann аналог": "analog",
+        "Пакети для сміття 1300115": "no",
+        "Шафа ВРА-03": "no",
+    }
+
+    async def fake_classify(*, titles, **_kwargs):
+        return {index: verdict_by_title[title] for index, title in enumerate(titles)}
 
     monkeypatch.setattr(competitor_prices_module.llm_filter, "classify", fake_classify)
 
     stages: list[tuple[str, str]] = []
-    refined = await competitor_prices_module._refine(
-        part_query(), sources, lambda stage, message: stages.append((stage, message))
+    emit = lambda stage, message: stages.append((stage, message))
+    refined_prom = await competitor_prices_module._refine_source(
+        part_query(), prom, emit
+    )
+    refined_avtopro = await competitor_prices_module._refine_source(
+        part_query(), avtopro, emit
     )
 
-    assert [o.title for o in refined[0].offers] == [
+    assert [o.title for o in refined_prom.offers] == [
         "Фільтр масляний Bosch 0451103316",
         "Фільтр масляний Mann аналог",
     ]
-    assert [o.is_analog for o in refined[0].offers] == [False, True]
-    assert refined[0].offers[0].confidence == 0.95
-    assert refined[1].offers == () and refined[1].status == "empty"
-    assert [stage for stage, _ in stages] == ["filter", "filter"]
+    assert [o.is_analog for o in refined_prom.offers] == [False, True]
+    assert refined_prom.offers[0].confidence == 0.95
+    assert refined_avtopro.offers == () and refined_avtopro.status == "empty"
+    assert [stage for stage, _ in stages] == ["filter"] * 4
 
 
 async def test_llm_filter_keeps_everything_when_the_model_is_off(monkeypatch):
-    sources = (SourceResult("prom", "Prom.ua", "ok", (
+    source = SourceResult("prom", "Prom.ua", "ok", (
         MarketOffer(source="prom", title="Фільтр", price=Decimal("10"),
                     currency="UAH", url="https://prom.ua/1"),
-    )),)
+    ))
     monkeypatch.setattr(competitor_prices_module.llm_filter, "is_enabled", lambda: False)
 
-    assert await competitor_prices_module._refine(
-        part_query(), sources, lambda *_: None
-    ) == sources
+    assert await competitor_prices_module._refine_source(
+        part_query(), source, lambda *_: None
+    ) == source
 
 
 async def test_classify_treats_missing_verdicts_as_no(monkeypatch):

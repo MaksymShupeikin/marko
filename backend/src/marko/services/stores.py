@@ -42,6 +42,7 @@ class StoreView:
     external_id: str
     name: str | None
     url: str
+    logo_url: str | None
     kind: str
     product_count: int
     last_synced_at: datetime | None
@@ -243,6 +244,7 @@ def _store_view(
         external_id=store.external_id,
         name=store.name,
         url=store.canonical_url,
+        logo_url=store.logo_url,
         kind=kind.value,
         product_count=product_count,
         last_synced_at=store.last_synced_at,

@@ -14,6 +14,7 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    Set<String> storeIds = const {},
     int limit = 60,
     int offset = 0,
   }) async {
@@ -25,6 +26,7 @@ class ProductsApi {
         if (priceMin != null) 'price_min': '$priceMin',
         if (priceMax != null) 'price_max': '$priceMax',
         if (source.value != null) 'source': source.value!,
+        if (storeIds.isNotEmpty) 'store_ids': storeIds.join(','),
         'limit': '$limit',
         'offset': '$offset',
       },
@@ -38,11 +40,13 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    Set<String> storeIds = const {},
   }) => {
     if (query.trim().isNotEmpty) 'q': query.trim(),
     'price_min': ?priceMin,
     'price_max': ?priceMax,
     'source': ?source.value,
+    if (storeIds.isNotEmpty) 'store_ids': [...storeIds],
   };
 
   /// Hides every product the filter matches. Returns how many were hidden.
@@ -51,6 +55,7 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    Set<String> storeIds = const {},
   }) async {
     final payload = await _client.postJson(
       '/api/v1/products/bulk/delete',
@@ -59,6 +64,7 @@ class ProductsApi {
         priceMin: priceMin,
         priceMax: priceMax,
         source: source,
+        storeIds: storeIds,
       ),
     );
     return ((payload as Map<String, dynamic>)['deleted'] as num).toInt();
@@ -70,6 +76,7 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    Set<String> storeIds = const {},
   }) async {
     final payload = await _client.postJson(
       '/api/v1/products/bulk/refresh',
@@ -78,6 +85,7 @@ class ProductsApi {
         priceMin: priceMin,
         priceMax: priceMax,
         source: source,
+        storeIds: storeIds,
       ),
     );
     return StoreSync.fromJson(payload as Map<String, dynamic>);
@@ -94,6 +102,15 @@ class ProductsApi {
       bytes: bytes,
     );
     return FileImportResult.fromJson(payload as Map<String, dynamic>);
+  }
+
+  /// Підключені магазини воркспейсу — для стрічки над каталогом.
+  Future<List<StoreInfo>> listStores() async {
+    final payload = await _client.getJson('/api/v1/stores');
+    return [
+      for (final item in payload as List<dynamic>)
+        StoreInfo.fromJson(item as Map<String, dynamic>),
+    ];
   }
 
   Future<StoreSync> addStore(String url) async {

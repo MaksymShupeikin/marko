@@ -120,6 +120,7 @@ class MarketplaceStore(TimestampMixin, Base):
     external_id: Mapped[str] = mapped_column(String(100))
     name: Mapped[str | None] = mapped_column(String(255))
     canonical_url: Mapped[str] = mapped_column(Text)
+    logo_url: Mapped[str | None] = mapped_column(Text)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

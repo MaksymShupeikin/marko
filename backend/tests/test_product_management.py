@@ -283,6 +283,7 @@ async def test_bulk_refresh_is_queued_with_the_filter(monkeypatch):
         "price_min": None,
         "price_max": None,
         "source": "scrape",
+        "store_ids": [],
     }
 
 

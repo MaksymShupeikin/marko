@@ -110,6 +110,7 @@ async def _run_import(
 
         now = datetime.now(UTC)
         store.last_synced_at = now
+        store.logo_url = gateway.company_logo or store.logo_url
         sync_run.status = SyncStatus.completed
         sync_run.progress_current = imported
         sync_run.progress_total = imported

@@ -1030,6 +1030,14 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
           userPrice: userPrice,
           currency: currency,
         ),
+        if (stats.recommendedPrice != null) ...[
+          const SizedBox(height: MarkoSpace.md),
+          _RecommendedPriceBanner(
+            price: stats.recommendedPrice!,
+            userPrice: userPrice,
+            currency: currency,
+          ),
+        ],
         if (allOffers.isNotEmpty) ...[
           const SizedBox(height: MarkoSpace.xxl),
           Text(
@@ -1079,6 +1087,83 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
           ],
         ],
       ],
+    );
+  }
+}
+
+/// Конкретна сума до виставлення: трохи нижче мінімальної ціни конкурентів.
+class _RecommendedPriceBanner extends StatelessWidget {
+  const _RecommendedPriceBanner({
+    required this.price,
+    required this.userPrice,
+    required this.currency,
+  });
+
+  final double price;
+  final double? userPrice;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final diff = userPrice == null ? null : price - userPrice!;
+    final subtitle = diff == null || diff.abs() < 1
+        ? 'На 1% нижче мінімальної ціни конкурентів'
+        : diff < 0
+        ? 'На ${formatPriceNumber(diff.abs())} ${formatCurrency(currency)} нижче за вашу поточну ціну'
+        : 'На ${formatPriceNumber(diff)} ${formatCurrency(currency)} вище за вашу поточну ціну';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.brand.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.brand.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: colors.brand.withValues(alpha: 0.16),
+              shape: BoxShape.circle,
+            ),
+            child: HeroIcon(HeroIcons.lightBulb, size: 16, color: colors.brand),
+          ),
+          const SizedBox(width: MarkoSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Рекомендована ціна',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: colors.brand,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: MarkoType.caption.copyWith(
+                    color: colors.ink,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: MarkoSpace.sm),
+          Text(
+            '${formatPriceNumber(price)} ${formatCurrency(currency)}',
+            style: MarkoType.price.copyWith(
+              color: colors.brand,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
