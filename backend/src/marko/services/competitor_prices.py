@@ -57,7 +57,6 @@ _OEM_HIT_SCORE = 0.9  # знайдено за номером — це та са�
 _ANALOG_CONFIDENCE = 0.6  # аналог іншого виробника: показуємо, але не в статистиці
 _LLM_SAME_CONFIDENCE = 0.95  # модель підтвердила: та сама деталь
 # Ширший невід: точність тепер тримає LLM-фільтр, а не обрізання джерела.
-_PROM_OFFER_BUDGET = 120  # досить кандидатів — далі терміни не перебираємо
 _PROM_MAX_OFFERS = 60
 _AVTOPRO_MAX_OFFERS = 40
 _MAX_OEM_TERMS = 2  # другий номер приводить інших продавців, ніж перший
@@ -72,6 +71,9 @@ _SERP_MAX_PAGE_FETCHES = 12
 _SERP_TIMEOUT = 6.0
 # Ці маркетплейси вже є окремими джерелами — з Google вони лише дублюють.
 _SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro")
+# Ринок — український: російські й білоруські магазини не конкуренти,
+# а їхні ціни в рублях лише засмічують порівняння.
+_SERP_BLOCKED_TLDS = (".ru", ".su", ".by", ".рф", ".xn--p1ai")
 
 _NON_ALNUM_RE = re.compile(r"[^0-9A-ZА-ЯІЇЄЁ]+", re.I)
 _PROM_PRODUCT_ID_RE = re.compile(r"/(?:[a-z]{2}/)?p(?P<id>\d+)-", re.I)
@@ -477,7 +479,17 @@ class AvtoproPriceSource:
             return SourceResult(self.source, self.label, "skipped", error="No OEM number")
 
         def fetch() -> SourceResult:
-            gateway = AvtoproGateway(replace(avtopro_config(), max_search_pages=4))
+            # Дефолтний ScrapeConfig — 30 с таймаут і 4 ретраї: один завислий
+            # запит з'їдав увесь бюджет джерела. Стрічка й так рветься
+            # антиботом — швидше здатися і віддати зібране.
+            gateway = AvtoproGateway(
+                replace(
+                    avtopro_config(),
+                    max_search_pages=4,
+                    timeout=8.0,
+                    max_retries=2,
+                )
+            )
             exact_codes = {_norm_code(number) for number in query.oem_numbers}
             for oem in query.oem_numbers[:3]:
                 result = gateway.offers(
@@ -545,12 +557,16 @@ class PromPriceSource:
 
     async def search(self, query: PartSearchQuery) -> SourceResult:
         config = _source_config()
-        offers: list[MarketOffer] = []
         async with AsyncHttpClient(config) as client:
-            for term in _search_terms(query):
-                offers.extend(await self._term_offers(client, query, term, config))
-                if len(offers) >= _PROM_OFFER_BUDGET:
-                    break
+            # Термів лише 2–3, а клієнт і так тримає спільний rate-limit:
+            # паралельно — це ціна найповільнішого терму, а не сума всіх.
+            batches = await asyncio.gather(
+                *(
+                    self._term_offers(client, query, term, config)
+                    for term in _search_terms(query)
+                )
+            )
+        offers = [offer for batch in batches for offer in batch]
 
         unique = _cheapest_by_key(offers, key=lambda offer: offer.seller or offer.url)
         # Обрізаємо найслабші збіги, а показуємо за ціною: так видно ринок,
@@ -689,6 +705,8 @@ class GooglePriceSource:
             if not domain or url in seen:
                 continue
             if domain == own_domain or _covered_elsewhere(domain):
+                continue
+            if domain.endswith(_SERP_BLOCKED_TLDS):
                 continue
             seen.add(url)
             score = _match_score(
@@ -1096,4 +1114,4 @@ def _cache_key(query: PartSearchQuery) -> str:
         ]
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    return f"competitor-prices:v3:{query.listing_id}:{digest}"
+    return f"competitor-prices:v4:{query.listing_id}:{digest}"

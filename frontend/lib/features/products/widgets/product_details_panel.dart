@@ -1478,11 +1478,15 @@ class _ModernOfferCard extends StatelessWidget {
                             color: colors.faint,
                           ),
                           const SizedBox(width: 3),
-                          Text(
-                            offer.seller!,
-                            style: MarkoType.caption.copyWith(
-                              color: colors.faint,
-                              fontSize: 11,
+                          Flexible(
+                            child: Text(
+                              offer.seller!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: MarkoType.caption.copyWith(
+                                color: colors.faint,
+                                fontSize: 11,
+                              ),
                             ),
                           ),
                         ],
@@ -1497,11 +1501,15 @@ class _ModernOfferCard extends StatelessWidget {
                             color: colors.faint,
                           ),
                           const SizedBox(width: 3),
-                          Text(
-                            offer.city!,
-                            style: MarkoType.caption.copyWith(
-                              color: colors.faint,
-                              fontSize: 11,
+                          Flexible(
+                            child: Text(
+                              offer.city!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: MarkoType.caption.copyWith(
+                                color: colors.faint,
+                                fontSize: 11,
+                              ),
                             ),
                           ),
                         ],
