@@ -32,7 +32,7 @@ from marko.parsers.prom_export import (
     seller_from_export_url,
 )
 from marko.repositories.listings import get_workspace_listing
-from marko.services import llm_filter
+from marko.services import exchange_rates, llm_filter
 from marko.services.matching import (
     brands_compatible,
     laterality_conflict,
@@ -51,6 +51,10 @@ _MIN_SUBSTRING_OEM_LENGTH = 6  # коротший номер трапляєть�
 _MIN_SELF_SUFFICIENT_DIGITS = 8  # коротший цифровий номер сам по собі нічого не доводить
 _MIN_STEM = 4  # довжина кореня для звірки теми назви
 _MIN_STATS_CONFIDENCE = 0.7  # слабкі збіги не мають задавати мін/медіану/макс
+# Викиди: ціна, що відрізняється від медіани впевнених збігів у 8+ разів, —
+# майже напевно сміття парсингу (склеєні цифри, «0 грн» доставки), не ринок.
+_OUTLIER_FACTOR = Decimal("8")
+_OUTLIER_MIN_OFFERS = 4  # менше — нема статистики, викид не відрізнити від ринку
 _MIN_NAME_SIMILARITY = 0.7  # нижче — це вже інша деталь, а не конкурент
 _STRONG_NAME_SIMILARITY = 0.8  # від цього збіг за назвою рахується у статистику
 _OEM_HIT_SCORE = 0.9  # знайдено за номером — це та сама деталь, не аналог
@@ -425,9 +429,10 @@ async def _collect(
     results = await asyncio.gather(
         *(_refined_source(source, query, timeout, emit) for source in sources)
     )
+    refined = await _to_uah(tuple(results))
     return CompetitorPriceReport(
         query=query,
-        sources=_single_currency(tuple(results)),
+        sources=_drop_implausible(_single_currency(refined)),
         observed_at=datetime.now(UTC),
     )
 
@@ -484,6 +489,78 @@ async def _refine_source(
         result,
         offers=tuple(kept),
         status="empty" if not kept and result.status == "ok" else result.status,
+    )
+
+
+async def _to_uah(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, ...]:
+    """Перерахувати доларові та єврові пропозиції в гривню за курсом НБУ.
+
+    Курси беруться лише коли іноземна валюта справді зустрілась; недоступний
+    НБУ — пропозиції лишаються як є і їх зніме _single_currency, як раніше.
+    """
+    foreign = {
+        offer.currency
+        for source in sources
+        for offer in source.offers
+        if offer.currency != "UAH"
+    }
+    if not foreign:
+        return sources
+    rates = await exchange_rates.uah_rates()
+    if not rates:
+        return sources
+    converted: list[SourceResult] = []
+    for source in sources:
+        offers = tuple(
+            replace(
+                offer,
+                price=(offer.price * rates[offer.currency]).quantize(Decimal("0.01")),
+                currency="UAH",
+            )
+            if offer.currency in rates
+            else offer
+            for offer in source.offers
+        )
+        converted.append(replace(source, offers=offers))
+    return tuple(converted)
+
+
+def _drop_implausible(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, ...]:
+    """Прибрати цінове сміття: нулі та дикі викиди відносно медіани.
+
+    Історія: сніпет Google віддавав «доставка 0 грн» як ціну 0 і склеєні
+    цифри як мільйони — обидва випадки доїжджали до клієнта. Нуль — не ціна
+    ніколи; викид ловимо лише коли є з чим порівняти (медіана впевнених
+    збігів і не менше чотирьох пропозицій), щоб не зачепити чесний розкид.
+    """
+    positive = tuple(
+        replace(
+            source,
+            offers=tuple(offer for offer in source.offers if offer.price > 0),
+        )
+        for source in sources
+    )
+    offers = [offer for source in positive for offer in source.offers]
+    strong = [
+        offer.price for offer in offers if offer.confidence >= _MIN_STATS_CONFIDENCE
+    ]
+    if len(offers) < _OUTLIER_MIN_OFFERS or not strong:
+        return positive
+    anchor = Decimal(str(median(strong)))
+    if anchor <= 0:
+        return positive
+
+    def plausible(offer: MarketOffer) -> bool:
+        return anchor / _OUTLIER_FACTOR <= offer.price <= anchor * _OUTLIER_FACTOR
+
+    dropped = sum(1 for offer in offers if not plausible(offer))
+    if dropped:
+        log.info(
+            "Ціни конкурентів: відкинуто %d викид(ів) за медіаною %s", dropped, anchor
+        )
+    return tuple(
+        replace(source, offers=tuple(filter(plausible, source.offers)))
+        for source in positive
     )
 
 
@@ -789,25 +866,30 @@ class GooglePriceSource:
         client: httpx.AsyncClient,
         candidates: list[tuple[dict, str, float]],
     ) -> list[MarketOffer]:
+        # Сторінка надійніша за сніпет: регулярка по тексту ловила «доставка
+        # 0 грн» і склеєні цифри. Тому спершу читаємо сторінку (структурні
+        # дані), і лише коли вона не віддала ціну — беремо сніпет як резерв.
         offers: list[MarketOffer] = []
-        pending: list[tuple[dict, str, float]] = []
-        for item, domain, score in candidates:
+        fetched = candidates[:_SERP_MAX_PAGE_FETCHES]
+        priced_pages = await asyncio.gather(
+            *(
+                self._page_price(client, item.get("link") or "")
+                for item, _, _ in fetched
+            )
+        )
+        leftovers: list[tuple[dict, str, float]] = list(
+            candidates[_SERP_MAX_PAGE_FETCHES:]
+        )
+        for (item, domain, score), priced in zip(fetched, priced_pages):
+            if priced is not None:
+                offers.append(self._offer(item, domain, score, *priced))
+            else:
+                leftovers.append((item, domain, score))
+        for item, domain, score in leftovers:
             snippet = f"{item.get('title') or ''} {item.get('snippet') or ''}"
             price = _price_from_text(snippet)
             if price is not None:
                 offers.append(self._offer(item, domain, score, price, "UAH"))
-            else:
-                pending.append((item, domain, score))
-
-        priced_pages = await asyncio.gather(
-            *(
-                self._page_price(client, item.get("link") or "")
-                for item, _, _ in pending[:_SERP_MAX_PAGE_FETCHES]
-            )
-        )
-        for (item, domain, score), priced in zip(pending, priced_pages):
-            if priced is not None:
-                offers.append(self._offer(item, domain, score, *priced))
         return offers
 
     async def _page_price(
@@ -1151,7 +1233,10 @@ def _recommended_price(prices: list[Decimal]) -> Decimal:
     ponytail: наївне правило "трохи дешевше за найдешевшого"; коли з'явиться
     маржа/собівартість — рахувати від неї, а не лише від ринку.
     """
-    return (min(prices) * Decimal("0.99")).quantize(Decimal("1"))
+    # Копійчані ціни округлення до гривні здатне обнулити — нуль не рекомендація.
+    return max(
+        (min(prices) * Decimal("0.99")).quantize(Decimal("1")), Decimal("1")
+    )
 
 
 def _stats_prices(offers: Iterable[MarketOffer]) -> list[Decimal]:
@@ -1198,4 +1283,6 @@ def _cache_key(query: PartSearchQuery) -> str:
         ]
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    return f"competitor-prices:v6:{query.listing_id}:{digest}"
+    # v7: конвертація валют і санітарні фільтри цін — старі звіти з сміттям
+    # (0 грн, мільйонні викиди) не повинні пережити деплой.
+    return f"competitor-prices:v7:{query.listing_id}:{digest}"

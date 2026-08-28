@@ -247,7 +247,12 @@ async def test_avtopro_keeps_analogues_out_of_the_stats(monkeypatch):
 
 
 async def test_google_source_prices_from_snippet_and_page(monkeypatch):
-    """Ціна зі сніпета — без GET; без ціни в сніпеті — JSON-LD зі сторінки."""
+    """Сторінка (JSON-LD) — головне джерело ціни; сніпет — лише резерв.
+
+    Сніпетна регулярка ловила «доставка 0 грн» і склеєні цифри, тому GET
+    робиться для кожного кандидата в межах ліміту, а сніпет рятує тільки
+    тих, чия сторінка не віддала ціну.
+    """
     serp = {
         "organic": [
             {
@@ -307,6 +312,11 @@ async def test_google_source_prices_from_snippet_and_page(monkeypatch):
 
         async def get(self, url):
             fetched_pages.append(url)
+            # Сторінка to24 «лежить» — для неї ціна прийде зі сніпета.
+            if "to24" in url:
+                response = FakeResponse(text="")
+                response.status_code = 500
+                return response
             return FakeResponse(text=page_html)
 
     monkeypatch.setattr(
@@ -325,8 +335,11 @@ async def test_google_source_prices_from_snippet_and_page(monkeypatch):
         ("to24.com.ua", "204.00"),
         ("partsplus.com.ua", "193.00"),
     }
-    # Сторінку качали лише для кандидата без ціни у сніпеті.
-    assert fetched_pages == ["https://partsplus.com.ua/detail/0451103316/bosch/"]
+    # Сторінки качали для обох кандидатів: сторінка важливіша за сніпет.
+    assert fetched_pages == [
+        "https://to24.com.ua/buy/bosch-0451103316",
+        "https://partsplus.com.ua/detail/0451103316/bosch/",
+    ]
 
 
 async def test_google_source_is_skipped_without_api_key(monkeypatch):
@@ -378,6 +391,104 @@ def test_uah_offers_win_even_as_minority():
     assert sources[0].offers == (uah,)
     assert sources[1].offers == ()
     assert sources[1].status == "empty"
+
+
+async def test_foreign_offers_convert_to_uah_by_nbu_rate(monkeypatch):
+    """50 USD за курсом 41.5 — це 2075 грн у виданні й статистиці."""
+    uah = MarketOffer("prom", "A", Decimal("2200"), "UAH", "https://prom.ua/a")
+    usd = MarketOffer("google", "B", Decimal("50"), "USD", "https://shop.example/b")
+
+    async def fake_rates():
+        return {"USD": Decimal("41.5"), "EUR": Decimal("45.0")}
+
+    monkeypatch.setattr(
+        competitor_prices_module.exchange_rates, "uah_rates", fake_rates
+    )
+
+    sources = await competitor_prices_module._to_uah(
+        (
+            SourceResult("prom", "Prom.ua", "ok", (uah,)),
+            SourceResult("google", "Google", "ok", (usd,)),
+        )
+    )
+
+    converted = sources[1].offers[0]
+    assert converted.price == Decimal("2075.00")
+    assert converted.currency == "UAH"
+    # Гривневі пропозиції не чіпаємо.
+    assert sources[0].offers == (uah,)
+
+
+async def test_unavailable_rates_keep_old_drop_behavior(monkeypatch):
+    """НБУ лежить → конвертації немає, долари зніме _single_currency."""
+    uah = MarketOffer("prom", "A", Decimal("200"), "UAH", "https://prom.ua/a")
+    usd = MarketOffer("google", "B", Decimal("50"), "USD", "https://shop.example/b")
+
+    async def no_rates():
+        return {}
+
+    monkeypatch.setattr(competitor_prices_module.exchange_rates, "uah_rates", no_rates)
+
+    sources = await competitor_prices_module._to_uah(
+        (SourceResult("google", "Google", "ok", (uah, usd)),)
+    )
+    assert sources[0].offers == (uah, usd)
+
+    cleaned = competitor_prices_module._single_currency(sources)
+    assert cleaned[0].offers == (uah,)
+
+
+def test_zero_prices_are_dropped_always():
+    """«Доставка 0 грн» зі сніпета не має ставати ціною товару."""
+    offers = (
+        MarketOffer("google", "A", Decimal("0"), "UAH", "https://shop.example/a"),
+        MarketOffer("google", "B", Decimal("204"), "UAH", "https://shop.example/b"),
+    )
+
+    sources = competitor_prices_module._drop_implausible(
+        (SourceResult("google", "Google", "ok", offers),)
+    )
+
+    assert [str(offer.price) for offer in sources[0].offers] == ["204"]
+
+
+def test_million_outlier_is_dropped_against_median():
+    """Склеєні цифри («3 000 000 грн») відсікаються медіаною впевнених."""
+    prices = ["190", "200", "210", "3000000"]
+    offers = tuple(
+        MarketOffer("google", f"O{i}", Decimal(p), "UAH", f"https://s.example/{i}")
+        for i, p in enumerate(prices)
+    )
+
+    sources = competitor_prices_module._drop_implausible(
+        (SourceResult("google", "Google", "ok", offers),)
+    )
+
+    assert [str(offer.price) for offer in sources[0].offers] == ["190", "200", "210"]
+
+
+def test_small_reports_keep_honest_spread():
+    """Три пропозиції — не статистика: розкид не рубаємо, щоб не втратити ринок."""
+    offers = tuple(
+        MarketOffer("google", f"O{i}", Decimal(p), "UAH", f"https://s.example/{i}")
+        for i, p in enumerate(["100", "200", "5000"])
+    )
+
+    sources = competitor_prices_module._drop_implausible(
+        (SourceResult("google", "Google", "ok", offers),)
+    )
+
+    assert len(sources[0].offers) == 3
+
+
+def test_recommended_price_is_never_zero():
+    """Копійчана ціна після −1% і округлення не має давати 0 грн."""
+    assert competitor_prices_module._recommended_price([Decimal("0.30")]) == Decimal(
+        "1"
+    )
+    assert competitor_prices_module._recommended_price([Decimal("200")]) == Decimal(
+        "198"
+    )
 
 
 def test_report_stats_use_all_sources_and_cache_flag():
@@ -595,7 +706,7 @@ def test_own_prom_seller_id_falls_back_to_store_subdomain():
     )
 
 
-def test_cache_key_is_v6_and_changes_with_workspace_exclusions():
+def test_cache_key_is_v7_and_changes_with_workspace_exclusions():
     base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
     workspace = competitor_prices_module.manual_search_query(
         "0451103316",
@@ -609,7 +720,7 @@ def test_cache_key_is_v6_and_changes_with_workspace_exclusions():
         ],
     )
 
-    assert _cache_key(base).startswith("competitor-prices:v6:")
+    assert _cache_key(base).startswith("competitor-prices:v7:")
     assert _cache_key(base) != _cache_key(workspace)
 
 
