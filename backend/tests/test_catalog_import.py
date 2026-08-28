@@ -27,6 +27,12 @@ def test_parse_product_price_returns_none_for_missing_value():
     ) is None
 
 
+def test_parse_product_price_rejects_zero_and_negative():
+    """Нуль у картці — це відсутня ціна: краще лишити стару, ніж показати 0 грн."""
+    assert parse_product_price(product(price="0", priceOriginal="0")) is None
+    assert parse_product_price(product(price="-15", priceOriginal=None)) is None
+
+
 def test_merge_raw_data_keeps_fields_the_new_source_does_not_carry():
     # A file import has OEM numbers but no seller; a scrape is the other way
     # round. Importing one must not erase what the other stored.

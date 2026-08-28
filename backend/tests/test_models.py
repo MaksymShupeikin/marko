@@ -134,3 +134,18 @@ def test_effective_price_prefers_the_discounted_one():
 def test_effective_price_falls_back_when_there_is_no_discount():
     assert product(price="390", discountedPrice="382").effective_price == "390"
     assert product(price=None, priceOriginal="390").effective_price == "390"
+
+
+def test_zero_price_falls_through_to_the_real_one():
+    """Картка показувала 0 грн, а на сторінці магазину стояло 200."""
+    assert product(price="0", priceOriginal="200").effective_price == "200"
+    assert product(price="0.00", priceOriginal="200").effective_price == "200"
+    # Нульова знижкова ціна теж не ціна — беремо звичайну.
+    assert (
+        product(price="390", discountedPrice="0", hasDiscount=True).effective_price
+        == "390"
+    )
+
+
+def test_effective_price_is_none_when_every_field_is_zero():
+    assert product(price="0", priceOriginal="0").effective_price is None

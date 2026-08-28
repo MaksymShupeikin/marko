@@ -51,7 +51,14 @@ class ExportImportResult:
 
 
 def parse_product_price(product: Product) -> Decimal | None:
-    return parse_price(product.effective_price)
+    """Ціна товару або нічого: нуль і мінус — це відсутня ціна, а не безкоштовно.
+
+    Записаний нуль виглядав як реальна ціна: картка показувала 0 грн, а на
+    сторінці магазину стояло 200. Краще лишити попередню ціну, ніж підмінити
+    її нулем.
+    """
+    price = parse_price(product.effective_price)
+    return price if price is not None and price > 0 else None
 
 
 async def import_store_catalog(sync_run_id: UUID, *, task_id: str | None = None) -> int:

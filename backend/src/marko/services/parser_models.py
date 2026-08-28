@@ -7,6 +7,22 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _DEFAULT_SELLER_LANGUAGE = "ua"
+_PRICE_NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def _is_positive(value: object) -> bool:
+    """Чи є в рядку сума більша за нуль — порожнє й "0" за ціну не рахуємо."""
+    if value is None:
+        return False
+    match = _PRICE_NUMBER_RE.search(str(value).replace(" ", "").replace(" ", ""))
+    if match is None:
+        return False
+    try:
+        return float(match.group().replace(",", ".")) > 0
+    except ValueError:
+        return False
+
+
 _PROM_HOSTS = frozenset({"prom.ua", "www.prom.ua"})
 _SELLER_PATH_RE = re.compile(
     r"^/(?:(?P<lang>[a-z]{2})/)?c(?P<company_id>\d+)-(?P<slug>[\w-]+)\.html/?$",
@@ -114,10 +130,17 @@ class Product:
         У ``price`` лежить закреслена ціна до знижки — саме її показував
         каталог, поки на сторінці стояла інша. Prom рендерить
         ``discountedPrice``, коли ``hasDiscount``; робимо так само.
+
+        Нуль — не ціна: Prom кладе "0" у ``price`` для товарів, де сума
+        живе в іншому полі, і картка показувала 0 грн там, де на сайті
+        стояло 200. Тому перебираємо поля, доки не трапиться додатне.
         """
-        if self.has_discount and self.discounted_price:
-            return self.discounted_price
-        return self.price or self.price_original
+        candidates = (
+            self.discounted_price if self.has_discount else None,
+            self.price,
+            self.price_original,
+        )
+        return next((value for value in candidates if _is_positive(value)), None)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
