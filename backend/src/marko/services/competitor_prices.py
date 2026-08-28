@@ -18,9 +18,8 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
-import marko.repositories.stores as stores_repo
 from marko.core.config import get_settings
-from marko.infrastructure.db.models import Listing, MarketplaceStore, StoreKind
+from marko.infrastructure.db.models import Listing, MarketplaceStore
 from marko.parsers.avtopro import AvtoproGateway, default_config as avtopro_config
 from marko.parsers.avtopro.gateway import BASE_URL as AVTOPRO_BASE_URL
 from marko.parsers.prom.client import AsyncHttpClient
@@ -38,6 +37,11 @@ from marko.services.matching import (
     laterality_conflict,
     normalize_tokens,
     token_similarity,
+)
+from marko.services.parser_models import Seller
+from marko.services.seller_exclusions import (
+    SellerExclusion,
+    load_prom_seller_exclusions,
 )
 
 log = logging.getLogger(__name__)
@@ -287,12 +291,8 @@ async def listing_search_query(
     if listing is None:
         raise LookupError("Product was not found in this workspace")
 
-    owned_stores = await stores_repo.list_workspace_stores_by_kind(
-        session,
-        workspace_id,
-        StoreKind.owned,
-    )
-    return _query_from_listing(listing, owned_stores)
+    exclusions = await load_prom_seller_exclusions(session, workspace_id)
+    return _query_from_listing(listing, exclusions)
 
 
 def manual_search_query(
@@ -300,11 +300,15 @@ def manual_search_query(
     brand: str | None = None,
     name: str | None = None,
     owned_stores: Iterable[MarketplaceStore] = (),
+    *,
+    seller_exclusions: Iterable[SellerExclusion] = (),
 ) -> PartSearchQuery:
     """Запит із форми ручного пошуку: жодного товару в каталозі за ним немає."""
     number = normalize_oem(oem)
     numbers = (number,) if number else ()
-    owner_ids, owner_slugs = _owner_identity(owned_stores)
+    owner_ids, owner_slugs = _owner_identity(
+        [*owned_stores, *seller_exclusions]
+    )
     return PartSearchQuery(
         # Свій ключ кешу на кожну комбінацію — саме її і бачить користувач.
         listing_id=f"manual:{_norm_code(oem)}",
@@ -320,7 +324,7 @@ def manual_search_query(
 
 
 def _owner_identity(
-    owned_stores: Iterable[MarketplaceStore],
+    owned_stores: Iterable[MarketplaceStore | SellerExclusion],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Ідентичність власних Prom-магазинів: їхні пропозиції — не конкуренти."""
     prom_stores = [
@@ -330,7 +334,18 @@ def _owner_identity(
         sorted({v for v in (_text_value(s.external_id) for s in prom_stores) if v})
     )
     slugs = tuple(
-        sorted({v for v in (_normalized_slug(s.name) for s in prom_stores) if v})
+        sorted(
+            {
+                value
+                for value in (
+                    _normalized_slug(
+                        getattr(store, "slug", None) or getattr(store, "name", None)
+                    )
+                    for store in prom_stores
+                )
+                if value
+            }
+        )
     )
     return ids, slugs
 
@@ -904,7 +919,7 @@ def _source_config() -> ScrapeConfig:
 
 def _query_from_listing(
     listing: Listing,
-    owned_stores: Iterable[MarketplaceStore] = (),
+    owned_stores: Iterable[MarketplaceStore | SellerExclusion] = (),
 ) -> PartSearchQuery:
     raw = listing.raw_data if isinstance(listing.raw_data, dict) else {}
     raw_numbers = raw.get("oem_numbers") or []
@@ -1049,16 +1064,33 @@ def _product_matches(
 
 
 def _is_own_prom_product(query: PartSearchQuery, product: Any) -> bool:
-    """Identify the owned Prom offer without relying on a mutable product title."""
+    """Identify an excluded Prom seller by ID, then slug, then URL identity."""
     seller_id = _text_value(getattr(product, "seller_id", None))
-    if seller_id and seller_id in query.owner_seller_ids:
-        return True
+    if seller_id:
+        return seller_id in query.owner_seller_ids
 
     seller_slug = _normalized_slug(getattr(product, "seller_slug", None))
-    if seller_slug and seller_slug in query.owner_seller_slugs:
-        return True
+    if seller_slug:
+        return seller_slug in query.owner_seller_slugs
+
+    url_seller = _prom_seller_from_url(getattr(product, "url", None))
+    if url_seller is not None:
+        if url_seller.company_id in query.owner_seller_ids:
+            return True
+        if url_seller.slug.casefold() in query.owner_seller_slugs:
+            return True
 
     return _same_marketplace_product(query.source_url, getattr(product, "url", None))
+
+
+def _prom_seller_from_url(url: str | None) -> Seller | None:
+    """Seller page path or ``slug-cs<ID>.prom.ua`` host as a final fallback."""
+    if not url:
+        return None
+    try:
+        return Seller.from_url(url)
+    except ValueError:
+        return seller_from_export_url(url)
 
 
 def _same_marketplace_product(source_url: str | None, offer_url: str | None) -> bool:
@@ -1141,14 +1173,17 @@ def _decimal_json(value: Decimal | None) -> str | None:
 
 
 def _cache_key(query: PartSearchQuery) -> str:
-    payload = "|".join(
-        [
-            *query.oem_numbers,
-            query.brand or "",
-            query.name,
-            *query.owner_seller_ids,
-            *query.owner_seller_slugs,
-        ]
+    payload = json.dumps(
+        {
+            "oem_numbers": query.oem_numbers,
+            "brand": query.brand,
+            "name": query.name,
+            "owner_seller_ids": sorted(set(query.owner_seller_ids)),
+            "owner_seller_slugs": sorted(set(query.owner_seller_slugs)),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    return f"competitor-prices:v5:{query.listing_id}:{digest}"
+    return f"competitor-prices:v6:{query.listing_id}:{digest}"

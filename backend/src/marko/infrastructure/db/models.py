@@ -140,6 +140,29 @@ class WorkspaceStore(TimestampMixin, Base):
     kind: Mapped[StoreKind] = mapped_column(Enum(StoreKind, name="store_kind"))
 
 
+class CompetitorSellerExclusion(TimestampMixin, Base):
+    """A seller that remains excluded after its imported catalog is removed."""
+
+    __tablename__ = "competitor_seller_exclusions"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "marketplace",
+            "external_id",
+            name="uq_competitor_seller_exclusion",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    marketplace: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str] = mapped_column(String(100))
+    slug: Mapped[str] = mapped_column(String(255))
+    canonical_url: Mapped[str] = mapped_column(Text)
+
+
 class Listing(TimestampMixin, Base):
     __tablename__ = "listings"
     __table_args__ = (

@@ -18,6 +18,7 @@ from marko.infrastructure.db.models import (
     WorkspaceStore,
 )
 from marko.services.parser_models import Seller
+from marko.services.seller_exclusions import remember_prom_seller
 
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
@@ -78,6 +79,11 @@ async def register_store(
         workspace_id=workspace_id,
         store_id=store_id,
         kind=StoreKind.owned,
+    )
+    await remember_prom_seller(
+        session,
+        workspace_id=workspace_id,
+        seller=seller,
     )
 
     sync_run, created = await _get_or_create_sync_run(

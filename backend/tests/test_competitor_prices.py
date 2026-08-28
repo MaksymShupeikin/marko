@@ -564,8 +564,8 @@ async def test_price_service_caches_each_product_and_refreshes(monkeypatch):
             raw_data={"oem_numbers": ["0451103316"]},
         )
 
-    async def fake_owned_stores(_session, _workspace_id, _kind):
-        return []
+    async def fake_exclusions(_session, _workspace_id):
+        return ()
 
     async def fake_collect(query, _on_event=None):
         collect_calls.append(query.listing_id)
@@ -582,9 +582,9 @@ async def test_price_service_caches_each_product_and_refreshes(monkeypatch):
         fake_get_listing,
     )
     monkeypatch.setattr(
-        competitor_prices_module.stores_repo,
-        "list_workspace_stores_by_kind",
-        fake_owned_stores,
+        competitor_prices_module,
+        "load_prom_seller_exclusions",
+        fake_exclusions,
     )
     monkeypatch.setattr(competitor_prices_module, "_collect", fake_collect)
 
@@ -668,7 +668,9 @@ async def test_llm_filter_drops_foreign_offers_and_regrades_the_rest(monkeypatch
     monkeypatch.setattr(competitor_prices_module.llm_filter, "classify", fake_classify)
 
     stages: list[tuple[str, str]] = []
-    emit = lambda stage, message: stages.append((stage, message))
+    def emit(stage, message):
+        stages.append((stage, message))
+
     refined_prom = await competitor_prices_module._refine_source(
         part_query(), prom, emit
     )

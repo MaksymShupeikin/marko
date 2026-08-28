@@ -27,6 +27,7 @@ from marko.parsers.prom_export import (
     seller_of,
 )
 from marko.services.parser_models import Product
+from marko.services.seller_exclusions import remember_prom_seller
 
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
@@ -147,6 +148,11 @@ async def import_export_file(
         workspace_id=workspace_id,
         store_id=store_id,
         kind=StoreKind.owned,
+    )
+    await remember_prom_seller(
+        session,
+        workspace_id=workspace_id,
+        seller=seller,
     )
 
     # ponytail: imported inside the request; move to Celery if files outgrow

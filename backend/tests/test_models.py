@@ -7,7 +7,7 @@ from marko.api.schemas.stores import ProductResponse
 from marko.infrastructure.db.models import Listing
 from marko.services.parser_models import Product, Seller, get_nested
 
-from factories import product, raw_product
+from factories import product
 
 
 # get_nested

@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
+    CompetitorSellerExclusion,
     Listing,
     MarketplaceStore,
     StoreKind,
@@ -135,6 +136,63 @@ async def upsert_workspace_store(
         )
     )
     await session.execute(statement)
+
+
+async def upsert_competitor_seller_exclusion(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    marketplace: str,
+    external_id: str,
+    slug: str,
+    canonical_url: str,
+) -> uuid.UUID:
+    """Remember an owned seller independently from its removable catalog."""
+    marketplace = marketplace.strip().casefold()
+    external_id = external_id.strip()
+    slug = slug.strip().casefold()
+    canonical_url = canonical_url.strip()
+    statement = (
+        insert(CompetitorSellerExclusion)
+        .values(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            marketplace=marketplace,
+            external_id=external_id,
+            slug=slug,
+            canonical_url=canonical_url,
+        )
+        .on_conflict_do_update(
+            constraint="uq_competitor_seller_exclusion",
+            set_={
+                "slug": slug,
+                "canonical_url": canonical_url,
+                "updated_at": func.now(),
+            },
+        )
+        .returning(CompetitorSellerExclusion.id)
+    )
+    return (await session.execute(statement)).scalar_one()
+
+
+async def list_competitor_seller_exclusions(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    marketplace: str,
+) -> list[CompetitorSellerExclusion]:
+    statement = (
+        select(CompetitorSellerExclusion)
+        .where(
+            CompetitorSellerExclusion.workspace_id == workspace_id,
+            CompetitorSellerExclusion.marketplace == marketplace.strip().casefold(),
+        )
+        .order_by(
+            CompetitorSellerExclusion.external_id,
+            CompetitorSellerExclusion.slug,
+        )
+    )
+    return list((await session.scalars(statement)).all())
 
 
 async def get_workspace_store(
