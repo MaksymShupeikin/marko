@@ -126,16 +126,15 @@ class ProductsApi {
     return SyncRun.fromJson(payload as Map<String, dynamic>);
   }
 
-  /// Незавершені імпорти каталогу — щоб показати капсулу після перезавантаження.
-  Future<List<StoreSync>> getActiveJobs() async {
+  /// Черга імпортів у порядку виконання: перший вантажиться, решта чекає.
+  ///
+  /// Бекенд віддає тут і поступ, і назву магазину, тож опитувати кожен
+  /// запуск окремо не треба — одного запиту вистачає на всю чергу.
+  Future<List<ActiveSyncRun>> getActiveJobs() async {
     final payload = await _client.getJson('/api/v1/jobs/active');
     return [
       for (final item in payload as List<dynamic>)
-        StoreSync(
-          storeId: (item as Map<String, dynamic>)['store_id'] as String?,
-          syncRunId: item['id'] as String,
-          status: item['status'] as String,
-        ),
+        ActiveSyncRun.fromJson(item as Map<String, dynamic>),
     ];
   }
 

@@ -13,13 +13,46 @@ import 'package:marko_client/features/products/widgets/product_card.dart';
 import 'package:marko_client/features/products/widgets/source_panel.dart';
 
 /// A catalog that starts empty and grows once the sync reports progress, plus
-/// a job that runs, then completes.
+/// a queue that runs one job, then empties.
 class _Backend {
+  _Backend({this.queues});
+
   int products = 0;
-  final jobs = <Map<String, dynamic>>[
-    {'status': 'running', 'progress_current': 2, 'progress_total': 4},
-    {'status': 'completed', 'progress_current': 4, 'progress_total': 4},
-  ];
+
+  /// Черги, які віддає /jobs/active по одній на кожен опит.
+  final List<List<Map<String, dynamic>>>? queues;
+
+  static Map<String, dynamic> run({
+    String id = 'run-1',
+    String status = 'running',
+    int current = 2,
+    int? total = 4,
+    String? storeName,
+  }) => {
+    'id': id,
+    'workspace_id': 'w1',
+    'store_id': 's1',
+    'kind': 'catalog_import',
+    'status': status,
+    'progress_current': current,
+    'progress_total': total,
+    'error': null,
+    'started_at': null,
+    'finished_at': null,
+    'created_at': '2026-08-28T10:00:00Z',
+    'updated_at': '2026-08-28T10:00:00Z',
+    'store_name': storeName,
+    'store_logo_url': null,
+  };
+
+  // Перший опит — на старті сторінки: черга ще порожня.
+  late final List<List<Map<String, dynamic>>> _queue =
+      queues ??
+      [
+        const [],
+        [run()],
+        const [],
+      ];
 
   ApiClient client() {
     return ApiClient(
@@ -51,9 +84,15 @@ class _Backend {
             'sync_run_id': 'run-1',
             'status': 'queued',
           }),
+          '/api/v1/jobs/active' => () {
+            final queue = _queue.length > 1 ? _queue.removeAt(0) : _queue.first;
+            if (queue.isNotEmpty) products += 2;
+            return jsonEncode(queue);
+          }(),
+          // Підсумок запуску, якого вже нема в активних: останні товари доїхали.
           '/api/v1/jobs/run-1' => () {
             products += 2;
-            return jsonEncode(jobs.removeAt(0));
+            return jsonEncode(run(status: 'completed', current: 4));
           }(),
           _ => '{}',
         };
@@ -145,5 +184,65 @@ void main() {
 
     expect(find.byType(SourcePanel), findsOneWidget);
     expect(find.textContaining('Імпорт каталогу:'), findsNothing);
+  });
+
+  testWidgets('the queue stacks stores and hides the tail behind a toggle', (
+    tester,
+  ) async {
+    final queue = [
+      _Backend.run(id: 'run-1', storeName: 'kemp'),
+      _Backend.run(
+        id: 'run-2',
+        status: 'queued',
+        current: 0,
+        total: null,
+        storeName: 'avtobust',
+      ),
+      _Backend.run(
+        id: 'run-3',
+        status: 'queued',
+        current: 0,
+        total: null,
+        storeName: 'profparts',
+      ),
+      _Backend.run(
+        id: 'run-4',
+        status: 'queued',
+        current: 0,
+        total: null,
+        storeName: 'parts-avto',
+      ),
+    ];
+    await tester.pumpWidget(
+      _app(_Backend(queues: [queue, queue, queue, const []]).client()),
+    );
+    // Промінь капсули крутиться без упину — settle тут не дочекається.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // Видно активний магазин і один наступний; решта — за кнопкою.
+    expect(find.text('kemp'), findsOneWidget);
+    expect(find.text('avtobust'), findsOneWidget);
+    expect(find.text('profparts'), findsNothing);
+    expect(find.text('Ще 2 магазини в черзі'), findsOneWidget);
+
+    await tester.tap(find.text('Ще 2 магазини в черзі'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('profparts'), findsOneWidget);
+    expect(find.text('parts-avto'), findsOneWidget);
+    expect(find.text('Згорнути чергу'), findsOneWidget);
+
+    await tester.tap(find.text('Згорнути чергу'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('parts-avto'), findsNothing);
+
+    // Даємо черзі спорожніти, інакше опитування переживе сам тест.
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }

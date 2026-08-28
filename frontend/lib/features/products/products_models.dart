@@ -384,6 +384,48 @@ class SyncRun {
   }
 }
 
+/// Один магазин у черзі імпорту: сам запуск плюс те, чим його підписати.
+class ActiveSyncRun {
+  const ActiveSyncRun({
+    required this.syncRunId,
+    required this.storeId,
+    required this.storeName,
+    required this.storeLogoUrl,
+    required this.run,
+  });
+
+  factory ActiveSyncRun.fromJson(Map<String, dynamic> json) {
+    return ActiveSyncRun(
+      syncRunId: json['id'] as String,
+      storeId: json['store_id'] as String?,
+      storeName: json['store_name'] as String?,
+      storeLogoUrl: json['store_logo_url'] as String?,
+      run: SyncRun.fromJson(json),
+    );
+  }
+
+  final String syncRunId;
+  final String? storeId;
+  final String? storeName;
+  final String? storeLogoUrl;
+  final SyncRun run;
+
+  /// Той самий магазин із оновленим станом запуску — для підсумку в кінці.
+  ActiveSyncRun withRun(SyncRun value) => ActiveSyncRun(
+    syncRunId: syncRunId,
+    storeId: storeId,
+    storeName: storeName,
+    storeLogoUrl: storeLogoUrl,
+    run: value,
+  );
+
+  /// Виконується прямо зараз — на відміну від тих, хто чекає черги.
+  bool get isRunning => run.status == 'running';
+  String get title => storeName?.trim().isNotEmpty == true
+      ? storeName!.trim()
+      : 'Магазин';
+}
+
 class MarketPriceOffer {
   const MarketPriceOffer({
     required this.source,
@@ -576,38 +618,50 @@ enum ImportSubmittingType {
 class CatalogImportState {
   const CatalogImportState({
     this.submittingType = ImportSubmittingType.none,
-    this.activeSync,
-    this.activeJob,
+    this.runs = const [],
+    this.finished,
     this.error,
     this.lastImport,
   });
 
   final ImportSubmittingType submittingType;
-  final StoreSync? activeSync;
-  final SyncRun? activeJob;
+
+  /// Черга імпортів у порядку виконання: перший вантажиться, решта чекає.
+  final List<ActiveSyncRun> runs;
+
+  /// Щойно завершений запуск — його ще кілька секунд показуємо з галочкою.
+  final ActiveSyncRun? finished;
   final String? error;
   final FileImportResult? lastImport;
 
   bool get isSubmitting => submittingType != ImportSubmittingType.none;
   bool get isSubmittingFile => submittingType == ImportSubmittingType.file;
   bool get isSubmittingProm => submittingType == ImportSubmittingType.prom;
-  bool get hasActiveJob => activeSync != null && activeJob?.isFinished != true;
+  bool get hasActiveJob => runs.isNotEmpty;
+
+  /// Що показує капсула: жива черга, а коли її нема — підсумок останнього.
+  List<ActiveSyncRun> get visibleRuns {
+    if (runs.isNotEmpty) return runs;
+    final done = finished;
+    return done == null ? const [] : [done];
+  }
+
+  int get queuedCount => runs.where((run) => !run.isRunning).length;
 
   CatalogImportState copyWith({
     ImportSubmittingType? submittingType,
-    StoreSync? activeSync,
-    SyncRun? activeJob,
+    List<ActiveSyncRun>? runs,
+    ActiveSyncRun? finished,
     String? error,
     FileImportResult? lastImport,
-    bool clearSync = false,
-    bool clearJob = false,
+    bool clearFinished = false,
     bool clearError = false,
     bool clearImport = false,
   }) {
     return CatalogImportState(
       submittingType: submittingType ?? this.submittingType,
-      activeSync: clearSync ? null : activeSync ?? this.activeSync,
-      activeJob: clearJob ? null : activeJob ?? this.activeJob,
+      runs: runs ?? this.runs,
+      finished: clearFinished ? null : finished ?? this.finished,
       error: clearError ? null : error ?? this.error,
       lastImport: clearImport ? null : lastImport ?? this.lastImport,
     );

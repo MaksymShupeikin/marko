@@ -11,15 +11,28 @@ import '../products_controller.dart';
 import '../products_models.dart';
 import 'product_card.dart' show formatPriceNumber;
 
-/// A floating capsule reporting the running import: it hovers over the catalog
-/// in the Stack, counts products as they land, and animates a glowing border beam.
-class DynamicSyncIsland extends ConsumerWidget {
+/// Черга імпортів над каталогом: перший магазин рахує товари під анімованим
+/// променем, решта чекає компактними рядками під ним. Коли черга довша за
+/// два рядки, хвіст згортається — щоб не затуляти каталог.
+class DynamicSyncIsland extends ConsumerStatefulWidget {
   const DynamicSyncIsland({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DynamicSyncIsland> createState() => _DynamicSyncIslandState();
+}
+
+class _DynamicSyncIslandState extends ConsumerState<DynamicSyncIsland> {
+  /// Скільки рядків видно згорнутою: активний плюс один наступний.
+  static const _collapsedRows = 2;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
     final import = ref.watch(catalogImportProvider).value;
-    final sync = import?.activeSync;
+    final runs = import?.visibleRuns ?? const <ActiveSyncRun>[];
+    final hidden = runs.length - _collapsedRows;
+    final collapsed = !_expanded && hidden > 0;
+    final shown = collapsed ? runs.take(_collapsedRows).toList() : runs;
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 280),
@@ -38,26 +51,60 @@ class DynamicSyncIsland extends ConsumerWidget {
           ),
         ),
       ),
-      child: sync == null
+      child: runs.isEmpty
           ? const SizedBox.shrink()
-          : _Capsule(
-              key: ValueKey(sync.syncRunId),
-              job: import!.activeJob,
-              status: sync.status,
-              onDismiss: () => _dismiss(context, ref),
+          : AnimatedSize(
+              key: ValueKey(runs.first.syncRunId),
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (index, run) in shown.indexed)
+                    Padding(
+                      padding: EdgeInsets.only(top: index == 0 ? 0 : MarkoSpace.xs),
+                      child: index == 0
+                          ? _Capsule(
+                              key: ValueKey(run.syncRunId),
+                              job: run.run,
+                              status: run.run.status,
+                              storeName: run.storeName,
+                              storeLogoUrl: run.storeLogoUrl,
+                              onDismiss: () => _dismiss(context, run),
+                            )
+                          : _QueuedRow(
+                              key: ValueKey(run.syncRunId),
+                              run: run,
+                              // Хвіст згорнутої черги тьмяніє й тоншає:
+                              // видно, що там ще щось є, але воно не заважає.
+                              depth: collapsed ? index : 0,
+                              onCancel: () => _dismiss(context, run),
+                            ),
+                    ),
+                  if (hidden > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: MarkoSpace.xs),
+                      child: _QueueToggle(
+                        hidden: hidden,
+                        expanded: _expanded,
+                        onPressed: () => setState(() => _expanded = !_expanded),
+                      ),
+                    ),
+                ],
+              ),
             ),
     );
   }
 
   /// Готовий чи впалий імпорт просто ховаємо; живий — зупиняємо після підтвердження.
-  Future<void> _dismiss(BuildContext context, WidgetRef ref) async {
+  Future<void> _dismiss(BuildContext context, ActiveSyncRun run) async {
     final notifier = ref.read(catalogImportProvider.notifier);
-    final job = ref.read(catalogImportProvider).value?.activeJob;
-    if (job?.isFinished ?? false) {
+    if (run.run.isFinished) {
       notifier.dismissSync();
       return;
     }
-    if (await _confirmCancel(context)) await notifier.cancelSync();
+    if (await _confirmCancel(context)) await notifier.cancelSync(run.syncRunId);
   }
 
   Future<bool> _confirmCancel(BuildContext context) async {
@@ -132,11 +179,15 @@ class _Capsule extends StatefulWidget {
     required this.job,
     required this.status,
     required this.onDismiss,
+    this.storeName,
+    this.storeLogoUrl,
   });
 
   final SyncRun? job;
   final String status;
   final VoidCallback onDismiss;
+  final String? storeName;
+  final String? storeLogoUrl;
 
   @override
   State<_Capsule> createState() => _CapsuleState();
@@ -225,6 +276,7 @@ class _CapsuleState extends State<_Capsule>
                     children: [
                       _SyncBadge(
                         accent: accent,
+                        logoUrl: widget.storeLogoUrl,
                         icon: failed
                             ? HeroIcons.exclamationTriangle
                             : done
@@ -240,7 +292,10 @@ class _CapsuleState extends State<_Capsule>
                                   ? 'Помилка синхронізації'
                                   : done
                                       ? 'Каталог оновлено'
-                                      : 'Синхронізація',
+                                      : widget.storeName?.trim().isNotEmpty ==
+                                              true
+                                          ? widget.storeName!.trim()
+                                          : 'Синхронізація',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -391,34 +446,176 @@ class _SyncBadge extends StatelessWidget {
   const _SyncBadge({
     required this.accent,
     required this.icon,
+    this.logoUrl,
+    this.size = 28,
   });
 
   final Color accent;
   final HeroIcons? icon;
 
+  /// Логотип магазину: у черзі кількох імпортів саме він відрізняє рядки.
+  final String? logoUrl;
+  final double size;
+
   @override
   Widget build(BuildContext context) {
     if (icon != null) {
       return Container(
-        width: 28,
-        height: 28,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           color: accent.withValues(alpha: 0.14),
           borderRadius: BorderRadius.circular(MarkoRadius.sm),
           border: Border.all(color: accent.withValues(alpha: 0.28)),
         ),
         alignment: Alignment.center,
-        child: HeroIcon(icon!, size: 16, color: accent),
+        child: HeroIcon(icon!, size: size * 0.57, color: accent),
       );
     }
 
-    return Image.asset(
-      'assets/logos/prom.webp',
-      width: 28,
-      height: 28,
-      fit: BoxFit.contain,
-      filterQuality: FilterQuality.high,
+    final logo = logoUrl;
+    if (logo != null && logo.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(MarkoRadius.sm),
+        child: Image.network(
+          logo,
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+          // Логотип не завантажився — лишається загальний знак майданчика.
+          errorBuilder: (_, _, _) => _promLogo(size),
+        ),
+      );
+    }
+    return _promLogo(size);
+  }
+
+  static Widget _promLogo(double size) => Image.asset(
+        'assets/logos/prom.webp',
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+      );
+}
+
+/// Магазин, що чекає своєї черги: рядок вужчий і спокійніший за активну капсулу.
+class _QueuedRow extends StatelessWidget {
+  const _QueuedRow({
+    super.key,
+    required this.run,
+    required this.depth,
+    required this.onCancel,
+  });
+
+  final ActiveSyncRun run;
+
+  /// Глибина в згорнутому хвості: 0 — повний рядок, далі тьмяніше й дрібніше.
+  final int depth;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final sunken = depth > 0;
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 180),
+      opacity: sunken ? 0.45 : 1,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: sunken ? 440 : 480),
+        margin: const EdgeInsets.symmetric(horizontal: MarkoSpace.lg),
+        padding: const EdgeInsets.fromLTRB(8, 5, MarkoSpace.xs, 5),
+        decoration: BoxDecoration(
+          color: colors.surface.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(MarkoRadius.md),
+          border: Border.all(color: colors.border),
+          boxShadow: sunken ? null : MarkoShadow.overlay,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SyncBadge(
+              accent: colors.muted,
+              icon: null,
+              logoUrl: run.storeLogoUrl,
+              size: 22,
+            ),
+            const SizedBox(width: MarkoSpace.sm),
+            Flexible(
+              child: Text(
+                run.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: colors.muted,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+            const SizedBox(width: MarkoSpace.sm),
+            Text(
+              run.run.statusLabel,
+              style: MarkoType.caption.copyWith(color: colors.faint, fontSize: 11),
+            ),
+            const SizedBox(width: MarkoSpace.xs),
+            _DismissButton(onPressed: onCancel),
+          ],
+        ),
+      ),
     );
+  }
+}
+
+/// «Ще N в черзі» — хвіст ховається, щоб черга не закривала каталог.
+class _QueueToggle extends StatelessWidget {
+  const _QueueToggle({
+    required this.hidden,
+    required this.expanded,
+    required this.onPressed,
+  });
+
+  final int hidden;
+  final bool expanded;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: HeroIcon(
+        expanded ? HeroIcons.chevronUp : HeroIcons.chevronDown,
+        size: 14,
+        color: colors.muted,
+      ),
+      label: Text(
+        expanded ? 'Згорнути чергу' : 'Ще $hidden ${_plural(hidden)} в черзі',
+        style: MarkoType.caption.copyWith(color: colors.muted, fontSize: 11.5),
+      ),
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(
+          horizontal: MarkoSpace.sm,
+          vertical: MarkoSpace.xxs,
+        ),
+        backgroundColor: colors.surface.withValues(alpha: 0.9),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MarkoRadius.sm),
+          side: BorderSide(color: colors.border),
+        ),
+      ),
+    );
+  }
+
+  static String _plural(int count) {
+    if (count % 10 == 1 && count % 100 != 11) return 'магазин';
+    if ([2, 3, 4].contains(count % 10) && !(count % 100 >= 12 && count % 100 <= 14)) {
+      return 'магазини';
+    }
+    return 'магазинів';
   }
 }
 

@@ -411,14 +411,13 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
   @override
   Future<CatalogImportState> build() async {
     ref.onDispose(() => _pollGeneration++);
-    // Імпорт живе на сервері — після перезавантаження сторінки капсула
-    // повертається і далі стежить за тим самим запуском.
+    // Імпорт живе на сервері — після перезавантаження сторінки черга
+    // повертається цілком і далі стежить за собою сама.
     try {
       final active = await _api.getActiveJobs();
       if (active.isNotEmpty) {
-        final sync = active.first;
-        unawaited(_followSync(sync, ++_pollGeneration));
-        return CatalogImportState(activeSync: sync);
+        unawaited(_followQueue(++_pollGeneration));
+        return CatalogImportState(runs: active);
       }
     } catch (_) {
       // Не змогли спитати про активні імпорти — стартуємо порожніми.
@@ -484,25 +483,29 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     state = AsyncData(_current.copyWith(clearImport: true));
   }
 
-  /// Hides the sync capsule and stops following the job.
+  /// Ховає капсулу з підсумком; живу чергу опитування поверне наступним тиком.
   void dismissSync() {
-    _pollGeneration++;
-    state = AsyncData(_current.copyWith(clearSync: true, clearJob: true));
+    state = AsyncData(_current.copyWith(clearFinished: true));
   }
 
-  /// Stops the import on the server, then hides the capsule.
-  Future<void> cancelSync() async {
-    final sync = _current.activeSync;
-    if (sync == null) return;
-    _pollGeneration++;
+  /// Зупиняє імпорт на сервері; решта черги рушає далі без нас.
+  Future<void> cancelSync([String? syncRunId]) async {
+    final id = syncRunId ?? _current.runs.firstOrNull?.syncRunId;
+    if (id == null) return;
     try {
-      await _api.cancelJob(sync.syncRunId);
-      state = AsyncData(_current.copyWith(clearSync: true, clearJob: true));
+      await _api.cancelJob(id);
+      state = AsyncData(
+        _current.copyWith(
+          runs: [
+            for (final run in _current.runs)
+              if (run.syncRunId != id) run,
+          ],
+        ),
+      );
       await ref.read(productsControllerProvider.notifier).refresh();
     } catch (error) {
-      // Скасувати не вдалося — капсула лишається і далі стежить за запуском.
+      // Скасувати не вдалося — рядок лишається, опитування веде його далі.
       state = AsyncData(_current.copyWith(error: error.toString()));
-      unawaited(_followSync(sync, ++_pollGeneration));
     }
   }
 
@@ -518,16 +521,12 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
       ),
     );
     try {
-      final sync = await request();
+      await request();
       state = AsyncData(
-        _current.copyWith(
-          submittingType: ImportSubmittingType.none,
-          activeSync: sync,
-          clearJob: true,
-        ),
+        _current.copyWith(submittingType: ImportSubmittingType.none),
       );
-      final generation = ++_pollGeneration;
-      unawaited(_followSync(sync, generation));
+      // Місце в черзі визначає сервер — одразу питаємо його, як вона стоїть.
+      unawaited(_followQueue(++_pollGeneration));
       return true;
     } catch (error) {
       state = AsyncData(
@@ -540,23 +539,41 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     }
   }
 
-  Future<void> _followSync(StoreSync sync, int generation) async {
+  Future<ActiveSyncRun> _finalState(ActiveSyncRun run) async {
+    try {
+      return run.withRun(await _api.getJob(run.syncRunId));
+    } catch (_) {
+      // Не дізнались підсумок — показуємо останнє, що бачили.
+      return run;
+    }
+  }
+
+  /// Одне опитування на всю чергу: /jobs/active віддає і поступ, і магазини.
+  Future<void> _followQueue(int generation) async {
     var seen = -1;
+    ActiveSyncRun? head = _current.runs.firstOrNull;
     while (generation == _pollGeneration) {
       try {
-        final job = await _api.getJob(sync.syncRunId);
+        final runs = await _api.getActiveJobs();
         if (generation != _pollGeneration) return;
-        // activeSync теж пишемо: перший поll може випередити результат build().
+        final current = runs.firstOrNull;
+        // Черга спорожніла або голова змінилась — попередній магазин доїхав.
+        final done = head != null && current?.syncRunId != head.syncRunId;
+        // Активний список тримає лише незавершені, тож чим саме скінчився
+        // запуск — успіхом, збоєм чи скасуванням — питаємо окремо.
+        final summary = done ? await _finalState(head) : null;
         state = AsyncData(
-          _current.copyWith(activeSync: sync, activeJob: job, clearError: true),
+          _current.copyWith(runs: runs, finished: summary, clearError: true),
         );
+        final progress = runs.fold<int>(0, (sum, r) => sum + r.run.progressCurrent);
         // Товари, що вже приїхали, вливаються в сітку, не чекаючи кінця імпорту.
-        if (job.progressCurrent != seen || job.isFinished) {
-          seen = job.progressCurrent;
+        if (progress != seen || done) {
+          seen = progress;
           await ref.read(productsControllerProvider.notifier).refresh();
         }
-        if (job.isFinished) {
-          // Капсула ще мить показує підсумок, потім зникає сама.
+        head = current;
+        if (runs.isEmpty) {
+          // Підсумок ще мить висить із галочкою, потім зникає сам.
           await Future<void>.delayed(_lingerAfterFinish);
           if (generation == _pollGeneration) dismissSync();
           return;
