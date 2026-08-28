@@ -1,11 +1,16 @@
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from factories import product
 from marko.api.schemas.stores import StoreCreateRequest
+import marko.services.catalog_import as catalog_import_module
 from marko.services.catalog_import import _merge_raw_data, parse_product_price
+from marko.services.parser_models import Seller
 
 
 def test_parse_product_price_accepts_decimal_string():
@@ -55,3 +60,62 @@ def test_store_create_request_accepts_url_without_language():
 def test_store_create_request_rejects_non_prom_url():
     with pytest.raises(ValidationError):
         StoreCreateRequest(url="https://example.com/store")
+
+
+async def test_xlsx_import_persists_permanent_seller_exclusion(monkeypatch):
+    workspace_id = uuid4()
+    store_id = uuid4()
+    seller = Seller(company_id="9876543", slug="my-shop", lang="ua")
+    parsed_products = [product(id=1, name="Фільтр", urlText="filtr")]
+    store = SimpleNamespace(last_synced_at=None)
+    session = AsyncMock()
+    session.get.return_value = store
+
+    monkeypatch.setattr(
+        catalog_import_module,
+        "parse_export",
+        lambda _file: iter(parsed_products),
+    )
+    monkeypatch.setattr(catalog_import_module, "seller_of", lambda _products: seller)
+    monkeypatch.setattr(
+        catalog_import_module.stores_repo,
+        "upsert_marketplace_store",
+        AsyncMock(return_value=store_id),
+    )
+    monkeypatch.setattr(
+        catalog_import_module.stores_repo,
+        "upsert_workspace_store",
+        AsyncMock(),
+    )
+    exclusion = AsyncMock()
+    monkeypatch.setattr(
+        catalog_import_module.stores_repo,
+        "upsert_competitor_seller_exclusion",
+        exclusion,
+    )
+    monkeypatch.setattr(
+        catalog_import_module,
+        "persist_products",
+        AsyncMock(return_value=1),
+    )
+    monkeypatch.setattr(
+        catalog_import_module.listings_repo,
+        "undelete_listings_for_store",
+        AsyncMock(),
+    )
+
+    result = await catalog_import_module.import_export_file(
+        session,
+        workspace_id=workspace_id,
+        content=b"xlsx",
+    )
+
+    assert result.store_id == store_id
+    exclusion.assert_awaited_once_with(
+        session,
+        workspace_id=workspace_id,
+        marketplace="prom",
+        external_id="9876543",
+        slug="my-shop",
+        canonical_url="https://prom.ua/ua/c9876543-my-shop.html",
+    )

@@ -77,7 +77,7 @@ class _SourceGridState extends ConsumerState<CatalogSourceCards> {
           accent: colors.excelAccent,
           logo: 'assets/logos/excel.webp',
           monoLogo: true,
-          title: 'XLSX вивантаження',
+          title: 'Імпорт XLSX файлу',
           subtitle: 'Візьмемо назву, ціну, бренд та всі номери запчастини',
           child: _FileDrop(
             busy: busy,

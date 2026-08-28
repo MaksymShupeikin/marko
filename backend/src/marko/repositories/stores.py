@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
+    CompetitorSellerExclusion,
     Listing,
     MarketplaceStore,
     StoreKind,
@@ -78,6 +79,52 @@ async def list_workspace_stores_by_kind(
         )
     )
     return list((await session.scalars(statement)).all())
+
+
+async def list_competitor_seller_exclusions(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+) -> list[CompetitorSellerExclusion]:
+    statement = (
+        select(CompetitorSellerExclusion)
+        .where(CompetitorSellerExclusion.workspace_id == workspace_id)
+        .order_by(
+            CompetitorSellerExclusion.marketplace,
+            CompetitorSellerExclusion.external_id,
+        )
+    )
+    return list((await session.scalars(statement)).all())
+
+
+async def upsert_competitor_seller_exclusion(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    marketplace: str,
+    external_id: str,
+    slug: str | None,
+    canonical_url: str,
+) -> None:
+    statement = (
+        insert(CompetitorSellerExclusion)
+        .values(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            marketplace=marketplace,
+            external_id=external_id,
+            slug=slug.casefold() if slug else None,
+            canonical_url=canonical_url,
+        )
+        .on_conflict_do_update(
+            constraint="uq_competitor_seller_exclusion_identity",
+            set_={
+                "slug": slug.casefold() if slug else None,
+                "canonical_url": canonical_url,
+                "updated_at": func.now(),
+            },
+        )
+    )
+    await session.execute(statement)
 
 
 async def upsert_marketplace_store(

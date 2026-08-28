@@ -148,6 +148,14 @@ async def import_export_file(
         store_id=store_id,
         kind=StoreKind.owned,
     )
+    await stores_repo.upsert_competitor_seller_exclusion(
+        session,
+        workspace_id=workspace_id,
+        marketplace="prom",
+        external_id=seller.company_id,
+        slug=seller.slug,
+        canonical_url=seller.listing_url,
+    )
 
     # ponytail: imported inside the request; move to Celery if files outgrow
     # the client timeout (a 5k-row export takes a few seconds).

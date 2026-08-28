@@ -8,6 +8,7 @@ from factories import product
 from marko.services.competitor_prices import (
     CompetitorPriceCache,
     CompetitorPriceReport,
+    GLOBAL_OWN_PROM_SELLERS,
     MarketOffer,
     PartSearchQuery,
     PromPriceSource,
@@ -17,6 +18,7 @@ from marko.services.competitor_prices import (
     _is_own_prom_product,
     _match_score,
     _product_matches,
+    _prom_seller_id_from_url,
     _search_terms,
     _query_from_listing,
     _same_marketplace_product,
@@ -474,7 +476,7 @@ def test_own_prom_product_is_excluded_when_url_language_or_host_differs():
     )
 
 
-def test_query_contains_all_owned_prom_stores():
+def test_query_contains_global_and_workspace_prom_exclusions():
     listing = SimpleNamespace(
         id="listing-1",
         sku="0451103316",
@@ -483,46 +485,132 @@ def test_query_contains_all_owned_prom_stores():
         url="https://prom.ua/ua/p123-filtr.html",
         raw_data={"seller_id": 2847093, "seller_slug": "kemp"},
     )
-    owned_stores = [
+    seller_exclusions = [
         SimpleNamespace(
             marketplace="prom",
             external_id="2231191",
-            name="motor-avto",
+            slug="motor-avto",
         ),
         SimpleNamespace(
             marketplace="prom",
             external_id="2847093",
-            name="kemp",
+            slug="kemp",
         ),
         SimpleNamespace(
             marketplace="olx",
             external_id="olx-shop",
-            name="olx-shop",
+            slug="olx-shop",
         ),
     ]
 
-    query = _query_from_listing(listing, owned_stores)
+    query = _query_from_listing(listing, seller_exclusions)
 
-    assert query.owner_seller_ids == ("2231191", "2847093")
-    assert query.owner_seller_slugs == ("kemp", "motor-avto")
+    assert query.owner_seller_ids == (
+        "2231191",
+        "2847093",
+        "3325174",
+        "3912822",
+        "4015921",
+    )
+    assert query.owner_seller_slugs == (
+        "avtobust",
+        "kemp",
+        "motor-avto",
+        "parts-avto",
+        "profparts",
+    )
 
 
 def test_manual_search_query_excludes_owned_prom_stores():
-    owned_stores = [
-        SimpleNamespace(marketplace="prom", external_id="2847093", name="kemp"),
-        SimpleNamespace(marketplace="olx", external_id="olx-shop", name="olx-shop"),
+    seller_exclusions = [
+        SimpleNamespace(marketplace="prom", external_id="9876543", slug="my-shop"),
+        SimpleNamespace(marketplace="olx", external_id="olx-shop", slug="olx-shop"),
     ]
 
     query = competitor_prices_module.manual_search_query(
-        "0451103316", "Bosch", owned_stores=owned_stores
+        "0451103316", "Bosch", seller_exclusions=seller_exclusions
     )
 
-    assert query.owner_seller_ids == ("2847093",)
-    assert query.owner_seller_slugs == ("kemp",)
+    assert query.owner_seller_ids == (
+        "2847093",
+        "3325174",
+        "3912822",
+        "4015921",
+        "9876543",
+    )
+    assert query.owner_seller_slugs == (
+        "avtobust",
+        "kemp",
+        "my-shop",
+        "parts-avto",
+        "profparts",
+    )
     own_product = SimpleNamespace(
-        seller_id=2847093, seller_slug="kemp", url="https://prom.ua/ua/p1-a.html"
+        seller_id=9876543,
+        seller_slug="my-shop",
+        url="https://prom.ua/ua/p1-a.html",
     )
     assert _is_own_prom_product(query, own_product)
+
+
+def test_all_global_own_prom_sellers_are_filtered_before_offer_creation():
+    query = competitor_prices_module.manual_search_query("0451103316", "Bosch")
+    products = [
+        product(
+            id=index,
+            name="Фільтр масляний Bosch 0451103316",
+            sku="0451103316",
+            urlText=f"filtr-{index}",
+            company={"id": int(seller_id), "name": slug, "slug": slug},
+        )
+        for index, (seller_id, slug) in enumerate(GLOBAL_OWN_PROM_SELLERS, start=1)
+    ]
+    products.append(
+        product(
+            id=99,
+            name="Фільтр масляний Bosch 0451103316",
+            sku="0451103316",
+            urlText="competitor-filter",
+            company={"id": 999, "name": "Market Seller", "slug": "market-seller"},
+        )
+    )
+
+    offers = list(PromPriceSource()._offers_from(query, products, "0451103316"))
+
+    assert [offer.seller for offer in offers] == ["Market Seller"]
+
+
+def test_own_prom_seller_id_falls_back_to_store_subdomain():
+    query = competitor_prices_module.manual_search_query("0451103316", "Bosch")
+    own_url = "https://kemp-cs2847093.prom.ua/ua/p999-filtr.html"
+
+    assert _prom_seller_id_from_url(own_url) == "2847093"
+    assert _is_own_prom_product(
+        query,
+        SimpleNamespace(
+            seller_id=None,
+            seller_slug=None,
+            url=own_url,
+        ),
+    )
+
+
+def test_cache_key_is_v6_and_changes_with_workspace_exclusions():
+    base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
+    workspace = competitor_prices_module.manual_search_query(
+        "0451103316",
+        "Bosch",
+        seller_exclusions=[
+            SimpleNamespace(
+                marketplace="prom",
+                external_id="9876543",
+                slug="my-shop",
+            )
+        ],
+    )
+
+    assert _cache_key(base).startswith("competitor-prices:v6:")
+    assert _cache_key(base) != _cache_key(workspace)
 
 
 async def test_redis_cache_keeps_multiple_products_independently():
@@ -564,7 +652,7 @@ async def test_price_service_caches_each_product_and_refreshes(monkeypatch):
             raw_data={"oem_numbers": ["0451103316"]},
         )
 
-    async def fake_owned_stores(_session, _workspace_id, _kind):
+    async def fake_seller_exclusions(_session, _workspace_id):
         return []
 
     async def fake_collect(query, _on_event=None):
@@ -583,8 +671,8 @@ async def test_price_service_caches_each_product_and_refreshes(monkeypatch):
     )
     monkeypatch.setattr(
         competitor_prices_module.stores_repo,
-        "list_workspace_stores_by_kind",
-        fake_owned_stores,
+        "list_competitor_seller_exclusions",
+        fake_seller_exclusions,
     )
     monkeypatch.setattr(competitor_prices_module, "_collect", fake_collect)
 

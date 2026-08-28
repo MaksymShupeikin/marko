@@ -93,9 +93,20 @@ def test_product_response_includes_listing_image_url():
 
 # Seller.from_url
 
-def test_seller_from_url_parses_and_lowercases_lang():
-    seller = Seller.from_url("https://prom.ua/UA/c2847093-kemp.html")
-    assert (seller.company_id, seller.slug, seller.lang) == ("2847093", "kemp", "ua")
+@pytest.mark.parametrize(
+    ("url", "company_id", "slug"),
+    [
+        ("https://prom.ua/UA/c2847093-kemp.html", "2847093", "kemp"),
+        ("https://prom.ua/c4015921-avtobust.html", "4015921", "avtobust"),
+        ("https://prom.ua/ua/c3325174-profparts.html", "3325174", "profparts"),
+        ("https://prom.ua/ua/c3912822-parts-avto.html", "3912822", "parts-avto"),
+    ],
+)
+def test_seller_from_url_parses_owned_store_identities(
+    url: str, company_id: str, slug: str
+):
+    seller = Seller.from_url(url)
+    assert (seller.company_id, seller.slug, seller.lang) == (company_id, slug, "ua")
 
 
 def test_seller_from_url_defaults_missing_language_to_ua():

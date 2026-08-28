@@ -140,6 +140,35 @@ class WorkspaceStore(TimestampMixin, Base):
     kind: Mapped[StoreKind] = mapped_column(Enum(StoreKind, name="store_kind"))
 
 
+class CompetitorSellerExclusion(TimestampMixin, Base):
+    """A Prom seller that must never be treated as a competitor in a workspace.
+
+    This identity deliberately outlives ``MarketplaceStore``. Removing an
+    imported catalog must not turn the seller's offers into market prices.
+    """
+
+    __tablename__ = "competitor_seller_exclusions"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "marketplace",
+            "external_id",
+            name="uq_competitor_seller_exclusion_identity",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    marketplace: Mapped[str] = mapped_column(
+        String(32), default="prom", server_default="prom"
+    )
+    external_id: Mapped[str] = mapped_column(String(100))
+    slug: Mapped[str | None] = mapped_column(String(255))
+    canonical_url: Mapped[str] = mapped_column(Text)
+
+
 class Listing(TimestampMixin, Base):
     __tablename__ = "listings"
     __table_args__ = (

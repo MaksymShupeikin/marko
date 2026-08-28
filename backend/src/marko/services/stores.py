@@ -79,6 +79,14 @@ async def register_store(
         store_id=store_id,
         kind=StoreKind.owned,
     )
+    await stores_repo.upsert_competitor_seller_exclusion(
+        session,
+        workspace_id=workspace_id,
+        marketplace="prom",
+        external_id=seller.company_id,
+        slug=seller.slug,
+        canonical_url=seller.listing_url,
+    )
 
     sync_run, created = await _get_or_create_sync_run(
         session, store_id=store_id, workspace_id=workspace_id
@@ -164,7 +172,7 @@ async def delete_store(
     store_id: UUID,
     workspace_id: UUID,
 ) -> None:
-    """Магазини тепер належать одному воркспейсу: видаляємо разом з лінком і лістингами."""
+    """Delete the catalog but retain its permanent competitor exclusion."""
     await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
     store = await session.get(MarketplaceStore, store_id)
     if store is not None:

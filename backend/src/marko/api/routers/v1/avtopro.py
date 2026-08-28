@@ -16,7 +16,6 @@ import marko.repositories.stores as stores_repo
 from marko.api.dependencies import CurrentUser, get_session
 from marko.api.schemas.competitor_prices import CompetitorPriceReportResponse
 from marko.api.sse import competitor_price_stream
-from marko.infrastructure.db.models import StoreKind
 from marko.services.billing import consume_check
 from marko.services.competitor_prices import (
     competitor_prices_for_query,
@@ -42,11 +41,12 @@ async def search_competitors(
 ) -> CompetitorPriceReportResponse:
     await consume_check(session, current.workspace_id)
     # Власні магазини — щоб свої ж оголошення не рахувались конкурентами.
-    owned = await stores_repo.list_workspace_stores_by_kind(
-        session, current.workspace_id, StoreKind.owned
+    exclusions = await stores_repo.list_competitor_seller_exclusions(
+        session, current.workspace_id
     )
     payload = await competitor_prices_for_query(
-        manual_search_query(oem, brand, name, owned_stores=owned), refresh=refresh
+        manual_search_query(oem, brand, name, seller_exclusions=exclusions),
+        refresh=refresh,
     )
     if not payload["stats"]["offers_total"]:
         raise HTTPException(
@@ -68,9 +68,10 @@ async def search_competitors_stream(
     """Те саме, але з підписами стадій, поки джерела ще збираються."""
     # Пейвол — до старту потоку: у генераторі сесії вже немає (див. sse.py).
     await consume_check(session, current.workspace_id)
-    owned = await stores_repo.list_workspace_stores_by_kind(
-        session, current.workspace_id, StoreKind.owned
+    exclusions = await stores_repo.list_competitor_seller_exclusions(
+        session, current.workspace_id
     )
     return competitor_price_stream(
-        manual_search_query(oem, brand, name, owned_stores=owned), refresh=refresh
+        manual_search_query(oem, brand, name, seller_exclusions=exclusions),
+        refresh=refresh,
     )
