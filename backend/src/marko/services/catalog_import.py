@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -31,6 +32,8 @@ from marko.services.parser_models import Product
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
 
+log = logging.getLogger(__name__)
+
 _BATCH_SIZE = 500
 
 
@@ -53,10 +56,36 @@ def parse_product_price(product: Product) -> Decimal | None:
 
 async def import_store_catalog(sync_run_id: UUID, *, task_id: str | None = None) -> int:
     try:
-        return await _run_import(sync_run_id, task_id=task_id)
+        imported = await _run_import(sync_run_id, task_id=task_id)
     except Exception as exc:
         await _mark_failed(sync_run_id, exc)
+        await _dispatch_next(sync_run_id)
         raise
+    await _dispatch_next(sync_run_id)
+    return imported
+
+
+async def _dispatch_next(sync_run_id: UUID) -> None:
+    """Магазин доїхав — пускаємо наступний із черги цього робочого простору.
+
+    Помилка тут не має валити завершений імпорт: черга зрушить із наступним
+    опитуванням /jobs/active, яке вміє себе лікувати.
+    """
+    # Імпорти всередині функції: celery_app тягне за собою модулі задач,
+    # а вони — цей файл.
+    from marko.services import stores as stores_service
+    from marko.worker.celery_app import celery_app
+
+    try:
+        async with async_session_factory() as session:
+            sync_run = await session.get(SyncRun, sync_run_id)
+            if sync_run is None or sync_run.workspace_id is None:
+                return
+            await stores_service.dispatch_next_queued(
+                session, sync_run.workspace_id, celery_app
+            )
+    except Exception as exc:
+        log.warning("Не вдалося пустити наступний імпорт у чергу: %s", exc)
 
 
 async def _run_import(

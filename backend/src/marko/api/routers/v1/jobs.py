@@ -26,8 +26,8 @@ async def active_jobs(
     session: Annotated[AsyncSession, Depends(get_session)],
     current: CurrentUser,
 ) -> list[SyncRunResponse]:
-    runs = await list_active_sync_runs(session, current.workspace_id)
-    return [SyncRunResponse.model_validate(run) for run in runs]
+    views = await list_active_sync_runs(session, current.workspace_id, celery_app)
+    return [SyncRunResponse.from_view(view) for view in views]
 
 
 @router.post("/{sync_run_id}/cancel", response_model=SyncRunResponse)

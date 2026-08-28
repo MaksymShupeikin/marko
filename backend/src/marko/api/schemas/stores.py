@@ -3,13 +3,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from marko.services.bulk_products import CatalogFilter
 from marko.services.parser_models import Seller
+
+if TYPE_CHECKING:  # лише для підказки типів: сервіс не має залежати від схем
+    from marko.services.stores import SyncRunView
 
 
 class StoreFileImportResponse(BaseModel):
@@ -179,3 +182,17 @@ class SyncRunResponse(BaseModel):
     finished_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # Підпис рядка черги: смужка магазинів ховає ті, у яких ще нуль товарів,
+    # тож назву й логотип віддаємо разом із запуском.
+    store_name: str | None = None
+    store_logo_url: str | None = None
+
+    @classmethod
+    def from_view(cls, view: SyncRunView) -> "SyncRunResponse":
+        return cls.model_validate(
+            view.sync_run,
+            update={
+                "store_name": view.store_name,
+                "store_logo_url": view.store_logo_url,
+            },
+        )

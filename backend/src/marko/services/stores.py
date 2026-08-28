@@ -49,6 +49,15 @@ class StoreView:
 
 
 @dataclass(frozen=True)
+class SyncRunView:
+    """Запуск імпорту разом із магазином: рядок черги підписується його іменем."""
+
+    sync_run: SyncRun
+    store_name: str | None
+    store_logo_url: str | None
+
+
+@dataclass(frozen=True)
 class ProductPage:
     items: list[Listing]
     total: int
@@ -92,7 +101,7 @@ async def register_store(
         session, store_id=store_id, workspace_id=workspace_id
     )
     if created:
-        await _dispatch_sync_run(session, sync_run, celery_app)
+        await _dispatch_if_idle(session, sync_run, celery_app)
     return store_id, sync_run
 
 
@@ -108,7 +117,7 @@ async def queue_store_sync(
         session, store_id=store_id, workspace_id=workspace_id
     )
     if created:
-        await _dispatch_sync_run(session, sync_run, celery_app)
+        await _dispatch_if_idle(session, sync_run, celery_app)
     return sync_run
 
 
@@ -130,6 +139,42 @@ async def _get_or_create_sync_run(
     await session.commit()
     await session.refresh(sync_run)
     return sync_run, True
+
+
+async def _dispatch_if_idle(
+    session: AsyncSession, sync_run: SyncRun, celery_app: Celery
+) -> None:
+    """Віддати воркеру лише якщо в майстерні порожньо.
+
+    Магазини імпортуються по одному: паралельні запуски ділять один канал до
+    prom.ua і сповільнюють обидва. Решта чекає зі статусом queued і без
+    task_id — саме за цією ознакою черга й рухається далі.
+    """
+    if await stores_repo.count_dispatched_sync_runs(session, sync_run.workspace_id):
+        return
+    await _dispatch_sync_run(session, sync_run, celery_app)
+
+
+async def dispatch_next_queued(
+    session: AsyncSession, workspace_id: UUID, celery_app: Celery
+) -> SyncRun | None:
+    """Пустити наступний імпорт у роботу: після завершення, скасування чи збою.
+
+    Запуск, який не вдалося поставити в чергу, позначається помилкою — і ми
+    беремо наступний, інакше одна мертва задача заморозила б усю чергу.
+    """
+    if await stores_repo.count_dispatched_sync_runs(session, workspace_id):
+        return None
+    while True:
+        sync_run = await stores_repo.lock_next_queued_sync_run(session, workspace_id)
+        if sync_run is None:
+            await session.commit()
+            return None
+        try:
+            await _dispatch_sync_run(session, sync_run, celery_app)
+        except TaskDispatchError:
+            continue
+        return sync_run
 
 
 async def _dispatch_sync_run(
@@ -204,9 +249,19 @@ async def get_sync_run(
 
 
 async def list_active_sync_runs(
-    session: AsyncSession, workspace_id: UUID
-) -> list[SyncRun]:
-    return await stores_repo.list_active_sync_runs(session, workspace_id)
+    session: AsyncSession, workspace_id: UUID, celery_app: Celery | None = None
+) -> list[SyncRunView]:
+    """Черга імпортів; заразом лікує її, якщо голова чомусь не поїхала.
+
+    Планувальника (celery beat) у проєкті немає, а фронт і так опитує цей
+    список кожні дві секунди — тож саме тут найдешевше помітити, що ніхто
+    не виконується, хоч у черзі хтось є (наприклад, воркер помер разом із
+    задачею), і зрушити її.
+    """
+    if celery_app is not None:
+        await dispatch_next_queued(session, workspace_id, celery_app)
+    rows = await stores_repo.list_active_sync_runs(session, workspace_id)
+    return [_sync_run_view(sync_run, store) for sync_run, store in rows]
 
 
 async def cancel_sync_run(
@@ -231,7 +286,17 @@ async def cancel_sync_run(
     sync_run.status = SyncStatus.cancelled
     sync_run.finished_at = datetime.now(UTC)
     await session.commit()
+    # Місце звільнилось — наступний магазин має рушити без чекання фронта.
+    await dispatch_next_queued(session, workspace_id, celery_app)
     return sync_run
+
+
+def _sync_run_view(sync_run: SyncRun, store: MarketplaceStore | None) -> SyncRunView:
+    return SyncRunView(
+        sync_run=sync_run,
+        store_name=store.name if store else None,
+        store_logo_url=store.logo_url if store else None,
+    )
 
 
 async def _get_workspace_store(

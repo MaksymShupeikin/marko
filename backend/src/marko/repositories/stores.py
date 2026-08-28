@@ -212,22 +212,73 @@ async def get_active_sync_run(
 
 async def list_active_sync_runs(
     session: AsyncSession, workspace_id: uuid.UUID
-) -> list[SyncRun]:
-    """Незавершені імпорти каталогу — щоб фронт відновив капсулу після перезавантаження."""
+) -> list[tuple[SyncRun, MarketplaceStore | None]]:
+    """Незавершені імпорти каталогу в порядку черги: перший — той, що виконується.
+
+    Магазин джойниться, бо рядок черги підписується його назвою й логотипом,
+    а смужка магазинів приховує ті, у яких ще нуль товарів.
+    """
     return list(
         (
             await session.execute(
-                select(SyncRun)
+                select(SyncRun, MarketplaceStore)
+                .outerjoin(MarketplaceStore, MarketplaceStore.id == SyncRun.store_id)
                 .where(
                     SyncRun.workspace_id == workspace_id,
                     SyncRun.kind == "catalog_import",
                     SyncRun.status.in_([SyncStatus.queued, SyncStatus.running]),
                 )
-                .order_by(SyncRun.created_at.desc())
+                .order_by(SyncRun.created_at.asc())
             )
         )
-        .scalars()
+        .tuples()
         .all()
+    )
+
+
+async def count_dispatched_sync_runs(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> int:
+    """Скільки імпортів уже віддано воркеру: running або queued із task_id.
+
+    Черга рухається по одному, тож ненульове значення означає «зайнято».
+    """
+    return await session.scalar(
+        select(func.count())
+        .select_from(SyncRun)
+        .where(
+            SyncRun.workspace_id == workspace_id,
+            SyncRun.kind == "catalog_import",
+            or_(
+                SyncRun.status == SyncStatus.running,
+                and_(
+                    SyncRun.status == SyncStatus.queued,
+                    SyncRun.task_id.is_not(None),
+                ),
+            ),
+        )
+    )
+
+
+async def lock_next_queued_sync_run(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> SyncRun | None:
+    """Найстаріший імпорт, що чекає черги, під блокуванням рядка.
+
+    SKIP LOCKED: два паралельні запити не мають віддати воркеру один і той
+    самий запуск, і чекати один одного їм теж ні до чого.
+    """
+    return await session.scalar(
+        select(SyncRun)
+        .where(
+            SyncRun.workspace_id == workspace_id,
+            SyncRun.kind == "catalog_import",
+            SyncRun.status == SyncStatus.queued,
+            SyncRun.task_id.is_(None),
+        )
+        .order_by(SyncRun.created_at.asc())
+        .limit(1)
+        .with_for_update(skip_locked=True)
     )
 
 
