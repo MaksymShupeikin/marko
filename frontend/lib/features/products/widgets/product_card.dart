@@ -198,6 +198,12 @@ class _ProductCardState extends State<ProductCard> {
               ),
             ),
           ),
+        if (product.isGrouped)
+          Positioned(
+            top: widget.horizontal ? 6 : MarkoSpace.sm,
+            right: widget.horizontal ? 6 : MarkoSpace.sm,
+            child: _StoreGroupBadge(label: product.storeGroupLabel),
+          ),
       ],
     );
   }
@@ -207,6 +213,44 @@ class _ProductCardState extends State<ProductCard> {
       : product.isAvailable == false
       ? 'Немає в наявності'
       : 'Наявність невідома';
+}
+
+class _StoreGroupBadge extends StatelessWidget {
+  const _StoreGroupBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.sm,
+        vertical: MarkoSpace.xs,
+      ),
+      decoration: BoxDecoration(
+        color: colors.brandSoft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: colors.brand.withValues(alpha: 0.35)),
+        boxShadow: MarkoShadow.card,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HeroIcon(HeroIcons.buildingStorefront, size: 13, color: colors.brand),
+          const SizedBox(width: MarkoSpace.xs),
+          Text(
+            label,
+            style: MarkoType.caption.copyWith(
+              color: colors.brand,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// A card-shaped placeholder with a sweeping shimmer: same square image block
@@ -490,9 +534,7 @@ class _CardDetails extends StatelessWidget {
               const SizedBox(width: MarkoSpace.xs),
               Flexible(
                 child: Text(
-                  product.isAvailable!
-                      ? 'В наявності'
-                      : 'Немає в наявності',
+                  product.isAvailable! ? 'В наявності' : 'Немає в наявності',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: MarkoType.caption.copyWith(

@@ -23,6 +23,39 @@ enum ProductSource {
   final String label;
 }
 
+class SiblingListing {
+  const SiblingListing({
+    required this.listingId,
+    required this.storeId,
+    required this.storeName,
+    required this.price,
+    required this.currency,
+    required this.isAvailable,
+    required this.url,
+  });
+
+  factory SiblingListing.fromJson(Map<String, dynamic> json) {
+    final rawPrice = json['current_price'];
+    return SiblingListing(
+      listingId: json['listing_id'] as String,
+      storeId: json['store_id'] as String,
+      storeName: json['store_name'] as String?,
+      price: rawPrice == null ? null : double.tryParse(rawPrice.toString()),
+      currency: json['currency'] as String,
+      isAvailable: json['is_available'] as bool?,
+      url: json['url'] as String,
+    );
+  }
+
+  final String listingId;
+  final String storeId;
+  final String? storeName;
+  final double? price;
+  final String currency;
+  final bool? isAvailable;
+  final String url;
+}
+
 class StoreProduct {
   const StoreProduct({
     required this.id,
@@ -34,12 +67,15 @@ class StoreProduct {
     required this.currency,
     required this.isAvailable,
     required this.imageUrl,
+    this.storeId = '',
     this.storeName,
     this.marketplace = '',
     this.oemNumbers = const [],
     this.lastSeenAt,
     this.canManage = false,
     this.source = ProductSource.scrape,
+    this.groupSize = 1,
+    this.siblings = const [],
   });
 
   factory StoreProduct.fromJson(Map<String, dynamic> json) {
@@ -54,6 +90,7 @@ class StoreProduct {
       currency: json['currency'] as String,
       isAvailable: json['is_available'] as bool?,
       imageUrl: json['image_url'] as String?,
+      storeId: json['store_id'] as String? ?? '',
       storeName: json['store_name'] as String?,
       marketplace: json['marketplace'] as String? ?? '',
       oemNumbers: (json['oem_numbers'] as List<dynamic>? ?? const [])
@@ -64,6 +101,12 @@ class StoreProduct {
       source: json['source'] == 'export'
           ? ProductSource.export
           : ProductSource.scrape,
+      groupSize: (json['group_size'] as num?)?.toInt() ?? 1,
+      siblings: (json['siblings'] as List<dynamic>? ?? const [])
+          .map(
+            (value) => SiblingListing.fromJson(value as Map<String, dynamic>),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -76,14 +119,77 @@ class StoreProduct {
   final String currency;
   final bool? isAvailable;
   final String? imageUrl;
+  final String storeId;
   final String? storeName;
   final String marketplace;
   final List<String> oemNumbers;
   final DateTime? lastSeenAt;
   final bool canManage;
   final ProductSource source;
+  final int groupSize;
+  final List<SiblingListing> siblings;
 
   bool get isFromProm => url.contains('prom.ua');
+
+  bool get isGrouped => groupSize > 1;
+
+  String get storeGroupLabel {
+    final mod10 = groupSize % 10;
+    final mod100 = groupSize % 100;
+    final word = mod10 == 1 && mod100 != 11 ? 'магазині' : 'магазинах';
+    return 'у $groupSize $word';
+  }
+
+  List<SiblingListing> get allOwnCopies {
+    final copies = [
+      SiblingListing(
+        listingId: id,
+        storeId: storeId,
+        storeName: storeName,
+        price: price,
+        currency: currency,
+        isAvailable: isAvailable,
+        url: url,
+      ),
+      ...siblings,
+    ];
+    copies.sort((left, right) {
+      final leftPrice = left.price;
+      final rightPrice = right.price;
+      if (leftPrice == null && rightPrice == null) {
+        return left.listingId.compareTo(right.listingId);
+      }
+      if (leftPrice == null) return 1;
+      if (rightPrice == null) return -1;
+      final byPrice = leftPrice.compareTo(rightPrice);
+      return byPrice != 0 ? byPrice : left.listingId.compareTo(right.listingId);
+    });
+    return List.unmodifiable(copies);
+  }
+
+  /// PATCH/refresh responses describe one listing and intentionally omit its group.
+  StoreProduct withGroupingFrom(StoreProduct grouped) {
+    return StoreProduct(
+      id: id,
+      name: name,
+      url: url,
+      sku: sku,
+      brand: brand,
+      price: price,
+      currency: currency,
+      isAvailable: isAvailable,
+      imageUrl: imageUrl,
+      storeId: storeId,
+      storeName: storeName,
+      marketplace: marketplace,
+      oemNumbers: oemNumbers,
+      lastSeenAt: lastSeenAt,
+      canManage: canManage,
+      source: source,
+      groupSize: grouped.groupSize,
+      siblings: grouped.siblings,
+    );
+  }
 
   /// The number to look up on avto.pro: the richest one we know about.
   String? get primaryOem => oemNumbers.isNotEmpty ? oemNumbers.first : sku;
@@ -238,8 +344,7 @@ class CatalogState {
   final String? error;
 
   /// How many products the buttons would act on right now.
-  int get actionCount =>
-      allMatchingSelected ? page.total : selectedIds.length;
+  int get actionCount => allMatchingSelected ? page.total : selectedIds.length;
 
   bool get hasSelection => allMatchingSelected || selectedIds.isNotEmpty;
 
@@ -567,11 +672,7 @@ class CompetitorPriceReport {
   }
 }
 
-enum ImportSubmittingType {
-  none,
-  file,
-  prom,
-}
+enum ImportSubmittingType { none, file, prom }
 
 class CatalogImportState {
   const CatalogImportState({
@@ -613,4 +714,3 @@ class CatalogImportState {
     );
   }
 }
-

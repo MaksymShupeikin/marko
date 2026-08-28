@@ -121,8 +121,9 @@ class ProductsController extends AsyncNotifier<CatalogState> {
     String productId,
     ProductUpdate update,
   ) async {
-    final updated = await _api.updateProduct(productId, update);
+    final response = await _api.updateProduct(productId, update);
     final current = _current;
+    final updated = _withCurrentGrouping(response, current);
     state = AsyncData(
       current.copyWith(
         page: CatalogPage(
@@ -140,8 +141,9 @@ class ProductsController extends AsyncNotifier<CatalogState> {
   }
 
   Future<StoreProduct> refreshProduct(String productId) async {
-    final updated = await _api.refreshProduct(productId);
+    final response = await _api.refreshProduct(productId);
     final current = _current;
+    final updated = _withCurrentGrouping(response, current);
     state = AsyncData(
       current.copyWith(
         page: CatalogPage(
@@ -257,7 +259,8 @@ class ProductsController extends AsyncNotifier<CatalogState> {
       current.copyWith(
         page: CatalogPage(
           items: [
-            for (final item in current.page.items) updated[item.id] ?? item,
+            for (final item in current.page.items)
+              updated[item.id]?.withGroupingFrom(item) ?? item,
           ],
           total: current.page.total,
         ),
@@ -380,7 +383,9 @@ class ProductsController extends AsyncNotifier<CatalogState> {
       );
       if (generation != _generation) return;
       final hasImported =
-          current.hasImportedProducts || page.total > 0 || page.items.isNotEmpty;
+          current.hasImportedProducts ||
+          page.total > 0 ||
+          page.items.isNotEmpty;
       state = AsyncData(
         _current.copyWith(
           page: page,
@@ -394,6 +399,19 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         _current.copyWith(isRefreshing: false, error: error.toString()),
       );
     }
+  }
+
+  StoreProduct _withCurrentGrouping(
+    StoreProduct updated,
+    CatalogState current,
+  ) {
+    for (final item in current.page.items) {
+      if (item.id == updated.id) return updated.withGroupingFrom(item);
+    }
+    final selected = current.selected;
+    return selected?.id == updated.id
+        ? updated.withGroupingFrom(selected!)
+        : updated;
   }
 }
 
@@ -433,9 +451,8 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     }
     final uri = Uri.tryParse(url);
     final host = uri?.host.toLowerCase() ?? '';
-    final isValidProm = host == 'prom.ua' ||
-        host == 'www.prom.ua' ||
-        host.endsWith('.prom.ua');
+    final isValidProm =
+        host == 'prom.ua' || host == 'www.prom.ua' || host.endsWith('.prom.ua');
     if (uri == null || !isValidProm) {
       state = AsyncData(
         _current.copyWith(

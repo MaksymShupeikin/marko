@@ -226,6 +226,21 @@ void main() {
   ) async {
     var savedName = 'Радіатор Iveco';
     var deleted = false;
+    Map<String, dynamic> groupedProduct() => {
+      ..._product('1', savedName, price: 3500),
+      'group_size': 2,
+      'siblings': [
+        {
+          'listing_id': 'copy-2',
+          'store_id': 'store-2',
+          'store_name': 'Avtobust',
+          'current_price': 3700,
+          'currency': 'UAH',
+          'is_available': true,
+          'url': 'https://avtobust.prom.ua/p2-detail.html',
+        },
+      ],
+    };
     final client = ApiClient(
       client: MockClient((request) async {
         if (request.method == 'POST' &&
@@ -266,7 +281,7 @@ void main() {
           return http.Response.bytes(
             utf8.encode(
               jsonEncode({
-                'items': deleted ? [] : [_product('1', savedName, price: 3500)],
+                'items': deleted ? [] : [groupedProduct()],
                 'total': deleted ? 0 : 1,
                 'limit': 60,
                 'offset': 0,
@@ -296,6 +311,9 @@ void main() {
       ),
       findsOneWidget,
     );
+    // Refresh returns one listing with group defaults; the controller keeps the
+    // catalog siblings so the badge and per-store facts do not disappear.
+    expect(find.text('Avtobust · 3 700 ₴'), findsOneWidget);
 
     await _clearToasts(tester);
     await tester.tap(find.byTooltip('Видалити товар'));

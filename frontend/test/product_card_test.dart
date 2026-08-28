@@ -40,5 +40,53 @@ void main() {
     expect(price.style!.fontSize, greaterThan(name.style!.fontSize!));
     expect(find.text('Marko  ·  SKU SKU-1'), findsOneWidget);
     expect(find.text('В наявності'), findsOneWidget);
+    expect(find.textContaining('магазин'), findsNothing);
+  });
+
+  testWidgets('grouped product card shows the own-store count badge', (
+    tester,
+  ) async {
+    const product = StoreProduct(
+      id: 'product-id',
+      name: 'Grouped product',
+      url: 'https://prom.ua/product',
+      sku: 'SKU-1',
+      brand: 'Marko',
+      price: 1000,
+      currency: 'UAH',
+      isAvailable: true,
+      imageUrl: null,
+      storeId: 'store-1',
+      storeName: 'KEMP',
+      groupSize: 2,
+      siblings: [
+        SiblingListing(
+          listingId: 'product-2',
+          storeId: 'store-2',
+          storeName: 'Avtobust',
+          price: 1200,
+          currency: 'UAH',
+          isAvailable: true,
+          url: 'https://prom.ua/product-2',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 280,
+              height: 406,
+              child: ProductCard(product: product),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('у 2 магазинах'), findsOneWidget);
   });
 }

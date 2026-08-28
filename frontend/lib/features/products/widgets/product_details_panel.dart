@@ -685,11 +685,34 @@ class _Facts extends StatelessWidget {
           _Fact(label: 'Артикул', value: product.sku, mono: true),
           _Fact(label: 'Бренд', value: product.brand),
           _Fact(label: 'OEM для пошуку', value: product.primaryOem, mono: true),
-          _Fact(label: 'Магазин', value: product.storeName),
+          if (product.isGrouped)
+            for (final copy in product.allOwnCopies)
+              _Fact(
+                label: 'Магазин',
+                value: _ownCopyLabel(copy, representativeId: product.id),
+              )
+          else
+            _Fact(label: 'Магазин', value: product.storeName),
           _Fact(label: 'Синхронізовано', value: updated),
         ],
       ),
     );
+  }
+
+  String _ownCopyLabel(
+    SiblingListing copy, {
+    required String representativeId,
+  }) {
+    final store = copy.storeName?.trim().isNotEmpty == true
+        ? copy.storeName!.trim()
+        : 'Без назви';
+    final price = copy.price == null
+        ? 'ціна не вказана'
+        : '${formatPriceNumber(copy.price!)} ${formatCurrency(copy.currency)}';
+    final representative = copy.listingId == representativeId
+        ? ' · представник'
+        : '';
+    return '$store · $price$representative';
   }
 }
 
@@ -907,10 +930,7 @@ class _CompetitorPricesLoadingState
                       duration: const Duration(milliseconds: 250),
                       layoutBuilder: (currentChild, previousChildren) => Stack(
                         alignment: Alignment.centerLeft,
-                        children: <Widget>[
-                          ...previousChildren,
-                          ?currentChild,
-                        ],
+                        children: <Widget>[...previousChildren, ?currentChild],
                       ),
                       child: SizedBox(
                         key: ValueKey(stage),
@@ -1037,6 +1057,14 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
             userPrice: userPrice,
             currency: currency,
           ),
+          if (widget.product?.isGrouped ?? false) ...[
+            const SizedBox(height: MarkoSpace.sm),
+            _OwnStoresGuidance(
+              product: widget.product!,
+              recommendedPrice: stats.recommendedPrice!,
+              currency: currency,
+            ),
+          ],
         ],
         if (allOffers.isNotEmpty) ...[
           const SizedBox(height: MarkoSpace.xxl),
@@ -1166,6 +1194,111 @@ class _RecommendedPriceBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+class _OwnStoresGuidance extends StatelessWidget {
+  const _OwnStoresGuidance({
+    required this.product,
+    required this.recommendedPrice,
+    required this.currency,
+  });
+
+  final StoreProduct product;
+  final double recommendedPrice;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final copies = product.allOwnCopies;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.surfaceMuted,
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Рекомендації для своїх магазинів',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: colors.ink,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: MarkoSpace.sm),
+          for (var index = 0; index < copies.length; index++) ...[
+            _OwnStoreGuidanceRow(
+              copy: copies[index],
+              recommendedPrice: recommendedPrice,
+              recommendedCurrency: currency,
+            ),
+            if (index < copies.length - 1)
+              const SizedBox(height: MarkoSpace.xs),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _OwnStoreGuidanceRow extends StatelessWidget {
+  const _OwnStoreGuidanceRow({
+    required this.copy,
+    required this.recommendedPrice,
+    required this.recommendedCurrency,
+  });
+
+  final SiblingListing copy;
+  final double recommendedPrice;
+  final String recommendedCurrency;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final price = copy.price;
+    final aboveMarket = price != null && price > recommendedPrice;
+    final tone = price == null
+        ? colors.faint
+        : aboveMarket
+        ? colors.warning
+        : colors.positive;
+    final store = copy.storeName?.trim().isNotEmpty == true
+        ? copy.storeName!.trim()
+        : 'Без назви';
+    final message = price == null
+        ? 'Магазин $store: ціна не вказана'
+        : aboveMarket
+        ? 'Магазин $store: ${formatPriceNumber(price)} ${_currencyLabel(copy.currency)} — вище ринку, рекомендовано ≤ ${formatPriceNumber(recommendedPrice)} ${_currencyLabel(recommendedCurrency)}'
+        : 'Магазин $store: ${formatPriceNumber(price)} ${_currencyLabel(copy.currency)} — в межах ринку';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.sm,
+        vertical: MarkoSpace.sm,
+      ),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(MarkoRadius.sm),
+        border: Border.all(color: tone.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        message,
+        style: MarkoType.caption.copyWith(
+          color: colors.ink,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
+  String _currencyLabel(String value) => switch (value.trim().toUpperCase()) {
+    'UAH' || 'ГРН' => 'грн',
+    _ => formatCurrency(value),
+  };
 }
 
 class _PriceBenchmarkBanner extends StatelessWidget {
