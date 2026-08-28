@@ -405,6 +405,9 @@ final productsControllerProvider =
 class CatalogImportController extends AsyncNotifier<CatalogImportState> {
   int _pollGeneration = 0;
 
+  /// Зупинені вручну запуски: їхній підсумок капсулі показувати не треба.
+  final Set<String> _cancelled = {};
+
   ProductsApi get _api => ref.read(productsApiProvider);
   CatalogImportState get _current => state.value ?? const CatalogImportState();
 
@@ -494,6 +497,8 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     if (id == null) return;
     try {
       await _api.cancelJob(id);
+      // Людина зупинила імпорт свідомо — підсумок їй показувати нема чого.
+      _cancelled.add(id);
       state = AsyncData(
         _current.copyWith(
           runs: [
@@ -561,7 +566,9 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
         final done = head != null && current?.syncRunId != head.syncRunId;
         // Активний список тримає лише незавершені, тож чим саме скінчився
         // запуск — успіхом, збоєм чи скасуванням — питаємо окремо.
-        final summary = done ? await _finalState(head) : null;
+        final summary = done && !_cancelled.remove(head.syncRunId)
+            ? await _finalState(head)
+            : null;
         state = AsyncData(
           _current.copyWith(runs: runs, finished: summary, clearError: true),
         );
