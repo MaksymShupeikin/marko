@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
 
@@ -37,6 +38,38 @@ _SYSTEM = (
     'Відповідь — лише JSON: {"verdicts": [{"index": 0, "verdict": "same"}, ...]},'
     " по одному запису на кожного кандидата, без пояснень."
 )
+
+
+# Другий прохід шле впʼятеро довший опис на кандидата, тож шматки менші.
+_VERIFY_CHUNK_SIZE = 12
+
+_VERIFY_SYSTEM = (
+    "Ти перевіряєш пропозиції автозапчастин, за якими рахується ринкова ціна.\n"
+    "Для кожного кандидата дано назву, ціну, продавця, наявність і стан,\n"
+    "а також медіану ринку для цієї самої деталі. Постав категорію:\n"
+    "  ok     — та сама (або взаємозамінна) НОВА деталь і справжня ціна:\n"
+    "           продавець просто дешевший за ринок;\n"
+    "  drop   — вживана, відновлена, з розборки; ціна за запитом чи договірна;\n"
+    "           ціна за кріплення, прокладку, доставку чи одну штуку з набору;\n"
+    "           ціна «від»; інша деталь, інший розмір або взагалі інший товар;\n"
+    "  unsure — з наданого не видно, чи це та сама нова деталь за реальною ціною.\n"
+    "Ціна, менша за ринкову в кілька разів, майже завжди означає інший товар.\n"
+    "Сумніваєшся — став unsure: пропозиція лишиться у списку, але не\n"
+    "формуватиме рекомендовану ціну.\n"
+    'Відповідь — лише JSON: {"verdicts": [{"index": 0, "verdict": "ok"}, ...]},'
+    " по одному запису на кожного кандидата, без пояснень."
+)
+
+
+@dataclass(frozen=True)
+class OfferFacts:
+    """Готові рядки про пропозицію: гроші форматує той, хто володіє звітом."""
+
+    title: str
+    price: str
+    seller: str | None = None
+    availability: str | None = None
+    condition: str | None = None
 
 
 def is_enabled() -> bool:
@@ -100,6 +133,88 @@ async def classify(
     return result
 
 
+async def verify_offers(
+    *,
+    name: str,
+    brand: str | None,
+    oem_numbers: Sequence[str],
+    market_summary: str,
+    offers: Sequence[OfferFacts],
+) -> dict[int, str]:
+    """index -> "ok" | "drop" | "unsure"; порожньо, якщо модель недоступна.
+
+    Другий прохід бачить те, чого не бачить перший: ціну, продавця, наявність
+    і стан — та ще й медіану ринку, яка існує лише коли всі джерела вже
+    відповіли. Пропущений вердикт — "unsure", а не "drop": тут неперевірена
+    пропозиція знижується в довірі, а не зникає.
+    """
+    if not offers or not is_enabled():
+        return {}
+    chunks = [
+        (start, offers[start : start + _VERIFY_CHUNK_SIZE])
+        for start in range(0, len(offers), _VERIFY_CHUNK_SIZE)
+    ]
+    batches = await asyncio.gather(
+        *(
+            _verify_chunk(name, brand, oem_numbers, market_summary, chunk)
+            for _, chunk in chunks
+        )
+    )
+    result: dict[int, str] = {}
+    for (start, chunk), verdicts in zip(chunks, batches):
+        if verdicts is None:
+            continue
+        for index in range(len(chunk)):
+            result[start + index] = verdicts.get(index, "unsure")
+    return result
+
+
+async def _verify_chunk(
+    name: str,
+    brand: str | None,
+    oem_numbers: Sequence[str],
+    market_summary: str,
+    offers: Sequence[OfferFacts],
+) -> dict[int, str] | None:
+    prompt = _verify_prompt(name, brand, oem_numbers, market_summary, offers)
+    try:
+        verdicts = json.loads(await _ask_openai(prompt, _VERIFY_SYSTEM))["verdicts"]
+    except Exception as exc:  # перевірка не критична — краще без неї, ніж без цін
+        log.warning("Перевірка підозрілих пропозицій не спрацювала: %s", exc)
+        return None
+    result = {
+        item["index"]: item["verdict"]
+        for item in verdicts
+        if isinstance(item.get("index"), int) and 0 <= item["index"] < len(offers)
+    }
+    return result or None
+
+
+def _verify_prompt(
+    name: str,
+    brand: str | None,
+    oem_numbers: Sequence[str],
+    market_summary: str,
+    offers: Sequence[OfferFacts],
+) -> str:
+    seed = [f"Наша деталь: {name}"]
+    if brand:
+        seed.append(f"Виробник: {brand}")
+    if oem_numbers:
+        seed.append(f"Каталожні номери: {', '.join(oem_numbers)}")
+    seed.append(market_summary)
+    lines: list[str] = []
+    for index, offer in enumerate(offers):
+        lines.append(f"{index}. {offer.title}")
+        lines.append(f"   ціна: {offer.price}")
+        if offer.seller:
+            lines.append(f"   продавець: {offer.seller}")
+        if offer.availability:
+            lines.append(f"   наявність: {offer.availability}")
+        lines.append(f"   стан: {offer.condition or 'невідомо'}")
+    return "\n".join([*seed, "", "Кандидати:", *lines])
+
+
 async def _classify_chunk(
     name: str,
     brand: str | None,
@@ -108,7 +223,7 @@ async def _classify_chunk(
 ) -> dict[int, str] | None:
     prompt = _prompt(name, brand, oem_numbers, titles)
     try:
-        verdicts = json.loads(await _ask_openai(prompt))["verdicts"]
+        verdicts = json.loads(await _ask_openai(prompt, _SYSTEM))["verdicts"]
     except Exception as exc:  # фільтр не критичний — краще без нього, ніж без цін
         log.warning("LLM-фільтр пропозицій не спрацював: %s", exc)
         return None
@@ -120,7 +235,7 @@ async def _classify_chunk(
     return result or None
 
 
-async def _ask_openai(prompt: str) -> str:
+async def _ask_openai(prompt: str, system: str = _SYSTEM) -> str:
     # json_object, а не json_schema: його розуміють усі сумісні провайдери,
     # а форму відповіді все одно перевіряє classify().
     settings = get_settings()
@@ -132,7 +247,7 @@ async def _ask_openai(prompt: str) -> str:
         model=settings.competitor_filter_model,
         response_format={"type": "json_object"},
         messages=[
-            {"role": "system", "content": _SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
         **extra,

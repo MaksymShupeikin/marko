@@ -55,6 +55,11 @@ _MIN_STATS_CONFIDENCE = 0.7  # слабкі збіги не мають зада�
 # майже напевно сміття парсингу (склеєні цифри, «0 грн» доставки), не ринок.
 _OUTLIER_FACTOR = Decimal("8")
 _OUTLIER_MIN_OFFERS = 4  # менше — нема статистики, викид не відрізнити від ринку
+# Другий прохід моделі по цінах, що формують звіт.
+_SUSPICIOUS_LOW_FACTOR = Decimal("2.5")  # дешевше за 40% медіани — точно перевірити
+_VERIFY_MIN_CONFIDENT = 3  # медіана з двох цін — не якір
+_VERIFY_MAX_OFFERS = 40  # стеля на звіт; скільки не влізло — у лог
+_UNVERIFIED_CONFIDENCE = 0.5  # видно у списку, але поза статистикою
 _MIN_NAME_SIMILARITY = 0.7  # нижче — це вже інша деталь, а не конкурент
 _STRONG_NAME_SIMILARITY = 0.8  # від цього збіг за назвою рахується у статистику
 _OEM_HIT_SCORE = 0.9  # знайдено за номером — це та сама деталь, не аналог
@@ -430,9 +435,10 @@ async def _collect(
         *(_refined_source(source, query, timeout, emit) for source in sources)
     )
     refined = await _to_uah(tuple(results))
+    sane = _drop_implausible(_single_currency(refined))
     return CompetitorPriceReport(
         query=query,
-        sources=_drop_implausible(_single_currency(refined)),
+        sources=await _verify_offers(query, sane, emit),
         observed_at=datetime.now(UTC),
     )
 
@@ -489,6 +495,123 @@ async def _refine_source(
         result,
         offers=tuple(kept),
         status="empty" if not kept and result.status == "ok" else result.status,
+    )
+
+
+async def _verify_offers(
+    query: PartSearchQuery,
+    sources: tuple[SourceResult, ...],
+    emit: ProgressCallback,
+) -> tuple[SourceResult, ...]:
+    """Другий прохід моделі по цінах, з яких рахується звіт.
+
+    Перший фільтр бачить лише назви — ціну оцінити нічим, бо медіана ринку
+    зʼявляється аж коли відповіли всі джерела. Тут модель отримує ціну,
+    продавця, наявність і стан, а ми діємо так: підтверджене лишається,
+    відкинуте зникає, а все неперевірене падає нижче порога статистики —
+    підозріло дешева пропозиція не задасть рекомендовану ціну навіть тоді,
+    коли модель недоступна.
+    """
+    if not get_settings().competitor_verify_enabled or not llm_filter.is_enabled():
+        return sources
+
+    indexed = [
+        (source_index, offer_index, offer)
+        for source_index, source in enumerate(sources)
+        for offer_index, offer in enumerate(source.offers)
+    ]
+    strong = [
+        offer.price
+        for _, _, offer in indexed
+        if offer.confidence >= _MIN_STATS_CONFIDENCE
+    ]
+    if len(strong) < _VERIFY_MIN_CONFIDENT:
+        return sources
+    anchor = Decimal(str(median(strong)))
+
+    def worth_checking(offer: MarketOffer) -> bool:
+        # Все, що йде в статистику, плюс підозріло дешеві поза нею.
+        return (
+            offer.confidence >= _MIN_STATS_CONFIDENCE
+            or offer.price < anchor / _SUSPICIOUS_LOW_FACTOR
+        )
+
+    # Найдешевші перші: саме вони задають рекомендацію, і саме вони найчастіше
+    # виявляються не тим товаром.
+    picked = sorted(
+        (item for item in indexed if worth_checking(item[2])),
+        key=lambda item: item[2].price,
+    )
+    if not picked:
+        return sources
+    if len(picked) > _VERIFY_MAX_OFFERS:
+        log.info(
+            "Перевірка цін: %d пропозицій понад стелю %d лишились неперевіреними",
+            len(picked) - _VERIFY_MAX_OFFERS,
+            _VERIFY_MAX_OFFERS,
+        )
+        picked = picked[:_VERIFY_MAX_OFFERS]
+
+    emit("filter", f"Перевіряємо ціни: {len(picked)} пропозицій")
+    verdicts = await llm_filter.verify_offers(
+        name=query.name,
+        brand=query.brand,
+        oem_numbers=query.oem_numbers,
+        market_summary=f"Медіана ринку: {anchor} {_report_currency(sources)}",
+        offers=[_offer_facts(offer) for _, _, offer in picked],
+    )
+
+    updates: dict[tuple[int, int], MarketOffer | None] = {}
+    for position, (source_index, offer_index, offer) in enumerate(picked):
+        match verdicts.get(position):
+            case "ok":
+                continue
+            case "drop":
+                updates[(source_index, offer_index)] = None
+            case _:
+                # Не підтверджено — лишаємо на очі людині, але зі статистики геть.
+                updates[(source_index, offer_index)] = replace(
+                    offer,
+                    confidence=min(offer.confidence, _UNVERIFIED_CONFIDENCE),
+                )
+    if not updates:
+        return sources
+
+    dropped = sum(1 for value in updates.values() if value is None)
+    if dropped:
+        emit("filter", f"Відсіяли {dropped} сумнівних цін")
+    log.info(
+        "Перевірка цін: відкинуто %d, знижено %d із %d",
+        dropped,
+        len(updates) - dropped,
+        len(picked),
+    )
+    return tuple(
+        replace(
+            source,
+            offers=tuple(
+                updates.get((source_index, offer_index), offer)
+                for offer_index, offer in enumerate(source.offers)
+                if updates.get((source_index, offer_index), offer) is not None
+            ),
+        )
+        for source_index, source in enumerate(sources)
+    )
+
+
+def _offer_facts(offer: MarketOffer) -> llm_filter.OfferFacts:
+    return llm_filter.OfferFacts(
+        title=offer.title,
+        price=f"{offer.price} {offer.currency}",
+        seller=offer.seller,
+        availability=offer.availability,
+        condition=offer.condition,
+    )
+
+
+def _report_currency(sources: tuple[SourceResult, ...]) -> str:
+    return next(
+        (offer.currency for source in sources for offer in source.offers), "UAH"
     )
 
 
@@ -1308,6 +1431,6 @@ def _cache_key(query: PartSearchQuery) -> str:
         ]
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    # v7: конвертація валют і санітарні фільтри цін — старі звіти з сміттям
-    # (0 грн, мільйонні викиди) не повинні пережити деплой.
-    return f"competitor-prices:v7:{query.listing_id}:{digest}"
+    # v8: відсіви вживаного й перевірка цін другим проходом — інакше шість
+    # годин TTL показували б старі звіти з розборкою і фальшивим "new".
+    return f"competitor-prices:v8:{query.listing_id}:{digest}"

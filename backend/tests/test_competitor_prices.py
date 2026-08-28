@@ -706,7 +706,7 @@ def test_own_prom_seller_id_falls_back_to_store_subdomain():
     )
 
 
-def test_cache_key_is_v7_and_changes_with_workspace_exclusions():
+def test_cache_key_is_v8_and_changes_with_workspace_exclusions():
     base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
     workspace = competitor_prices_module.manual_search_query(
         "0451103316",
@@ -720,7 +720,7 @@ def test_cache_key_is_v7_and_changes_with_workspace_exclusions():
         ],
     )
 
-    assert _cache_key(base).startswith("competitor-prices:v7:")
+    assert _cache_key(base).startswith("competitor-prices:v8:")
     assert _cache_key(base) != _cache_key(workspace)
 
 
@@ -903,7 +903,7 @@ async def test_classify_treats_missing_verdicts_as_no(monkeypatch):
 
     monkeypatch.setattr(llm_filter, "is_enabled", lambda: True)
 
-    async def fake_ask(_prompt: str) -> str:
+    async def fake_ask(_prompt: str, _system: str = "") -> str:
         return '{"verdicts": [{"index": 0, "verdict": "same"}]}'
 
     monkeypatch.setattr(llm_filter, "_ask_openai", fake_ask)
@@ -912,7 +912,7 @@ async def test_classify_treats_missing_verdicts_as_no(monkeypatch):
     )
     assert verdicts == {0: "same", 1: "no", 2: "no"}
 
-    async def empty_ask(_prompt: str) -> str:
+    async def empty_ask(_prompt: str, _system: str = "") -> str:
         return '{"verdicts": []}'
 
     monkeypatch.setattr(llm_filter, "_ask_openai", empty_ask)
@@ -978,3 +978,236 @@ async def test_one_broken_page_does_not_kill_the_whole_prom_source(monkeypatch):
     assert result.status == "ok"
     assert len(result.offers) == pages - 1  # усі, крім зламаної сторінки
     assert "seller-2" not in {offer.seller for offer in result.offers}
+
+
+def _verify_offer(title: str, price: str, confidence: float = 0.9) -> MarketOffer:
+    return MarketOffer(
+        source="prom",
+        title=title,
+        price=Decimal(price),
+        currency="UAH",
+        url=f"https://prom.ua/{price}",
+        seller="shop",
+        availability="в наявності",
+        confidence=confidence,
+    )
+
+
+def _enable_verification(monkeypatch, *, enabled: bool = True) -> None:
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "is_enabled", lambda: enabled
+    )
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(competitor_verify_enabled=True),
+    )
+
+
+async def test_suspicious_cheap_offer_is_reverified_and_dropped(monkeypatch):
+    """Ціна вп'ятеро нижча за медіану — модель дивиться на неї з усіма даними."""
+    _enable_verification(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer("Кріплення фільтра", "40"),
+                _verify_offer("Фільтр масляний Bosch", "200"),
+                _verify_offer("Фільтр масляний Bosch B", "210"),
+                _verify_offer("Фільтр масляний Bosch C", "220"),
+            ),
+        ),
+    )
+    seen: dict = {}
+
+    async def fake_verify(*, offers, market_summary, **kwargs):
+        seen["offers"] = offers
+        seen["summary"] = market_summary
+        seen.update(kwargs)
+        return {index: ("drop" if "Кріплення" in o.title else "ok")
+                for index, o in enumerate(offers)}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+
+    checked = await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    assert [o.title for o in checked[0].offers] == [
+        "Фільтр масляний Bosch",
+        "Фільтр масляний Bosch B",
+        "Фільтр масляний Bosch C",
+    ]
+    # Модель бачить ціну, продавця й наявність — не лише назву.
+    assert seen["offers"][0].price.startswith("40")
+    assert seen["offers"][0].seller == "shop"
+    assert seen["offers"][0].availability == "в наявності"
+    assert "медіана" in seen["summary"].lower()
+
+
+async def test_every_offer_in_the_stats_is_verified(monkeypatch):
+    """Перевіряємо все, що формує звіт, а не лише дивні ціни."""
+    _enable_verification(monkeypatch)
+    prices = ["500", "520", "540", "560", "580"]
+    sources = (
+        SourceResult(
+            "prom", "Prom.ua", "ok",
+            tuple(_verify_offer(f"Фільтр {p}", p) for p in prices),
+        ),
+    )
+    sent: list[str] = []
+
+    async def fake_verify(*, offers, **_kwargs):
+        sent.extend(o.title for o in offers)
+        return {index: "ok" for index in range(len(offers))}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+
+    await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    assert len(sent) == 5
+    # Найдешевші першими: саме вони задають рекомендацію.
+    assert sent[0] == "Фільтр 500"
+
+
+async def test_unverified_offer_stays_visible_but_out_of_stats(monkeypatch):
+    """«unsure» не видаляє пропозицію, але й не пускає її в рекомендацію."""
+    _enable_verification(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom", "Prom.ua", "ok",
+            (
+                _verify_offer("Фільтр дешевий", "50"),
+                _verify_offer("Фільтр A", "500"),
+                _verify_offer("Фільтр B", "520"),
+                _verify_offer("Фільтр C", "540"),
+            ),
+        ),
+    )
+
+    async def fake_verify(*, offers, **_kwargs):
+        return {index: ("unsure" if "дешевий" in o.title else "ok")
+                for index, o in enumerate(offers)}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+
+    checked = await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    cheap = next(o for o in checked[0].offers if "дешевий" in o.title)
+    assert cheap.confidence == 0.5
+    # У статистику пішли лише впевнені — 50 грн рекомендації не задає.
+    assert min(checked[0].prices) == Decimal("500")
+
+
+async def test_verification_failure_keeps_every_offer(monkeypatch):
+    """Модель мовчить — нічого не втрачаємо, лише знижуємо довіру."""
+    _enable_verification(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom", "Prom.ua", "ok",
+            tuple(_verify_offer(f"Фільтр {p}", p) for p in ("500", "520", "540")),
+        ),
+    )
+
+    async def fake_verify(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+
+    checked = await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    assert len(checked[0].offers) == 3
+    assert all(o.confidence == 0.5 for o in checked[0].offers)
+
+
+async def test_verification_is_skipped_without_the_model(monkeypatch):
+    _enable_verification(monkeypatch, enabled=False)
+    called = False
+
+    async def fake_verify(**_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+    sources = (
+        SourceResult(
+            "prom", "Prom.ua", "ok",
+            tuple(_verify_offer(f"Фільтр {p}", p) for p in ("500", "520", "540")),
+        ),
+    )
+
+    assert await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    ) is sources
+    assert not called
+
+
+async def test_thin_report_skips_verification(monkeypatch):
+    """Дві ціни — не статистика: якоря немає, перевіряти нічого."""
+    _enable_verification(monkeypatch)
+    called = False
+
+    async def fake_verify(**_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+    sources = (
+        SourceResult(
+            "prom", "Prom.ua", "ok",
+            (_verify_offer("Фільтр A", "500"), _verify_offer("Фільтр B", "520")),
+        ),
+    )
+
+    await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    )
+    assert not called
+
+
+async def test_verification_is_capped(monkeypatch):
+    _enable_verification(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom", "Prom.ua", "ok",
+            tuple(_verify_offer(f"Фільтр {i}", str(500 + i)) for i in range(50)),
+        ),
+    )
+    sent: list[str] = []
+
+    async def fake_verify(*, offers, **_kwargs):
+        sent.extend(o.title for o in offers)
+        return {index: "ok" for index in range(len(offers))}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_offers", fake_verify
+    )
+
+    await competitor_prices_module._verify_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    assert len(sent) == competitor_prices_module._VERIFY_MAX_OFFERS
+    assert sent[0] == "Фільтр 0"  # найдешевший перший

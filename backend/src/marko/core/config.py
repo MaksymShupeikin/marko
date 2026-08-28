@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     competitor_price_source_timeout_seconds: float = 25.0
     # OpenAI API / GPT модель для фільтрації пропозицій конкурентів
     competitor_filter_model: str = "gpt-5-nano"
+    # Другий прохід моделі по цінах, що йдуть у статистику: точніше, але
+    # повільніше. Вимикається окремо від першого фільтра, який працює добре.
+    competitor_verify_enabled: bool = True
     # Порожньо = джерело Google (Serper.dev) вимкнене.
     serper_api_key: str = ""
     openai_api_key: str = ""
