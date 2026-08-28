@@ -1,4 +1,5 @@
 """Workspace-wide product catalog: search, filter, sort, and management."""
+
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -17,6 +18,7 @@ from marko.api.schemas.stores import (
     CatalogFilterRequest,
     CatalogPageResponse,
     CatalogProductResponse,
+    CatalogSiblingResponse,
     ProductUpdateRequest,
     StoreSyncResponse,
 )
@@ -53,7 +55,9 @@ SourceOption = Literal["export", "scrape"]
 
 def _parse_store_ids(raw: str | None) -> list[UUID]:
     try:
-        return [UUID(value.strip()) for value in (raw or "").split(",") if value.strip()]
+        return [
+            UUID(value.strip()) for value in (raw or "").split(",") if value.strip()
+        ]
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -76,6 +80,7 @@ async def search_products(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CatalogPageResponse:
     stores_filter = _parse_store_ids(store_ids)
+    group_duplicates = not stores_filter
     rows = await listings_repo.search_workspace_listings(
         session,
         current.workspace_id,
@@ -84,6 +89,7 @@ async def search_products(
         price_max=price_max,
         source=source,
         store_ids=stores_filter,
+        group_duplicates=group_duplicates,
         order=sort,
         limit=limit,
         offset=offset,
@@ -96,12 +102,56 @@ async def search_products(
         price_max=price_max,
         source=source,
         store_ids=stores_filter,
+        group_duplicates=group_duplicates,
     )
+    items = [
+        _catalog_item(listing, store, kind, override)
+        for listing, store, kind, override, _ in rows
+    ]
+    if group_duplicates:
+        group_keys = {
+            group_key
+            for _, _, kind, _, group_key in rows
+            if kind == StoreKind.owned and group_key.startswith("sku:")
+        }
+        copies_by_group: dict[str, list[listings_repo.OwnedSiblingListing]] = {}
+        for copy in await listings_repo.list_owned_siblings(
+            session, current.workspace_id, group_keys
+        ):
+            copies_by_group.setdefault(copy.group_key, []).append(copy)
+
+        enriched: list[CatalogProductResponse] = []
+        for item, (_, _, kind, _, group_key) in zip(items, rows, strict=True):
+            copies = (
+                copies_by_group.get(group_key, [])
+                if kind == StoreKind.owned and group_key.startswith("sku:")
+                else []
+            )
+            siblings = [
+                CatalogSiblingResponse(
+                    listing_id=copy.listing_id,
+                    store_id=copy.store_id,
+                    store_name=copy.store_name,
+                    current_price=copy.current_price,
+                    currency=copy.currency,
+                    is_available=copy.is_available,
+                    url=copy.url,
+                )
+                for copy in copies
+                if copy.listing_id != item.id
+            ]
+            enriched.append(
+                item.model_copy(
+                    update={
+                        "group_size": 1 + len(siblings),
+                        "siblings": siblings,
+                    }
+                )
+            )
+        items = enriched
+
     return CatalogPageResponse(
-        items=[
-            _catalog_item(listing, store, kind, override)
-            for listing, store, kind, override in rows
-        ],
+        items=items,
         total=total,
         limit=limit,
         offset=offset,
@@ -115,9 +165,7 @@ async def bulk_delete_products(
     current: CurrentUser,
 ) -> BulkDeleteResponse:
     """Hide every product the filter matches — the whole catalog, if unfiltered."""
-    deleted = await delete_matching(
-        session, current.workspace_id, payload.to_filter()
-    )
+    deleted = await delete_matching(session, current.workspace_id, payload.to_filter())
     return BulkDeleteResponse(deleted=deleted)
 
 

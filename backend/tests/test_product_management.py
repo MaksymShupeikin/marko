@@ -134,6 +134,8 @@ async def test_update_product_persists_overrides(monkeypatch):
     assert response.name == "Нова назва"
     assert response.current_price == Decimal("125.50")
     assert response.can_manage is True
+    assert response.group_size == 1
+    assert response.siblings == []
     assert listing.name == "Стара назва"
     assert listing.sku == "OLD"
     assert listing.is_available is True
@@ -187,6 +189,7 @@ async def test_refresh_product_fetches_and_persists_overrides(monkeypatch):
     monkeypatch.setattr(products, "AsyncHttpClient", lambda config: mock_client)
 
     from marko.services.parser_models import SeedInfo
+
     seed = SeedInfo(
         product=_scraped(),
         seller_count=1,

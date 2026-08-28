@@ -1,8 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 import uuid
-from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    cast,
+    delete,
+    func,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
@@ -23,6 +35,20 @@ class WorkspaceListingView:
     sku: str | None
     brand: str | None
     raw_data: dict | None
+
+
+@dataclass(frozen=True)
+class OwnedSiblingListing:
+    """One visible copy of a grouped product in an owned store."""
+
+    group_key: str
+    listing_id: uuid.UUID
+    store_id: uuid.UUID
+    store_name: str | None
+    current_price: Decimal | None
+    currency: str
+    is_available: bool | None
+    url: str
 
 
 async def count_listings_for_store(session: AsyncSession, store_id: uuid.UUID) -> int:
@@ -54,6 +80,68 @@ async def list_listings_for_store(
 # Products imported from an XLSX export keep the seller's own subdomain link
 # ("kemp-cs2847093.prom.ua/p..."); scraped ones carry a marketplace link.
 _EXPORT_URL_PATTERN = "%.prom.ua/%"
+_SKU_GROUP_PREFIX = "sku:"
+
+
+def _effective(override_column, listing_column):
+    return case(
+        (WorkspaceListingOverride.listing_id.is_not(None), override_column),
+        else_=listing_column,
+    )
+
+
+def _group_key():
+    """Group only owned, non-blank effective SKUs; every other row is unique."""
+
+    effective_sku = _effective(WorkspaceListingOverride.sku, Listing.sku)
+    normalized_sku = func.lower(func.trim(effective_sku))
+    return case(
+        (
+            and_(
+                WorkspaceStore.kind == StoreKind.owned,
+                func.nullif(normalized_sku, "").is_not(None),
+            ),
+            literal(_SKU_GROUP_PREFIX).concat(normalized_sku),
+        ),
+        else_=literal("id:").concat(cast(Listing.id, String)),
+    )
+
+
+def _visible_workspace_predicates(workspace_id: uuid.UUID):
+    return (
+        WorkspaceStore.workspace_id == workspace_id,
+        or_(
+            WorkspaceListingOverride.is_deleted.is_(None),
+            WorkspaceListingOverride.is_deleted.is_(False),
+        ),
+    )
+
+
+def _ranked_workspace_listings(workspace_id: uuid.UUID):
+    """Rank representatives before catalog search, price and source filters."""
+
+    price = _effective(WorkspaceListingOverride.current_price, Listing.current_price)
+    return (
+        select(
+            Listing.id.label("listing_id"),
+            func.row_number()
+            .over(
+                partition_by=_group_key(),
+                order_by=(price.asc().nulls_last(), Listing.id.asc()),
+            )
+            .label("group_rank"),
+        )
+        .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
+        .outerjoin(
+            WorkspaceListingOverride,
+            and_(
+                WorkspaceListingOverride.listing_id == Listing.id,
+                WorkspaceListingOverride.workspace_id == workspace_id,
+            ),
+        )
+        .where(*_visible_workspace_predicates(workspace_id))
+        .subquery()
+    )
 
 
 def _workspace_listings_query(
@@ -64,6 +152,7 @@ def _workspace_listings_query(
     price_max: float | None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    group_duplicates: bool = False,
 ):
     statement = (
         select(
@@ -71,6 +160,7 @@ def _workspace_listings_query(
             MarketplaceStore,
             WorkspaceStore.kind,
             WorkspaceListingOverride,
+            _group_key().label("group_key"),
         )
         .join(MarketplaceStore, MarketplaceStore.id == Listing.store_id)
         .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
@@ -81,21 +171,26 @@ def _workspace_listings_query(
                 WorkspaceListingOverride.workspace_id == workspace_id,
             ),
         )
-        .where(
-            WorkspaceStore.workspace_id == workspace_id,
-            or_(
-                WorkspaceListingOverride.is_deleted.is_(None),
-                WorkspaceListingOverride.is_deleted.is_(False),
+        .where(*_visible_workspace_predicates(workspace_id))
+    )
+    if group_duplicates:
+        ranked = _ranked_workspace_listings(workspace_id)
+        statement = statement.join(
+            ranked,
+            and_(
+                ranked.c.listing_id == Listing.id,
+                ranked.c.group_rank == 1,
             ),
         )
-    )
     if query:
         pattern = f"%{query.strip()}%"
         statement = statement.where(
             or_(
                 _effective(WorkspaceListingOverride.name, Listing.name).ilike(pattern),
                 _effective(WorkspaceListingOverride.sku, Listing.sku).ilike(pattern),
-                _effective(WorkspaceListingOverride.brand, Listing.brand).ilike(pattern),
+                _effective(WorkspaceListingOverride.brand, Listing.brand).ilike(
+                    pattern
+                ),
             )
         )
     if source == "export":
@@ -106,16 +201,12 @@ def _workspace_listings_query(
         statement = statement.where(Listing.store_id.in_(store_ids))
     if price_min is not None:
         statement = statement.where(
-            _effective(
-                WorkspaceListingOverride.current_price, Listing.current_price
-            )
+            _effective(WorkspaceListingOverride.current_price, Listing.current_price)
             >= price_min
         )
     if price_max is not None:
         statement = statement.where(
-            _effective(
-                WorkspaceListingOverride.current_price, Listing.current_price
-            )
+            _effective(WorkspaceListingOverride.current_price, Listing.current_price)
             <= price_max
         )
     return statement
@@ -123,9 +214,7 @@ def _workspace_listings_query(
 
 # Ordering is picked by name so the API never interpolates SQL from the client.
 def _listing_order(order: str):
-    price = _effective(
-        WorkspaceListingOverride.current_price, Listing.current_price
-    )
+    price = _effective(WorkspaceListingOverride.current_price, Listing.current_price)
     orders = {
         "name": _effective(WorkspaceListingOverride.name, Listing.name).asc(),
         "price_asc": price.asc().nulls_last(),
@@ -146,6 +235,7 @@ async def count_workspace_listings(
     price_max: float | None = None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    group_duplicates: bool = False,
 ) -> int:
     statement = _workspace_listings_query(
         workspace_id,
@@ -154,6 +244,7 @@ async def count_workspace_listings(
         price_max=price_max,
         source=source,
         store_ids=store_ids,
+        group_duplicates=group_duplicates,
     ).with_only_columns(func.count(Listing.id))
     return (await session.execute(statement)).scalar_one()
 
@@ -167,6 +258,7 @@ async def search_workspace_listings(
     price_max: float | None = None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    group_duplicates: bool = False,
     order: str = "name",
     limit: int = 60,
     offset: int = 0,
@@ -176,6 +268,7 @@ async def search_workspace_listings(
         MarketplaceStore,
         StoreKind,
         WorkspaceListingOverride | None,
+        str,
     ]
 ]:
     statement = (
@@ -186,12 +279,72 @@ async def search_workspace_listings(
             price_max=price_max,
             source=source,
             store_ids=store_ids,
+            group_duplicates=group_duplicates,
         )
         .order_by(_listing_order(order), Listing.id)
         .limit(limit)
         .offset(offset)
     )
     return [tuple(row) for row in (await session.execute(statement)).all()]
+
+
+async def list_owned_siblings(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    sku_keys: set[str],
+) -> list[OwnedSiblingListing]:
+    """Load every visible owned copy for the grouped SKUs on one catalog page."""
+
+    if not sku_keys:
+        return []
+
+    group_key = _group_key()
+    current_price = _effective(
+        WorkspaceListingOverride.current_price, Listing.current_price
+    )
+    is_available = _effective(
+        WorkspaceListingOverride.is_available, Listing.is_available
+    )
+    statement = (
+        select(
+            group_key.label("group_key"),
+            Listing.id,
+            Listing.store_id,
+            MarketplaceStore.name,
+            current_price.label("current_price"),
+            Listing.currency,
+            is_available.label("is_available"),
+            Listing.url,
+        )
+        .join(MarketplaceStore, MarketplaceStore.id == Listing.store_id)
+        .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
+        .outerjoin(
+            WorkspaceListingOverride,
+            and_(
+                WorkspaceListingOverride.listing_id == Listing.id,
+                WorkspaceListingOverride.workspace_id == workspace_id,
+            ),
+        )
+        .where(
+            *_visible_workspace_predicates(workspace_id),
+            WorkspaceStore.kind == StoreKind.owned,
+            group_key.in_(sku_keys),
+        )
+        .order_by(group_key, current_price.asc().nulls_last(), Listing.id)
+    )
+    return [
+        OwnedSiblingListing(
+            group_key=row[0],
+            listing_id=row[1],
+            store_id=row[2],
+            store_name=row[3],
+            current_price=row[4],
+            currency=row[5],
+            is_available=row[6],
+            url=row[7],
+        )
+        for row in (await session.execute(statement)).all()
+    ]
 
 
 async def get_workspace_listing(
@@ -241,11 +394,14 @@ async def get_manageable_workspace_listing(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     listing_id: uuid.UUID,
-) -> tuple[
-    Listing,
-    MarketplaceStore,
-    WorkspaceListingOverride | None,
-] | None:
+) -> (
+    tuple[
+        Listing,
+        MarketplaceStore,
+        WorkspaceListingOverride | None,
+    ]
+    | None
+):
     row = (
         await session.execute(
             select(Listing, MarketplaceStore, WorkspaceListingOverride)
@@ -327,13 +483,6 @@ async def manageable_workspace_listing_ids(
     return list((await session.execute(statement)).scalars().all())
 
 
-def _effective(override_column, listing_column):
-    return case(
-        (WorkspaceListingOverride.listing_id.is_not(None), override_column),
-        else_=listing_column,
-    )
-
-
 async def get_listings_by_external_ids(
     session: AsyncSession, store_id: uuid.UUID, external_ids: list[str]
 ) -> list[Listing]:
@@ -355,7 +504,9 @@ async def add_listing(session: AsyncSession, listing: Listing) -> None:
     session.add(listing)
 
 
-async def add_price_observation(session: AsyncSession, observation: PriceObservation) -> None:
+async def add_price_observation(
+    session: AsyncSession, observation: PriceObservation
+) -> None:
     session.add(observation)
 
 
@@ -367,17 +518,14 @@ async def undelete_listings_for_store(
     """Restore visibility of store listings for a workspace upon re-import or sync."""
     subquery = select(Listing.id).where(Listing.store_id == store_id)
     # Remove tombstone overrides that had no field edits
-    delete_statement = (
-        delete(WorkspaceListingOverride)
-        .where(
-            WorkspaceListingOverride.workspace_id == workspace_id,
-            WorkspaceListingOverride.listing_id.in_(subquery),
-            WorkspaceListingOverride.is_deleted.is_(True),
-            WorkspaceListingOverride.name.is_(None),
-            WorkspaceListingOverride.current_price.is_(None),
-            WorkspaceListingOverride.sku.is_(None),
-            WorkspaceListingOverride.brand.is_(None),
-        )
+    delete_statement = delete(WorkspaceListingOverride).where(
+        WorkspaceListingOverride.workspace_id == workspace_id,
+        WorkspaceListingOverride.listing_id.in_(subquery),
+        WorkspaceListingOverride.is_deleted.is_(True),
+        WorkspaceListingOverride.name.is_(None),
+        WorkspaceListingOverride.current_price.is_(None),
+        WorkspaceListingOverride.sku.is_(None),
+        WorkspaceListingOverride.brand.is_(None),
     )
     await session.execute(delete_statement)
 
@@ -392,4 +540,3 @@ async def undelete_listings_for_store(
         .values(is_deleted=False)
     )
     await session.execute(update_statement)
-

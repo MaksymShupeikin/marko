@@ -1,4 +1,5 @@
 """Schemas for stores, listings, and catalog synchronization."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -89,6 +90,16 @@ class ProductResponse(BaseModel):
     last_seen_at: datetime
 
 
+class CatalogSiblingResponse(BaseModel):
+    listing_id: UUID
+    store_id: UUID
+    store_name: str | None = None
+    current_price: Decimal | None
+    currency: str
+    is_available: bool | None
+    url: str
+
+
 class CatalogProductResponse(ProductResponse):
     """A product plus the store it came from, for the workspace-wide catalog."""
 
@@ -99,6 +110,8 @@ class CatalogProductResponse(ProductResponse):
     can_manage: bool = False
     # "export" — прийшов з XLSX-вивантаження, "scrape" — знятий з майданчика.
     source: Literal["export", "scrape"] = "scrape"
+    group_size: int = 1
+    siblings: list[CatalogSiblingResponse] = Field(default_factory=list)
 
 
 class ProductUpdateRequest(BaseModel):
@@ -120,10 +133,14 @@ class ProductUpdateRequest(BaseModel):
         normalized = value.strip()
         if info.field_name == "name" and not normalized:
             raise ValueError("Назва товару не може бути порожньою")
-        if info.field_name == "image_url" and normalized and not normalized.startswith(
-            ("https://", "http://")
+        if (
+            info.field_name == "image_url"
+            and normalized
+            and not normalized.startswith(("https://", "http://"))
         ):
-            raise ValueError("Посилання на зображення має починатися з http:// або https://")
+            raise ValueError(
+                "Посилання на зображення має починатися з http:// або https://"
+            )
         return normalized or None
 
     @field_validator("oem_numbers")
