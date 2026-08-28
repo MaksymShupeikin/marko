@@ -32,7 +32,7 @@ from marko.parsers.prom_export import (
     seller_from_export_url,
 )
 from marko.repositories.listings import get_workspace_listing
-from marko.services import exchange_rates, llm_filter
+from marko.services import exchange_rates, llm_filter, offer_gates
 from marko.services.matching import (
     brands_compatible,
     laterality_conflict,
@@ -648,27 +648,35 @@ class AvtoproPriceSource:
                 # Один артикул лежить на десятку складів — це той самий товар,
                 # і десять рядків про нього лише забивають список та зсувають
                 # медіану. Лишаємо найдешевшу пропозицію на артикул.
+                # Відсів до дедупу, а не після: вживана деталь дешевша за нову,
+                # і найдешевшим на артикул виявився б саме мотлох.
                 unique = _cheapest_by_key(
-                    result.offers,
+                    (
+                        offer
+                        for offer in result.offers
+                        if not offer_gates.is_junk(
+                            _avtopro_text(offer), offer.availability
+                        )
+                    ),
                     key=lambda offer: f"{offer.maker}|{_norm_code(offer.code)}",
                 )
                 offers = sorted(
                     (
                         MarketOffer(
                             source=self.source,
-                            title=" ".join(
-                                part
-                                for part in (offer.maker, offer.code, offer.description)
-                                if part
-                            )
-                            or result.suggestion.title,
+                            title=_avtopro_text(offer) or result.suggestion.title,
                             price=Decimal(str(offer.price)).quantize(Decimal("0.01")),
                             currency=offer.currency,
                             url=AVTOPRO_BASE_URL
                             + (offer.part_uri or result.suggestion.part_uri),
                             city=offer.city,
                             availability=offer.availability,
-                            condition="new",
+                            # avto.pro — каталог нових деталей, тож «нове» тут
+                            # припущення джерела, а не факт з оголошення.
+                            condition=offer_gates.condition_of(
+                                _avtopro_text(offer), offer.availability
+                            )
+                            or "new",
                             confidence=(
                                 0.98
                                 if _norm_code(offer.code) in exact_codes
@@ -769,6 +777,11 @@ class PromPriceSource:
             )
             if not score or _is_own_prom_product(query, product):
                 continue
+            # Вживане й «ціна за запитом» відпадають до дедупу за продавцем:
+            # інакше найдешевшим у продавця став би саме мотлох.
+            if offer_gates.is_junk(product.name, product.presence):
+                log.info("Ціни конкурентів: відсіяно %r", product.name)
+                continue
             price = parse_price(product.effective_price)
             if price is None or not product.url:
                 continue
@@ -780,7 +793,7 @@ class PromPriceSource:
                 url=product.url,
                 seller=product.seller_name,
                 availability=product.presence,
-                condition="new",
+                condition=offer_gates.condition_of(product.name),
                 image_url=product.image,
                 confidence=score,
                 # Номер не збігся — знайшли за назвою, тобто аналог.
@@ -849,6 +862,11 @@ class GooglePriceSource:
             if domain == own_domain or _covered_elsewhere(domain):
                 continue
             if domain.endswith(_SERP_BLOCKED_TLDS):
+                continue
+            # Лише за назвою: сніпет збирає й інші оголошення сторінки, тож
+            # магазин, який поруч торгує розборкою, вилітав би дарма.
+            # Заразом бережемо слоти докачки сторінок для справжніх кандидатів.
+            if offer_gates.is_junk(item.get("title")):
                 continue
             seen.add(url)
             score = _match_score(
@@ -1221,6 +1239,13 @@ def _normalized_slug(value: Any) -> str | None:
 def _text_value(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _avtopro_text(offer: Any) -> str:
+    """Текст рядка avto.pro: виробник, код і опис в один рядок для відсівів."""
+    return " ".join(
+        part for part in (offer.maker, offer.code, offer.description) if part
+    )
 
 
 def _norm_code(value: str | None) -> str:
