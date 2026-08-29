@@ -1451,7 +1451,11 @@ class ExistPriceSource(GooglePriceSource):
         terms = [
             " ".join(
                 value
-                for value in ("site:exist.ua", query.brand, oem)
+                # Serper free accounts reject the Google ``site:`` operator.
+                # The domain token still ranks Exist highly; candidates are
+                # then hard-limited to exist.ua below, so no other domain can
+                # leak into this first-class source.
+                for value in ("exist.ua", query.brand, oem)
                 if value
             )
             for oem in query.oem_numbers[:_MAX_OEM_TERMS]

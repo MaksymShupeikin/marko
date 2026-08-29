@@ -379,6 +379,65 @@ async def test_google_source_is_skipped_without_api_key(monkeypatch):
     assert result.offers == ()
 
 
+async def test_exist_source_uses_free_plan_query_and_hard_domain_filter(monkeypatch):
+    queries: list[str] = []
+    payload = {
+        "organic": [
+            {
+                "title": "Bosch oil filter 0451103316",
+                "link": "https://exist.ua/uk/bosch-brand/filter-0451103316/",
+                "snippet": "Ціна 200 грн, у наявності",
+            },
+            {
+                "title": "Bosch oil filter 0451103316",
+                "link": "https://other.test/filter-0451103316/",
+                "snippet": "Ціна 100 грн",
+            },
+        ]
+    }
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return payload
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def post(self, _url, json, headers):
+            queries.append(json["q"])
+            return Response()
+
+    monkeypatch.setattr(
+        competitor_prices_module, "httpx", SimpleNamespace(AsyncClient=Client)
+    )
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(serper_api_key="test-key"),
+    )
+
+    result = await competitor_prices_module.ExistPriceSource().search(part_query())
+
+    assert queries == ["exist.ua Bosch 0451103316"]
+    assert result.label == "Exist.ua"
+    assert [offer.url for offer in result.offers] == [
+        "https://exist.ua/uk/bosch-brand/filter-0451103316/"
+    ]
+
+
 async def test_foreign_offer_is_converted_by_official_nbu_rate(monkeypatch):
     uah = [
         MarketOffer(
