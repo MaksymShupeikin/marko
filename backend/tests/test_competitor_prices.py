@@ -1445,3 +1445,27 @@ def test_exist_source_asks_the_site_directly_and_google_skips_it():
     assert [d for _i, d, _s in google._candidates(query, [batch])] == [
         "autoshop.com.ua"
     ]
+
+
+async def test_free_serper_plan_marks_exist_skipped_not_failed():
+    """Оператор site: заборонений на безкоштовному тарифі — це не збій.
+
+    Інакше замовник бачить у звіті червоне «джерело не відповіло» там, де
+    насправді треба лише змінити тариф.
+    """
+
+    class FreePlanSource:
+        source = "exist"
+        label = "Exist.ua"
+
+        async def search(self, _query):
+            raise competitor_prices_module._SourceUnavailable(
+                "Serper: оператор site: доступний лише на платному тарифі"
+            )
+
+    result = await competitor_prices_module._run_source(
+        FreePlanSource(), part_query(), 5.0, lambda *_: None
+    )
+
+    assert result.status == "skipped"
+    assert "тариф" in result.error

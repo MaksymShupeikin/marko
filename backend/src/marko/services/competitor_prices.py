@@ -794,6 +794,15 @@ async def _run_source(
     emit("source", f"Збираємо пропозиції: {source.label}")
     try:
         result = await asyncio.wait_for(source.search(query), timeout=timeout)
+    except _SourceUnavailable as exc:
+        log.info("Competitor source %s unavailable: %s", source.source, exc)
+        emit("source", f"{source.label}: джерело недоступне")
+        return SourceResult(
+            source=source.source,
+            label=source.label,
+            status="skipped",
+            error=str(exc),
+        )
     except Exception as exc:  # source failures must not hide the whole report
         log.warning("Competitor source %s failed: %s", source.source, exc)
         emit("source", f"{source.label}: джерело не відповіло")
@@ -1002,6 +1011,10 @@ class PromPriceSource:
             )
 
 
+class _SourceUnavailable(RuntimeError):
+    """Джерело недоступне через тариф чи налаштування, а не через збій."""
+
+
 class GooglePriceSource:
     """Serper.dev: незалежні магазини, які не живуть на маркетплейсах.
 
@@ -1052,6 +1065,13 @@ class GooglePriceSource:
             json={"q": term, "gl": "ua", "hl": "uk", "num": _SERP_RESULTS_PER_TERM},
             headers={"X-API-KEY": api_key},
         )
+        # Оператор site: заборонений на безкоштовному тарифі Serper
+        # («Query pattern not allowed for free accounts»). Це не збій —
+        # джерело просто недоступне, поки тариф не змінять.
+        if response.status_code == 400 and "not allowed" in response.text:
+            raise _SourceUnavailable(
+                "Serper: оператор site: доступний лише на платному тарифі"
+            )
         response.raise_for_status()
         return response.json().get("organic") or []
 
