@@ -520,7 +520,7 @@ async def _refine_source(
     emit("filter", f"{result.label}: звіряємо {len(result.offers)} варіантів")
     verdicts = await llm_filter.classify(
         name=query.name,
-        brand=query.brand,
+        brand=_market_brand(query.brand),
         oem_numbers=query.oem_numbers,
         titles=[offer.title for offer in result.offers],
     )
@@ -609,7 +609,7 @@ async def _verify_offers(
     emit("filter", f"Перевіряємо ціни: {len(picked)} пропозицій")
     verdicts = await llm_filter.verify_offers(
         name=query.name,
-        brand=query.brand,
+        brand=_market_brand(query.brand),
         oem_numbers=query.oem_numbers,
         market_summary=f"Медіана ринку: {anchor} {_report_currency(sources)}",
         offers=[_offer_facts(offer) for _, _, offer in picked],
@@ -1264,7 +1264,7 @@ def _query_from_listing(
     return PartSearchQuery(
         listing_id=str(listing.id),
         oem_numbers=numbers,
-        brand=_market_brand(listing.brand),
+        brand=listing.brand,
         name=listing.name,
         source_url=listing.url,
         owner_seller_ids=owner_seller_ids,
@@ -1279,6 +1279,10 @@ def _market_brand(brand: str | None) -> str | None:
     тож звірка за номером починає працювати, а в промт моделі не йде рядок
     «Виробник: KEMP», який схиляв її до вердикту «аналог». Для справжніх марок
     каталогу (VAG, Bosch, Opel) усе лишається як було.
+
+    У самому запиті марку лишаємо: avto.pro шукає деталь у каталозі за
+    виробником, і там KEMP — справжній ключ. Знімаємо її лише там, де вона
+    видає себе за виробника деталі: звірка бренду та промти моделі.
     """
     return None if (brand or "").strip().casefold() in GLOBAL_OWN_BRANDS else brand
 
@@ -1347,7 +1351,7 @@ def _match_score(
     # Бренд звіряємо лише для збігу за номером: той самий номер під чужою
     # маркою — інша деталь. Для пошуку за назвою бренд навпаки заважає — він
     # майже завжди наш власний, а конкурент продає ту саму річ під своїм.
-    if hits and not brands_compatible(query.brand, brand):
+    if hits and not brands_compatible(_market_brand(query.brand), brand):
         hits = []
     if hits:
         # Суто цифровий короткий номер — це ще й чийсь внутрішній артикул

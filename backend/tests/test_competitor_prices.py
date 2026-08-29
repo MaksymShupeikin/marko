@@ -16,6 +16,7 @@ from marko.services.competitor_prices import (
     _cache_key,
     _cheapest_by_key,
     _is_own_prom_product,
+    _market_brand,
     _match_score,
     _product_matches,
     _prom_seller_id_from_url,
@@ -608,10 +609,14 @@ def _kemp_listing(**over):
 
 def test_own_house_brand_is_not_treated_as_a_manufacturer():
     """KEMP — марка магазину; справжня марка каталогу лишається як була."""
-    assert _query_from_listing(_kemp_listing()).brand is None
-    assert _query_from_listing(_kemp_listing(brand="Bosch")).brand == "Bosch"
+    assert _market_brand("KEMP") is None
     # Регістр і пробіли не мають рятувати власну марку від скасування.
-    assert _query_from_listing(_kemp_listing(brand=" kemp ")).brand is None
+    assert _market_brand(" kemp ") is None
+    assert _market_brand("Bosch") == "Bosch"
+
+    # У самому запиті марка лишається: avto.pro шукає деталь у каталозі за
+    # виробником, і там KEMP — справжній ключ, без нього джерело порожнє.
+    assert _query_from_listing(_kemp_listing()).brand == "KEMP"
 
 
 def test_number_match_survives_a_foreign_brand_under_own_house_brand():
