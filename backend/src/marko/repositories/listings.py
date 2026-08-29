@@ -121,13 +121,23 @@ def _ranked_workspace_listings(workspace_id: uuid.UUID):
     """Rank representatives before catalog search, price and source filters."""
 
     price = _effective(WorkspaceListingOverride.current_price, Listing.current_price)
+    availability = _effective(
+        WorkspaceListingOverride.is_available, Listing.is_available
+    )
+    positive = price > 0
+    priority = case(
+        (and_(availability.is_(True), positive), 0),
+        (and_(availability.is_(None), positive), 1),
+        (positive, 2),
+        else_=3,
+    )
     return (
         select(
             Listing.id.label("listing_id"),
             func.row_number()
             .over(
                 partition_by=_group_key(),
-                order_by=(price.asc().nulls_last(), Listing.id.asc()),
+                order_by=(priority.asc(), price.asc().nulls_last(), Listing.id.asc()),
             )
             .label("group_rank"),
         )

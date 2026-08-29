@@ -85,6 +85,7 @@ def _listing(
     sku: str | None,
     price: str | None,
     name: str | None = None,
+    is_available: bool | None = True,
 ) -> Listing:
     listing_id = uuid4()
     listing = Listing(
@@ -98,7 +99,7 @@ def _listing(
         brand="Brand",
         currency="UAH",
         current_price=Decimal(price) if price is not None else None,
-        is_available=True,
+        is_available=is_available,
         raw_data={},
     )
     session.add(listing)
@@ -234,6 +235,28 @@ async def test_lower_override_price_changes_group_representative(catalog_db):
     assert page.items[0].id == overridden.id
     assert page.items[0].current_price == Decimal("900")
     assert page.items[0].siblings[0].listing_id == original_cheap.id
+
+
+async def test_representative_prefers_available_positive_price_then_cheapest(
+    catalog_db,
+):
+    session, async_session, workspace_id = catalog_db
+    first_store = _store(session, workspace_id, "First")
+    second_store = _store(session, workspace_id, "Second")
+    third_store = _store(session, workspace_id, "Third")
+    _listing(session, first_store, sku="SAME", price="0")
+    _listing(
+        session, second_store, sku="SAME", price="800", is_available=False
+    )
+    available = _listing(
+        session, third_store, sku="SAME", price="1000", is_available=True
+    )
+
+    page = await _search(async_session, workspace_id)
+
+    assert page.total == 1
+    assert page.items[0].id == available.id
+    assert page.items[0].current_price == Decimal("1000")
 
 
 async def test_deleted_copy_is_absent_from_group_and_siblings(catalog_db):

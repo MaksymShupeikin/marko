@@ -33,6 +33,7 @@ from marko.parsers.prom.exceptions import ParseError, RequestFailed
 from marko.parsers.prom.parser import parse_product_page
 from marko.parsers.prom_export import canonical_product_url, parse_price
 from marko.services.parser_models import Product
+from marko.services.price_validation import positive_price_or_none
 
 log = logging.getLogger(__name__)
 
@@ -265,7 +266,15 @@ def apply_scraped_product(
     # Порожня назва — це зламаний парс, а не товар без назви.
     if product.name:
         override.name = product.name
-    override.current_price = parse_price(product.effective_price)
+    parsed_price = parse_price(product.effective_price)
+    if parsed_price is None:
+        # A genuinely absent page price remains an explicit absence.
+        override.current_price = None
+    else:
+        # Zero/negative placeholders never destroy a previously valid price.
+        valid_price = positive_price_or_none(parsed_price)
+        if valid_price is not None:
+            override.current_price = valid_price
     override.sku = product.sku
     override.brand = product.brand
     override.image_url = product.image

@@ -27,6 +27,7 @@ from marko.parsers.prom_export import (
     seller_of,
 )
 from marko.services.parser_models import Product
+from marko.services.price_validation import positive_price_or_none
 from marko.services.seller_exclusions import remember_prom_seller
 
 import marko.repositories.stores as stores_repo
@@ -49,7 +50,7 @@ class ExportImportResult:
 
 
 def parse_product_price(product: Product) -> Decimal | None:
-    return parse_price(product.effective_price)
+    return positive_price_or_none(parse_price(product.effective_price))
 
 
 async def import_store_catalog(sync_run_id: UUID, *, task_id: str | None = None) -> int:

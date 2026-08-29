@@ -105,6 +105,10 @@ def test_product_update_rejects_empty_payload_and_invalid_image_url():
         ProductUpdateRequest()
     with pytest.raises(ValidationError):
         ProductUpdateRequest(image_url="example.com/image.jpg")
+    with pytest.raises(ValidationError):
+        ProductUpdateRequest(current_price=Decimal("0"))
+    with pytest.raises(ValidationError):
+        ProductUpdateRequest(current_price=Decimal("-1"))
 
 
 async def test_update_product_persists_overrides(monkeypatch):
@@ -339,3 +343,13 @@ def test_refresh_keeps_the_name_when_the_page_parses_empty():
     apply_scraped_product(override, _scraped(name=None))
 
     assert override.name == "Стара назва"
+
+
+def test_refresh_zero_or_negative_price_keeps_previous_valid_price():
+    from marko.infrastructure.db.models import WorkspaceListingOverride
+    from marko.services.bulk_products import apply_scraped_product
+
+    for invalid in ("0", "-10"):
+        override = WorkspaceListingOverride(current_price=Decimal("500"))
+        apply_scraped_product(override, _scraped(price=invalid))
+        assert override.current_price == Decimal("500")

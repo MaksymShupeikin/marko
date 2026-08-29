@@ -120,7 +120,7 @@ class ProductUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=1000)
     sku: str | None = Field(default=None, max_length=255)
     brand: str | None = Field(default=None, max_length=255)
-    current_price: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    current_price: Decimal | None = Field(default=None, gt=0, decimal_places=2)
     is_available: bool | None = None
     image_url: str | None = Field(default=None, max_length=2048)
     oem_numbers: list[str] | None = Field(default=None, max_length=50)
