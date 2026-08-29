@@ -208,8 +208,14 @@ async def test_prom_source_scans_every_configured_page(monkeypatch):
     }
 
 
-async def test_avtopro_keeps_analogues_out_of_the_stats(monkeypatch):
-    """Стрічка деталі — це і аналоги: показуємо їх, але ціну задає своя деталь."""
+async def test_avtopro_counts_interchangeable_analogues_in_the_stats(monkeypatch):
+    """Стрічка деталі — це і аналоги: вони теж формують ринкову ціну.
+
+    Рішення замовника: аналог — це та сама деталь на ту саму машину від іншого
+    виробника, і вона конкурує з нашою. Деталь на іншу машину сюди не доходить.
+    Ризик відомий: дешевий аналог тягне рекомендацію вниз — саме тому кожен
+    оффер у статистиці проходить другий прохід моделі.
+    """
     feed = [
         SimpleNamespace(
             maker=maker, code=code, part_uri=f"/part-{code}/", description="Кнопка",
@@ -242,8 +248,8 @@ async def test_avtopro_keeps_analogues_out_of_the_stats(monkeypatch):
 
     assert [str(offer.price) for offer in result.offers] == ["180.00", "300.00", "420.00"]
     assert [offer.is_analog for offer in result.offers] == [True, False, True]
-    # Дешевший аналог не має вдавати, що наша деталь коштує 180.
-    assert result.min_price == Decimal("300.00")
+    # Позначка «аналог» лишається для ока, але ціну він задає нарівні з точним.
+    assert result.min_price == Decimal("180.00")
 
 
 async def test_google_source_prices_from_snippet_and_page(monkeypatch):
@@ -482,12 +488,12 @@ def test_small_reports_keep_honest_spread():
 
 
 def test_recommended_price_is_never_zero():
-    """Копійчана ціна після −1% і округлення не має давати 0 грн."""
+    """Копійчана ціна після −6% і округлення не має давати 0 грн."""
     assert competitor_prices_module._recommended_price([Decimal("0.30")]) == Decimal(
         "1"
     )
     assert competitor_prices_module._recommended_price([Decimal("200")]) == Decimal(
-        "198"
+        "188"
     )
 
 
@@ -523,8 +529,8 @@ def test_report_stats_use_all_sources_and_cache_flag():
     assert payload["stats"]["min_price"] == "100"
     assert payload["stats"]["median_price"] == "200.00"
     assert payload["stats"]["max_price"] == "300"
-    # Рекомендація — конкретна сума: на 1% нижче мінімуму конкурентів.
-    assert payload["stats"]["recommended_price"] == "99"
+    # Рекомендація — конкретна сума: на 6% нижче мінімуму конкурентів.
+    assert payload["stats"]["recommended_price"] == "94"
 
 
 def test_cheapest_by_key_keeps_lowest_offer_per_seller():
