@@ -142,7 +142,7 @@ void main() {
 
     // Порожній каталог — онбординг, ані капсули, ані скелетонів.
     expect(
-      find.text('Додайте товари з XLSX-вивантаження'),
+      find.text('Додайте товари з XLSX-файлу'),
       findsOneWidget,
     );
     expect(find.byType(ProductCardSkeleton), findsNothing);
@@ -158,7 +158,7 @@ void main() {
     // Онбординг поступився каталогу: капсула зверху, привиди в сітці.
     expect(find.text('Синхронізація'), findsOneWidget);
     expect(
-      find.text('Додайте товари з XLSX-вивантаження'),
+      find.text('Додайте товари з XLSX-файлу'),
       findsNothing,
     );
     expect(find.byType(ProductCardSkeleton), findsWidgets);

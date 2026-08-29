@@ -48,6 +48,7 @@ class CompetitorPriceStatsResponse(BaseModel):
     median_price: str | None = None
     max_price: str | None = None
     recommended_price: str | None = None
+    recommended_discount_percent: int = 6
 
 
 class CompetitorPriceReportResponse(BaseModel):

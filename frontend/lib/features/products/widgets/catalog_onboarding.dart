@@ -100,7 +100,7 @@ class _Instructions extends StatelessWidget {
       children: [
         if (intro) ...[
           Text(
-            'Додайте товари з XLSX-вивантаження',
+            'Додайте товари з XLSX-файлу',
             style: Theme.of(
               context,
             ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w600),

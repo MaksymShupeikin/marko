@@ -1036,6 +1036,7 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
             price: stats.recommendedPrice!,
             userPrice: userPrice,
             currency: currency,
+            discountPercent: stats.recommendedDiscountPercent,
           ),
         ],
         if (allOffers.isNotEmpty) ...[
@@ -1097,18 +1098,22 @@ class _RecommendedPriceBanner extends StatelessWidget {
     required this.price,
     required this.userPrice,
     required this.currency,
+    required this.discountPercent,
   });
 
   final double price;
   final double? userPrice;
   final String currency;
 
+  /// Скільки відсотків нижче за мінімум ринку — цифра приходить з бекенду.
+  final int discountPercent;
+
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final diff = userPrice == null ? null : price - userPrice!;
     final subtitle = diff == null || diff.abs() < 1
-        ? 'На 1% нижче мінімальної ціни конкурентів'
+        ? 'На $discountPercent% нижче мінімальної ціни конкурентів'
         : diff < 0
         ? 'На ${formatPriceNumber(diff.abs())} ${formatCurrency(currency)} нижче за вашу поточну ціну'
         : 'На ${formatPriceNumber(diff)} ${formatCurrency(currency)} вище за вашу поточну ціну';

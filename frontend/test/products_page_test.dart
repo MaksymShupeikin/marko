@@ -446,7 +446,7 @@ void main() {
 
     // Instructions plus both source cards, right there — no modal to find.
     expect(
-      find.text('Додайте товари з XLSX-вивантаження'),
+      find.text('Додайте товари з XLSX-файлу'),
       findsOneWidget,
     );
     expect(find.text('Імпорт XLSX файлу'), findsOneWidget);

@@ -537,6 +537,8 @@ def test_report_stats_use_all_sources_and_cache_flag():
     assert payload["stats"]["max_price"] == "300"
     # Рекомендація — конкретна сума: на 6% нижче мінімуму конкурентів.
     assert payload["stats"]["recommended_price"] == "94"
+    # Відсоток їде поруч, щоб підпис у картці не розходився з формулою.
+    assert payload["stats"]["recommended_discount_percent"] == 6
 
 
 def test_cheapest_by_key_keeps_lowest_offer_per_seller():

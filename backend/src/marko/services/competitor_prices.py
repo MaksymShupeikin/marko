@@ -58,6 +58,7 @@ _MIN_STATS_CONFIDENCE = 0.7  # слабкі збіги не мають зада�
 # майже напевно сміття парсингу (склеєні цифри, «0 грн» доставки), не ринок.
 # Замовник підрізає найдешевшого конкурента на 6% — це його основний запит.
 _RECOMMENDED_DISCOUNT = Decimal("0.94")
+_RECOMMENDED_DISCOUNT_PERCENT = int((1 - _RECOMMENDED_DISCOUNT) * 100)
 
 _OUTLIER_FACTOR = Decimal("8")
 _OUTLIER_MIN_OFFERS = 4  # менше — нема статистики, викид не відрізнити від ринку
@@ -256,6 +257,9 @@ class CompetitorPriceReport:
                 "recommended_price": _decimal_json(
                     _recommended_price(prices) if prices else None
                 ),
+                # Відсоток їде поруч із сумою: інтерфейс місяць писав «−1%»,
+                # поки формула вже рахувала −6%.
+                "recommended_discount_percent": _RECOMMENDED_DISCOUNT_PERCENT,
             },
             "sources": [source.as_json() for source in self.sources],
         }

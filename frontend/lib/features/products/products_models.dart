@@ -548,6 +548,7 @@ class CompetitorPriceStats {
     this.medianPrice,
     this.maxPrice,
     this.recommendedPrice,
+    this.recommendedDiscountPercent = 6,
   });
 
   factory CompetitorPriceStats.fromJson(Map<String, dynamic> json) {
@@ -563,6 +564,8 @@ class CompetitorPriceStats {
       medianPrice: price('median_price'),
       maxPrice: price('max_price'),
       recommendedPrice: price('recommended_price'),
+      recommendedDiscountPercent:
+          (json['recommended_discount_percent'] as num?)?.toInt() ?? 6,
     );
   }
 
@@ -574,6 +577,9 @@ class CompetitorPriceStats {
 
   /// Конкретна сума до виставлення: трохи нижче мінімуму конкурентів.
   final double? recommendedPrice;
+
+  /// Наскільки саме нижче — цифру задає бекенд, щоб підпис не брехав.
+  final int recommendedDiscountPercent;
 }
 
 class CompetitorPriceReport {
