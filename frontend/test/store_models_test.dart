@@ -42,6 +42,7 @@ void main() {
       'observed_at': '2026-08-23T12:00:00Z',
       'stats': {
         'offers_total': 15,
+        'eligible_offers_total': 3,
         'sources_total': 2,
         'min_price': '100.00',
         'median_price': '150.00',
@@ -106,6 +107,7 @@ void main() {
     expect(fileImport.summary, contains('50 товарів'));
 
     expect(competitor.stats.offersTotal, 15);
+    expect(competitor.stats.eligibleOffersTotal, 3);
     expect(competitor.stats.minPrice, 100.0);
     expect(competitor.currency, 'UAH');
     expect(competitor.sources.first.offers.first.title, 'VW 701807101 Бампер');

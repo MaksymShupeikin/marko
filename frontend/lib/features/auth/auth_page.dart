@@ -493,6 +493,7 @@ class _AuthProductPreviewState extends State<_AuthProductPreview>
     observedAt: null,
     stats: CompetitorPriceStats(
       offersTotal: 28,
+      eligibleOffersTotal: 28,
       sourcesTotal: 1,
       minPrice: 210,
       medianPrice: 285,

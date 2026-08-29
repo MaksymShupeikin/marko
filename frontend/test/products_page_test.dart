@@ -365,13 +365,13 @@ void main() {
     await tester.pumpWidget(_app(_Recorder().client()));
     await tester.pumpAndSettle();
 
-    expect(find.text('XLSX вивантаження'), findsNothing);
+    expect(find.text('Імпорт XLSX файлу'), findsNothing);
 
     // Not awaited: the future only completes once the modal is dismissed.
     unawaited(showCatalogImport(tester.element(find.byType(ProductsPage))));
     await tester.pumpAndSettle();
 
-    expect(find.text('XLSX вивантаження'), findsOneWidget);
+    expect(find.text('Імпорт XLSX файлу'), findsOneWidget);
     expect(find.text('Магазин Prom.ua'), findsOneWidget);
   });
 
@@ -467,7 +467,7 @@ void main() {
       find.text('Додайте товари з XLSX-вивантаження'),
       findsOneWidget,
     );
-    expect(find.text('XLSX вивантаження'), findsOneWidget);
+    expect(find.text('Імпорт XLSX файлу'), findsOneWidget);
     expect(find.text('Магазин Prom.ua'), findsOneWidget);
     // Nothing to search or sort yet.
     expect(find.text('Каталог'), findsNothing);

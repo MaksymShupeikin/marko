@@ -148,7 +148,7 @@ def test_cache_key_is_v6_stable_and_changes_when_exclusion_is_added():
 
     assert _cache_key(first) == _cache_key(reordered)
     assert _cache_key(first) != _cache_key(expanded)
-    assert _cache_key(first).startswith("competitor-prices:v6:")
+    assert _cache_key(first).startswith("competitor-prices:v7:")
 
 
 async def test_listing_query_loads_presets_and_workspace_exclusions(monkeypatch):

@@ -45,6 +45,7 @@ void main() {
     observedAt: null,
     stats: CompetitorPriceStats(
       offersTotal: 1,
+      eligibleOffersTotal: 2,
       sourcesTotal: 1,
       minPrice: 1100,
       medianPrice: 1150,
@@ -93,5 +94,66 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Магазин Profparts: ціна не вказана'), findsOneWidget);
+  });
+
+  testWidgets('one verified market offer does not produce a recommendation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    const insufficientReport = CompetitorPriceReport(
+      cached: false,
+      observedAt: null,
+      stats: CompetitorPriceStats(
+        offersTotal: 1,
+        eligibleOffersTotal: 1,
+        sourcesTotal: 1,
+        minPrice: 2082,
+        medianPrice: 2082,
+        maxPrice: 2082,
+      ),
+      sources: [
+        SourcePriceResult(
+          source: 'prom',
+          label: 'Prom.ua',
+          status: 'ok',
+          offersTotal: 1,
+          offers: [
+            MarketPriceOffer(
+              source: 'prom',
+              title: 'Кут бампера VW T4',
+              price: 2082,
+              currency: 'UAH',
+              url: 'https://prom.ua/offer',
+              condition: 'new',
+              verified: true,
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const Scaffold(
+          body: SizedBox(
+            width: 500,
+            height: 1300,
+            child: ProductDetailsPreview(
+              product: product,
+              report: insufficientReport,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Недостатньо даних для рекомендації'), findsOneWidget);
+    expect(find.text('Рекомендована ціна'), findsNothing);
+    expect(find.text('Найкраща ціна на ринку'), findsNothing);
   });
 }

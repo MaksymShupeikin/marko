@@ -27,6 +27,7 @@ class MarketOfferResponse(BaseModel):
     image_url: str | None = None
     confidence: float = 1.0
     is_analog: bool = False
+    verified: bool = False
 
 
 class SourcePriceResponse(BaseModel):
@@ -43,6 +44,7 @@ class SourcePriceResponse(BaseModel):
 
 class CompetitorPriceStatsResponse(BaseModel):
     offers_total: int
+    eligible_offers_total: int = 0
     sources_total: int
     min_price: str | None = None
     median_price: str | None = None

@@ -503,6 +503,7 @@ class MarketPriceOffer {
     this.imageUrl,
     this.confidence = 1,
     this.isAnalog = false,
+    this.verified = false,
   });
 
   factory MarketPriceOffer.fromJson(Map<String, dynamic> json) {
@@ -520,6 +521,7 @@ class MarketPriceOffer {
       imageUrl: json['image_url'] as String?,
       confidence: (json['confidence'] as num?)?.toDouble() ?? 1,
       isAnalog: json['is_analog'] as bool? ?? false,
+      verified: json['verified'] as bool? ?? false,
     );
   }
 
@@ -537,6 +539,9 @@ class MarketPriceOffer {
 
   /// Не той самий номер: аналог іншого виробника або схожа позиція.
   final bool isAnalog;
+
+  /// Сторінка товару повторно перевірена для цінової статистики.
+  final bool verified;
 
   String get priceLabel => '${price.toStringAsFixed(0)} $currency';
 
@@ -604,6 +609,7 @@ class CompetitorPriceStats {
   const CompetitorPriceStats({
     required this.offersTotal,
     required this.sourcesTotal,
+    this.eligibleOffersTotal = 0,
     this.minPrice,
     this.medianPrice,
     this.maxPrice,
@@ -618,6 +624,8 @@ class CompetitorPriceStats {
 
     return CompetitorPriceStats(
       offersTotal: (json['offers_total'] as num).toInt(),
+      eligibleOffersTotal:
+          (json['eligible_offers_total'] as num?)?.toInt() ?? 0,
       sourcesTotal: (json['sources_total'] as num).toInt(),
       minPrice: price('min_price'),
       medianPrice: price('median_price'),
@@ -627,6 +635,7 @@ class CompetitorPriceStats {
   }
 
   final int offersTotal;
+  final int eligibleOffersTotal;
   final int sourcesTotal;
   final double? minPrice;
   final double? medianPrice;

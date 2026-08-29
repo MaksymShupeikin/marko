@@ -1017,6 +1017,7 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
     final stats = widget.report.stats;
     final currency = widget.report.currency;
     final userPrice = widget.product?.price;
+    final hasReliableMarket = stats.eligibleOffersTotal >= 2;
 
     if (stats.offersTotal == 0) {
       return const MarkoInlineMessage(
@@ -1034,7 +1035,8 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (userPrice != null &&
+        if (hasReliableMarket &&
+            userPrice != null &&
             stats.minPrice != null &&
             stats.medianPrice != null)
           _PriceBenchmarkBanner(
@@ -1044,13 +1046,18 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
             maxPrice: stats.maxPrice ?? stats.medianPrice!,
             currency: currency,
           ),
-        const SizedBox(height: MarkoSpace.md),
-        _MarketSpectrumGauge(
-          stats: stats,
-          userPrice: userPrice,
-          currency: currency,
-        ),
-        if (stats.recommendedPrice != null) ...[
+        if (hasReliableMarket) ...[
+          const SizedBox(height: MarkoSpace.md),
+          _MarketSpectrumGauge(
+            stats: stats,
+            userPrice: userPrice,
+            currency: currency,
+          ),
+        ] else
+          _InsufficientPricingEvidence(
+            eligibleOffers: stats.eligibleOffersTotal,
+          ),
+        if (hasReliableMarket && stats.recommendedPrice != null) ...[
           const SizedBox(height: MarkoSpace.md),
           _RecommendedPriceBanner(
             price: stats.recommendedPrice!,
@@ -1115,6 +1122,62 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
           ],
         ],
       ],
+    );
+  }
+}
+
+class _InsufficientPricingEvidence extends StatelessWidget {
+  const _InsufficientPricingEvidence({required this.eligibleOffers});
+
+  final int eligibleOffers;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final countText = eligibleOffers == 0
+        ? 'Жодна ціна не пройшла повну перевірку.'
+        : 'Повну перевірку пройшла лише 1 ціна.';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.warning.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.warning.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          HeroIcon(
+            HeroIcons.exclamationTriangle,
+            size: 18,
+            color: colors.warning,
+          ),
+          const SizedBox(width: MarkoSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Недостатньо даних для рекомендації',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: colors.warning,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$countText Потрібні щонайменше 2 перевірені пропозиції нової деталі з фіксованою ціною.',
+                  style: MarkoType.caption.copyWith(
+                    color: colors.ink,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

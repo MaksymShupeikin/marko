@@ -141,7 +141,13 @@ def test_long_or_lettered_oem_matches_without_a_topic_check():
 
 def test_stats_ignore_weak_matches():
     strong = MarketOffer(
-        "prom", "A", Decimal("300"), "UAH", "https://prom.ua/a", confidence=0.9
+        "prom",
+        "A",
+        Decimal("300"),
+        "UAH",
+        "https://prom.ua/a",
+        confidence=0.9,
+        verified=True,
     )
     weak = MarketOffer(
         "prom", "B", Decimal("50"), "UAH", "https://prom.ua/b", confidence=0.65
@@ -149,8 +155,35 @@ def test_stats_ignore_weak_matches():
     source = SourceResult("prom", "Prom.ua", "ok", (strong, weak))
 
     assert source.min_price == Decimal("300")
-    # Немає жодного впевненого збігу — рахуємо за тим, що є.
-    assert SourceResult("prom", "Prom.ua", "ok", (weak,)).min_price == Decimal("50")
+    # Неперевірена ціна не стає «ринком» навіть якщо вона єдина.
+    assert SourceResult("prom", "Prom.ua", "ok", (weak,)).min_price is None
+
+
+def test_hard_gates_drop_used_non_fixed_zero_and_unavailable_offers():
+    def offer(title: str, price: str = "100", **kwargs) -> MarketOffer:
+        return MarketOffer(
+            "prom",
+            title,
+            Decimal(price),
+            "UAH",
+            f"https://prom.ua/{title}",
+            **kwargs,
+        )
+
+    valid = offer("Новий бампер VW T4")
+    kept, rejected = competitor_prices_module._hard_gate_offers(
+        (
+            valid,
+            offer("Кут бампера VW T4 б/у"),
+            offer("Бампер VW T4", seller="Авторозбірка Київ"),
+            offer("Бампер — ціна за запитом"),
+            offer("Бампер VW T4", "0"),
+            offer("Бампер VW T4", availability="Немає в наявності"),
+        )
+    )
+
+    assert kept == (valid,)
+    assert rejected == 5
 
 
 async def test_prom_source_scans_every_configured_page(monkeypatch):
@@ -240,8 +273,8 @@ async def test_avtopro_keeps_analogues_out_of_the_stats(monkeypatch):
 
     assert [str(offer.price) for offer in result.offers] == ["180.00", "300.00", "420.00"]
     assert [offer.is_analog for offer in result.offers] == [True, False, True]
-    # Дешевший аналог не має вдавати, що наша деталь коштує 180.
-    assert result.min_price == Decimal("300.00")
+    # Навіть точний номер не задає ціну до перевірки сторінки.
+    assert result.min_price is None
 
 
 async def test_google_source_prices_from_snippet_and_page(monkeypatch):
@@ -340,8 +373,12 @@ async def test_google_source_is_skipped_without_api_key(monkeypatch):
 
 def test_minority_currency_offers_are_dropped():
     uah = [
-        MarketOffer("prom", "A", Decimal("200"), "UAH", "https://prom.ua/a"),
-        MarketOffer("prom", "B", Decimal("240"), "UAH", "https://prom.ua/b"),
+        MarketOffer(
+            "prom", "A", Decimal("200"), "UAH", "https://prom.ua/a", verified=True
+        ),
+        MarketOffer(
+            "prom", "B", Decimal("240"), "UAH", "https://prom.ua/b", verified=True
+        ),
     ]
     usd = MarketOffer("avtopro", "C", Decimal("50"), "USD", "https://avto.pro/c")
 
@@ -394,8 +431,22 @@ def test_report_stats_use_all_sources_and_cache_flag():
                 label="Prom.ua",
                 status="ok",
                 offers=(
-                    MarketOffer("prom", "A", Decimal("100"), "UAH", "https://prom.ua/a"),
-                    MarketOffer("prom", "B", Decimal("300"), "UAH", "https://prom.ua/b"),
+                    MarketOffer(
+                        "prom",
+                        "A",
+                        Decimal("100"),
+                        "UAH",
+                        "https://prom.ua/a",
+                        verified=True,
+                    ),
+                    MarketOffer(
+                        "prom",
+                        "B",
+                        Decimal("300"),
+                        "UAH",
+                        "https://prom.ua/b",
+                        verified=True,
+                    ),
                 ),
             ),
             SourceResult(source="avtopro", label="Avto.pro", status="empty"),
@@ -406,12 +457,42 @@ def test_report_stats_use_all_sources_and_cache_flag():
     payload = report.as_json()
 
     assert payload["stats"]["offers_total"] == 2
+    assert payload["stats"]["eligible_offers_total"] == 2
     assert payload["stats"]["sources_total"] == 2
     assert payload["stats"]["min_price"] == "100"
     assert payload["stats"]["median_price"] == "200.00"
     assert payload["stats"]["max_price"] == "300"
     # Рекомендація — конкретна сума: на 1% нижче мінімуму конкурентів.
     assert payload["stats"]["recommended_price"] == "99"
+
+
+def test_report_refuses_recommendation_from_one_verified_price():
+    report = CompetitorPriceReport(
+        query=part_query(),
+        sources=(
+            SourceResult(
+                "prom",
+                "Prom.ua",
+                "ok",
+                (
+                    MarketOffer(
+                        "prom",
+                        "A",
+                        Decimal("2082"),
+                        "UAH",
+                        "https://prom.ua/a",
+                        verified=True,
+                    ),
+                ),
+            ),
+        ),
+        observed_at=datetime.fromtimestamp(0, UTC),
+    )
+
+    stats = report.as_json()["stats"]
+    assert stats["eligible_offers_total"] == 1
+    assert stats["min_price"] == "2082"
+    assert stats["recommended_price"] is None
 
 
 def test_cheapest_by_key_keeps_lowest_offer_per_seller():
@@ -698,6 +779,113 @@ async def test_llm_filter_keeps_everything_when_the_model_is_off(monkeypatch):
     assert await competitor_prices_module._refine_source(
         part_query(), source, lambda *_: None
     ) == source
+
+
+async def test_llm_filter_failure_is_fail_closed(monkeypatch):
+    source = SourceResult(
+        "prom",
+        "Prom.ua",
+        "ok",
+        (
+            MarketOffer(
+                source="prom",
+                title="Фільтр",
+                price=Decimal("100"),
+                currency="UAH",
+                url="https://prom.ua/1",
+            ),
+        ),
+    )
+    monkeypatch.setattr(competitor_prices_module.llm_filter, "is_enabled", lambda: True)
+
+    async def failed_classify(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "classify", failed_classify
+    )
+    result = await competitor_prices_module._refine_source(
+        part_query(), source, lambda *_: None
+    )
+
+    assert result.offers == ()
+    assert result.status == "empty"
+
+
+async def test_second_pass_keeps_only_page_verified_exact_offer(monkeypatch):
+    accepted = MarketOffer(
+        "prom",
+        "Фільтр Bosch",
+        Decimal("300"),
+        "UAH",
+        "https://prom.ua/accepted",
+        confidence=0.95,
+    )
+    rejected = MarketOffer(
+        "google",
+        "Фільтр Bosch",
+        Decimal("310"),
+        "UAH",
+        "https://shop.test/rejected",
+        confidence=0.95,
+    )
+    analog = MarketOffer(
+        "prom",
+        "Фільтр Mann",
+        Decimal("250"),
+        "UAH",
+        "https://prom.ua/analog",
+        confidence=0.6,
+        is_analog=True,
+    )
+    sources = (
+        SourceResult("prom", "Prom.ua", "ok", (accepted, analog)),
+        SourceResult("google", "Google", "ok", (rejected,)),
+    )
+    monkeypatch.setattr(competitor_prices_module.llm_filter, "is_enabled", lambda: True)
+
+    async def evidence(_offers):
+        return ["new fixed price 300", "used part"]
+
+    async def verify(**_kwargs):
+        return {0: True, 1: False}
+
+    monkeypatch.setattr(competitor_prices_module, "_fetch_offer_evidence", evidence)
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_pricing_offers", verify
+    )
+
+    result = await competitor_prices_module._verify_pricing_offers(
+        part_query(), sources, lambda *_: None
+    )
+    offers = [offer for source in result for offer in source.offers]
+
+    assert [offer.url for offer in offers] == [accepted.url, analog.url]
+    assert offers[0].verified is True
+    assert offers[0].condition == "new"
+    assert offers[1].is_analog is True
+
+
+def test_low_verified_price_below_half_median_is_removed():
+    offers = tuple(
+        MarketOffer(
+            "prom",
+            str(price),
+            Decimal(price),
+            "UAH",
+            f"https://prom.ua/{price}",
+            verified=True,
+        )
+        for price in ("400", "1000", "1100")
+    )
+    result = competitor_prices_module._drop_low_price_outliers(
+        (SourceResult("prom", "Prom.ua", "ok", offers),), lambda *_: None
+    )
+
+    assert [offer.price for offer in result[0].offers] == [
+        Decimal("1000"),
+        Decimal("1100"),
+    ]
 
 
 async def test_classify_treats_missing_verdicts_as_no(monkeypatch):

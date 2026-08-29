@@ -7,9 +7,10 @@ import json
 import logging
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from html import unescape
 from statistics import median
 from typing import Any, Callable, Iterable, Iterator, Protocol
 from urllib.parse import urlsplit
@@ -60,6 +61,12 @@ _STRONG_NAME_SIMILARITY = 0.8  # від цього збіг за назвою р
 _OEM_HIT_SCORE = 0.9  # знайдено за номером — це та сама деталь, не аналог
 _ANALOG_CONFIDENCE = 0.6  # аналог іншого виробника: показуємо, але не в статистиці
 _LLM_SAME_CONFIDENCE = 0.95  # модель підтвердила: та сама деталь
+_VERIFIED_CONFIDENCE = 0.99  # друга перевірка сторінки підтвердила товар і ціну
+_MIN_RECOMMENDATION_OFFERS = 2
+_LOW_PRICE_RATIO = Decimal("0.50")
+_MAX_VERIFICATION_OFFERS = 24
+_VERIFICATION_TIMEOUT = 8.0
+_PAGE_EVIDENCE_CHARS = 6000
 # Ширший невід: точність тепер тримає LLM-фільтр, а не обрізання джерела.
 _PROM_MAX_OFFERS = 60
 _AVTOPRO_MAX_OFFERS = 40
@@ -81,6 +88,27 @@ _SERP_BLOCKED_TLDS = (".ru", ".su", ".by", ".рф", ".xn--p1ai")
 
 _NON_ALNUM_RE = re.compile(r"[^0-9A-ZА-ЯІЇЄЁ]+", re.I)
 _PROM_PRODUCT_ID_RE = re.compile(r"/(?:[a-z]{2}/)?p(?P<id>\d+)-", re.I)
+_USED_RE = re.compile(
+    r"(?:"
+    r"(?<![\w])б\s*[/.‐‑‒–—-]?\s*[ув](?![\w])|"
+    r"\b(?:used|refurbished|remanufactured)\b|"
+    r"вживан|бывш\w*\s+в\s+употреблен|відновлен|восстановлен|"
+    r"авторозбір|авторазбор|автошрот"
+    r")",
+    re.I,
+)
+_NON_FIXED_PRICE_RE = re.compile(
+    r"(?:"
+    r"(?:ціна|цена).{0,35}(?:за\s+запитом|по\s+запросу|уточн|договірн|договорн|пізніше|позже|напиш|пишіт|сообщим|повідомим)|"
+    r"(?:за\s+запитом|по\s+запросу|уточн|напиш|пишіт|сообщим|повідомим).{0,35}(?:ціна|цену|цена)|"
+    r"price\s+on\s+request"
+    r")",
+    re.I,
+)
+_UNAVAILABLE_RE = re.compile(
+    r"(?:немає\s+в\s+наявності|нет\s+в\s+наличии|не\s+в\s+наявності|закінчився|out\s+of\s+stock|неактуальн)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -130,9 +158,14 @@ class MarketOffer:
     confidence: float = 1.0
     # Не той самий номер: інший виробник робить те саме — ціна для порівняння.
     is_analog: bool = False
+    # Ціна впливає на статистику лише після повторної перевірки сторінки.
+    verified: bool = False
+    # Сніпет пошуку допомагає гейтам, але не є частиною публічного API.
+    evidence_text: str | None = field(default=None, repr=False, compare=False)
 
     def as_json(self) -> dict[str, Any]:
         data = asdict(self)
+        data.pop("evidence_text", None)
         data["price"] = str(self.price)
         return data
 
@@ -153,7 +186,8 @@ class SourceResult:
 
     @property
     def min_price(self) -> Decimal | None:
-        return min(self.prices) if self.offers else None
+        values = self.prices
+        return min(values) if values else None
 
     @property
     def median_price(self) -> Decimal | None:
@@ -162,7 +196,8 @@ class SourceResult:
 
     @property
     def max_price(self) -> Decimal | None:
-        return max(self.prices) if self.offers else None
+        values = self.prices
+        return max(values) if values else None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -197,12 +232,14 @@ class CompetitorPriceReport:
 
     def as_json(self) -> dict[str, Any]:
         prices = self.prices
+        eligible_offers_total = len(prices)
         return {
             "query": self.query.as_json(),
             "cached": self.cached,
             "observed_at": self.observed_at.isoformat(),
             "stats": {
                 "offers_total": len(self.offers),
+                "eligible_offers_total": eligible_offers_total,
                 "sources_total": len(self.sources),
                 "min_price": _decimal_json(min(prices) if prices else None),
                 "median_price": _decimal_json(
@@ -212,7 +249,9 @@ class CompetitorPriceReport:
                 ),
                 "max_price": _decimal_json(max(prices) if prices else None),
                 "recommended_price": _decimal_json(
-                    _recommended_price(prices) if prices else None
+                    _recommended_price(prices)
+                    if eligible_offers_total >= _MIN_RECOMMENDATION_OFFERS
+                    else None
                 ),
             },
             "sources": [source.as_json() for source in self.sources],
@@ -405,9 +444,12 @@ async def _collect(
     results = await asyncio.gather(
         *(_refined_source(source, query, timeout, emit) for source in sources)
     )
+    checked_sources = await _verify_pricing_offers(
+        query, _single_currency(tuple(results)), emit
+    )
     return CompetitorPriceReport(
         query=query,
-        sources=_single_currency(tuple(results)),
+        sources=_drop_low_price_outliers(checked_sources, emit),
         observed_at=datetime.now(UTC),
     )
 
@@ -428,19 +470,33 @@ async def _refine_source(
     result: SourceResult,
     emit: ProgressCallback,
 ) -> SourceResult:
-    """Пропустити зібране крізь дешеву модель: вона бачить те, чого не бачать токени."""
-    if not result.offers or not llm_filter.is_enabled():
+    """Жорсткі гейти, потім семантичне звірення дешевою моделлю."""
+    if not result.offers:
         return result
 
-    emit("filter", f"{result.label}: звіряємо {len(result.offers)} варіантів")
+    gated, rejected = _hard_gate_offers(result.offers)
+    if rejected:
+        emit("filter", f"{result.label}: відхилили {rejected} непридатних оголошень")
+    result = replace(
+        result,
+        offers=gated,
+        status="empty" if not gated and result.status == "ok" else result.status,
+    )
+    if not gated or not llm_filter.is_enabled():
+        return result
+
+    emit("filter", f"{result.label}: звіряємо {len(gated)} варіантів")
     verdicts = await llm_filter.classify(
         name=query.name,
         brand=query.brand,
         oem_numbers=query.oem_numbers,
-        titles=[offer.title for offer in result.offers],
+        titles=[offer.title for offer in gated],
+        details=[_offer_llm_details(offer) for offer in gated],
     )
     if not verdicts:
-        return result
+        # Помилка моделі не є дозволом використовувати неперевірені ціни.
+        emit("filter", f"{result.label}: модель не підтвердила пропозиції")
+        return replace(result, offers=(), status="empty")
 
     kept: list[MarketOffer] = []
     for index, offer in enumerate(result.offers):
@@ -465,6 +521,235 @@ async def _refine_source(
         offers=tuple(kept),
         status="empty" if not kept and result.status == "ok" else result.status,
     )
+
+
+async def _verify_pricing_offers(
+    query: PartSearchQuery,
+    sources: tuple[SourceResult, ...],
+    emit: ProgressCallback,
+) -> tuple[SourceResult, ...]:
+    """Admit exact offers only after a fresh page fetch and a second Nano pass.
+
+    Analogues may still be shown as reference offers, but never enter market
+    statistics. Exact offers without page evidence are removed fail-closed.
+    """
+    candidates = [
+        offer
+        for source in sources
+        for offer in source.offers
+        if not offer.is_analog and offer.confidence >= _MIN_STATS_CONFIDENCE
+    ]
+    if not candidates:
+        return sources
+
+    if not llm_filter.is_enabled():
+        candidate_keys = {_offer_key(offer) for offer in candidates}
+        emit("verify", "Перевірка недоступна: ціни не допущені до звіту")
+        return tuple(
+            replace(
+                source,
+                offers=tuple(
+                    offer
+                    for offer in source.offers
+                    if _offer_key(offer) not in candidate_keys
+                ),
+                status=(
+                    "empty"
+                    if all(_offer_key(offer) in candidate_keys for offer in source.offers)
+                    and source.status == "ok"
+                    else source.status
+                ),
+            )
+            for source in sources
+        )
+
+    selected = candidates[:_MAX_VERIFICATION_OFFERS]
+    candidate_keys = {_offer_key(offer) for offer in candidates}
+    selected_keys = {_offer_key(offer) for offer in selected}
+    emit("verify", f"Перевіряємо {len(selected)} сторінок з товарами")
+
+    evidence = await _fetch_offer_evidence(selected)
+    reviewable: list[MarketOffer] = []
+    review_payloads: list[dict[str, str]] = []
+    for offer, page_text in zip(selected, evidence):
+        if not page_text:
+            continue
+        reviewable.append(offer)
+        review_payloads.append(
+            {
+                "title": offer.title,
+                "seller": offer.seller or "",
+                "price": str(offer.price),
+                "currency": offer.currency,
+                "availability": offer.availability or "",
+                "source_condition": offer.condition or "",
+                "url": offer.url,
+                "page_evidence": page_text,
+            }
+        )
+
+    verdicts = await llm_filter.verify_pricing_offers(
+        name=query.name,
+        brand=query.brand,
+        oem_numbers=query.oem_numbers,
+        candidates=review_payloads,
+    )
+    accepted_keys = {
+        _offer_key(offer)
+        for index, offer in enumerate(reviewable)
+        if verdicts.get(index) is True
+    }
+
+    verified_sources: list[SourceResult] = []
+    rejected = 0
+    for source in sources:
+        kept: list[MarketOffer] = []
+        for offer in source.offers:
+            key = _offer_key(offer)
+            if key not in candidate_keys:
+                kept.append(offer)
+            elif key in selected_keys and key in accepted_keys:
+                kept.append(
+                    replace(
+                        offer,
+                        confidence=max(offer.confidence, _VERIFIED_CONFIDENCE),
+                        condition="new",
+                        verified=True,
+                    )
+                )
+            else:
+                rejected += 1
+        verified_sources.append(
+            replace(
+                source,
+                offers=tuple(kept),
+                status="empty" if not kept and source.status == "ok" else source.status,
+            )
+        )
+
+    if rejected:
+        emit("verify", f"Не допустили {rejected} неперевірених пропозицій")
+    return tuple(verified_sources)
+
+
+async def _fetch_offer_evidence(offers: list[MarketOffer]) -> list[str | None]:
+    async with httpx.AsyncClient(
+        timeout=_VERIFICATION_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+    ) as client:
+        return list(await asyncio.gather(*(_fetch_page_evidence(client, o) for o in offers)))
+
+
+async def _fetch_page_evidence(
+    client: httpx.AsyncClient, offer: MarketOffer
+) -> str | None:
+    try:
+        response = await client.get(offer.url)
+        if response.status_code != 200:
+            return None
+        return _page_evidence(response.text)
+    except Exception as exc:
+        log.info("Offer verification page %r failed: %s", offer.url, exc)
+        return None
+
+
+def _page_evidence(html: str) -> str | None:
+    """Compact untrusted page data for the second verification pass."""
+    structured = "\n".join(_LD_JSON_RE.findall(html))[: _PAGE_EVIDENCE_CHARS // 2]
+    visible = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
+    visible = re.sub(r"<style\b[^>]*>.*?</style>", " ", visible, flags=re.I | re.S)
+    visible = unescape(re.sub(r"<[^>]+>", " ", visible))
+    visible = re.sub(r"\s+", " ", visible).strip()
+    combined = f"{structured}\n{visible}".strip()[:_PAGE_EVIDENCE_CHARS]
+    return combined or None
+
+
+def _drop_low_price_outliers(
+    sources: tuple[SourceResult, ...], emit: ProgressCallback
+) -> tuple[SourceResult, ...]:
+    """Remove verified prices below half the median when 3+ prices exist."""
+    verified = [
+        offer
+        for source in sources
+        for offer in source.offers
+        if offer.verified and not offer.is_analog
+    ]
+    if len(verified) < 3:
+        return sources
+    market_median = Decimal(str(median(offer.price for offer in verified)))
+    cutoff = market_median * _LOW_PRICE_RATIO
+    rejected_keys = {
+        _offer_key(offer) for offer in verified if offer.price < cutoff
+    }
+    if not rejected_keys:
+        return sources
+
+    emit("verify", f"Відхилили {len(rejected_keys)} аномально низьких цін")
+    cleaned: list[SourceResult] = []
+    for source in sources:
+        offers = tuple(
+            offer for offer in source.offers if _offer_key(offer) not in rejected_keys
+        )
+        cleaned.append(
+            replace(
+                source,
+                offers=offers,
+                status="empty" if not offers and source.status == "ok" else source.status,
+            )
+        )
+    return tuple(cleaned)
+
+
+def _hard_gate_offers(
+    offers: Iterable[MarketOffer],
+) -> tuple[tuple[MarketOffer, ...], int]:
+    candidates = tuple(offers)
+    kept = tuple(
+        offer for offer in candidates if _offer_rejection_reason(offer) is None
+    )
+    return kept, len(candidates) - len(kept)
+
+
+def _offer_rejection_reason(offer: MarketOffer) -> str | None:
+    if offer.price <= 0:
+        return "non_positive_price"
+    text = " ".join(
+        value
+        for value in (
+            offer.title,
+            offer.seller,
+            offer.availability,
+            offer.condition,
+            offer.evidence_text,
+        )
+        if value
+    )
+    if _USED_RE.search(text):
+        return "not_new"
+    if _NON_FIXED_PRICE_RE.search(text):
+        return "non_fixed_price"
+    if _UNAVAILABLE_RE.search(offer.availability or ""):
+        return "unavailable"
+    return None
+
+
+def _offer_llm_details(offer: MarketOffer) -> str:
+    return " | ".join(
+        value
+        for value in (
+            f"ціна={offer.price} {offer.currency}",
+            f"продавець={offer.seller}" if offer.seller else None,
+            f"наявність={offer.availability}" if offer.availability else None,
+            f"стан={offer.condition}" if offer.condition else None,
+            offer.evidence_text,
+        )
+        if value
+    )
+
+
+def _offer_key(offer: MarketOffer) -> tuple[str, str, Decimal]:
+    return offer.source, offer.url, offer.price
 
 
 def _single_currency(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, ...]:
@@ -571,7 +856,6 @@ class AvtoproPriceSource:
                             + (offer.part_uri or result.suggestion.part_uri),
                             city=offer.city,
                             availability=offer.availability,
-                            condition="new",
                             confidence=(
                                 0.98
                                 if _norm_code(offer.code) in exact_codes
@@ -683,7 +967,6 @@ class PromPriceSource:
                 url=product.url,
                 seller=product.seller_name,
                 availability=product.presence,
-                condition="new",
                 image_url=product.image,
                 confidence=score,
                 # Номер не збігся — знайшли за назвою, тобто аналог.
@@ -815,6 +1098,7 @@ class GooglePriceSource:
             seller=domain,
             confidence=score,
             is_analog=score < _OEM_HIT_SCORE,
+            evidence_text=f"{item.get('title') or ''} {item.get('snippet') or ''}",
         )
 
 
@@ -1140,12 +1424,14 @@ def _recommended_price(prices: list[Decimal]) -> Decimal:
 
 
 def _stats_prices(offers: Iterable[MarketOffer]) -> list[Decimal]:
-    """Prices of confident matches only; all of them when none is confident."""
-    offers = list(offers)
-    strong = [
-        offer.price for offer in offers if offer.confidence >= _MIN_STATS_CONFIDENCE
+    """Only page-verified exact new offers may influence pricing."""
+    return [
+        offer.price
+        for offer in offers
+        if offer.verified
+        and not offer.is_analog
+        and offer.confidence >= _MIN_STATS_CONFIDENCE
     ]
-    return strong or [offer.price for offer in offers]
 
 
 def _by_confidence_then_price(offer: MarketOffer) -> tuple[float, Decimal]:
@@ -1186,4 +1472,4 @@ def _cache_key(query: PartSearchQuery) -> str:
         separators=(",", ":"),
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    return f"competitor-prices:v6:{query.listing_id}:{digest}"
+    return f"competitor-prices:v7:{query.listing_id}:{digest}"

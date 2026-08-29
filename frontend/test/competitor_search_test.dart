@@ -14,6 +14,7 @@ const _report = {
   'observed_at': '2026-08-23T12:00:00Z',
   'stats': {
     'offers_total': 2,
+    'eligible_offers_total': 2,
     'sources_total': 2,
     'min_price': '100.91',
     'median_price': '181.96',
@@ -162,4 +163,3 @@ void main() {
     expect(find.text('Останні пошуки'), findsOneWidget);
   });
 }
-
