@@ -15,6 +15,12 @@ from urllib.parse import urlsplit
 
 import openpyxl
 
+from marko.parsers.part_numbers import (
+    normalize_oem,
+    numbers_from_list,
+    order_numbers,
+    split_number_list,
+)
 from marko.services.parser_models import Product, Seller
 
 PRODUCTS_SHEET = "Export Products Sheet"
@@ -30,11 +36,6 @@ _CHARACTERISTIC_VALUE = "Значення_Характеристики"
 # не знайдеться нічого. Поруч із номерами там і фрази, тож беремо не все.
 _OEM_SEARCH_HEADERS = ("Пошукові_запити", "Пошукові_запити_укр")
 
-_MIN_OEM_LENGTH = 4  # shorter tokens are truncation noise, not part numbers
-_MIN_SEARCH_OEM_LENGTH = 6  # «94-06» та «6 pin» — не номери
-# Лише латиниця й цифри, щонайменше дві цифри: кирилиця відсіює слова, а
-# вимога цифр — марки та моделі («Ford», «Sierra»).
-_SEARCH_OEM_RE = re.compile(r"(?=(?:\D*\d){2})[A-Z0-9]+")
 _SELLER_HOST_RE = re.compile(r"^(?P<slug>[\w-]+?)-cs(?P<company_id>\d+)\.prom\.ua$", re.I)
 _PRODUCT_PATH_RE = re.compile(r"^/(?:[a-z]{2}/)?(?P<slug>p\d+-[^/]+)$", re.I)
 
@@ -90,18 +91,6 @@ def parse_price(value: object) -> Decimal | None:
         return None
 
 
-def normalize_oem(value: object) -> str | None:
-    """Uppercase part number without separators, or None when unusable."""
-    token = re.sub(r"[\s ]+", "", str(value or "")).upper()
-    if len(token) < _MIN_OEM_LENGTH or not any(char.isalnum() for char in token):
-        return None
-    return token
-
-
-def _split_oem_list(value: object) -> list[str]:
-    return [str(part) for part in str(value or "").split(",")]
-
-
 class _RowReader:
     """Maps header names to column indexes; headers repeat, so keep them all."""
 
@@ -135,42 +124,20 @@ class _RowReader:
         return found
 
 
-def _part_number(value: object) -> str | None:
-    """Схоже на каталожний номер, а не на слово чи об'єм двигуна.
-
-    «1.6-1.8-2.0» після склеювання дало б «161820» — саме тому крапка одразу
-    відхиляє токен: у номерах Prom-експорту її не буває, а в об'ємах є завжди.
-    """
-    raw = str(value or "").strip()
-    if "." in raw:
-        return None
-    token = re.sub(r"[\s \-]+", "", raw).upper()
-    if len(token) < _MIN_SEARCH_OEM_LENGTH:
-        return None
-    return token if _SEARCH_OEM_RE.fullmatch(token) else None
-
-
 def _search_query_numbers(reader: _RowReader, row: tuple) -> list[str]:
     numbers: list[str] = []
     for header in _OEM_SEARCH_HEADERS:
-        for part in _split_oem_list(reader.value(row, header)):
-            if (token := _part_number(part)) is not None:
-                numbers.append(token)
+        numbers.extend(numbers_from_list(reader.value(row, header)))
     return numbers
 
 
 def _oem_numbers(reader: _RowReader, row: tuple, characteristics: dict) -> tuple[str, ...]:
     raw: list[object] = [reader.value(row, header) for header in _OEM_HEADERS]
     for name in _OEM_CHARACTERISTICS:
-        raw.extend(_split_oem_list(characteristics.get(name)))
+        raw.extend(split_number_list(characteristics.get(name)))
     numbers = list(dict.fromkeys(filter(None, map(normalize_oem, raw))))
     numbers.extend(_search_query_numbers(reader, row))
-    # Номер виробника майже завжди має літеру (8E0513033, 056121113D), а
-    # внутрішній артикул — самі цифри. Пошукових термінів беремо лише перші
-    # два, тож справжній номер має стояти попереду, інакше його не спитають.
-    return tuple(
-        sorted(dict.fromkeys(numbers), key=lambda code: not any(c.isalpha() for c in code))
-    )
+    return order_numbers(numbers)
 
 
 def _product(reader: _RowReader, row: tuple) -> Product | None:

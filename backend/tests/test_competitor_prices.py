@@ -593,6 +593,60 @@ def test_own_prom_product_is_excluded_when_url_language_or_host_differs():
     )
 
 
+def _kemp_listing(**over):
+    """Картка під власною маркою: саме такі 86% каталогу замовника."""
+    base = dict(
+        id="listing-kemp",
+        sku="312783",
+        brand="KEMP",
+        name="Амортизатор задний Audi (Ауді) A4 (В6) 00-04",
+        url="https://prom.ua/ua/p2749852485-amortizator.html",
+        raw_data={"oem_numbers": ["8E0513033", "312783"]},
+    )
+    return SimpleNamespace(**{**base, **over})
+
+
+def test_own_house_brand_is_not_treated_as_a_manufacturer():
+    """KEMP — марка магазину; справжня марка каталогу лишається як була."""
+    assert _query_from_listing(_kemp_listing()).brand is None
+    assert _query_from_listing(_kemp_listing(brand="Bosch")).brand == "Bosch"
+    # Регістр і пробіли не мають рятувати власну марку від скасування.
+    assert _query_from_listing(_kemp_listing(brand=" kemp ")).brand is None
+
+
+def test_number_match_survives_a_foreign_brand_under_own_house_brand():
+    """Головна причина порожніх звітів: збіг за номером анулювався брендом."""
+    query = _query_from_listing(_kemp_listing())
+
+    # Конкурент продає ту саму деталь під своєю маркою — це і є ринок.
+    assert _match_score(query, "Амортизатор задній 8E0513033", brand="VAG") == 0.9
+    assert _match_score(query, "Амортизатор задній 8E0513033", brand="Sachs") == 0.9
+
+
+def test_real_brand_still_rejects_the_same_number_under_another_make():
+    """Для справжньої марки звірка бренду лишається: контракт не зламано."""
+    query = _query_from_listing(
+        _kemp_listing(brand="Bosch", raw_data={"oem_numbers": ["0451103316"]})
+    )
+
+    assert _match_score(query, "Фільтр 0451103316", brand="Bosch") == 0.9
+    assert _match_score(query, "Фільтр 0451103316", brand="Mann") == 0.0
+
+
+def test_google_skips_own_sites_but_keeps_dealers():
+    """kemp.ua — сайт замовника; дилер із товаром KEMP лишається конкурентом."""
+    query = _query_from_listing(_kemp_listing())
+    batch = [
+        {"link": "https://kemp.ua/amortyzator-8E0513033", "title": "Амортизатор задний Audi A4 (В6) 00-04"},
+        {"link": "https://shop.kemp.ua/p/8E0513033", "title": "Амортизатор задний Audi A4 (В6) 00-04"},
+        {"link": "https://autoshop.com.ua/8E0513033", "title": "Амортизатор задний Audi A4 (В6) 00-04 KEMP"},
+    ]
+
+    picked = competitor_prices_module.GooglePriceSource()._candidates(query, [batch])
+
+    assert [domain for _item, domain, _score in picked] == ["autoshop.com.ua"]
+
+
 def test_query_contains_global_and_workspace_prom_exclusions():
     listing = SimpleNamespace(
         id="listing-1",
@@ -1217,3 +1271,129 @@ async def test_verification_is_capped(monkeypatch):
 
     assert len(sent) == competitor_prices_module._VERIFY_MAX_OFFERS
     assert sent[0] == "Фільтр 0"  # найдешевший перший
+
+
+# Добір каталожного номера зі сторінки товару
+
+
+def _page_listing():
+    """Картка, додана посиланням: тільки внутрішній артикул, номера немає."""
+    return SimpleNamespace(
+        id="listing-1",
+        sku="312783 KEMP",
+        brand="KEMP",
+        name="Амортизатор задний Audi (Ауді) A4 (В6) 00-04",
+        url="https://prom.ua/ua/p2749852485-amortizator.html",
+        raw_data={"seller_id": 2847093, "seller_slug": "kemp"},
+    )
+
+
+def _patch_listing_lookup(monkeypatch, view):
+    async def fake_listing(_session, _workspace_id, _listing_id):
+        return view
+
+    async def fake_exclusions(_session, _workspace_id):
+        return []
+
+    monkeypatch.setattr(competitor_prices_module, "get_workspace_listing", fake_listing)
+    monkeypatch.setattr(
+        competitor_prices_module.stores_repo,
+        "list_competitor_seller_exclusions",
+        fake_exclusions,
+    )
+
+
+class _FakeSession:
+    def __init__(self) -> None:
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+async def test_missing_number_is_read_from_the_product_page(monkeypatch):
+    """За «312783 KEMP» ринку немає; номер зі сторінки його знаходить."""
+    saved: dict = {}
+    _patch_listing_lookup(monkeypatch, _page_listing())
+
+    class FakeClient:
+        def __init__(self, _config) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc) -> None:
+            return None
+
+        async def get_html(self, url: str) -> str:
+            saved["url"] = url
+            return "<html/>"
+
+    async def fake_store(_session, listing_id, numbers):
+        saved["stored"] = (listing_id, numbers)
+
+    monkeypatch.setattr(competitor_prices_module, "AsyncHttpClient", FakeClient)
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "parse_product_page",
+        lambda _html: SimpleNamespace(
+            product=SimpleNamespace(oem_numbers=("8E0513033",))
+        ),
+    )
+    monkeypatch.setattr(competitor_prices_module, "set_listing_oem_numbers", fake_store)
+
+    session = _FakeSession()
+    query = await competitor_prices_module.listing_search_query(
+        session, "workspace-1", "listing-1"
+    )
+
+    assert query.oem_numbers[0] == "8E0513033"
+    # Артикул лишається кандидатом для звірки, просто вже не першим.
+    assert "312783KEMP" in query.oem_numbers
+    assert saved["stored"] == ("listing-1", ["8E0513033"])
+    assert saved["url"] == "https://prom.ua/ua/p2749852485-amortizator.html"
+    assert session.commits == 1
+
+
+async def test_unreachable_product_page_does_not_break_the_report(monkeypatch):
+    """Антибот на сторінці — не привід лишити замовника без звіту."""
+    _patch_listing_lookup(monkeypatch, _page_listing())
+
+    class BrokenClient:
+        def __init__(self, _config) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise RuntimeError("403 Forbidden")
+
+        async def __aexit__(self, *_exc) -> None:
+            return None
+
+    monkeypatch.setattr(competitor_prices_module, "AsyncHttpClient", BrokenClient)
+
+    session = _FakeSession()
+    query = await competitor_prices_module.listing_search_query(
+        session, "workspace-1", "listing-1"
+    )
+
+    assert query.oem_numbers == ("312783KEMP",)
+    assert session.commits == 0
+
+
+async def test_existing_numbers_skip_the_extra_page_request(monkeypatch):
+    """Картка з номерами вже не платить зайвим запитом за кожен звіт."""
+    view = _page_listing()
+    view.raw_data = {**view.raw_data, "oem_numbers": ["8E0513033"]}
+    _patch_listing_lookup(monkeypatch, view)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("сторінку не мали чіпати")
+
+    monkeypatch.setattr(competitor_prices_module, "AsyncHttpClient", forbidden)
+
+    query = await competitor_prices_module.listing_search_query(
+        _FakeSession(), "workspace-1", "listing-1"
+    )
+
+    assert query.oem_numbers == ("8E0513033", "312783KEMP")

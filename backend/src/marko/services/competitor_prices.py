@@ -25,13 +25,16 @@ from marko.parsers.avtopro import AvtoproGateway, default_config as avtopro_conf
 from marko.parsers.avtopro.gateway import BASE_URL as AVTOPRO_BASE_URL
 from marko.parsers.prom.client import AsyncHttpClient
 from marko.parsers.prom.config import ScrapeConfig
-from marko.parsers.prom.parser import parse_search
+from marko.parsers.prom.parser import parse_product_page, parse_search
 from marko.parsers.prom_export import (
     normalize_oem,
     parse_price,
     seller_from_export_url,
 )
-from marko.repositories.listings import get_workspace_listing
+from marko.repositories.listings import (
+    get_workspace_listing,
+    set_listing_oem_numbers,
+)
 from marko.services import exchange_rates, llm_filter, offer_gates
 from marko.services.matching import (
     brands_compatible,
@@ -98,6 +101,17 @@ _PROM_SELLER_HOST_ID_RE = re.compile(r"-cs(?P<id>\d+)(?:\.|$)", re.I)
 # These sellers belong to the Marko installation, not to the competitive
 # market. Prom's numeric company id is the durable identity; slug is a fallback
 # for search payloads that omit it.
+# Власна торгова марка магазину, а не виробник деталі. 41 120 із 47 785
+# карток каталогу йдуть під нею, і саме тому вона отруювала звірку: збіг за
+# справжнім номером анулювався, бо конкурент продає ту саму деталь під Sachs
+# чи VAG. Тримаємо у вже нормалізованому вигляді — порівнюємо casefold.
+GLOBAL_OWN_BRANDS: tuple[str, ...] = ("kemp",)
+
+# Власні сайти поза маркетплейсами: у конкуренти вони потрапляли через Google
+# і на «Ford Sierra» ставали найдешевшою пропозицією — рекомендація підрізала
+# замовника ним самим. Дилери, що перепродають KEMP, конкурентами лишаються.
+GLOBAL_OWN_DOMAINS: tuple[str, ...] = ("kemp.ua",)
+
 GLOBAL_OWN_PROM_SELLERS: tuple[tuple[str, str], ...] = (
     ("2847093", "kemp"),
     ("4015921", "avtobust"),
@@ -317,7 +331,40 @@ async def listing_search_query(
     seller_exclusions = await stores_repo.list_competitor_seller_exclusions(
         session, workspace_id
     )
-    return _query_from_listing(listing, seller_exclusions)
+    query = _query_from_listing(listing, seller_exclusions)
+    raw = listing.raw_data if isinstance(listing.raw_data, dict) else {}
+    if raw.get("oem_numbers"):
+        return query
+    # У картці лише внутрішній артикул — за ним конкурентів не знайти.
+    return await _numbers_from_product_page(session, listing, query)
+
+
+async def _numbers_from_product_page(
+    session: AsyncSession, listing: Any, query: PartSearchQuery
+) -> PartSearchQuery:
+    """Дочитує каталожний номер зі сторінки товару й запам'ятовує його.
+
+    Товар, доданий посиланням, приходить без номера — лишався пошук за
+    назвою. Один GET на картку, далі номер живе в raw_data, тож наступні
+    звіти безкоштовні. Антибот чи змінена розмітка — не привід валити звіт:
+    працюємо за назвою, як і до цього.
+    """
+    try:
+        async with AsyncHttpClient(_source_config()) as client:
+            html = await client.get_html(listing.url)
+        numbers = parse_product_page(html).product.oem_numbers
+    except Exception as exc:  # сторінка недоступна — звіт усе одно потрібен
+        log.info("Не вдалось дочитати номер зі сторінки %s: %s", listing.url, exc)
+        return query
+    if not numbers:
+        return query
+    await set_listing_oem_numbers(session, listing.id, list(numbers))
+    await session.commit()
+    log.info("Дочитано номери для %s: %s", listing.id, numbers)
+    # Артикул лишається кандидатом для звірки, але вже після справжніх номерів.
+    return replace(
+        query, oem_numbers=tuple(dict.fromkeys((*numbers, *query.oem_numbers)))
+    )
 
 
 def manual_search_query(
@@ -991,6 +1038,8 @@ class GooglePriceSource:
                 continue
             if domain == own_domain or _covered_elsewhere(domain):
                 continue
+            if _is_own_domain(domain):
+                continue
             if domain.endswith(_SERP_BLOCKED_TLDS):
                 continue
             # Лише за назвою: сніпет збирає й інші оголошення сторінки, тож
@@ -1141,6 +1190,13 @@ def _serp_domain(url: str | None) -> str:
     return (urlsplit(url or "").hostname or "").lower().removeprefix("www.")
 
 
+def _is_own_domain(domain: str) -> bool:
+    """Власний сайт замовника — не конкурент, разом із піддоменами."""
+    return any(
+        domain == own or domain.endswith("." + own) for own in GLOBAL_OWN_DOMAINS
+    )
+
+
 def _covered_elsewhere(domain: str) -> bool:
     return any(
         domain == covered or domain.endswith("." + covered)
@@ -1208,12 +1264,23 @@ def _query_from_listing(
     return PartSearchQuery(
         listing_id=str(listing.id),
         oem_numbers=numbers,
-        brand=listing.brand,
+        brand=_market_brand(listing.brand),
         name=listing.name,
         source_url=listing.url,
         owner_seller_ids=owner_seller_ids,
         owner_seller_slugs=owner_seller_slugs,
     )
+
+
+def _market_brand(brand: str | None) -> str | None:
+    """Марка виробника деталі; власна торгова марка нею не вважається.
+
+    Порожня марка нікого не відсіює (`brands_compatible` пропускає невідоме),
+    тож звірка за номером починає працювати, а в промт моделі не йде рядок
+    «Виробник: KEMP», який схиляв її до вердикту «аналог». Для справжніх марок
+    каталогу (VAG, Bosch, Opel) усе лишається як було.
+    """
+    return None if (brand or "").strip().casefold() in GLOBAL_OWN_BRANDS else brand
 
 
 def _search_terms(query: PartSearchQuery) -> list[str]:

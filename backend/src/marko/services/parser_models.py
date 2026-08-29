@@ -6,6 +6,13 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from marko.parsers.part_numbers import numbers_from_list, order_numbers
+
+# Характеристики картки Prom, де магазин публікує каталожні номери. Раніше
+# сюди ніхто не заглядав: товар, доданий посиланням, лишався взагалі без
+# номера, і пошук конкурентів ішов за внутрішнім артикулом — тобто в нікуди.
+_OEM_ATTRIBUTES = ("Код запчастини", "Кросс-номери")
+
 _DEFAULT_SELLER_LANGUAGE = "ua"
 _PRICE_NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 
@@ -65,6 +72,24 @@ _FALLBACK_KEYS = {
 }
 
 
+def _numbers_from_attributes(raw: dict) -> tuple[str, ...]:
+    """Каталожні номери з атрибутів Apollo: «Код запчастини» = «312783, 77648805».
+
+    Значення перелічені через кому й поруч із ними трапляється вільний текст,
+    тож фільтр той самий, що й для XLSX-експорту.
+    """
+    numbers: list[str] = []
+    for attribute in raw.get("attributes") or []:
+        if not isinstance(attribute, dict):
+            continue
+        if str(attribute.get("name") or "").strip() not in _OEM_ATTRIBUTES:
+            continue
+        for value in attribute.get("values") or []:
+            if isinstance(value, dict):
+                numbers.extend(numbers_from_list(value.get("value")))
+    return order_numbers(numbers)
+
+
 def get_nested(data: dict, path: str) -> Any:
     """Get a nested value from a dict by dot path, e.g. ``company.name``."""
     current: Any = data
@@ -115,6 +140,7 @@ class Product:
                     (raw[key] for key in raw_keys if raw.get(key)), None
                 )
         values["url"] = cls._build_url(values["id"], values["url_text"], lang)
+        values["oem_numbers"] = _numbers_from_attributes(raw)
         return cls(**values)
 
     @staticmethod

@@ -10,6 +10,8 @@ from marko.parsers.prom.parser import (
     parse_product_page,
 )
 
+from marko.services.parser_models import Product
+
 from factories import html_with_state, raw_product
 
 
@@ -111,3 +113,47 @@ def test_parse_company_logo_missing_or_broken_returns_none():
     assert parse_company_logo("<html>no ld json</html>") is None
     broken = '<script type="application/ld+json">{not json</script>'
     assert parse_company_logo(broken) is None
+
+
+# Каталожні номери з атрибутів картки
+
+
+def test_product_reads_part_numbers_from_attributes():
+    """Товар, доданий посиланням, більше не лишається без номера виробника."""
+    raw = {
+        "id": 2749852485,
+        "name": "Амортизатор задний Audi A4",
+        "attributes": [
+            {"name": "Код запчастини", "values": [{"value": "312783, 77648805"}]},
+            {"name": "Стан", "values": [{"value": "Новий"}]},
+        ],
+    }
+
+    assert Product.from_raw(raw).oem_numbers == ("312783", "77648805")
+
+
+def test_product_without_attributes_has_no_part_numbers():
+    assert Product.from_raw({"id": 1, "name": "Амортизатор"}).oem_numbers == ()
+
+
+def test_part_numbers_from_attributes_drop_words_and_engine_sizes():
+    """Поруч із номерами трапляється вільний текст — у номери він не йде."""
+    raw = {
+        "id": 1,
+        "name": "Амортизатор",
+        "attributes": [
+            {
+                "name": "Кросс-номери",
+                "values": [{"value": "110418, 1.6-1.8-2.0, 94-06, Ford, 6 pin"}],
+            }
+        ],
+    }
+
+    assert Product.from_raw(raw).oem_numbers == ("110418",)
+
+
+def test_part_numbers_survive_a_broken_attributes_block():
+    """Prom інколи віддає null або рядок замість списку значень."""
+    raw = {"id": 1, "name": "Амортизатор", "attributes": [None, {"name": "Код запчастини"}]}
+
+    assert Product.from_raw(raw).oem_numbers == ()

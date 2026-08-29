@@ -351,6 +351,21 @@ async def get_listings_by_external_ids(
     )
 
 
+async def set_listing_oem_numbers(
+    session: AsyncSession, listing_id: uuid.UUID, numbers: list[str]
+) -> None:
+    """Кладе знайдені каталожні номери в raw_data картки, не чіпаючи решти.
+
+    Комітить викликач: репозиторій лише змінює, як і решта функцій тут.
+    """
+    listing = await session.get(Listing, listing_id)
+    if listing is None:
+        return
+    raw = dict(listing.raw_data or {})
+    raw["oem_numbers"] = numbers
+    listing.raw_data = raw
+
+
 async def add_listing(session: AsyncSession, listing: Listing) -> None:
     session.add(listing)
 
