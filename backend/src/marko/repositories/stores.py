@@ -72,7 +72,7 @@ async def list_stores(
         MarketplaceStore.created_at.desc()
     )
     rows = (await session.execute(statement)).all()
-    return [(row[0], row[1], row[2]) for row in rows]
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
 
 
 async def list_workspace_stores_by_kind(
