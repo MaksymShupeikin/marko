@@ -92,7 +92,11 @@ _SERP_TIMEOUT = 6.0
 _SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro")
 # Ринок — український: російські й білоруські магазини не конкуренти,
 # а їхні ціни в рублях лише засмічують порівняння.
-_SERP_BLOCKED_TLDS = (".ru", ".su", ".by", ".рф", ".xn--p1ai")
+# Замовник продає лише в Україні — закордонний магазин не конкурує з його
+# покупцем, а його ціна (нехай і чесно сконвертована) лише каламутить звіт.
+# Тому білий список замість чорного: gl=ua у Serper — побажання, не гарантія,
+# і американські чи китайські майданчики все одно просочувались у видачу.
+_SERP_ALLOWED_TLD = ".ua"
 
 _NON_ALNUM_RE = re.compile(r"[^0-9A-ZА-ЯІЇЄЁ]+", re.I)
 _PROM_PRODUCT_ID_RE = re.compile(r"/(?:[a-z]{2}/)?p(?P<id>\d+)-", re.I)
@@ -1040,7 +1044,7 @@ class GooglePriceSource:
                 continue
             if _is_own_domain(domain):
                 continue
-            if domain.endswith(_SERP_BLOCKED_TLDS):
+            if not domain.endswith(_SERP_ALLOWED_TLD):
                 continue
             # Лише за назвою: сніпет збирає й інші оголошення сторінки, тож
             # магазин, який поруч торгує розборкою, вилітав би дарма.
@@ -1511,4 +1515,4 @@ def _cache_key(query: PartSearchQuery) -> str:
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
     # v8: відсіви вживаного й перевірка цін другим проходом — інакше шість
     # годин TTL показували б старі звіти з розборкою і фальшивим "new".
-    return f"competitor-prices:v8:{query.listing_id}:{digest}"
+    return f"competitor-prices:v9:{query.listing_id}:{digest}"

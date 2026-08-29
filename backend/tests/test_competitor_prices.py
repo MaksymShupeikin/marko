@@ -277,9 +277,14 @@ async def test_google_source_prices_from_snippet_and_page(monkeypatch):
                 "link": "https://prom.ua/p123-filtr.html",
                 "snippet": "Ціна 150 грн",
             },
+            {   # закордонний магазин: не ринок замовника, хоч деталь і та
+                "title": "Bosch 0451103316 Oil Filter",
+                "link": "https://eeuroparts.com/parts/0451103316",
+                "snippet": "$4.99 In Stock",
+            },
             {   # зовсім не наша деталь
                 "title": "Куртка зимова чоловіча",
-                "link": "https://shop.example/kurtka",
+                "link": "https://shop.example.com.ua/kurtka",
                 "snippet": "1200 грн",
             },
         ]
@@ -771,7 +776,7 @@ def test_own_prom_seller_id_falls_back_to_store_subdomain():
     )
 
 
-def test_cache_key_is_v8_and_changes_with_workspace_exclusions():
+def test_cache_key_is_v9_and_changes_with_workspace_exclusions():
     base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
     workspace = competitor_prices_module.manual_search_query(
         "0451103316",
@@ -785,7 +790,7 @@ def test_cache_key_is_v8_and_changes_with_workspace_exclusions():
         ],
     )
 
-    assert _cache_key(base).startswith("competitor-prices:v8:")
+    assert _cache_key(base).startswith("competitor-prices:v9:")
     assert _cache_key(base) != _cache_key(workspace)
 
 
