@@ -28,6 +28,12 @@ class MarketOfferResponse(BaseModel):
     confidence: float = 1.0
     is_analog: bool = False
     verified: bool = False
+    original_price: str | None = None
+    original_currency: str | None = None
+    exchange_rate: str | None = None
+    exchange_rate_date: str | None = None
+    verified_at: datetime | None = None
+    price_changed_on_page: bool = False
 
 
 class SourcePriceResponse(BaseModel):
@@ -50,6 +56,14 @@ class CompetitorPriceStatsResponse(BaseModel):
     median_price: str | None = None
     max_price: str | None = None
     recommended_price: str | None = None
+    recommended_price_from: str | None = None
+    recommended_price_to: str | None = None
+    recommended_discount_percent: int = 6
+    recommended_discount_min_percent: int = 5
+    recommended_discount_max_percent: int = 7
+    slider_discount_min_percent: int = 1
+    slider_discount_max_percent: int = 30
+    pricing_status: str = "insufficient"
 
 
 class CompetitorPriceReportResponse(BaseModel):

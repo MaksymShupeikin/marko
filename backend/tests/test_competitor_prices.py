@@ -12,6 +12,7 @@ from marko.services.competitor_prices import (
     PartSearchQuery,
     PromPriceSource,
     SourceResult,
+    VerifiedPageSnapshot,
     _cache_key,
     _cheapest_by_key,
     _is_own_prom_product,
@@ -182,8 +183,10 @@ def test_hard_gates_drop_used_non_fixed_zero_and_unavailable_offers():
         )
     )
 
-    assert kept == (valid,)
-    assert rejected == 5
+    # Search may lie with zero; it is retained only long enough to reopen the
+    # product page and replace it with the fresh authoritative price.
+    assert kept == (valid, offer("Бампер VW T4", "0"))
+    assert rejected == 4
 
 
 async def test_prom_source_scans_every_configured_page(monkeypatch):
@@ -296,6 +299,11 @@ async def test_google_source_prices_from_snippet_and_page(monkeypatch):
                 "link": "https://prom.ua/p123-filtr.html",
                 "snippet": "Ціна 150 грн",
             },
+            {   # Exist.ua також має окремий видимий source
+                "title": "Фільтр масляний Bosch 0451103316",
+                "link": "https://exist.ua/uk/bosch-brand/filter-0451103316/",
+                "snippet": "Ціна 190 грн",
+            },
             {   # зовсім не наша деталь
                 "title": "Куртка зимова чоловіча",
                 "link": "https://shop.example/kurtka",
@@ -371,7 +379,7 @@ async def test_google_source_is_skipped_without_api_key(monkeypatch):
     assert result.offers == ()
 
 
-def test_minority_currency_offers_are_dropped():
+async def test_foreign_offer_is_converted_by_official_nbu_rate(monkeypatch):
     uah = [
         MarketOffer(
             "prom", "A", Decimal("200"), "UAH", "https://prom.ua/a", verified=True
@@ -382,35 +390,54 @@ def test_minority_currency_offers_are_dropped():
     ]
     usd = MarketOffer("avtopro", "C", Decimal("50"), "USD", "https://avto.pro/c")
 
-    sources = competitor_prices_module._single_currency(
+    class Rates:
+        async def rates_for(self, currencies):
+            from marko.services.exchange_rates import NbuRate
+
+            assert currencies == {"USD"}
+            return {"USD": NbuRate("USD", Decimal("41.25"), "29.08.2026")}
+
+    monkeypatch.setattr(competitor_prices_module, "_nbu_rates", Rates())
+    sources = await competitor_prices_module._normalize_currencies(
         (
             SourceResult("prom", "Prom.ua", "ok", tuple(uah)),
             SourceResult("avtopro", "Avto.pro", "ok", (usd,)),
-        )
+        ),
+        lambda *_: None,
     )
 
-    # 50 USD не є мінімумом проти 200 грн — без курсу порівнювати нічим.
     assert sources[0].min_price == Decimal("200")
-    assert sources[1].offers == ()
-    assert sources[1].status == "empty"
+    converted = sources[1].offers[0]
+    assert converted.price == Decimal("2062.50")
+    assert converted.currency == "UAH"
+    assert converted.original_price == Decimal("50")
+    assert converted.original_currency == "USD"
+    assert converted.exchange_rate == Decimal("41.25")
+    assert converted.exchange_rate_date == "29.08.2026"
 
 
-def test_uah_offers_win_even_as_minority():
-    """Каталог гривневий: доларова більшість не має перемикати звіт у USD."""
+async def test_foreign_offers_fail_closed_without_current_nbu_rate(monkeypatch):
     uah = MarketOffer("prom", "A", Decimal("200"), "UAH", "https://prom.ua/a")
     usd = [
         MarketOffer("avtopro", "B", Decimal("50"), "USD", "https://avto.pro/b"),
         MarketOffer("avtopro", "C", Decimal("60"), "USD", "https://avto.pro/c"),
     ]
 
-    sources = competitor_prices_module._single_currency(
+    class NoRates:
+        async def rates_for(self, currencies):
+            return {}
+
+    monkeypatch.setattr(competitor_prices_module, "_nbu_rates", NoRates())
+    sources = await competitor_prices_module._normalize_currencies(
         (
             SourceResult("prom", "Prom.ua", "ok", (uah,)),
             SourceResult("avtopro", "Avto.pro", "ok", tuple(usd)),
-        )
+        ),
+        lambda *_: None,
     )
 
-    assert sources[0].offers == (uah,)
+    assert [offer.price for offer in sources[0].offers] == [Decimal("200")]
+    assert sources[0].offers[0].original_currency == "UAH"
     assert sources[1].offers == ()
     assert sources[1].status == "empty"
 
@@ -462,8 +489,33 @@ def test_report_stats_use_all_sources_and_cache_flag():
     assert payload["stats"]["min_price"] == "100"
     assert payload["stats"]["median_price"] == "200.00"
     assert payload["stats"]["max_price"] == "300"
-    # Рекомендація — конкретна сума: на 1% нижче мінімуму конкурентів.
-    assert payload["stats"]["recommended_price"] == "99"
+    assert payload["stats"]["recommended_price_from"] == "93"
+    assert payload["stats"]["recommended_price"] == "94"
+    assert payload["stats"]["recommended_price_to"] == "95"
+    assert payload["stats"]["pricing_status"] == "reliable"
+
+
+def test_recommendation_contract_for_3200_uah():
+    offers = tuple(
+        MarketOffer(
+            "prom", str(price), Decimal(price), "UAH", f"https://prom.ua/{price}",
+            verified=True,
+        )
+        for price in ("3200", "3400")
+    )
+    report = CompetitorPriceReport(
+        query=part_query(),
+        sources=(SourceResult("prom", "Prom.ua", "ok", offers),),
+        observed_at=datetime.fromtimestamp(0, UTC),
+    )
+
+    stats = report.as_json()["stats"]
+    assert stats["recommended_price_from"] == "2976"
+    assert stats["recommended_price"] == "3008"
+    assert stats["recommended_price_to"] == "3040"
+    assert stats["recommended_discount_percent"] == 6
+    assert stats["slider_discount_min_percent"] == 1
+    assert stats["slider_discount_max_percent"] == 30
 
 
 def test_report_refuses_recommendation_from_one_verified_price():
@@ -812,7 +864,7 @@ async def test_llm_filter_failure_is_fail_closed(monkeypatch):
     assert result.status == "empty"
 
 
-async def test_second_pass_keeps_only_page_verified_exact_offer(monkeypatch):
+async def test_second_pass_refreshes_and_verifies_exact_and_analog(monkeypatch):
     accepted = MarketOffer(
         "prom",
         "Фільтр Bosch",
@@ -844,13 +896,30 @@ async def test_second_pass_keeps_only_page_verified_exact_offer(monkeypatch):
     )
     monkeypatch.setattr(competitor_prices_module.llm_filter, "is_enabled", lambda: True)
 
-    async def evidence(_offers):
-        return ["new fixed price 300", "used part"]
+    checked_at = datetime.fromtimestamp(10, UTC)
+
+    def snapshot(offer, price):
+        return VerifiedPageSnapshot(
+            url=offer.url,
+            title=offer.title,
+            code=None,
+            brand=None,
+            price=Decimal(price),
+            currency="UAH",
+            availability="InStock",
+            condition="NewCondition",
+            verified_at=checked_at,
+            evidence_text="new fixed price in stock",
+        )
+
+    async def snapshots(_query, offers):
+        assert offers == [accepted, analog, rejected]
+        return [snapshot(accepted, "305"), snapshot(analog, "255"), snapshot(rejected, "315")]
 
     async def verify(**_kwargs):
-        return {0: True, 1: False}
+        return {0: True, 1: True, 2: False}
 
-    monkeypatch.setattr(competitor_prices_module, "_fetch_offer_evidence", evidence)
+    monkeypatch.setattr(competitor_prices_module, "_fetch_verified_snapshots", snapshots)
     monkeypatch.setattr(
         competitor_prices_module.llm_filter, "verify_pricing_offers", verify
     )
@@ -861,12 +930,101 @@ async def test_second_pass_keeps_only_page_verified_exact_offer(monkeypatch):
     offers = [offer for source in result for offer in source.offers]
 
     assert [offer.url for offer in offers] == [accepted.url, analog.url]
-    assert offers[0].verified is True
+    assert offers[0].verified is True and offers[0].price == Decimal("305")
     assert offers[0].condition == "new"
-    assert offers[1].is_analog is True
+    assert offers[1].is_analog is True and offers[1].verified is True
+    assert offers[1].price == Decimal("255")
+    assert offers[1].confidence == 0.99
 
 
-def test_low_verified_price_below_half_median_is_removed():
+async def test_search_zero_or_absurd_price_is_replaced_by_page_price(monkeypatch):
+    offers = [
+        MarketOffer("google", "Part", Decimal("0"), "UAH", "https://shop.test/zero"),
+        MarketOffer(
+            "google", "Part", Decimal("3000000"), "UAH", "https://shop.test/absurd"
+        ),
+    ]
+    checked_at = datetime.fromtimestamp(10, UTC)
+
+    async def snapshots(_query, candidates):
+        return [
+            VerifiedPageSnapshot(
+                url=offer.url,
+                title="Фільтр масляний Bosch 0451103316",
+                code="0451103316",
+                brand="Bosch",
+                price=Decimal("200"),
+                currency="UAH",
+                availability="InStock",
+                condition="NewCondition",
+                verified_at=checked_at,
+                evidence_text="new fixed price 200 in stock",
+            )
+            for offer in candidates
+        ]
+
+    async def accept_all(**kwargs):
+        return {index: True for index in range(len(kwargs["candidates"]))}
+
+    monkeypatch.setattr(competitor_prices_module.llm_filter, "is_enabled", lambda: True)
+    monkeypatch.setattr(competitor_prices_module, "_fetch_verified_snapshots", snapshots)
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "verify_pricing_offers", accept_all
+    )
+
+    result = await competitor_prices_module._verify_pricing_offers(
+        part_query(),
+        (SourceResult("google", "Google", "ok", tuple(offers)),),
+        lambda *_: None,
+    )
+
+    assert [offer.price for offer in result[0].offers] == [
+        Decimal("200"),
+        Decimal("200"),
+    ]
+    assert all(offer.price_changed_on_page for offer in result[0].offers)
+    assert all(offer.original_price == Decimal("200") for offer in result[0].offers)
+
+
+def test_exist_primary_product_price_ignores_related_analog_cards():
+    html = """
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@graph":[
+      {"@type":"Product","name":"Bosch oil filter","sku":"0451103316",
+       "brand":{"@type":"Brand","name":"Bosch"},
+       "offers":{"@type":"Offer","price":"200","priceCurrency":"UAH",
+                 "availability":"https://schema.org/InStock"}},
+      {"@type":"Product","name":"Cheap related analogue","sku":"OTHER-1",
+       "offers":{"@type":"Offer","price":"50","priceCurrency":"UAH"}}
+    ]}
+    </script>
+    """
+    offer = MarketOffer(
+        "exist", "Bosch filter", Decimal("0"), "UAH", "https://exist.ua/product"
+    )
+
+    snapshot = competitor_prices_module._snapshot_from_html(part_query(), offer, html)
+
+    assert snapshot is not None
+    assert snapshot.price == Decimal("200")
+    assert snapshot.code == "0451103316"
+
+
+def test_ambiguous_structured_prices_are_rejected():
+    html = """
+    <script type="application/ld+json">
+    [{"@type":"Offer","price":"200","priceCurrency":"UAH"},
+     {"@type":"Offer","price":"350","priceCurrency":"UAH"}]
+    </script>
+    """
+    offer = MarketOffer(
+        "google", "Part", Decimal("200"), "UAH", "https://shop.test/product"
+    )
+
+    assert competitor_prices_module._snapshot_from_html(part_query(), offer, html) is None
+
+
+async def test_persistent_low_verified_price_is_rechecked_and_removed(monkeypatch):
     offers = tuple(
         MarketOffer(
             "prom",
@@ -878,14 +1036,110 @@ def test_low_verified_price_below_half_median_is_removed():
         )
         for price in ("400", "1000", "1100")
     )
-    result = competitor_prices_module._drop_low_price_outliers(
-        (SourceResult("prom", "Prom.ua", "ok", offers),), lambda *_: None
+    async def unchanged(_query, suspicious):
+        assert [offer.price for offer in suspicious] == [Decimal("400")]
+        return suspicious
+
+    monkeypatch.setattr(
+        competitor_prices_module, "_refresh_anomalous_prices", unchanged
+    )
+    result, status = await competitor_prices_module._apply_anomaly_gates(
+        part_query(),
+        (SourceResult("prom", "Prom.ua", "ok", offers),),
+        lambda *_: None,
     )
 
+    assert status == "reliable"
     assert [offer.price for offer in result[0].offers] == [
         Decimal("1000"),
         Decimal("1100"),
     ]
+
+
+async def test_persistent_absurd_high_price_is_rechecked_and_removed(monkeypatch):
+    offers = tuple(
+        MarketOffer(
+            "prom", str(price), Decimal(price), "UAH", f"https://prom.ua/{price}",
+            verified=True,
+        )
+        for price in ("1000", "1100", "3000000")
+    )
+
+    async def unchanged(_query, suspicious):
+        assert [offer.price for offer in suspicious] == [Decimal("3000000")]
+        return suspicious
+
+    monkeypatch.setattr(
+        competitor_prices_module, "_refresh_anomalous_prices", unchanged
+    )
+    result, status = await competitor_prices_module._apply_anomaly_gates(
+        part_query(),
+        (SourceResult("prom", "Prom.ua", "ok", offers),),
+        lambda *_: None,
+    )
+
+    assert status == "reliable"
+    assert [offer.price for offer in result[0].offers] == [
+        Decimal("1000"),
+        Decimal("1100"),
+    ]
+
+
+async def test_two_prices_over_2x_become_conflict_after_recheck(monkeypatch):
+    offers = tuple(
+        MarketOffer(
+            "prom", str(price), Decimal(price), "UAH", f"https://prom.ua/{price}",
+            verified=True,
+        )
+        for price in ("1000", "2500")
+    )
+
+    async def unchanged(_query, candidates):
+        return candidates
+
+    monkeypatch.setattr(
+        competitor_prices_module, "_refresh_anomalous_prices", unchanged
+    )
+    result, status = await competitor_prices_module._apply_anomaly_gates(
+        part_query(),
+        (SourceResult("prom", "Prom.ua", "ok", offers),),
+        lambda *_: None,
+    )
+
+    assert status == "conflict"
+    assert not any(offer.verified for offer in result[0].offers)
+    report = CompetitorPriceReport(
+        query=part_query(), sources=result, observed_at=datetime.now(UTC),
+        pricing_status=status,
+    )
+    assert report.as_json()["stats"]["recommended_price"] is None
+
+
+async def test_verified_analogues_form_a_reliable_market(monkeypatch):
+    """Regression: 11 useful Sierra offers must not yield 'one price only'."""
+    offers = tuple(
+        MarketOffer(
+            "avtopro", f"Analog {index}", Decimal(price), "UAH",
+            f"https://avto.pro/{index}", confidence=0.99, is_analog=True,
+            verified=True, source_offer_id=f"wh-{index}",
+        )
+        for index, price in enumerate(("750", "805", "862.12", "897.79", "907.50"))
+    )
+
+    sources, status = await competitor_prices_module._apply_anomaly_gates(
+        part_query(),
+        (SourceResult("avtopro", "Avto.pro", "ok", offers),),
+        lambda *_: None,
+    )
+    report = CompetitorPriceReport(
+        query=part_query(), sources=sources, observed_at=datetime.now(UTC),
+        pricing_status=status,
+    )
+
+    stats = report.as_json()["stats"]
+    assert status == "reliable"
+    assert stats["eligible_offers_total"] == 5
+    assert stats["recommended_price"] == "705"
 
 
 async def test_classify_treats_missing_verdicts_as_no(monkeypatch):

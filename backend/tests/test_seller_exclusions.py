@@ -122,7 +122,7 @@ def test_seller_identity_uses_id_then_slug_then_url_fallback():
     )
 
 
-def test_cache_key_is_v6_stable_and_changes_when_exclusion_is_added():
+def test_cache_key_is_v8_stable_and_changes_when_exclusion_is_added():
     fields = dict(
         listing_id="p1",
         oem_numbers=("0451103316",),
@@ -148,7 +148,8 @@ def test_cache_key_is_v6_stable_and_changes_when_exclusion_is_added():
 
     assert _cache_key(first) == _cache_key(reordered)
     assert _cache_key(first) != _cache_key(expanded)
-    assert _cache_key(first).startswith("competitor-prices:v7:")
+    assert _cache_key(first).startswith("competitor-prices:v8:")
+    assert ":p1:" in _cache_key(first)
 
 
 async def test_listing_query_loads_presets_and_workspace_exclusions(monkeypatch):

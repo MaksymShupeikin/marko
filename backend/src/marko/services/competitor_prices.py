@@ -6,10 +6,9 @@ import hashlib
 import json
 import logging
 import re
-from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from html import unescape
 from statistics import median
 from typing import Any, Callable, Iterable, Iterator, Protocol
@@ -21,11 +20,15 @@ from redis.asyncio import Redis
 
 from marko.core.config import get_settings
 from marko.infrastructure.db.models import Listing, MarketplaceStore
-from marko.parsers.avtopro import AvtoproGateway, default_config as avtopro_config
+from marko.parsers.avtopro import (
+    AvtoproGateway,
+    default_config as avtopro_config,
+    parse_feed,
+)
 from marko.parsers.avtopro.gateway import BASE_URL as AVTOPRO_BASE_URL
 from marko.parsers.prom.client import AsyncHttpClient
 from marko.parsers.prom.config import ScrapeConfig
-from marko.parsers.prom.parser import parse_search
+from marko.parsers.prom.parser import parse_product_page, parse_search
 from marko.parsers.prom_export import (
     normalize_oem,
     parse_price,
@@ -33,6 +36,7 @@ from marko.parsers.prom_export import (
 )
 from marko.repositories.listings import get_workspace_listing
 from marko.services import llm_filter
+from marko.services.exchange_rates import KYIV, NbuExchangeRateProvider
 from marko.services.matching import (
     brands_compatible,
     laterality_conflict,
@@ -64,7 +68,9 @@ _LLM_SAME_CONFIDENCE = 0.95  # модель підтвердила: та сам�
 _VERIFIED_CONFIDENCE = 0.99  # друга перевірка сторінки підтвердила товар і ціну
 _MIN_RECOMMENDATION_OFFERS = 2
 _LOW_PRICE_RATIO = Decimal("0.50")
-_MAX_VERIFICATION_OFFERS = 24
+_HIGH_PRICE_RATIO = Decimal("2")
+_MODIFIED_Z_LIMIT = Decimal("3.5")
+_MAX_VERIFICATION_OFFERS = 120
 _VERIFICATION_TIMEOUT = 8.0
 _PAGE_EVIDENCE_CHARS = 6000
 # Ширший невід: точність тепер тримає LLM-фільтр, а не обрізання джерела.
@@ -81,7 +87,7 @@ _GOOGLE_MAX_OFFERS = 20
 _SERP_MAX_PAGE_FETCHES = 12
 _SERP_TIMEOUT = 6.0
 # Ці маркетплейси вже є окремими джерелами — з Google вони лише дублюють.
-_SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro")
+_SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro", "exist.ua")
 # Ринок — український: російські й білоруські магазини не конкуренти,
 # а їхні ціни в рублях лише засмічують порівняння.
 _SERP_BLOCKED_TLDS = (".ru", ".su", ".by", ".рф", ".xn--p1ai")
@@ -160,14 +166,46 @@ class MarketOffer:
     is_analog: bool = False
     # Ціна впливає на статистику лише після повторної перевірки сторінки.
     verified: bool = False
+    original_price: Decimal | None = None
+    original_currency: str | None = None
+    exchange_rate: Decimal | None = None
+    exchange_rate_date: str | None = None
+    verified_at: datetime | None = None
+    price_changed_on_page: bool = False
+    # Source-specific identity is internal and never leaves the public API.
+    source_offer_id: str | None = field(default=None, repr=False, compare=False)
+    source_code: str | None = field(default=None, repr=False, compare=False)
     # Сніпет пошуку допомагає гейтам, але не є частиною публічного API.
     evidence_text: str | None = field(default=None, repr=False, compare=False)
 
     def as_json(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("evidence_text", None)
+        data.pop("source_offer_id", None)
+        data.pop("source_code", None)
         data["price"] = str(self.price)
+        for key in ("original_price", "exchange_rate"):
+            if data[key] is not None:
+                data[key] = str(data[key])
+        if data["verified_at"] is not None:
+            data["verified_at"] = data["verified_at"].isoformat()
         return data
+
+
+@dataclass(frozen=True)
+class VerifiedPageSnapshot:
+    """Deterministic facts extracted from the freshly fetched product page."""
+
+    url: str
+    title: str
+    code: str | None
+    brand: str | None
+    price: Decimal
+    currency: str
+    availability: str | None
+    condition: str | None
+    verified_at: datetime
+    evidence_text: str
 
 
 @dataclass(frozen=True)
@@ -221,6 +259,7 @@ class CompetitorPriceReport:
     sources: tuple[SourceResult, ...]
     observed_at: datetime
     cached: bool = False
+    pricing_status: str | None = None
 
     @property
     def offers(self) -> list[MarketOffer]:
@@ -233,6 +272,12 @@ class CompetitorPriceReport:
     def as_json(self) -> dict[str, Any]:
         prices = self.prices
         eligible_offers_total = len(prices)
+        pricing_status = self.pricing_status or (
+            "reliable"
+            if eligible_offers_total >= _MIN_RECOMMENDATION_OFFERS
+            else "insufficient"
+        )
+        reliable = pricing_status == "reliable"
         return {
             "query": self.query.as_json(),
             "cached": self.cached,
@@ -249,10 +294,20 @@ class CompetitorPriceReport:
                 ),
                 "max_price": _decimal_json(max(prices) if prices else None),
                 "recommended_price": _decimal_json(
-                    _recommended_price(prices)
-                    if eligible_offers_total >= _MIN_RECOMMENDATION_OFFERS
-                    else None
+                    _discounted_market_price(prices, Decimal("6")) if reliable else None
                 ),
+                "recommended_price_from": _decimal_json(
+                    _discounted_market_price(prices, Decimal("7")) if reliable else None
+                ),
+                "recommended_price_to": _decimal_json(
+                    _discounted_market_price(prices, Decimal("5")) if reliable else None
+                ),
+                "recommended_discount_percent": 6,
+                "recommended_discount_min_percent": 5,
+                "recommended_discount_max_percent": 7,
+                "slider_discount_min_percent": 1,
+                "slider_discount_max_percent": 30,
+                "pricing_status": pricing_status,
             },
             "sources": [source.as_json() for source in self.sources],
         }
@@ -314,6 +369,7 @@ class CompetitorPriceCache:
 
 
 _cache = CompetitorPriceCache(get_settings().competitor_price_cache_url)
+_nbu_rates = NbuExchangeRateProvider(get_settings().competitor_price_cache_url)
 
 # ponytail: ліміт на процес; якщо інстансів стане багато і джерела почнуть
 # банити — переносити ліміт у Redis-семафор.
@@ -435,6 +491,7 @@ async def _collect(
     sources: tuple[PriceSource, ...] = (
         AvtoproPriceSource(),
         PromPriceSource(),
+        ExistPriceSource(),
         GooglePriceSource(),
     )
     emit("start", "Готуємо пошукові запити")
@@ -444,13 +501,17 @@ async def _collect(
     results = await asyncio.gather(
         *(_refined_source(source, query, timeout, emit) for source in sources)
     )
-    checked_sources = await _verify_pricing_offers(
-        query, _single_currency(tuple(results)), emit
+    checked_sources = await _verify_pricing_offers(query, tuple(results), emit)
+    normalized_sources = await _normalize_currencies(checked_sources, emit)
+    deduplicated_sources = _deduplicate_verified_sellers(normalized_sources)
+    clean_sources, pricing_status = await _apply_anomaly_gates(
+        query, deduplicated_sources, emit
     )
     return CompetitorPriceReport(
         query=query,
-        sources=_drop_low_price_outliers(checked_sources, emit),
+        sources=clean_sources,
         observed_at=datetime.now(UTC),
+        pricing_status=pricing_status,
     )
 
 
@@ -528,37 +589,27 @@ async def _verify_pricing_offers(
     sources: tuple[SourceResult, ...],
     emit: ProgressCallback,
 ) -> tuple[SourceResult, ...]:
-    """Admit exact offers only after a fresh page fetch and a second Nano pass.
+    """Replace search prices with fresh product-page facts, then ask Nano.
 
-    Analogues may still be shown as reference offers, but never enter market
-    statistics. Exact offers without page evidence are removed fail-closed.
+    Every displayed offer, including an analogue, must survive a deterministic
+    page parse and the semantic availability/state check. Search snippets never
+    become market prices directly.
     """
     candidates = [
         offer
         for source in sources
         for offer in source.offers
-        if not offer.is_analog and offer.confidence >= _MIN_STATS_CONFIDENCE
     ]
     if not candidates:
         return sources
 
     if not llm_filter.is_enabled():
-        candidate_keys = {_offer_key(offer) for offer in candidates}
-        emit("verify", "Перевірка недоступна: ціни не допущені до звіту")
+        emit("verify", "Перевірка недоступна: пропозиції не допущені до звіту")
         return tuple(
             replace(
                 source,
-                offers=tuple(
-                    offer
-                    for offer in source.offers
-                    if _offer_key(offer) not in candidate_keys
-                ),
-                status=(
-                    "empty"
-                    if all(_offer_key(offer) in candidate_keys for offer in source.offers)
-                    and source.status == "ok"
-                    else source.status
-                ),
+                offers=(),
+                status="empty" if source.status == "ok" else source.status,
             )
             for source in sources
         )
@@ -568,23 +619,35 @@ async def _verify_pricing_offers(
     selected_keys = {_offer_key(offer) for offer in selected}
     emit("verify", f"Перевіряємо {len(selected)} сторінок з товарами")
 
-    evidence = await _fetch_offer_evidence(selected)
-    reviewable: list[MarketOffer] = []
+    snapshots = await _fetch_verified_snapshots(query, selected)
+    reviewable: list[tuple[MarketOffer, VerifiedPageSnapshot]] = []
     review_payloads: list[dict[str, str]] = []
-    for offer, page_text in zip(selected, evidence):
-        if not page_text:
+    for offer, snapshot in zip(selected, snapshots):
+        if snapshot is None:
             continue
-        reviewable.append(offer)
+        page_offer = replace(
+            offer,
+            title=snapshot.title or offer.title,
+            price=snapshot.price,
+            currency=snapshot.currency,
+            availability=snapshot.availability or offer.availability,
+            condition=snapshot.condition or offer.condition,
+            evidence_text=snapshot.evidence_text,
+        )
+        if _offer_rejection_reason(page_offer) is not None:
+            continue
+        reviewable.append((offer, snapshot))
         review_payloads.append(
             {
-                "title": offer.title,
+                "title": snapshot.title or offer.title,
                 "seller": offer.seller or "",
-                "price": str(offer.price),
-                "currency": offer.currency,
-                "availability": offer.availability or "",
-                "source_condition": offer.condition or "",
+                "price": str(snapshot.price),
+                "currency": snapshot.currency,
+                "availability": snapshot.availability or "",
+                "source_condition": snapshot.condition or "",
+                "candidate_match_type": "analog" if offer.is_analog else "same",
                 "url": offer.url,
-                "page_evidence": page_text,
+                "page_evidence": snapshot.evidence_text,
             }
         )
 
@@ -596,8 +659,11 @@ async def _verify_pricing_offers(
     )
     accepted_keys = {
         _offer_key(offer)
-        for index, offer in enumerate(reviewable)
+        for index, (offer, _) in enumerate(reviewable)
         if verdicts.get(index) is True
+    }
+    snapshot_by_key = {
+        _offer_key(offer): snapshot for offer, snapshot in reviewable
     }
 
     verified_sources: list[SourceResult] = []
@@ -609,12 +675,27 @@ async def _verify_pricing_offers(
             if key not in candidate_keys:
                 kept.append(offer)
             elif key in selected_keys and key in accepted_keys:
+                snapshot = snapshot_by_key[key]
                 kept.append(
                     replace(
                         offer,
+                        title=snapshot.title or offer.title,
+                        price=snapshot.price,
+                        currency=snapshot.currency,
+                        availability=snapshot.availability or offer.availability,
                         confidence=max(offer.confidence, _VERIFIED_CONFIDENCE),
                         condition="new",
                         verified=True,
+                        # Preserve the authoritative page amount before any
+                        # NBU conversion, never the preliminary search value.
+                        original_price=snapshot.price,
+                        original_currency=snapshot.currency,
+                        verified_at=snapshot.verified_at,
+                        price_changed_on_page=(
+                            snapshot.price != offer.price
+                            or snapshot.currency != _norm_currency(offer.currency)
+                        ),
+                        evidence_text=snapshot.evidence_text,
                     )
                 )
             else:
@@ -632,26 +713,108 @@ async def _verify_pricing_offers(
     return tuple(verified_sources)
 
 
-async def _fetch_offer_evidence(offers: list[MarketOffer]) -> list[str | None]:
+async def _fetch_verified_snapshots(
+    query: PartSearchQuery, offers: list[MarketOffer]
+) -> list[VerifiedPageSnapshot | None]:
     async with httpx.AsyncClient(
         timeout=_VERIFICATION_TIMEOUT,
         follow_redirects=True,
         headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
     ) as client:
-        return list(await asyncio.gather(*(_fetch_page_evidence(client, o) for o in offers)))
+        return list(
+            await asyncio.gather(
+                *(_fetch_verified_snapshot(client, query, offer) for offer in offers)
+            )
+        )
 
 
-async def _fetch_page_evidence(
-    client: httpx.AsyncClient, offer: MarketOffer
-) -> str | None:
+async def _fetch_verified_snapshot(
+    client: httpx.AsyncClient,
+    query: PartSearchQuery,
+    offer: MarketOffer,
+) -> VerifiedPageSnapshot | None:
     try:
         response = await client.get(offer.url)
         if response.status_code != 200:
             return None
-        return _page_evidence(response.text)
+        return _snapshot_from_html(query, offer, response.text)
     except Exception as exc:
         log.info("Offer verification page %r failed: %s", offer.url, exc)
         return None
+
+
+def _snapshot_from_html(
+    query: PartSearchQuery, offer: MarketOffer, html: str
+) -> VerifiedPageSnapshot | None:
+    evidence = _page_evidence(html)
+    if not evidence:
+        return None
+    checked_at = datetime.now(UTC)
+
+    if offer.source == "prom":
+        try:
+            product = parse_product_page(html, "ua").product
+        except Exception:
+            return None
+        price = parse_price(product.effective_price)
+        if price is None or price <= 0:
+            return None
+        return VerifiedPageSnapshot(
+            url=offer.url,
+            title=product.name or offer.title,
+            code=product.sku,
+            brand=product.brand,
+            price=price,
+            currency=_norm_currency(product.currency),
+            availability=product.presence,
+            condition=None,
+            verified_at=checked_at,
+            evidence_text=evidence,
+        )
+
+    if offer.source == "avtopro":
+        try:
+            feed = parse_feed(html)
+        except Exception:
+            return None
+        matching = [
+            row
+            for row in feed.offers
+            if (not offer.source_offer_id or row.warehouse_id == offer.source_offer_id)
+            and (not offer.source_code or _norm_code(row.code) == _norm_code(offer.source_code))
+        ]
+        if len(matching) != 1:
+            return None
+        row = matching[0]
+        return VerifiedPageSnapshot(
+            url=offer.url,
+            title=" ".join(filter(None, (row.maker, row.code, row.description))),
+            code=row.code,
+            brand=row.maker,
+            price=Decimal(str(row.price)).quantize(Decimal("0.01")),
+            currency=_norm_currency(row.currency),
+            availability=row.availability,
+            condition=None,
+            verified_at=checked_at,
+            evidence_text=evidence,
+        )
+
+    product = _primary_structured_product(html, query, offer)
+    if product is None:
+        return None
+    title, code, brand, price, currency, availability, condition = product
+    return VerifiedPageSnapshot(
+        url=offer.url,
+        title=title or offer.title,
+        code=code,
+        brand=brand,
+        price=price,
+        currency=currency,
+        availability=availability,
+        condition=condition,
+        verified_at=checked_at,
+        evidence_text=evidence,
+    )
 
 
 def _page_evidence(html: str) -> str | None:
@@ -665,32 +828,223 @@ def _page_evidence(html: str) -> str | None:
     return combined or None
 
 
-def _drop_low_price_outliers(
+async def _normalize_currencies(
     sources: tuple[SourceResult, ...], emit: ProgressCallback
 ) -> tuple[SourceResult, ...]:
-    """Remove verified prices below half the median when 3+ prices exist."""
-    verified = [
+    currencies = {
+        _norm_currency(offer.currency)
+        for source in sources
+        for offer in source.offers
+        if _norm_currency(offer.currency) != "UAH"
+    }
+    rates = await _nbu_rates.rates_for(currencies)
+    dropped = 0
+    normalized: list[SourceResult] = []
+    for source in sources:
+        offers: list[MarketOffer] = []
+        for offer in source.offers:
+            currency = _norm_currency(offer.currency)
+            original_price = offer.original_price or offer.price
+            original_currency = offer.original_currency or currency
+            if currency == "UAH":
+                offers.append(
+                    replace(
+                        offer,
+                        currency="UAH",
+                        original_price=original_price,
+                        original_currency=original_currency,
+                    )
+                )
+                continue
+            rate = rates.get(currency)
+            if rate is None:
+                dropped += 1
+                continue
+            offers.append(
+                replace(
+                    offer,
+                    price=(offer.price * rate.rate).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    ),
+                    currency="UAH",
+                    original_price=original_price,
+                    original_currency=original_currency,
+                    exchange_rate=rate.rate,
+                    exchange_rate_date=rate.exchange_date,
+                )
+            )
+        normalized.append(
+            replace(
+                source,
+                offers=tuple(offers),
+                status="empty" if not offers and source.status == "ok" else source.status,
+            )
+        )
+    if dropped:
+        emit("verify", f"Без курсу НБУ відхилили {dropped} валютних пропозицій")
+    return tuple(normalized)
+
+
+def _deduplicate_verified_sellers(
+    sources: tuple[SourceResult, ...],
+) -> tuple[SourceResult, ...]:
+    """One seller/warehouse contributes at most one verified market price."""
+    best: dict[str, MarketOffer] = {}
+    unverified: list[MarketOffer] = []
+    for source in sources:
+        for offer in source.offers:
+            if not offer.verified:
+                unverified.append(offer)
+                continue
+            identity = "|".join(
+                (
+                    offer.source,
+                    offer.source_offer_id
+                    or offer.seller
+                    or _serp_domain(offer.url)
+                    or offer.url,
+                )
+            )
+            current = best.get(identity)
+            if current is None or offer.price < current.price:
+                best[identity] = offer
+    allowed = {_offer_key(offer) for offer in (*best.values(), *unverified)}
+    return tuple(
+        replace(
+            source,
+            offers=tuple(o for o in source.offers if _offer_key(o) in allowed),
+        )
+        for source in sources
+    )
+
+
+async def _apply_anomaly_gates(
+    query: PartSearchQuery,
+    sources: tuple[SourceResult, ...],
+    emit: ProgressCallback,
+) -> tuple[tuple[SourceResult, ...], str]:
+    market = [
         offer
         for source in sources
         for offer in source.offers
-        if offer.verified and not offer.is_analog
+        if offer.verified
     ]
-    if len(verified) < 3:
-        return sources
-    market_median = Decimal(str(median(offer.price for offer in verified)))
-    cutoff = market_median * _LOW_PRICE_RATIO
-    rejected_keys = {
-        _offer_key(offer) for offer in verified if offer.price < cutoff
-    }
-    if not rejected_keys:
-        return sources
+    if len(market) < 2:
+        return sources, "insufficient"
 
-    emit("verify", f"Відхилили {len(rejected_keys)} аномально низьких цін")
+    if len(market) == 2:
+        if max(o.price for o in market) / min(o.price for o in market) <= _HIGH_PRICE_RATIO:
+            return sources, "reliable"
+        refreshed = await _refresh_anomalous_prices(query, market)
+        if len(refreshed) != 2 or max(o.price for o in refreshed) / min(
+            o.price for o in refreshed
+        ) > _HIGH_PRICE_RATIO:
+            emit("verify", "Дві підтверджені ціни суперечать одна одній")
+            conflict = {_offer_key(offer) for offer in market}
+            return (
+                tuple(
+                    replace(
+                        source,
+                        offers=tuple(
+                            replace(o, verified=False)
+                            if _offer_key(o) in conflict
+                            else o
+                            for o in source.offers
+                        ),
+                    )
+                    for source in sources
+                ),
+                "conflict",
+            )
+        sources = _replace_offers(sources, refreshed)
+        return sources, "reliable"
+
+    suspicious = _statistical_outliers(market)
+    if not suspicious:
+        return sources, "reliable"
+    refreshed = await _refresh_anomalous_prices(query, suspicious)
+    sources = _replace_offers(sources, refreshed)
+    refreshed_by_key = {_offer_key(offer): offer for offer in refreshed}
+    all_market = [
+        refreshed_by_key.get(_offer_key(offer), offer) for offer in market
+    ]
+    rejected = {_offer_key(offer) for offer in _statistical_outliers(all_market)}
+    if rejected:
+        emit("verify", f"Відхилили {len(rejected)} стійких аномальних цін")
+        sources = _remove_offer_keys(sources, rejected)
+    status = "reliable" if len(_stats_prices(o for s in sources for o in s.offers)) >= 2 else "insufficient"
+    return sources, status
+
+
+def _statistical_outliers(offers: list[MarketOffer]) -> list[MarketOffer]:
+    if len(offers) < 3:
+        return []
+    center = Decimal(str(median(o.price for o in offers)))
+    deviations = [abs(o.price - center) for o in offers]
+    mad = Decimal(str(median(deviations)))
+    result: list[MarketOffer] = []
+    for offer in offers:
+        fail_safe = offer.price < center * _LOW_PRICE_RATIO or offer.price > center * _HIGH_PRICE_RATIO
+        z_outlier = (
+            mad > 0
+            and (Decimal("0.6745") * abs(offer.price - center) / mad)
+            > _MODIFIED_Z_LIMIT
+        )
+        if fail_safe or z_outlier:
+            result.append(offer)
+    return result
+
+
+async def _refresh_anomalous_prices(
+    query: PartSearchQuery, offers: list[MarketOffer]
+) -> list[MarketOffer]:
+    snapshots = await _fetch_verified_snapshots(query, offers)
+    refreshed: list[MarketOffer] = []
+    for offer, snapshot in zip(offers, snapshots):
+        if snapshot is None or snapshot.price <= 0:
+            continue
+        currency = _norm_currency(snapshot.currency)
+        if currency == "UAH":
+            price = snapshot.price
+        elif offer.exchange_rate is not None and currency == offer.original_currency:
+            price = (snapshot.price * offer.exchange_rate).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        else:
+            continue
+        refreshed.append(
+            replace(
+                offer,
+                price=price,
+                original_price=snapshot.price,
+                original_currency=currency,
+                verified_at=snapshot.verified_at,
+                price_changed_on_page=True,
+                evidence_text=snapshot.evidence_text,
+            )
+        )
+    return refreshed
+
+
+def _replace_offers(
+    sources: tuple[SourceResult, ...], replacements: list[MarketOffer]
+) -> tuple[SourceResult, ...]:
+    by_key = {_offer_key(offer): offer for offer in replacements}
+    return tuple(
+        replace(
+            source,
+            offers=tuple(by_key.get(_offer_key(offer), offer) for offer in source.offers),
+        )
+        for source in sources
+    )
+
+
+def _remove_offer_keys(
+    sources: tuple[SourceResult, ...], rejected: set[tuple[str, str, str]]
+) -> tuple[SourceResult, ...]:
     cleaned: list[SourceResult] = []
     for source in sources:
-        offers = tuple(
-            offer for offer in source.offers if _offer_key(offer) not in rejected_keys
-        )
+        offers = tuple(o for o in source.offers if _offer_key(o) not in rejected)
         cleaned.append(
             replace(
                 source,
@@ -712,7 +1066,8 @@ def _hard_gate_offers(
 
 
 def _offer_rejection_reason(offer: MarketOffer) -> str | None:
-    if offer.price <= 0:
+    # A zero search-snippet price is allowed only until the fresh page parse.
+    if offer.verified and offer.price <= 0:
         return "non_positive_price"
     text = " ".join(
         value
@@ -748,34 +1103,8 @@ def _offer_llm_details(offer: MarketOffer) -> str:
     )
 
 
-def _offer_key(offer: MarketOffer) -> tuple[str, str, Decimal]:
-    return offer.source, offer.url, offer.price
-
-
-def _single_currency(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, ...]:
-    """Drop offers priced in a foreign currency — 50 USD is not below 200 UAH.
-
-    Without exchange rates the only honest comparison is within one currency.
-    The catalog is priced in UAH, so any UAH offers win even as a minority;
-    only a report with no UAH at all falls back to the most common currency.
-    """
-    counts = Counter(
-        offer.currency for source in sources for offer in source.offers
-    )
-    if len(counts) < 2:
-        return sources
-    main = "UAH" if counts.get("UAH") else counts.most_common(1)[0][0]
-    log.info(
-        "Competitor prices: kept %s, dropped %d offer(s) in other currencies",
-        main,
-        sum(count for currency, count in counts.items() if currency != main),
-    )
-    kept: list[SourceResult] = []
-    for source in sources:
-        offers = tuple(offer for offer in source.offers if offer.currency == main)
-        status = "empty" if not offers and source.status == "ok" else source.status
-        kept.append(replace(source, offers=offers, status=status))
-    return tuple(kept)
+def _offer_key(offer: MarketOffer) -> tuple[str, str, str]:
+    return offer.source, offer.url, offer.source_offer_id or ""
 
 
 async def _run_source(
@@ -862,6 +1191,8 @@ class AvtoproPriceSource:
                                 else _ANALOG_CONFIDENCE
                             ),
                             is_analog=_norm_code(offer.code) not in exact_codes,
+                            source_offer_id=offer.warehouse_id,
+                            source_code=offer.code,
                         )
                         for offer in unique
                     ),
@@ -971,6 +1302,7 @@ class PromPriceSource:
                 confidence=score,
                 # Номер не збігся — знайшли за назвою, тобто аналог.
                 is_analog=score < _OEM_HIT_SCORE,
+                source_code=product.sku,
             )
 
 
@@ -1102,6 +1434,78 @@ class GooglePriceSource:
         )
 
 
+class ExistPriceSource(GooglePriceSource):
+    """First-class Exist.ua source, isolated from the generic Google source."""
+
+    source = "exist"
+    label = "Exist.ua"
+
+    async def search(self, query: PartSearchQuery) -> SourceResult:
+        api_key = get_settings().serper_api_key
+        if not api_key:
+            return SourceResult(self.source, self.label, "skipped", error="No API key")
+        if not query.oem_numbers:
+            return SourceResult(
+                self.source, self.label, "skipped", error="No OEM number"
+            )
+        terms = [
+            " ".join(
+                value
+                for value in ("site:exist.ua", query.brand, oem)
+                if value
+            )
+            for oem in query.oem_numbers[:_MAX_OEM_TERMS]
+        ]
+        async with httpx.AsyncClient(
+            timeout=_SERP_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+        ) as client:
+            batches = await asyncio.gather(
+                *(self._serp(client, api_key, term) for term in terms)
+            )
+            candidates = self._exist_candidates(query, batches)
+            offers = await self._priced_offers(client, candidates)
+        unique = _cheapest_by_key(offers, key=lambda offer: offer.url)
+        kept = sorted(unique, key=_by_confidence_then_price)[:_GOOGLE_MAX_OFFERS]
+        return SourceResult(
+            self.source,
+            self.label,
+            "ok" if kept else "empty",
+            tuple(sorted(kept, key=_by_price)),
+        )
+
+    def _exist_candidates(
+        self, query: PartSearchQuery, batches: Iterable[list[dict]]
+    ) -> list[tuple[dict, str, float]]:
+        seen: set[str] = set()
+        result: list[tuple[dict, str, float]] = []
+        for item in (entry for batch in batches for entry in batch):
+            url = item.get("link") or ""
+            domain = _serp_domain(url)
+            if domain != "exist.ua" and not domain.endswith(".exist.ua"):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            score = _match_score(
+                query,
+                item.get("title"),
+                item.get("snippet"),
+                name=item.get("title"),
+                brand=query.brand,
+            )
+            if score:
+                result.append((item, domain, score))
+        return result
+
+    def _offer(
+        self, item: dict, domain: str, score: float, price: Decimal, currency: str
+    ) -> MarketOffer:
+        offer = super()._offer(item, domain, score, price, currency)
+        return replace(offer, source_code=_first_code_in_text(item.get("title") or ""))
+
+
 _TEXT_PRICE_RE = re.compile(
     r"(\d[\d\s ]{0,9}(?:[.,]\d{1,2})?)\s*(?:грн|₴|uah)", re.I
 )
@@ -1142,6 +1546,190 @@ def _structured_price(html: str) -> tuple[Decimal, str] | None:
                 # Валюти в microdata поруч може й не бути; ринок — гривневий.
                 return price, "UAH"
     return None
+
+
+def _primary_structured_product(
+    html: str,
+    query: PartSearchQuery,
+    offer: MarketOffer,
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    Decimal,
+    str,
+    str | None,
+    str | None,
+] | None:
+    """Extract exactly one main-card price; related-product prices are ignored."""
+    products: list[dict[str, Any]] = []
+    for block in _LD_JSON_RE.findall(html):
+        try:
+            payload = json.loads(block.strip())
+        except ValueError:
+            continue
+        products.extend(_json_ld_products(payload))
+
+    target_codes = {
+        _norm_code(value)
+        for value in (*query.oem_numbers, offer.source_code)
+        if value
+    }
+    exact = [
+        product
+        for product in products
+        if target_codes
+        and any(
+            code and code in _norm_code(str(product.get(field) or ""))
+            for code in target_codes
+            for field in ("sku", "mpn", "productID", "name")
+        )
+    ]
+    candidates = exact or (products if len(products) == 1 else [])
+    parsed = [_parsed_product_node(product) for product in candidates]
+    parsed = [value for value in parsed if value is not None]
+    # Multiple candidate cards or multiple distinct prices are ambiguous.
+    unique = {
+        (value[3], value[4]): value
+        for value in parsed
+    }
+    if len(unique) == 1:
+        return next(iter(unique.values()))
+
+    # Other sites may expose only Offer/microdata/OpenGraph without Product.
+    if products:
+        return None
+    price = _unambiguous_structured_price(html)
+    if price is None:
+        return None
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+    title = (
+        unescape(re.sub(r"<[^>]+>", " ", title_match.group(1))).strip()
+        if title_match
+        else offer.title
+    )
+    return title, offer.source_code, None, price[0], price[1], None, None
+
+
+def _json_ld_products(node: Any) -> list[dict[str, Any]]:
+    if isinstance(node, list):
+        return [item for value in node for item in _json_ld_products(value)]
+    if not isinstance(node, dict):
+        return []
+    value_type = node.get("@type")
+    types = value_type if isinstance(value_type, list) else [value_type]
+    found = [node] if "Product" in types else []
+    for key, value in node.items():
+        if key == "offers":
+            continue
+        if isinstance(value, (dict, list)):
+            found.extend(_json_ld_products(value))
+    return found
+
+
+def _parsed_product_node(
+    product: dict[str, Any],
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    Decimal,
+    str,
+    str | None,
+    str | None,
+] | None:
+    prices = _direct_offer_prices(product.get("offers"))
+    unique = {(price, currency) for price, currency in prices if price > 0}
+    if len(unique) != 1:
+        return None
+    price, currency = next(iter(unique))
+    brand_value = product.get("brand")
+    brand = (
+        str(brand_value.get("name") or "").strip() or None
+        if isinstance(brand_value, dict)
+        else str(brand_value or "").strip() or None
+    )
+    offer_node = product.get("offers")
+    if isinstance(offer_node, list):
+        offer_node = offer_node[0] if len(offer_node) == 1 else {}
+    if not isinstance(offer_node, dict):
+        offer_node = {}
+    return (
+        str(product.get("name") or "").strip() or None,
+        str(product.get("sku") or product.get("mpn") or product.get("productID") or "").strip()
+        or None,
+        brand,
+        price,
+        currency,
+        str(offer_node.get("availability") or "").strip() or None,
+        str(offer_node.get("itemCondition") or "").strip() or None,
+    )
+
+
+def _direct_offer_prices(node: Any) -> list[tuple[Decimal, str]]:
+    if isinstance(node, list):
+        return [value for item in node for value in _direct_offer_prices(item)]
+    if not isinstance(node, dict):
+        return []
+    node_type = node.get("@type")
+    if node_type == "AggregateOffer":
+        low = parse_price(node.get("lowPrice"))
+        high = parse_price(node.get("highPrice"))
+        if low is None or (high is not None and high != low):
+            return []
+        return [(low, _norm_currency(str(node.get("priceCurrency") or "")))]
+    if node_type == "Offer" or "price" in node:
+        price = parse_price(node.get("price"))
+        return (
+            [(price, _norm_currency(str(node.get("priceCurrency") or "")))]
+            if price is not None
+            else []
+        )
+    return []
+
+
+def _unambiguous_structured_price(html: str) -> tuple[Decimal, str] | None:
+    prices: list[tuple[Decimal, str]] = []
+    for block in _LD_JSON_RE.findall(html):
+        try:
+            payload = json.loads(block.strip())
+        except ValueError:
+            continue
+        prices.extend(_all_offer_prices(payload))
+    if not prices:
+        flat = re.sub(r"\s+", " ", html)
+        for match in re.finditer(
+            r'<(?:meta|[^>]+)[^>]*(?:itemprop="price"|property="og:price:amount")[^>]*>',
+            flat,
+            re.I,
+        ):
+            content = re.search(r'content="([^"]*)"', match.group(0), re.I)
+            price = parse_price(content.group(1)) if content else None
+            if price is not None:
+                prices.append((price, "UAH"))
+    unique = {(price, currency) for price, currency in prices if price > 0}
+    return next(iter(unique)) if len(unique) == 1 else None
+
+
+def _all_offer_prices(node: Any) -> list[tuple[Decimal, str]]:
+    if isinstance(node, list):
+        return [value for item in node for value in _all_offer_prices(item)]
+    if not isinstance(node, dict):
+        return []
+    own = _direct_offer_prices(node)
+    if own:
+        return own
+    return [
+        value
+        for child in node.values()
+        if isinstance(child, (dict, list))
+        for value in _all_offer_prices(child)
+    ]
+
+
+def _first_code_in_text(text: str) -> str | None:
+    match = re.search(r"(?=[A-Z0-9 -]{6,})(?=[A-Z0-9 -]*\d)[A-Z0-9][A-Z0-9 -]{4,}[A-Z0-9]", text, re.I)
+    return re.sub(r"\s+", "", match.group(0)) if match else None
 
 
 def _ld_price(node: Any) -> tuple[Decimal, str] | None:
@@ -1414,22 +2002,27 @@ def _norm_code(value: str | None) -> str:
     return _NON_ALNUM_RE.sub("", (value or "").upper())
 
 
-def _recommended_price(prices: list[Decimal]) -> Decimal:
-    """Конкретна сума до виставлення: на 1% нижче мінімуму впевнених збігів.
+def _discounted_market_price(
+    prices: list[Decimal], discount_percent: Decimal
+) -> Decimal:
+    """One deterministic half-up rounding policy for every recommended amount."""
+    multiplier = Decimal("1") - discount_percent / Decimal("100")
+    return (min(prices) * multiplier).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
 
-    ponytail: наївне правило "трохи дешевше за найдешевшого"; коли з'явиться
-    маржа/собівартість — рахувати від неї, а не лише від ринку.
-    """
-    return (min(prices) * Decimal("0.99")).quantize(Decimal("1"))
+
+def _recommended_price(prices: list[Decimal]) -> Decimal:
+    """Backward-compatible helper: the central policy is now market minimum −6%."""
+    return _discounted_market_price(prices, Decimal("6"))
 
 
 def _stats_prices(offers: Iterable[MarketOffer]) -> list[Decimal]:
-    """Only page-verified exact new offers may influence pricing."""
+    """Page-verified same-part and compatible-analogue offers form the market."""
     return [
         offer.price
         for offer in offers
         if offer.verified
-        and not offer.is_analog
         and offer.confidence >= _MIN_STATS_CONFIDENCE
     ]
 
@@ -1472,4 +2065,5 @@ def _cache_key(query: PartSearchQuery) -> str:
         separators=(",", ":"),
     )
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-    return f"competitor-prices:v7:{query.listing_id}:{digest}"
+    kyiv_date = datetime.now(KYIV).date().isoformat()
+    return f"competitor-prices:v8:{kyiv_date}:{query.listing_id}:{digest}"
