@@ -13,7 +13,8 @@ from marko.parsers.prom_export import (
 )
 
 _HEADERS = [
-    "Код_товару", "Назва_позиції", "Назва_позиції_укр", "Ціна", "Валюта",
+    "Код_товару", "Назва_позиції", "Назва_позиції_укр", "Пошукові_запити",
+    "Ціна", "Валюта",
     "Одиниця_виміру", "Посилання_зображення", "Наявність", "Кількість",
     "Унікальний_ідентифікатор", "Виробник", "Продукт_на_сайті",
     "Номер_пристрою_(MPN)",
@@ -22,7 +23,9 @@ _HEADERS = [
 ]
 
 _ROW = [
-    "93818439", "Радиатор Iveco", "Радіатор Iveco (Івеко)", "3297", "UAH",
+    "93818439", "Радиатор Iveco", "Радіатор Iveco (Івеко)",
+    "93818439, Радіатор Iveco, радиатор Ивеко",
+    "3297", "UAH",
     "шт.", "https://images.prom.ua/1.jpg", "!", 5,
     1153724202, "KEMP", "https://kemp-cs2847093.prom.ua/p1153724202-radiator.html",
     "93818439",
@@ -57,6 +60,47 @@ def test_parses_a_row_into_a_product_with_every_oem_candidate():
     assert product.image == "https://images.prom.ua/1.jpg"
     # Deduplicated, spaces stripped, "12" dropped as too short to be a part number.
     assert product.oem_numbers == ("93818439", "77643", "115070")
+
+
+def test_takes_the_manufacturer_number_from_the_search_queries():
+    """Справжній випадок: у «Код_товару» артикул магазину, номер Audi — поруч.
+
+    За «312783» конкурентів не знаходилось узагалі; за «8E0513033» знаходиться
+    ринок, тож саме він має стояти першим — пошукових термінів беруть два.
+    """
+    row = [
+        "312783", "Амортизатор задний Audi A4", "Амортизатор задний Audi (Ауді) A4 (В6)",
+        "312783, 312 783, 8E0 513 033, 8E0513033, 77648805, 7764 8805,"
+        " задний, Амортизатор Audi A4, 1.6-1.8-2.0, 00-04",
+        "1383", "UAH", "шт.", "https://images.prom.ua/2.jpg", "!", 3,
+        2749852485, "KEMP", "https://kemp-cs2847093.prom.ua/p2749852485-amortyzator.html",
+        "312783",
+        "Код запчастини", "312783, 77648805",
+        "Стан", "Новий",
+    ]
+
+    product = next(iter(parse_export(_workbook([row]))))
+
+    assert product.oem_numbers[0] == "8E0513033"
+    assert set(product.oem_numbers) == {"8E0513033", "312783", "77648805"}
+
+
+def test_search_queries_drop_words_engine_sizes_and_short_tokens():
+    """Поле змішує номери з фразами — у номери має пройти лише номер."""
+    row = [
+        "776414", "Амортизатор передний", "Амортизатор передній Mercedes 124",
+        "776414, 115 070, Амортизатор передний Mercedes 124, Ford, Sierra,"
+        " 1.6-1.8-2.0, 94-06, 6 pin, 2.0",
+        "1769", "UAH", "шт.", "https://images.prom.ua/3.jpg", "!", 1,
+        2766554583, "KEMP", "https://kemp-cs2847093.prom.ua/p2766554583-amort.html",
+        None,
+        "Стан", "Новий",
+        "Тип", "Газомасляний",
+    ]
+
+    product = next(iter(parse_export(_workbook([row]))))
+
+    assert product.oem_numbers == ("776414", "115070")
 
 
 def test_marks_minus_availability_as_out_of_stock():
