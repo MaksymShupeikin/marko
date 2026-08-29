@@ -39,9 +39,14 @@ List<Map<String, dynamic>> _mockStoresJson() => [
 
 Widget _app({
   List<Map<String, dynamic>>? stores,
+  List<String>? requestLog,
 }) {
   final client = ApiClient(
     client: MockClient((request) async {
+      requestLog?.add('${request.method} ${request.url.path}');
+      if (request.method == 'DELETE') {
+        return http.Response('', 204);
+      }
       if (request.url.path == '/api/v1/stores') {
         return http.Response(
           jsonEncode(stores ?? _mockStoresJson()),
@@ -138,6 +143,100 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Скинути'), findsNothing);
+  });
+
+  testWidgets('store with file rows grows a file card that deletes them', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final log = <String>[];
+    await tester.pumpWidget(
+      _app(
+        requestLog: log,
+        stores: [
+          {
+            'id': 'store-1',
+            'name': 'kemp',
+            'url': 'https://prom.ua/ua/c2847093-kemp.html',
+            'logo_url': null,
+            'product_count': 14120,
+            'file_product_count': 4901,
+          },
+          {
+            'id': 'store-2',
+            'name': 'avtobust',
+            'url': 'https://prom.ua/ua/c4015921-avtobust.html',
+            'logo_url': null,
+            'product_count': 14300,
+            'file_product_count': 0,
+          },
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Рядок «Файли» — лише для магазину, у якого є товари з файлу.
+    expect(find.text('Файли'), findsOneWidget);
+    expect(find.text('4901 товарів з файлу'), findsOneWidget);
+    // «kemp» двічі: картка файлу та картка магазину.
+    expect(find.text('kemp'), findsNWidgets(2));
+    expect(find.text('avtobust'), findsOneWidget);
+
+    // Корзинка картки файлу: перша серед trash-іконок (рядок файлів вище).
+    await tester.tap(
+      find.byTooltip('Прибрати товари з файлу'),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Прибрати файл магазину «kemp»?'), findsOneWidget);
+
+    await tester.tap(find.text('Прибрати файл'));
+    await tester.pumpAndSettle();
+
+    expect(log, contains('DELETE /api/v1/stores/store-1/file-products'));
+
+    // Тост живе 4 секунди на таймері — даємо йому догоріти.
+    await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets('deleting a store asks first and calls the API', (tester) async {
+    tester.view.physicalSize = const Size(1280, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final log = <String>[];
+    await tester.pumpWidget(_app(requestLog: log));
+    await tester.pumpAndSettle();
+
+    final trash = find.byTooltip('Видалити магазин');
+    expect(trash, findsNWidgets(3));
+
+    await tester.tap(trash.first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.text('Видалити магазин «Kemp Auto»?'), findsOneWidget);
+
+    // «Скасувати» нічого не видаляє.
+    await tester.tap(find.text('Скасувати'));
+    await tester.pumpAndSettle();
+    expect(log.where((r) => r.startsWith('DELETE')), isEmpty);
+
+    await tester.tap(trash.first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Видалити магазин').last);
+    await tester.pumpAndSettle();
+
+    expect(log, contains('DELETE /api/v1/stores/store-1'));
+
+    await tester.pump(const Duration(seconds: 5));
   });
 
   testWidgets('renders nothing if stores list is empty', (tester) async {

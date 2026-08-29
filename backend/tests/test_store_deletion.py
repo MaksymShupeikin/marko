@@ -90,3 +90,74 @@ async def test_register_store_persists_permanent_seller_exclusion(monkeypatch):
         slug="my-shop",
         canonical_url="https://prom.ua/ua/c9876543-my-shop.html",
     )
+
+
+async def test_delete_file_products_removes_only_export_listings(monkeypatch):
+    """Файл перестає бути референсом: його рядки йдуть, Prom-товари лишаються."""
+    store_id = uuid4()
+    session = AsyncMock()
+    delete_export = AsyncMock(return_value=4901)
+    monkeypatch.setattr(
+        stores,
+        "_get_workspace_store",
+        AsyncMock(return_value=SimpleNamespace(store_id=store_id)),
+    )
+    monkeypatch.setattr(
+        stores.listings_repo, "delete_export_listings_for_store", delete_export
+    )
+
+    deleted = await stores.delete_store_file_products(
+        session,
+        store_id=store_id,
+        workspace_id=uuid4(),
+    )
+
+    assert deleted == 4901
+    delete_export.assert_awaited_once_with(session, store_id)
+    session.commit.assert_awaited_once()
+
+
+async def test_delete_file_products_rejects_foreign_workspace(monkeypatch):
+    session = AsyncMock()
+    monkeypatch.setattr(
+        stores.stores_repo,
+        "get_workspace_store",
+        AsyncMock(return_value=None),
+    )
+    delete_export = AsyncMock()
+    monkeypatch.setattr(
+        stores.listings_repo, "delete_export_listings_for_store", delete_export
+    )
+
+    with pytest.raises(stores.StoreNotFoundError):
+        await stores.delete_store_file_products(
+            session,
+            store_id=uuid4(),
+            workspace_id=uuid4(),
+        )
+
+    delete_export.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+def test_store_view_carries_the_file_product_count():
+    """Лічильник «з файлу» доїжджає до відповіді API — фронт малює картку."""
+    store = SimpleNamespace(
+        id=uuid4(),
+        marketplace="prom",
+        external_id="2847093",
+        name="kemp",
+        canonical_url="https://prom.ua/ua/c2847093-kemp.html",
+        logo_url=None,
+        last_synced_at=None,
+    )
+    from marko.infrastructure.db.models import StoreKind
+
+    view = stores._store_view(store, StoreKind.owned, 14120, 4901)
+
+    assert view.product_count == 14120
+    assert view.file_product_count == 4901
+    # Роут будує відповідь через StoreResponse(**view.__dict__).
+    from marko.api.schemas.stores import StoreResponse
+
+    assert StoreResponse(**view.__dict__).file_product_count == 4901

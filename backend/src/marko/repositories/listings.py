@@ -366,6 +366,35 @@ async def set_listing_oem_numbers(
     listing.raw_data = raw
 
 
+async def count_export_listings_for_store(
+    session: AsyncSession, store_id: uuid.UUID
+) -> int:
+    """Скільки товарів магазину приїхало з XLSX-файлу (лінк-піддомен продавця)."""
+    statement = (
+        select(func.count())
+        .select_from(Listing)
+        .where(Listing.store_id == store_id, Listing.url.ilike(_EXPORT_URL_PATTERN))
+    )
+    return (await session.execute(statement)).scalar_one()
+
+
+async def delete_export_listings_for_store(
+    session: AsyncSession, store_id: uuid.UUID
+) -> int:
+    """Прибирає з магазину все, що прийшло з файлу; Prom-товари не чіпає.
+
+    Спостереження цін і override-и йдуть каскадом (FK ON DELETE CASCADE).
+    Повертає кількість видаленого — щоб сервіс мав що записати в лог.
+    """
+    subquery = select(Listing.id).where(
+        Listing.store_id == store_id, Listing.url.ilike(_EXPORT_URL_PATTERN)
+    )
+    result = await session.execute(
+        delete(Listing).where(Listing.id.in_(subquery))
+    )
+    return result.rowcount or 0
+
+
 async def add_listing(session: AsyncSession, listing: Listing) -> None:
     session.add(listing)
 

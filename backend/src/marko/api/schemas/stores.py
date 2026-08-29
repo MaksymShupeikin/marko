@@ -42,6 +42,7 @@ class StoreResponse(BaseModel):
     logo_url: str | None = None
     kind: str
     product_count: int
+    file_product_count: int = 0
     last_synced_at: datetime | None
 
 

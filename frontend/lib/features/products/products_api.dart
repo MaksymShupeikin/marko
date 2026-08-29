@@ -113,6 +113,16 @@ class ProductsApi {
     ];
   }
 
+  /// Видаляє магазин з каталогом; виключення продавця лишається назавжди.
+  Future<void> deleteStore(String storeId) async {
+    await _client.deleteJson('/api/v1/stores/$storeId');
+  }
+
+  /// Прибирає товари, що приїхали з XLSX-файлу магазину: файл — не референс.
+  Future<void> deleteStoreFileProducts(String storeId) async {
+    await _client.deleteJson('/api/v1/stores/$storeId/file-products');
+  }
+
   Future<StoreSync> addStore(String url) async {
     final payload = await _client.postJson(
       '/api/v1/stores',

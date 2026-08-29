@@ -31,6 +31,7 @@ from marko.services.stores import (
     StoreNotFoundError,
     TaskDispatchError,
     delete_store,
+    delete_store_file_products,
     get_store,
     list_store_products,
     list_stores,
@@ -125,6 +126,27 @@ async def get_store_details(
     except StoreNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
     return StoreResponse(**store.__dict__)
+
+
+@router.delete("/{store_id}/file-products", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_store_file_products(
+    store_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+) -> Response:
+    """Файл більше не референс: його товари зникають з каталогу й пошуку."""
+    try:
+        await delete_store_file_products(
+            session,
+            store_id=store_id,
+            workspace_id=current.workspace_id,
+        )
+    except StoreNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Store not found",
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{store_id}", status_code=status.HTTP_204_NO_CONTENT)

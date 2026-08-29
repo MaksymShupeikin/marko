@@ -1,6 +1,8 @@
 """Store registration, catalog job dispatch, and read models."""
 from __future__ import annotations
 
+import logging
+
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +23,9 @@ from marko.services.parser_models import Seller
 
 import marko.repositories.stores as stores_repo
 import marko.repositories.listings as listings_repo
+
+
+log = logging.getLogger(__name__)
 
 
 class StoreNotFoundError(LookupError):
@@ -45,6 +50,7 @@ class StoreView:
     logo_url: str | None
     kind: str
     product_count: int
+    file_product_count: int
     last_synced_at: datetime | None
 
 
@@ -199,7 +205,7 @@ async def _dispatch_sync_run(
 
 async def list_stores(session: AsyncSession, workspace_id: UUID) -> list[StoreView]:
     rows = await stores_repo.list_stores(session, workspace_id)
-    return [_store_view(store, kind, product_count) for store, kind, product_count in rows]
+    return [_store_view(*row) for row in rows]
 
 
 async def get_store(
@@ -209,6 +215,25 @@ async def get_store(
     if row is None:
         raise StoreNotFoundError(str(store_id))
     return _store_view(*row)
+
+
+async def delete_store_file_products(
+    session: AsyncSession,
+    *,
+    store_id: UUID,
+    workspace_id: UUID,
+) -> int:
+    """Прибирає з каталогу товари, що приїхали з XLSX-файлу цього магазину.
+
+    Після цього файл перестає бути референсом для пошуку: його рядків немає
+    ні в каталозі, ні в запитах конкурентів. Prom-товари магазину і запис
+    у реєстрі виключень продавців лишаються.
+    """
+    await _get_workspace_store(session, store_id=store_id, workspace_id=workspace_id)
+    deleted = await listings_repo.delete_export_listings_for_store(session, store_id)
+    await session.commit()
+    log.info("Прибрано %d товарів із файлу магазину %s", deleted, store_id)
+    return deleted
 
 
 async def delete_store(
@@ -309,7 +334,10 @@ async def _get_workspace_store(
 
 
 def _store_view(
-    store: MarketplaceStore, kind: StoreKind, product_count: int
+    store: MarketplaceStore,
+    kind: StoreKind,
+    product_count: int,
+    file_product_count: int = 0,
 ) -> StoreView:
     return StoreView(
         id=store.id,
@@ -320,5 +348,6 @@ def _store_view(
         logo_url=store.logo_url,
         kind=kind.value,
         product_count=product_count,
+        file_product_count=file_product_count,
         last_synced_at=store.last_synced_at,
     )

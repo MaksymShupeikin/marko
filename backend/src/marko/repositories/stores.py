@@ -5,6 +5,7 @@ from sqlalchemy import and_, or_, select, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import marko.repositories.listings as listings_repo
 from marko.infrastructure.db.models import (
     CompetitorSellerExclusion,
     Listing,
@@ -23,14 +24,23 @@ def _store_with_count_query(workspace_id: uuid.UUID):
     Приховані (is_deleted) товари не рахуємо — інакше лічильник показує
     більше, ніж є в каталозі.
     """
-    visible = func.count(Listing.id).filter(
-        or_(
-            WorkspaceListingOverride.is_deleted.is_(None),
-            WorkspaceListingOverride.is_deleted.is_(False),
-        )
+    not_hidden = or_(
+        WorkspaceListingOverride.is_deleted.is_(None),
+        WorkspaceListingOverride.is_deleted.is_(False),
+    )
+    visible = func.count(Listing.id).filter(not_hidden)
+    # Товари з XLSX-файлу впізнаються за лінком-піддоменом продавця — та сама
+    # ознака, на якій працює фільтр каталогу «З файлу».
+    from_file = func.count(Listing.id).filter(
+        not_hidden, Listing.url.ilike(listings_repo._EXPORT_URL_PATTERN)
     )
     return (
-        select(MarketplaceStore, WorkspaceStore.kind, visible.label("product_count"))
+        select(
+            MarketplaceStore,
+            WorkspaceStore.kind,
+            visible.label("product_count"),
+            from_file.label("file_product_count"),
+        )
         .join(WorkspaceStore, WorkspaceStore.store_id == MarketplaceStore.id)
         .outerjoin(Listing, Listing.store_id == MarketplaceStore.id)
         .outerjoin(
@@ -47,17 +57,17 @@ def _store_with_count_query(workspace_id: uuid.UUID):
 
 async def get_store_by_id(
     session: AsyncSession, store_id: uuid.UUID, workspace_id: uuid.UUID
-) -> tuple[MarketplaceStore, StoreKind, int] | None:
+) -> tuple[MarketplaceStore, StoreKind, int, int] | None:
     statement = _store_with_count_query(workspace_id).where(
         MarketplaceStore.id == store_id
     )
     row = (await session.execute(statement)).one_or_none()
-    return row  # Returns a tuple (store, kind, product_count) or None
+    return row  # (store, kind, product_count, file_product_count) or None
 
 
 async def list_stores(
     session: AsyncSession, workspace_id: uuid.UUID
-) -> list[tuple[MarketplaceStore, StoreKind, int]]:
+) -> list[tuple[MarketplaceStore, StoreKind, int, int]]:
     statement = _store_with_count_query(workspace_id).order_by(
         MarketplaceStore.created_at.desc()
     )

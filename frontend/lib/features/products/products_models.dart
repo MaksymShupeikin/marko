@@ -144,6 +144,7 @@ class StoreInfo {
     required this.name,
     required this.url,
     required this.productCount,
+    this.fileProductCount = 0,
     this.logoUrl,
   });
 
@@ -153,6 +154,7 @@ class StoreInfo {
       name: json['name'] as String? ?? '',
       url: json['url'] as String? ?? '',
       productCount: (json['product_count'] as num?)?.toInt() ?? 0,
+      fileProductCount: (json['file_product_count'] as num?)?.toInt() ?? 0,
       logoUrl: json['logo_url'] as String?,
     );
   }
@@ -161,6 +163,7 @@ class StoreInfo {
   final String name;
   final String url;
   final int productCount;
+  final int fileProductCount;
   final String? logoUrl;
 
   String get productCountLabel {
