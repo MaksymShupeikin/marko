@@ -1010,6 +1010,26 @@ class CompetitorPricesReport extends StatefulWidget {
 
 class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
   bool _expanded = false;
+  late int _selectedDiscount;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDiscount = _initialDiscount(widget.report.stats);
+  }
+
+  @override
+  void didUpdateWidget(covariant CompetitorPricesReport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.report != widget.report) {
+      _selectedDiscount = _initialDiscount(widget.report.stats);
+    }
+  }
+
+  int _initialDiscount(CompetitorPriceStats stats) => stats
+      .recommendedDiscountPercent
+      .clamp(stats.sliderDiscountMinPercent, stats.sliderDiscountMaxPercent)
+      .toInt();
 
   @override
   Widget build(BuildContext context) {
@@ -1017,7 +1037,10 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
     final stats = widget.report.stats;
     final currency = widget.report.currency;
     final userPrice = widget.product?.price;
-    final hasReliableMarket = stats.eligibleOffersTotal >= 2;
+    final hasReliableMarket = stats.hasReliableMarket;
+    final selectedTarget = stats.minPrice == null
+        ? null
+        : (stats.minPrice! * (1 - _selectedDiscount / 100)).roundToDouble();
 
     if (stats.offersTotal == 0) {
       return const MarkoInlineMessage(
@@ -1056,19 +1079,37 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
         ] else
           _InsufficientPricingEvidence(
             eligibleOffers: stats.eligibleOffersTotal,
+            conflict: stats.pricingStatus == 'conflict',
           ),
-        if (hasReliableMarket && stats.recommendedPrice != null) ...[
+        if (hasReliableMarket &&
+            stats.recommendedPrice != null &&
+            stats.minPrice != null) ...[
           const SizedBox(height: MarkoSpace.md),
           _RecommendedPriceBanner(
             price: stats.recommendedPrice!,
+            marketMin: stats.minPrice!,
+            priceFrom: stats.recommendedPriceFrom,
+            priceTo: stats.recommendedPriceTo,
+            discountPercent: stats.recommendedDiscountPercent,
+            discountMinPercent: stats.recommendedDiscountMinPercent,
+            discountMaxPercent: stats.recommendedDiscountMaxPercent,
             userPrice: userPrice,
             currency: currency,
+          ),
+          const SizedBox(height: MarkoSpace.sm),
+          _PricingDiscountCalculator(
+            marketMin: stats.minPrice!,
+            currency: currency,
+            selectedPercent: _selectedDiscount,
+            minPercent: stats.sliderDiscountMinPercent,
+            maxPercent: stats.sliderDiscountMaxPercent,
+            onChanged: (value) => setState(() => _selectedDiscount = value),
           ),
           if (widget.product?.isGrouped ?? false) ...[
             const SizedBox(height: MarkoSpace.sm),
             _OwnStoresGuidance(
               product: widget.product!,
-              recommendedPrice: stats.recommendedPrice!,
+              recommendedPrice: selectedTarget!,
               currency: currency,
             ),
           ],
@@ -1127,9 +1168,13 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
 }
 
 class _InsufficientPricingEvidence extends StatelessWidget {
-  const _InsufficientPricingEvidence({required this.eligibleOffers});
+  const _InsufficientPricingEvidence({
+    required this.eligibleOffers,
+    required this.conflict,
+  });
 
   final int eligibleOffers;
+  final bool conflict;
 
   @override
   Widget build(BuildContext context) {
@@ -1159,7 +1204,9 @@ class _InsufficientPricingEvidence extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Недостатньо даних для рекомендації',
+                  conflict
+                      ? 'Суперечливі ціни — рекомендацію зупинено'
+                      : 'Недостатньо даних для рекомендації',
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     color: colors.warning,
                     fontWeight: FontWeight.w700,
@@ -1167,7 +1214,9 @@ class _InsufficientPricingEvidence extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$countText Потрібні щонайменше 2 перевірені пропозиції нової деталі з фіксованою ціною.',
+                  conflict
+                      ? 'Дві повторно перевірені ціни відрізняються більш ніж удвічі. Система не вгадує правильну ціну.'
+                      : '$countText Потрібні щонайменше 2 перевірені пропозиції нової або підтвердженої сумісної деталі з фіксованою ціною.',
                   style: MarkoType.caption.copyWith(
                     color: colors.ink,
                     fontSize: 12,
@@ -1186,11 +1235,23 @@ class _InsufficientPricingEvidence extends StatelessWidget {
 class _RecommendedPriceBanner extends StatelessWidget {
   const _RecommendedPriceBanner({
     required this.price,
+    required this.marketMin,
+    required this.priceFrom,
+    required this.priceTo,
+    required this.discountPercent,
+    required this.discountMinPercent,
+    required this.discountMaxPercent,
     required this.userPrice,
     required this.currency,
   });
 
   final double price;
+  final double marketMin;
+  final double? priceFrom;
+  final double? priceTo;
+  final int discountPercent;
+  final int discountMinPercent;
+  final int discountMaxPercent;
   final double? userPrice;
   final String currency;
 
@@ -1198,11 +1259,14 @@ class _RecommendedPriceBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final diff = userPrice == null ? null : price - userPrice!;
-    final subtitle = diff == null || diff.abs() < 1
-        ? 'На 1% нижче мінімальної ціни конкурентів'
+    final comparison = diff == null || diff.abs() < 1
+        ? 'Ціль збігається з вашою поточною ціною'
         : diff < 0
         ? 'На ${formatPriceNumber(diff.abs())} ${formatCurrency(currency)} нижче за вашу поточну ціну'
         : 'На ${formatPriceNumber(diff)} ${formatCurrency(currency)} вище за вашу поточну ціну';
+    final range = priceFrom != null && priceTo != null
+        ? 'Діапазон −$discountMaxPercent%…−$discountMinPercent%: ${formatPriceNumber(priceFrom!)}–${formatPriceNumber(priceTo!)} ${formatCurrency(currency)}'
+        : 'Мінімум ринку: ${formatPriceNumber(marketMin)} ${formatCurrency(currency)}';
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1212,6 +1276,7 @@ class _RecommendedPriceBanner extends StatelessWidget {
         border: Border.all(color: colors.brand.withValues(alpha: 0.35)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             padding: const EdgeInsets.all(6),
@@ -1227,7 +1292,7 @@ class _RecommendedPriceBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Рекомендована ціна',
+                  'Рекомендована ціна · −$discountPercent%',
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     color: colors.brand,
                     fontWeight: FontWeight.w700,
@@ -1235,10 +1300,18 @@ class _RecommendedPriceBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  subtitle,
+                  range,
                   style: MarkoType.caption.copyWith(
                     color: colors.ink,
                     fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  comparison,
+                  style: MarkoType.caption.copyWith(
+                    color: colors.muted,
+                    fontSize: 11,
                   ),
                 ),
               ],
@@ -1251,6 +1324,100 @@ class _RecommendedPriceBanner extends StatelessWidget {
               color: colors.brand,
               fontSize: 16,
               fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PricingDiscountCalculator extends StatelessWidget {
+  const _PricingDiscountCalculator({
+    required this.marketMin,
+    required this.currency,
+    required this.selectedPercent,
+    required this.minPercent,
+    required this.maxPercent,
+    required this.onChanged,
+  });
+
+  final double marketMin;
+  final String currency;
+  final int selectedPercent;
+  final int minPercent;
+  final int maxPercent;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final target = (marketMin * (1 - selectedPercent / 100)).roundToDouble();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      decoration: BoxDecoration(
+        color: colors.surfaceMuted,
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Калькулятор дисконту від мінімуму ринку',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: colors.ink,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: MarkoSpace.sm),
+              Text(
+                '$selectedPercent%',
+                key: const ValueKey('pricing-slider-percent'),
+                style: MarkoType.price.copyWith(
+                  color: colors.brand,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            key: const ValueKey('pricing-discount-slider'),
+            min: minPercent.toDouble(),
+            max: maxPercent.toDouble(),
+            divisions: maxPercent - minPercent,
+            value: selectedPercent.toDouble(),
+            label: '$selectedPercent%',
+            onChanged: (value) => onChanged(value.round()),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Розрахована ціна',
+                  style: MarkoType.caption.copyWith(color: colors.muted),
+                ),
+              ),
+              Text(
+                '${formatPriceNumber(target)} ${formatCurrency(currency)}',
+                key: const ValueKey('pricing-slider-target'),
+                style: MarkoType.price.copyWith(
+                  color: colors.ink,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Це лише розрахунок — ціна в магазинах автоматично не змінюється.',
+            style: MarkoType.caption.copyWith(
+              color: colors.faint,
+              fontSize: 10.5,
             ),
           ),
         ],
@@ -1322,20 +1489,26 @@ class _OwnStoreGuidanceRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final price = copy.price;
-    final aboveMarket = price != null && price > recommendedPrice;
+    final difference = price == null ? null : recommendedPrice - price;
+    final matchesTarget = difference != null && difference.abs() < 0.5;
+    final canRaise = difference != null && difference >= 0.5;
     final tone = price == null
         ? colors.faint
-        : aboveMarket
-        ? colors.warning
-        : colors.positive;
+        : matchesTarget
+        ? colors.brand
+        : canRaise
+        ? colors.positive
+        : colors.warning;
     final store = copy.storeName?.trim().isNotEmpty == true
         ? copy.storeName!.trim()
         : 'Без назви';
     final message = price == null
         ? 'Магазин $store: ціна не вказана'
-        : aboveMarket
-        ? 'Магазин $store: ${formatPriceNumber(price)} ${_currencyLabel(copy.currency)} — вище ринку, рекомендовано ≤ ${formatPriceNumber(recommendedPrice)} ${_currencyLabel(recommendedCurrency)}'
-        : 'Магазин $store: ${formatPriceNumber(price)} ${_currencyLabel(copy.currency)} — в межах ринку';
+        : matchesTarget
+        ? 'Магазин $store: ціна відповідає вибраному рівню — ${formatPriceNumber(recommendedPrice)} ${_currencyLabel(recommendedCurrency)}'
+        : canRaise
+        ? 'Магазин $store: можна підвищити на ${formatPriceNumber(difference)} ${_currencyLabel(recommendedCurrency)} до ${formatPriceNumber(recommendedPrice)} ${_currencyLabel(recommendedCurrency)}'
+        : 'Магазин $store: рекомендовано знизити на ${formatPriceNumber(difference!.abs())} ${_currencyLabel(recommendedCurrency)} до ${formatPriceNumber(recommendedPrice)} ${_currencyLabel(recommendedCurrency)}';
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -1749,6 +1922,24 @@ class _ModernOfferCard extends StatelessWidget {
                   runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.brand.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(MarkoRadius.xs),
+                      ),
+                      child: Text(
+                        _marketSourceLabel(offer.source),
+                        style: MarkoType.caption.copyWith(
+                          color: colors.brand,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                     if (offer.seller != null && offer.seller!.isNotEmpty)
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1835,6 +2026,16 @@ class _ModernOfferCard extends StatelessWidget {
                       ),
                   ],
                 ),
+                if (offer.wasConverted) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '${formatPriceNumber(offer.originalPrice!)} ${formatCurrency(offer.originalCurrency!)} → ${formatPriceNumber(offer.price)} грн · курс НБУ ${offer.exchangeRateDate ?? ''}',
+                    style: MarkoType.caption.copyWith(
+                      color: colors.muted,
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1891,4 +2092,12 @@ class _ModernOfferCard extends StatelessWidget {
       ),
     );
   }
+
+  String _marketSourceLabel(String source) => switch (source) {
+    'prom' => 'Prom.ua',
+    'avtopro' => 'Avto.pro',
+    'exist' => 'Exist.ua',
+    'google' => 'Інші сайти',
+    _ => source,
+  };
 }

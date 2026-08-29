@@ -50,7 +50,10 @@ void main() {
       minPrice: 1100,
       medianPrice: 1150,
       maxPrice: 1200,
-      recommendedPrice: 1089,
+      recommendedPriceFrom: 1023,
+      recommendedPrice: 1034,
+      recommendedPriceTo: 1045,
+      pricingStatus: 'reliable',
     ),
     sources: [],
   );
@@ -86,14 +89,76 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('Рекомендації для своїх магазинів'), findsOneWidget);
-    expect(find.text('Магазин KEMP: 950 грн — в межах ринку'), findsOneWidget);
+    expect(
+      find.text('Магазин KEMP: можна підвищити на 84 грн до 1 034 грн'),
+      findsOneWidget,
+    );
     expect(
       find.text(
-        'Магазин Avtobust: 1 200 грн — вище ринку, рекомендовано ≤ 1 089 грн',
+        'Магазин Avtobust: рекомендовано знизити на 166 грн до 1 034 грн',
       ),
       findsOneWidget,
     );
     expect(find.text('Магазин Profparts: ціна не вказана'), findsOneWidget);
+  });
+
+  testWidgets('discount slider is local, starts at 6 and calculates 1/30%', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const Scaffold(
+          body: SingleChildScrollView(
+            child: SizedBox(
+              width: 500,
+              child: CompetitorPricesReport(report: report, product: product),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    var slider = tester.widget<Slider>(
+      find.byKey(const ValueKey('pricing-discount-slider')),
+    );
+    expect(slider.min, 1);
+    expect(slider.max, 30);
+    expect(slider.divisions, 29);
+    expect(slider.value, 6);
+    expect(find.text('1 034 ₴'), findsWidgets);
+
+    slider.onChanged!(1);
+    await tester.pump();
+    expect(find.text('1%'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('pricing-slider-target')))
+          .data,
+      '1 089 ₴',
+    );
+
+    slider = tester.widget<Slider>(
+      find.byKey(const ValueKey('pricing-discount-slider')),
+    );
+    slider.onChanged!(30);
+    await tester.pump();
+    expect(find.text('30%'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('pricing-slider-target')))
+          .data,
+      '770 ₴',
+    );
+    expect(
+      find.text('Магазин KEMP: рекомендовано знизити на 180 грн до 770 грн'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('one verified market offer does not produce a recommendation', (
@@ -113,6 +178,7 @@ void main() {
         minPrice: 2082,
         medianPrice: 2082,
         maxPrice: 2082,
+        pricingStatus: 'insufficient',
       ),
       sources: [
         SourcePriceResult(
@@ -155,5 +221,36 @@ void main() {
     expect(find.text('Недостатньо даних для рекомендації'), findsOneWidget);
     expect(find.text('Рекомендована ціна'), findsNothing);
     expect(find.text('Найкраща ціна на ринку'), findsNothing);
+    expect(find.byType(Slider), findsNothing);
+  });
+
+  testWidgets('conflict hides recommendation and slider', (tester) async {
+    const conflictReport = CompetitorPriceReport(
+      cached: false,
+      observedAt: null,
+      stats: CompetitorPriceStats(
+        offersTotal: 2,
+        eligibleOffersTotal: 0,
+        sourcesTotal: 1,
+        pricingStatus: 'conflict',
+      ),
+      sources: [],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const Scaffold(
+          body: CompetitorPricesReport(report: conflictReport),
+        ),
+      ),
+    );
+
+    expect(
+      find.text('Суперечливі ціни — рекомендацію зупинено'),
+      findsOneWidget,
+    );
+    expect(find.byType(Slider), findsNothing);
+    expect(find.textContaining('Рекомендована ціна'), findsNothing);
   });
 }

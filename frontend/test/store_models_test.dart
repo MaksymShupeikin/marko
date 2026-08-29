@@ -47,6 +47,13 @@ void main() {
         'min_price': '100.00',
         'median_price': '150.00',
         'max_price': '200.00',
+        'recommended_price_from': '93.00',
+        'recommended_price': '94.00',
+        'recommended_price_to': '95.00',
+        'recommended_discount_percent': 6,
+        'slider_discount_min_percent': 1,
+        'slider_discount_max_percent': 30,
+        'pricing_status': 'reliable',
       },
       'sources': [
         {
@@ -64,6 +71,13 @@ void main() {
               'url': 'https://avto.pro/part-701807101',
               'city': 'Kyiv',
               'is_analog': false,
+              'verified': true,
+              'original_price': '2.50',
+              'original_currency': 'USD',
+              'exchange_rate': '40.00',
+              'exchange_rate_date': '29.08.2026',
+              'verified_at': '2026-08-29T12:00:00Z',
+              'price_changed_on_page': true,
             },
           ],
         },
@@ -109,7 +123,16 @@ void main() {
     expect(competitor.stats.offersTotal, 15);
     expect(competitor.stats.eligibleOffersTotal, 3);
     expect(competitor.stats.minPrice, 100.0);
+    expect(competitor.stats.recommendedPrice, 94.0);
+    expect(competitor.stats.recommendedPriceFrom, 93.0);
+    expect(competitor.stats.recommendedPriceTo, 95.0);
+    expect(competitor.stats.hasReliableMarket, isTrue);
     expect(competitor.currency, 'UAH');
     expect(competitor.sources.first.offers.first.title, 'VW 701807101 Бампер');
+    expect(competitor.sources.first.offers.first.wasConverted, isTrue);
+    expect(
+      competitor.sources.first.offers.first.exchangeRateDate,
+      '29.08.2026',
+    );
   });
 }

@@ -504,6 +504,12 @@ class MarketPriceOffer {
     this.confidence = 1,
     this.isAnalog = false,
     this.verified = false,
+    this.originalPrice,
+    this.originalCurrency,
+    this.exchangeRate,
+    this.exchangeRateDate,
+    this.verifiedAt,
+    this.priceChangedOnPage = false,
   });
 
   factory MarketPriceOffer.fromJson(Map<String, dynamic> json) {
@@ -522,6 +528,16 @@ class MarketPriceOffer {
       confidence: (json['confidence'] as num?)?.toDouble() ?? 1,
       isAnalog: json['is_analog'] as bool? ?? false,
       verified: json['verified'] as bool? ?? false,
+      originalPrice: json['original_price'] == null
+          ? null
+          : double.tryParse(json['original_price'].toString()),
+      originalCurrency: json['original_currency'] as String?,
+      exchangeRate: json['exchange_rate'] == null
+          ? null
+          : double.tryParse(json['exchange_rate'].toString()),
+      exchangeRateDate: json['exchange_rate_date'] as String?,
+      verifiedAt: DateTime.tryParse(json['verified_at'] as String? ?? ''),
+      priceChangedOnPage: json['price_changed_on_page'] as bool? ?? false,
     );
   }
 
@@ -542,6 +558,18 @@ class MarketPriceOffer {
 
   /// Сторінка товару повторно перевірена для цінової статистики.
   final bool verified;
+  final double? originalPrice;
+  final String? originalCurrency;
+  final double? exchangeRate;
+  final String? exchangeRateDate;
+  final DateTime? verifiedAt;
+  final bool priceChangedOnPage;
+
+  bool get wasConverted =>
+      originalPrice != null &&
+      originalCurrency != null &&
+      originalCurrency!.toUpperCase() != 'UAH' &&
+      exchangeRate != null;
 
   String get priceLabel => '${price.toStringAsFixed(0)} $currency';
 
@@ -614,6 +642,14 @@ class CompetitorPriceStats {
     this.medianPrice,
     this.maxPrice,
     this.recommendedPrice,
+    this.recommendedPriceFrom,
+    this.recommendedPriceTo,
+    this.recommendedDiscountPercent = 6,
+    this.recommendedDiscountMinPercent = 5,
+    this.recommendedDiscountMaxPercent = 7,
+    this.sliderDiscountMinPercent = 1,
+    this.sliderDiscountMaxPercent = 30,
+    this.pricingStatus,
   });
 
   factory CompetitorPriceStats.fromJson(Map<String, dynamic> json) {
@@ -631,6 +667,19 @@ class CompetitorPriceStats {
       medianPrice: price('median_price'),
       maxPrice: price('max_price'),
       recommendedPrice: price('recommended_price'),
+      recommendedPriceFrom: price('recommended_price_from'),
+      recommendedPriceTo: price('recommended_price_to'),
+      recommendedDiscountPercent:
+          (json['recommended_discount_percent'] as num?)?.toInt() ?? 6,
+      recommendedDiscountMinPercent:
+          (json['recommended_discount_min_percent'] as num?)?.toInt() ?? 5,
+      recommendedDiscountMaxPercent:
+          (json['recommended_discount_max_percent'] as num?)?.toInt() ?? 7,
+      sliderDiscountMinPercent:
+          (json['slider_discount_min_percent'] as num?)?.toInt() ?? 1,
+      sliderDiscountMaxPercent:
+          (json['slider_discount_max_percent'] as num?)?.toInt() ?? 30,
+      pricingStatus: json['pricing_status'] as String?,
     );
   }
 
@@ -643,6 +692,18 @@ class CompetitorPriceStats {
 
   /// Конкретна сума до виставлення: трохи нижче мінімуму конкурентів.
   final double? recommendedPrice;
+  final double? recommendedPriceFrom;
+  final double? recommendedPriceTo;
+  final int recommendedDiscountPercent;
+  final int recommendedDiscountMinPercent;
+  final int recommendedDiscountMaxPercent;
+  final int sliderDiscountMinPercent;
+  final int sliderDiscountMaxPercent;
+  final String? pricingStatus;
+
+  bool get hasReliableMarket =>
+      pricingStatus == 'reliable' ||
+      (pricingStatus == null && eligibleOffersTotal >= 2);
 }
 
 class CompetitorPriceReport {
