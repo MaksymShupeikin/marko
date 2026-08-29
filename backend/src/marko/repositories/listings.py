@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import uuid
-from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy import (
+    Text,
+    and_,
+    case,
+    cast,
+    delete,
+    func,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from marko.infrastructure.db.models import (
@@ -56,6 +67,63 @@ async def list_listings_for_store(
 _EXPORT_URL_PATTERN = "%.prom.ua/%"
 
 
+# Один фізичний товар лежить у чотирьох власних магазинах під тим самим
+# артикулом, але записаним по-різному: у Prom «312783 KEMP», в експорті —
+# «312783». Тому ключ групи — артикул без розділових знаків, у верхньому
+# регістрі й без хвоста власної марки.
+_OWN_BRAND_SUFFIX = "(KEMP)$"
+
+
+def _group_key():
+    sku = _effective(WorkspaceListingOverride.sku, Listing.sku)
+    cleaned = func.upper(
+        func.regexp_replace(func.coalesce(sku, ""), r"[^0-9A-Za-z]", "", "g")
+    )
+    stripped = func.regexp_replace(cleaned, _OWN_BRAND_SUFFIX, "")
+    # Без артикула групувати нема за чим: товар лишається сам по собі,
+    # інакше всі безартикульні картки злиплися б в одну.
+    return case((stripped == "", cast(Listing.id, Text)), else_=stripped)
+
+
+def _group_rank_subquery(workspace_id: uuid.UUID):
+    """Представник групи — найдешевша власна картка з додатною ціною.
+
+    Ранжування рахується до фільтрів каталогу: інакше пошук чи ціновий
+    діапазон міняли б представника, і той самий товар показувався б то
+    однією карткою, то іншою.
+    """
+    key = _group_key()
+    price = _effective(WorkspaceListingOverride.current_price, Listing.current_price)
+    # Нульова й порожня ціна представником не стає — з неї не порахувати
+    # ні рекомендації, ні порівняння з ринком.
+    unpriced = case((or_(price.is_(None), price <= 0), 1), else_=0)
+    return (
+        select(
+            Listing.id.label("listing_id"),
+            func.row_number()
+            .over(partition_by=key, order_by=(unpriced.asc(), price.asc(), Listing.id.asc()))
+            .label("rn"),
+            func.count().over(partition_by=key).label("group_size"),
+        )
+        .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
+        .outerjoin(
+            WorkspaceListingOverride,
+            and_(
+                WorkspaceListingOverride.listing_id == Listing.id,
+                WorkspaceListingOverride.workspace_id == workspace_id,
+            ),
+        )
+        .where(
+            WorkspaceStore.workspace_id == workspace_id,
+            or_(
+                WorkspaceListingOverride.is_deleted.is_(None),
+                WorkspaceListingOverride.is_deleted.is_(False),
+            ),
+        )
+        .subquery()
+    )
+
+
 def _workspace_listings_query(
     workspace_id: uuid.UUID,
     *,
@@ -65,12 +133,19 @@ def _workspace_listings_query(
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
 ):
+    # Фільтр за магазином — це запит «покажи каталог саме цього магазину»,
+    # тож там групування вимикаємо: інакше товар зник би з видачі лише через
+    # те, що найдешевша його копія лежить в іншому магазині.
+    grouped = not store_ids
+    ranks = _group_rank_subquery(workspace_id) if grouped else None
+    group_size = ranks.c.group_size if grouped else literal(1)
     statement = (
         select(
             Listing,
             MarketplaceStore,
             WorkspaceStore.kind,
             WorkspaceListingOverride,
+            group_size.label("group_size"),
         )
         .join(MarketplaceStore, MarketplaceStore.id == Listing.store_id)
         .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
@@ -89,6 +164,10 @@ def _workspace_listings_query(
             ),
         )
     )
+    if ranks is not None:
+        statement = statement.join(
+            ranks, ranks.c.listing_id == Listing.id
+        ).where(ranks.c.rn == 1)
     if query:
         pattern = f"%{query.strip()}%"
         statement = statement.where(
@@ -176,6 +255,7 @@ async def search_workspace_listings(
         MarketplaceStore,
         StoreKind,
         WorkspaceListingOverride | None,
+        int,
     ]
 ]:
     statement = (
@@ -190,6 +270,57 @@ async def search_workspace_listings(
         .order_by(_listing_order(order), Listing.id)
         .limit(limit)
         .offset(offset)
+    )
+    return [tuple(row) for row in (await session.execute(statement)).all()]
+
+
+async def list_group_siblings(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    listing_id: uuid.UUID,
+) -> list[tuple[Listing, MarketplaceStore, WorkspaceListingOverride | None]]:
+    """Ті самі товари у власних магазинах — усі, включно з представником.
+
+    Панель показує, яку ціну поставити в кожному магазині, тож потрібні всі
+    копії, а не лише чужі.
+    """
+    key = _group_key()
+    base = (
+        select(key.label("group_key"))
+        .outerjoin(
+            WorkspaceListingOverride,
+            and_(
+                WorkspaceListingOverride.listing_id == Listing.id,
+                WorkspaceListingOverride.workspace_id == workspace_id,
+            ),
+        )
+        .where(Listing.id == listing_id)
+        .scalar_subquery()
+    )
+    statement = (
+        select(Listing, MarketplaceStore, WorkspaceListingOverride)
+        .join(MarketplaceStore, MarketplaceStore.id == Listing.store_id)
+        .join(WorkspaceStore, WorkspaceStore.store_id == Listing.store_id)
+        .outerjoin(
+            WorkspaceListingOverride,
+            and_(
+                WorkspaceListingOverride.listing_id == Listing.id,
+                WorkspaceListingOverride.workspace_id == workspace_id,
+            ),
+        )
+        .where(
+            WorkspaceStore.workspace_id == workspace_id,
+            or_(
+                WorkspaceListingOverride.is_deleted.is_(None),
+                WorkspaceListingOverride.is_deleted.is_(False),
+            ),
+            key == base,
+        )
+        .order_by(
+            _effective(
+                WorkspaceListingOverride.current_price, Listing.current_price
+            ).asc()
+        )
     )
     return [tuple(row) for row in (await session.execute(statement)).all()]
 

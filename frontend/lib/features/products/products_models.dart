@@ -40,6 +40,7 @@ class StoreProduct {
     this.lastSeenAt,
     this.canManage = false,
     this.source = ProductSource.scrape,
+    this.groupSize = 1,
   });
 
   factory StoreProduct.fromJson(Map<String, dynamic> json) {
@@ -61,6 +62,7 @@ class StoreProduct {
           .toList(growable: false),
       lastSeenAt: DateTime.tryParse(json['last_seen_at'] as String? ?? ''),
       canManage: json['can_manage'] as bool? ?? false,
+      groupSize: (json['group_size'] as num?)?.toInt() ?? 1,
       source: json['source'] == 'export'
           ? ProductSource.export
           : ProductSource.scrape,
@@ -83,6 +85,10 @@ class StoreProduct {
   final bool canManage;
   final ProductSource source;
 
+  /// Скільки власних магазинів тримають цей самий товар. Каталог показує
+  /// найдешевшу картку; решта доступні в панелі товару.
+  final int groupSize;
+
   bool get isFromProm => url.contains('prom.ua');
 
   /// The number to look up on avto.pro: the richest one we know about.
@@ -103,6 +109,37 @@ class StoreProduct {
   String get priceLabel => price == null
       ? 'Ціна не вказана'
       : '${price!.toStringAsFixed(2)} $currency';
+}
+
+/// Та сама деталь в іншому власному магазині — для порад у панелі товару.
+class SiblingListing {
+  const SiblingListing({
+    required this.id,
+    required this.storeId,
+    required this.storeName,
+    required this.price,
+    required this.currency,
+    required this.url,
+  });
+
+  factory SiblingListing.fromJson(Map<String, dynamic> json) {
+    final rawPrice = json['current_price'];
+    return SiblingListing(
+      id: json['id'] as String,
+      storeId: json['store_id'] as String,
+      storeName: json['store_name'] as String? ?? '',
+      price: rawPrice == null ? null : double.tryParse(rawPrice.toString()),
+      currency: json['currency'] as String? ?? 'UAH',
+      url: json['url'] as String? ?? '',
+    );
+  }
+
+  final String id;
+  final String storeId;
+  final String storeName;
+  final double? price;
+  final String currency;
+  final String url;
 }
 
 class ProductUpdate {

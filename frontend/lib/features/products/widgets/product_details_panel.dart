@@ -11,6 +11,7 @@ import '../../../core/widgets/marko_cached_image.dart';
 import '../../../core/widgets/marko_loader.dart';
 import '../../../core/widgets/marko_toast.dart';
 import '../../billing/paywall.dart';
+import '../products_api.dart';
 import '../products_controller.dart';
 import '../products_models.dart';
 import 'product_management_dialogs.dart';
@@ -978,6 +979,14 @@ class _CompetitorPricesLoadingState
 /// Market report body: benchmark banner, min/median/max gauge and offer
 /// cards. Reused by the OEM lookup modal, where there is no own product
 /// (pass `product: null` — the "your price" comparisons just disappear).
+/// Копії того самого товару у власних магазинах. Тягнемо лише коли картка
+/// справді групова — зайвого запиту на кожен товар не робимо.
+final _siblingsProvider = FutureProvider.autoDispose
+    .family<List<SiblingListing>, String>(
+      (ref, productId) => ref.watch(productsApiProvider).getSiblings(productId),
+    );
+
+
 class CompetitorPricesReport extends StatefulWidget {
   const CompetitorPricesReport({required this.report, this.product, super.key});
 
@@ -1038,6 +1047,12 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
             currency: currency,
             discountPercent: stats.recommendedDiscountPercent,
           ),
+          if ((widget.product?.groupSize ?? 1) > 1)
+            _OwnStoresGuidance(
+              productId: widget.product!.id,
+              recommended: stats.recommendedPrice!,
+              currency: currency,
+            ),
         ],
         if (allOffers.isNotEmpty) ...[
           const SizedBox(height: MarkoSpace.xxl),
@@ -1699,5 +1714,96 @@ class _ModernOfferCard extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+
+/// Що робити з ціною в кожному власному магазині: заказчик тримає той самий
+/// товар у чотирьох магазинах за різними цінами, і рекомендація рахується
+/// від найдешевшого. Решті потрібна своя, конкретна цифра.
+class _OwnStoresGuidance extends ConsumerWidget {
+  const _OwnStoresGuidance({
+    required this.productId,
+    required this.recommended,
+    required this.currency,
+  });
+
+  final String productId;
+  final double recommended;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MarkoTheme.of(context);
+    final siblings = ref.watch(_siblingsProvider(productId)).value;
+    if (siblings == null || siblings.length < 2) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: MarkoSpace.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Ваші магазини',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: MarkoSpace.sm),
+          for (final sibling in siblings)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      sibling.storeName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                  const SizedBox(width: MarkoSpace.sm),
+                  Text(
+                    sibling.price == null
+                        ? 'ціна не вказана'
+                        : '${formatPriceNumber(sibling.price!)} ${formatCurrency(currency)}',
+                    style: MarkoType.caption.copyWith(color: colors.faint),
+                  ),
+                  const SizedBox(width: MarkoSpace.sm),
+                  Flexible(
+                    child: Text(
+                      _advice(sibling.price),
+                      textAlign: TextAlign.right,
+                      maxLines: 2,
+                      style: MarkoType.caption.copyWith(
+                        color: _adviceColor(colors, sibling.price),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _advice(double? price) {
+    if (price == null) return 'поставте ціну';
+    final target = '${formatPriceNumber(recommended)} ${formatCurrency(currency)}';
+    // ±1% — це вже влучання, ганяти ціну туди-сюди немає сенсу.
+    if ((price - recommended).abs() <= recommended * 0.01) {
+      return 'відповідає рекомендації';
+    }
+    return price > recommended
+        ? 'вище ринку — можна знизити до $target'
+        : 'можна підняти до $target';
+  }
+
+  Color _adviceColor(MarkoTheme colors, double? price) {
+    if (price == null) return colors.faint;
+    if ((price - recommended).abs() <= recommended * 0.01) return colors.positive;
+    return price > recommended ? colors.negative : colors.brand;
   }
 }

@@ -336,3 +336,66 @@ def test_refresh_keeps_the_name_when_the_page_parses_empty():
     apply_scraped_product(override, _scraped(name=None))
 
     assert override.name == "Стара назва"
+
+
+# Групування власних карток в одну
+
+
+def _compiled(**kwargs) -> str:
+    from marko.repositories.listings import _workspace_listings_query
+    from uuid import uuid4
+
+    statement = _workspace_listings_query(
+        uuid4(), query=None, price_min=None, price_max=None, **kwargs
+    )
+    return str(statement.compile(compile_kwargs={"literal_binds": False}))
+
+
+def test_catalog_groups_own_copies_of_the_same_part():
+    """Один товар у чотирьох магазинах — одна картка, найдешевша з них."""
+    sql = _compiled()
+
+    assert "row_number() OVER" in sql
+    # Ключ групи — артикул без розділових знаків і без хвоста власної марки.
+    assert "regexp_replace" in sql
+    # Представник — найдешевший; картка без ціни представником не стає.
+    assert "rn = :rn_1" in sql.replace("anon_1.", "").replace('"', "")
+
+
+def test_store_filter_turns_grouping_off():
+    """Фільтр за магазином — запит «покажи саме цей магазин», без склеювання.
+
+    Інакше товар зник би з видачі лише тому, що найдешевша його копія
+    лежить в іншому магазині.
+    """
+    from uuid import uuid4
+
+    sql = _compiled(store_ids=[uuid4()])
+
+    assert "row_number() OVER" not in sql
+
+
+def test_catalog_item_reports_the_group_size():
+    """Розмір групи доїжджає до фронта — з нього малюється «у N магазинах»."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from marko.api.routers.v1.products import _catalog_item
+    from marko.infrastructure.db.models import StoreKind
+    from uuid import uuid4
+
+    listing = SimpleNamespace(
+        id=uuid4(), store_id=uuid4(), name="Амортизатор", url="https://prom.ua/ua/p1-a.html",
+        sku="96306157", brand="KEMP", current_price=None, currency="UAH",
+        external_id="1", model_id=None,
+        is_available=True, image_url=None,
+        last_seen_at=datetime(2026, 8, 29, tzinfo=UTC), raw_data={},
+        created_at=datetime(2026, 8, 29, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 29, tzinfo=UTC),
+    )
+    store = SimpleNamespace(name="kemp", marketplace="prom")
+
+    item = _catalog_item(listing, store, StoreKind.owned, None, 3)
+
+    assert item.group_size == 3
+    assert _catalog_item(listing, store, StoreKind.owned, None).group_size == 1

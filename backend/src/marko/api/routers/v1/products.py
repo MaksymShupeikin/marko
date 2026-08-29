@@ -17,6 +17,7 @@ from marko.api.schemas.stores import (
     CatalogFilterRequest,
     CatalogPageResponse,
     CatalogProductResponse,
+    SiblingListingResponse,
     ProductUpdateRequest,
     StoreSyncResponse,
 )
@@ -99,8 +100,8 @@ async def search_products(
     )
     return CatalogPageResponse(
         items=[
-            _catalog_item(listing, store, kind, override)
-            for listing, store, kind, override in rows
+            _catalog_item(listing, store, kind, override, group_size)
+            for listing, store, kind, override, group_size in rows
         ],
         total=total,
         limit=limit,
@@ -145,6 +146,35 @@ async def bulk_refresh_products(
         sync_run_id=sync_run.id,
         status=sync_run.status.value,
     )
+
+
+@router.get(
+    "/{listing_id}/siblings", response_model=list[SiblingListingResponse]
+)
+async def product_siblings(
+    listing_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+) -> list[SiblingListingResponse]:
+    """Та сама деталь у власних магазинах — від найдешевшої до найдорожчої."""
+    rows = await listings_repo.list_group_siblings(
+        session, current.workspace_id, listing_id
+    )
+    return [
+        SiblingListingResponse(
+            id=listing.id,
+            store_id=listing.store_id,
+            store_name=store.name,
+            current_price=(
+                override.current_price
+                if override is not None and override.current_price is not None
+                else listing.current_price
+            ),
+            currency=listing.currency,
+            url=listing.url,
+        )
+        for listing, store, override in rows
+    ]
 
 
 @router.patch("/{listing_id}", response_model=CatalogProductResponse)
@@ -294,6 +324,7 @@ def _catalog_item(
     store,
     kind: StoreKind,
     override: WorkspaceListingOverride | None,
+    group_size: int = 1,
 ) -> CatalogProductResponse:
     raw_data = listing.raw_data if isinstance(listing.raw_data, dict) else {}
     item = CatalogProductResponse.model_validate(listing).model_dump()
@@ -319,5 +350,6 @@ def _catalog_item(
         ],
         can_manage=kind == StoreKind.owned,
         source="export" if is_export_url(listing.url) else "scrape",
+        group_size=group_size,
     )
     return CatalogProductResponse.model_validate(item)

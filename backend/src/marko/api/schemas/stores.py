@@ -103,6 +103,19 @@ class CatalogProductResponse(ProductResponse):
     can_manage: bool = False
     # "export" — прийшов з XLSX-вивантаження, "scrape" — знятий з майданчика.
     source: Literal["export", "scrape"] = "scrape"
+    # Скільки власних магазинів тримають цей самий товар; 1 — тільки цей.
+    group_size: int = 1
+
+
+class SiblingListingResponse(BaseModel):
+    """Та сама деталь в іншому власному магазині."""
+
+    id: UUID
+    store_id: UUID
+    store_name: str | None = None
+    current_price: Decimal | None = None
+    currency: str = "UAH"
+    url: str = ""
 
 
 class ProductUpdateRequest(BaseModel):

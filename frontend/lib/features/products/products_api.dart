@@ -206,6 +206,15 @@ class ProductsApi {
     return StoreProduct.fromJson(payload as Map<String, dynamic>);
   }
 
+  /// Та сама деталь у решті власних магазинів, від найдешевшої.
+  Future<List<SiblingListing>> getSiblings(String productId) async {
+    final payload = await _client.getJson('/api/v1/products/$productId/siblings');
+    return [
+      for (final item in payload as List<dynamic>)
+        SiblingListing.fromJson(item as Map<String, dynamic>),
+    ];
+  }
+
   Future<void> deleteProduct(String productId) async {
     await _client.deleteJson('/api/v1/products/$productId');
   }

@@ -421,11 +421,35 @@ class _CardDetails extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (_metadata.isNotEmpty) ...[
-          Text(
-            _metadata,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: MarkoType.caption.copyWith(color: colors.faint),
+          Row(
+            children: [
+              Flexible(
+                child: Text(
+                  _metadata,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: MarkoType.caption.copyWith(color: colors.faint),
+                ),
+              ),
+              if (product.groupSize > 1) ...[
+                const SizedBox(width: MarkoSpace.xs),
+                // Одна картка на товар: показуємо найдешевшу з власних.
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: colors.brandSoft,
+                    borderRadius: BorderRadius.circular(MarkoRadius.sm),
+                  ),
+                  child: Text(
+                    'у ${product.groupSize} магазинах',
+                    style: MarkoType.caption.copyWith(
+                      color: colors.brand,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: MarkoSpace.xs),
         ],
