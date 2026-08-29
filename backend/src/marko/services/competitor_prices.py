@@ -91,7 +91,8 @@ _GOOGLE_MAX_OFFERS = 20
 _SERP_MAX_PAGE_FETCHES = 12
 _SERP_TIMEOUT = 6.0
 # Ці маркетплейси вже є окремими джерелами — з Google вони лише дублюють.
-_SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro")
+# Ці майданчики мають власні джерела — з Google вони лише дублювали б їх.
+_SERP_COVERED_DOMAINS = ("prom.ua", "avto.pro", "exist.ua")
 # Ринок — український: російські й білоруські магазини не конкуренти,
 # а їхні ціни в рублях лише засмічують порівняння.
 # Замовник продає лише в Україні — закордонний магазин не конкурує з його
@@ -488,6 +489,7 @@ async def _collect(
     sources: tuple[PriceSource, ...] = (
         AvtoproPriceSource(),
         PromPriceSource(),
+        ExistPriceSource(),
         GooglePriceSource(),
     )
     emit("start", "Готуємо пошукові запити")
@@ -1010,6 +1012,12 @@ class GooglePriceSource:
 
     source = "google"
     label = "Google"
+    # Порожньо — беремо всі домени, крім покритих іншими джерелами. Нащадок
+    # звужує пошук до одного майданчика.
+    _only_domain: str | None = None
+
+    def _terms(self, query: PartSearchQuery) -> list[str]:
+        return _search_terms(query)
 
     async def search(self, query: PartSearchQuery) -> SourceResult:
         api_key = get_settings().serper_api_key
@@ -1022,7 +1030,7 @@ class GooglePriceSource:
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
         ) as client:
             batches = await asyncio.gather(
-                *(self._serp(client, api_key, term) for term in _search_terms(query))
+                *(self._serp(client, api_key, term) for term in self._terms(query))
             )
             candidates = self._candidates(query, batches)
             offers = await self._priced_offers(client, candidates)
@@ -1058,9 +1066,15 @@ class GooglePriceSource:
             domain = _serp_domain(url)
             if not domain or url in seen:
                 continue
-            if domain == own_domain or _covered_elsewhere(domain):
+            if domain == own_domain or _is_own_domain(domain):
                 continue
-            if _is_own_domain(domain):
+            if self._only_domain:
+                if not (
+                    domain == self._only_domain
+                    or domain.endswith("." + self._only_domain)
+                ):
+                    continue
+            elif _covered_elsewhere(domain):
                 continue
             if not domain.endswith(_SERP_ALLOWED_TLD):
                 continue
@@ -1137,6 +1151,22 @@ class GooglePriceSource:
             confidence=score,
             is_analog=score < _OEM_HIT_SCORE,
         )
+
+
+class ExistPriceSource(GooglePriceSource):
+    """Exist.ua окремим контуром, а не випадковою знахідкою загального пошуку.
+
+    Заказчик звіряється саме з ним, тож питаємо майданчик прицільно —
+    `site:exist.ua` по кожному пошуковому терміну. Далі все спільне: гейти,
+    другий прохід моделі, конвертація валют.
+    """
+
+    source = "exist"
+    label = "Exist.ua"
+    _only_domain = "exist.ua"
+
+    def _terms(self, query: PartSearchQuery) -> list[str]:
+        return [f"site:{self._only_domain} {term}" for term in _search_terms(query)]
 
 
 _TEXT_PRICE_RE = re.compile(

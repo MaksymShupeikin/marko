@@ -1422,3 +1422,26 @@ async def test_existing_numbers_skip_the_extra_page_request(monkeypatch):
     )
 
     assert query.oem_numbers == ("8E0513033", "312783KEMP")
+
+
+def test_exist_source_asks_the_site_directly_and_google_skips_it():
+    """Exist.ua має бути окремим джерелом, а не випадковою знахідкою Google."""
+    query = part_query()
+    exist = competitor_prices_module.ExistPriceSource()
+
+    # Питаємо майданчик прицільно, кожним пошуковим терміном.
+    terms = exist._terms(query)
+    assert terms and all(term.startswith("site:exist.ua ") for term in terms)
+
+    batch = [
+        {"link": "https://exist.ua/uk/detail/0451103316/", "title": "Фільтр масляний Bosch 0451103316"},
+        {"link": "https://autoshop.com.ua/0451103316", "title": "Фільтр масляний Bosch 0451103316"},
+    ]
+
+    # Джерело Exist бере лише свій майданчик...
+    assert [d for _i, d, _s in exist._candidates(query, [batch])] == ["exist.ua"]
+    # ...а загальний Google його не дублює.
+    google = competitor_prices_module.GooglePriceSource()
+    assert [d for _i, d, _s in google._candidates(query, [batch])] == [
+        "autoshop.com.ua"
+    ]
