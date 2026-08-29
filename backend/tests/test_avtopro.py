@@ -61,7 +61,38 @@ def test_parse_feed_row_and_token():
     assert offer.currency == "UAH"
     assert offer.warehouse_id == "LS489A;645;0000;347922"
     assert offer.boosted is True
+    assert offer.used is False
     assert '"Skip":24' in page.continuation_token
+
+
+def test_used_rows_are_recognised_without_the_word_in_the_description():
+    """Справжній випадок: із пʼяти вживаних лише одна писала «б/у» словами.
+
+    Решта йшли як звичайні, і найдешевша з них ставала мінімумом ринку —
+    заказчик клікав рекомендацію й потрапляв на вживану ступицю. Рядок
+    несе машинний прапорець data-bu, на нього й спираємось.
+    """
+    used_flag = _ROW.replace(
+        'data-wholesale="0"', 'data-wholesale="0" data-bu="1"'
+    )
+    dismantling = _ROW.replace(
+        'data-wholesale="0"', 'data-wholesale="0" data-is-cardismantling="True"'
+    )
+    badge = _ROW.replace(
+        '<span class="ap-feed__table__descr">Фильтр масляный</span>',
+        '<span data-tooltip-content="Запчасти, которые были в употреблении">'
+        "Б/У</span><span>Фильтр масляный</span>",
+    )
+
+    for markup, label in (
+        (used_flag, "data-bu"),
+        (dismantling, "розборка"),
+        (badge, "бейдж"),
+    ):
+        page = parse_feed('<article class="ap-feed">' + markup)
+        assert page.offers[0].used is True, label
+        # Опис так і лишився без слова «б/у» — текстом це не спіймати.
+        assert "б/у" not in (page.offers[0].description or "").lower()
 
 
 def test_parse_search_skips_non_part_uris_and_picks_brand():

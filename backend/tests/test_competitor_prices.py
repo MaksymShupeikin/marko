@@ -221,7 +221,7 @@ async def test_avtopro_counts_interchangeable_analogues_in_the_stats(monkeypatch
         SimpleNamespace(
             maker=maker, code=code, part_uri=f"/part-{code}/", description="Кнопка",
             city="Київ", availability=None, price=price, currency="UAH",
-            warehouse_id=f"wh-{maker}", boosted=False,
+            warehouse_id=f"wh-{maker}", boosted=False, used=False,
         )
         for maker, code, price in (
             ("KEMP", "8200090327", 300.0),
@@ -776,7 +776,7 @@ def test_own_prom_seller_id_falls_back_to_store_subdomain():
     )
 
 
-def test_cache_key_is_v9_and_changes_with_workspace_exclusions():
+def test_cache_key_is_v10_and_changes_with_workspace_exclusions():
     base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
     workspace = competitor_prices_module.manual_search_query(
         "0451103316",
@@ -790,7 +790,7 @@ def test_cache_key_is_v9_and_changes_with_workspace_exclusions():
         ],
     )
 
-    assert _cache_key(base).startswith("competitor-prices:v9:")
+    assert _cache_key(base).startswith("competitor-prices:v10:")
     assert _cache_key(base) != _cache_key(workspace)
 
 
@@ -1181,13 +1181,21 @@ async def test_unverified_offer_stays_visible_but_out_of_stats(monkeypatch):
     assert min(checked[0].prices) == Decimal("500")
 
 
-async def test_verification_failure_keeps_every_offer(monkeypatch):
-    """Модель мовчить — нічого не втрачаємо, лише знижуємо довіру."""
+async def test_model_silence_keeps_ordinary_prices_in_the_stats(monkeypatch):
+    """Модель мовчить — це не привід вирізати чесний ринок.
+
+    Реальний випадок: із 29 пропозицій модель підтвердила дві, решту
+    позначила «не знаю» — і рекомендація вийшла втричі вища за ринок.
+    Тепер «не знаю» понижує лише підозріло дешеві.
+    """
     _enable_verification(monkeypatch)
     sources = (
         SourceResult(
             "prom", "Prom.ua", "ok",
-            tuple(_verify_offer(f"Фільтр {p}", p) for p in ("500", "520", "540")),
+            tuple(
+                _verify_offer(f"Фільтр {p}", p)
+                for p in ("100", "500", "520", "540")
+            ),
         ),
     )
 
@@ -1201,9 +1209,14 @@ async def test_verification_failure_keeps_every_offer(monkeypatch):
     checked = await competitor_prices_module._verify_offers(
         part_query(), sources, lambda *_: None
     )
+    kept = {o.price: o.confidence for o in checked[0].offers}
 
-    assert len(checked[0].offers) == 3
-    assert all(o.confidence == 0.5 for o in checked[0].offers)
+    assert len(checked[0].offers) == 4
+    # Звичайні ціни лишаються в статистиці...
+    assert kept[Decimal("500")] > 0.5
+    assert kept[Decimal("540")] > 0.5
+    # ...а вп'ятеро дешевша за медіану — під підозрою, і поза нею.
+    assert kept[Decimal("100")] == 0.5
 
 
 async def test_verification_is_skipped_without_the_model(monkeypatch):

@@ -66,6 +66,7 @@ _SUSPICIOUS_LOW_FACTOR = Decimal("2.5")  # дешевше за 40% медіан�
 _VERIFY_MIN_CONFIDENT = 3  # медіана з двох цін — не якір
 _VERIFY_MAX_OFFERS = 40  # стеля на звіт; скільки не влізло — у лог
 _UNVERIFIED_CONFIDENCE = 0.5  # видно у списку, але поза статистикою
+_MIN_STATS_SAMPLE = 3  # менше — це вже не ринок, а випадкові дві ціни
 _MIN_NAME_SIMILARITY = 0.7  # нижче — це вже інша деталь, а не конкурент
 _STRONG_NAME_SIMILARITY = 0.8  # від цього збіг за назвою рахується у статистику
 _OEM_HIT_SCORE = 0.9  # знайдено за номером — це та сама деталь, не аналог
@@ -627,7 +628,14 @@ async def _verify_offers(
             case "drop":
                 updates[(source_index, offer_index)] = None
             case _:
-                # Не підтверджено — лишаємо на очі людині, але зі статистики геть.
+                # «Не знаю» — не доказ поганої пропозиції. Понижуємо лише
+                # підозріло дешеві: саме вони здатні збити рекомендацію
+                # сміттєвою ціною. Решту лишаємо в статистиці, інакше модель
+                # мовчки вирізає чесний дешевий ринок і радить підняти ціну —
+                # так на реальній картці з 29 пропозицій у розрахунок пройшли
+                # дві, а рекомендація вийшла втричі вища за ринок.
+                if offer.price >= anchor / _SUSPICIOUS_LOW_FACTOR:
+                    continue
                 updates[(source_index, offer_index)] = replace(
                     offer,
                     confidence=min(offer.confidence, _UNVERIFIED_CONFIDENCE),
@@ -835,7 +843,13 @@ class AvtoproPriceSource:
                     (
                         offer
                         for offer in result.offers
-                        if not offer_gates.is_junk(
+                        # offer.used — машинний прапорець рядка (data-bu,
+                        # розборка). Текст його не замінює: з пʼяти вживаних
+                        # пропозицій на реальній сторінці слово «б/у» стояло
+                        # лише в одній, а решта йшли як звичайні — зокрема та,
+                        # що ставала мінімумом ринку.
+                        if not offer.used
+                        and not offer_gates.is_junk(
                             _avtopro_text(offer), offer.availability
                         )
                     ),
@@ -852,8 +866,8 @@ class AvtoproPriceSource:
                             + (offer.part_uri or result.suggestion.part_uri),
                             city=offer.city,
                             availability=offer.availability,
-                            # avto.pro — каталог нових деталей, тож «нове» тут
-                            # припущення джерела, а не факт з оголошення.
+                            # Вживані сюди вже не доходять — прапорець рядка
+                            # відсіяв їх до дедупу, тож «нове» тут факт.
                             condition=offer_gates.condition_of(
                                 _avtopro_text(offer), offer.availability
                             )
@@ -1470,12 +1484,21 @@ def _recommended_price(prices: list[Decimal]) -> Decimal:
 
 
 def _stats_prices(offers: Iterable[MarketOffer]) -> list[Decimal]:
-    """Prices of confident matches only; all of them when none is confident."""
+    """Ціни впевнених збігів; коли їх замало — усі, що пройшли гейти.
+
+    Дві випадкові ціни не описують ринок. Якщо після перевірки впевнених
+    лишилась жменя, а пропозицій було помітно більше, вужча вибірка
+    систематично зміщена вгору: модель сумнівається саме в дешевих аналогах.
+    Ширша вибірка з позначкою краща за впевнено неправильну рекомендацію.
+    """
     offers = list(offers)
     strong = [
         offer.price for offer in offers if offer.confidence >= _MIN_STATS_CONFIDENCE
     ]
-    return strong or [offer.price for offer in offers]
+    if len(strong) >= _MIN_STATS_SAMPLE or len(offers) < _MIN_STATS_SAMPLE:
+        return strong or [offer.price for offer in offers]
+    # Пропозицій вистачало, а впевнених лишилась жменя — вибірка зміщена.
+    return [offer.price for offer in offers]
 
 
 def _by_confidence_then_price(offer: MarketOffer) -> tuple[float, Decimal]:
@@ -1515,4 +1538,4 @@ def _cache_key(query: PartSearchQuery) -> str:
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
     # v8: відсіви вживаного й перевірка цін другим проходом — інакше шість
     # годин TTL показували б старі звіти з розборкою і фальшивим "new".
-    return f"competitor-prices:v9:{query.listing_id}:{digest}"
+    return f"competitor-prices:v10:{query.listing_id}:{digest}"

@@ -44,6 +44,9 @@ class Offer:
     currency: str
     warehouse_id: str | None  # raw data-wh-id, stable seller/warehouse key
     boosted: bool
+    # avto.pro торгує і вживаним: такий рядок несе окремий бейдж «Б/У».
+    # Покладатись на слова в описі не можна — продавець їх може не написати.
+    used: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +60,7 @@ class Offer:
             "currency": self.currency,
             "warehouse_id": self.warehouse_id,
             "boosted": self.boosted,
+            "used": self.used,
         }
 
 
@@ -131,7 +135,25 @@ def _parse_row(row: str) -> Offer | None:
         currency=_CURRENCY_BY_SYMBOL.get(symbol, "UAH"),
         warehouse_id=_attr(row, "data-wh-id"),
         boosted=_attr(row, "data-is-boost-position") == "1",
+        used=_is_used(row),
     )
+
+
+# Вживану деталь рядок позначає машинним прапорцем data-bu="1", а розборку —
+# data-is-cardismantling="True". Це надійніше за слова: продавець може не
+# написати «б/у» в описі взагалі. Бейдж у комірці опису лишаємо запасним
+# варіантом на випадок зміни атрибутів.
+_USED_BADGE_RE = re.compile(
+    r"были\s+в\s+употреблении|>\s*Б\s*/\s*У\s*<", re.I | re.U
+)
+
+
+def _is_used(row: str) -> bool:
+    if _attr(row, "data-bu") == "1":
+        return True
+    if (_attr(row, "data-is-cardismantling") or "").lower() == "true":
+        return True
+    return _USED_BADGE_RE.search(row) is not None
 
 
 def _descr(row: str) -> str | None:
