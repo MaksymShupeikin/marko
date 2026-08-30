@@ -450,6 +450,35 @@ async def test_unavailable_rates_keep_old_drop_behavior(monkeypatch):
     assert cleaned[0].offers == (uah,)
 
 
+def test_installment_payment_is_not_a_price():
+    """Rozetka в сніпеті: «від 365 ₴ x 6» — місячний платіж за товар 2190.
+
+    Платіж повторюється і без маркера («від 365 ₴»), тож число з розстрочки
+    не рахується ціною в жодному входженні: краще без пропозиції, ніж 365.
+    """
+    snippet = (
+        "Амортизатори Solgy 211217 ; Продавець: AATLANT ; "
+        "Rozetka. від 365 ₴ x 6 ; від 365 ₴ ; Оплата"
+    )
+    assert competitor_prices_module._price_from_text(snippet) is None
+
+    # Маркер «/міс» — та сама розстрочка.
+    assert (
+        competitor_prices_module._price_from_text("від 199 грн/міс на 12 місяців")
+        is None
+    )
+
+    # Звичайна ціна поруч із розстрочкою — виживає.
+    both = "Ціна 2190 грн. Або від 365 ₴ x 6 у розстрочку"
+    assert str(competitor_prices_module._price_from_text(both)) == "2190.00"
+
+    # Сніпет без розстрочки працює як раніше.
+    assert (
+        str(competitor_prices_module._price_from_text("Купити за 204 грн"))
+        == "204.00"
+    )
+
+
 def test_zero_prices_are_dropped_always():
     """«Доставка 0 грн» зі сніпета не має ставати ціною товару."""
     offers = (

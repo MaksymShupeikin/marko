@@ -1335,9 +1335,30 @@ _LD_JSON_RE = re.compile(
 )
 
 
+# Розстрочка в сніпетах: «від 365 ₴ x 6», «365 грн/міс». Місячний платіж —
+# не ціна товару: Rozetka віддала так амортизатор за 2190 як «365».
+_INSTALLMENT_PRICE_RE = re.compile(
+    r"(\d[\d\s ]{0,9}(?:[.,]\d{1,2})?)\s*(?:грн|₴|uah)\s*(?:[xх×]\s*\d|/\s*м[іе]с)",
+    re.I,
+)
+
+
 def _price_from_text(text: str) -> Decimal | None:
-    match = _TEXT_PRICE_RE.search(text)
-    return parse_price(match.group(1)) if match else None
+    """Перша ціна з тексту, окрім платежів розстрочки.
+
+    Сніпет пише місячний платіж і з маркером, і без: «від 365 ₴ x 6; від
+    365 ₴». Тому число, спіймане в розстрочці, не рахується ціною в жодному
+    входженні — краще лишитись без пропозиції, ніж показати 365 замість 2190.
+    """
+    installment = {
+        parse_price(match.group(1))
+        for match in _INSTALLMENT_PRICE_RE.finditer(text)
+    }
+    for match in _TEXT_PRICE_RE.finditer(text):
+        price = parse_price(match.group(1))
+        if price is not None and price not in installment:
+            return price
+    return None
 
 
 def _structured_price(html: str) -> tuple[Decimal, str, str | None] | None:
