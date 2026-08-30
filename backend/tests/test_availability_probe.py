@@ -74,6 +74,7 @@ async def test_probe_runs_two_queries_with_both_flag_values_offline(
         ("availability-probe:211217", "true"),
     ]
     assert payload["configured"] == {"serper": True, "llm": True}
+    assert payload["run_errors"] == []
     assert payload["usage"] == {
         "full_reports": 4,
         "serper_calls": 0,
@@ -102,6 +103,50 @@ async def test_probe_runs_two_queries_with_both_flag_values_offline(
         probe.cp.AvtoproPriceSource.search,
     ) == original_methods
     assert settings.cache_clears == 5
+
+
+async def test_probe_reports_first_runtime_error_and_stops(monkeypatch, capsys):
+    probe = _load_probe()
+    settings = _SettingsProvider(configured=True)
+    calls = 0
+
+    async def broken_report(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AttributeError("malformed verdict item")
+
+    monkeypatch.setattr(probe, "get_settings", settings)
+    monkeypatch.setattr(probe.cp, "competitor_prices_for_query", broken_report)
+
+    await probe.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert calls == 1
+    assert payload["usage"]["full_reports"] == 1
+    assert payload["run_errors"] == [
+        {
+            "query": "availability-probe:5202CY",
+            "mode": "gate_off",
+            "type": "AttributeError",
+            "message": "malformed verdict item",
+        }
+    ]
+    assert payload["acceptance"]["passes"] is False
+    assert settings.cache_clears == 2
+
+
+def test_probe_paid_caps_can_only_be_reduced(monkeypatch):
+    monkeypatch.setenv("AVAILABILITY_PROBE_SERPER_CAP", "26")
+    monkeypatch.setenv("AVAILABILITY_PROBE_LLM_CAP", "49")
+    probe = _load_probe()
+    assert probe._BUDGET["serper_calls"] == 26
+    assert probe._BUDGET["llm_calls"] == 49
+
+    monkeypatch.setenv("AVAILABILITY_PROBE_SERPER_CAP", "999")
+    monkeypatch.setenv("AVAILABILITY_PROBE_LLM_CAP", "999")
+    probe = _load_probe()
+    assert probe._BUDGET["serper_calls"] == 30
+    assert probe._BUDGET["llm_calls"] == 60
 
 
 def test_probe_acceptance_requires_unavailable_to_stay_out_of_stats():

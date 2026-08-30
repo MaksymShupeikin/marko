@@ -19,10 +19,19 @@ from marko.services import competitor_prices as cp
 
 
 _FLAG = "COMPETITOR_AVAILABILITY_GATE_ENABLED"
+
+
+def _bounded_budget(env_name: str, default: int) -> int:
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return default
+    return min(default, max(0, int(raw)))
+
+
 _BUDGET = {
     "full_reports": 4,
-    "serper_calls": 30,
-    "llm_calls": 60,
+    "serper_calls": _bounded_budget("AVAILABILITY_PROBE_SERPER_CAP", 30),
+    "llm_calls": _bounded_budget("AVAILABILITY_PROBE_LLM_CAP", 60),
     "prom_pages": 100,
     "google_pages": 100,
     "avtopro_reports": 4,
@@ -149,6 +158,18 @@ async def _report(query: cp.PartSearchQuery, *, enabled: bool) -> dict[str, Any]
     return await cp.competitor_prices_for_query(query, refresh=True)
 
 
+async def _safe_report(
+    query: cp.PartSearchQuery, *, enabled: bool
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    try:
+        return await _report(query, enabled=enabled), None
+    except Exception as exc:
+        return None, {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+
 async def main() -> None:
     if len(_QUERIES) > 2:
         raise RuntimeError("availability probe is hard-capped at two queries")
@@ -208,12 +229,44 @@ async def main() -> None:
     cp.PromPriceSource._page_products = capped_prom_page
     cp.AvtoproPriceSource.search = capped_avtopro_search
     comparisons: list[dict[str, Any]] = []
+    run_errors: list[dict[str, Any]] = []
     try:
         for query in _QUERIES:
             consume("full_reports")
-            gate_off = await _report(query, enabled=False)
+            gate_off, gate_off_error = await _safe_report(query, enabled=False)
+            if gate_off_error is not None:
+                error = {
+                    "query": query.listing_id,
+                    "mode": "gate_off",
+                    **gate_off_error,
+                }
+                run_errors.append(error)
+                comparisons.append(
+                    {
+                        "query": query.as_json(),
+                        "gate_off_error": gate_off_error,
+                    }
+                )
+                break
+
             consume("full_reports")
-            gate_on = await _report(query, enabled=True)
+            gate_on, gate_on_error = await _safe_report(query, enabled=True)
+            if gate_on_error is not None:
+                error = {
+                    "query": query.listing_id,
+                    "mode": "gate_on",
+                    **gate_on_error,
+                }
+                run_errors.append(error)
+                comparisons.append(
+                    {
+                        "query": query.as_json(),
+                        "gate_off": _summary(gate_off),
+                        "gate_on_error": gate_on_error,
+                    }
+                )
+                break
+
             assertions = _availability_assertions(gate_on)
             comparisons.append(
                 {
@@ -254,6 +307,7 @@ async def main() -> None:
                 "cache": "report and photo caches are no-op; no Redis reads or writes",
                 "budget": _BUDGET,
                 "usage": usage,
+                "run_errors": run_errors,
                 "comparisons": comparisons,
                 "acceptance": {
                     "positive_cases": sum(
@@ -264,18 +318,22 @@ async def main() -> None:
                             > 0
                         )
                         for comparison in comparisons
+                        if "gate_on_availability_assertions" in comparison
                     ),
-                    "passes": bool(comparisons)
+                    "passes": not run_errors
+                    and bool(comparisons)
                     and any(
                         comparison["gate_on_availability_assertions"][
                             "out_of_stock_detected"
                         ]
                         > 0
                         for comparison in comparisons
+                        if "gate_on_availability_assertions" in comparison
                     )
                     and all(
                         comparison["gate_on_availability_assertions"]["passes"]
                         for comparison in comparisons
+                        if "gate_on_availability_assertions" in comparison
                         if comparison["gate_on_availability_assertions"][
                             "out_of_stock_detected"
                         ]
