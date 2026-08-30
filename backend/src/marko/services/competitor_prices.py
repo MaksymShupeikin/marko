@@ -35,7 +35,7 @@ from marko.repositories.listings import (
     get_workspace_listing,
     set_listing_oem_numbers,
 )
-from marko.services import exchange_rates, llm_filter, offer_gates
+from marko.services import exchange_rates, llm_filter, offer_gates, photo_check
 from marko.services.matching import (
     brands_compatible,
     laterality_conflict,
@@ -67,6 +67,10 @@ _SUSPICIOUS_LOW_FACTOR = Decimal("2.5")  # дешевше за 40% медіан�
 _VERIFY_MIN_CONFIDENT = 3  # медіана з двох цін — не якір
 _VERIFY_MAX_OFFERS = 40  # стеля на звіт; скільки не влізло — у лог
 _UNVERIFIED_CONFIDENCE = 0.5  # видно у списку, але поза статистикою
+# Фото-перевірка вживаності: дивимось лише на пропозиції, що задають
+# рекомендацію, — помилка саме там коштує грошей.
+_PHOTO_CHECK_CHEAPEST = 3  # найдешевші якірні — саме вони задають рекомендацію
+_PHOTO_CHECK_MAX = 4  # стеля фото на звіт
 _MIN_STATS_SAMPLE = 3  # менше — це вже не ринок, а випадкові дві ціни
 _MIN_NAME_SIMILARITY = 0.7  # нижче — це вже інша деталь, а не конкурент
 _STRONG_NAME_SIMILARITY = 0.8  # від цього збіг за назвою рахується у статистику
@@ -503,7 +507,9 @@ async def _collect(
     sane = _drop_implausible(_single_currency(refined))
     return CompetitorPriceReport(
         query=query,
-        sources=await _verify_offers(query, sane, emit),
+        sources=await _photo_check_offers(
+            query, await _verify_offers(query, sane, emit), emit
+        ),
         observed_at=datetime.now(UTC),
     )
 
@@ -563,6 +569,43 @@ async def _refine_source(
     )
 
 
+def _indexed_anchor(
+    sources: tuple[SourceResult, ...],
+) -> tuple[list[tuple[int, int, MarketOffer]], Decimal | None]:
+    """Плоский список пропозицій і медіана впевнених цін; None — статистики нема."""
+    indexed = [
+        (source_index, offer_index, offer)
+        for source_index, source in enumerate(sources)
+        for offer_index, offer in enumerate(source.offers)
+    ]
+    strong = [
+        offer.price
+        for _, _, offer in indexed
+        if offer.confidence >= _MIN_STATS_CONFIDENCE
+    ]
+    if len(strong) < _VERIFY_MIN_CONFIDENT:
+        return indexed, None
+    return indexed, Decimal(str(median(strong)))
+
+
+def _apply_updates(
+    sources: tuple[SourceResult, ...],
+    updates: dict[tuple[int, int], MarketOffer | None],
+) -> tuple[SourceResult, ...]:
+    """Замінити чи прибрати пропозиції за адресою (джерело, позиція)."""
+    return tuple(
+        replace(
+            source,
+            offers=tuple(
+                updates.get((source_index, offer_index), offer)
+                for offer_index, offer in enumerate(source.offers)
+                if updates.get((source_index, offer_index), offer) is not None
+            ),
+        )
+        for source_index, source in enumerate(sources)
+    )
+
+
 async def _verify_offers(
     query: PartSearchQuery,
     sources: tuple[SourceResult, ...],
@@ -580,19 +623,9 @@ async def _verify_offers(
     if not get_settings().competitor_verify_enabled or not llm_filter.is_enabled():
         return sources
 
-    indexed = [
-        (source_index, offer_index, offer)
-        for source_index, source in enumerate(sources)
-        for offer_index, offer in enumerate(source.offers)
-    ]
-    strong = [
-        offer.price
-        for _, _, offer in indexed
-        if offer.confidence >= _MIN_STATS_CONFIDENCE
-    ]
-    if len(strong) < _VERIFY_MIN_CONFIDENT:
+    indexed, anchor = _indexed_anchor(sources)
+    if anchor is None:
         return sources
-    anchor = Decimal(str(median(strong)))
 
     def worth_checking(offer: MarketOffer) -> bool:
         # Все, що йде в статистику, плюс підозріло дешеві поза нею.
@@ -658,17 +691,115 @@ async def _verify_offers(
         len(updates) - dropped,
         len(picked),
     )
-    return tuple(
-        replace(
-            source,
-            offers=tuple(
-                updates.get((source_index, offer_index), offer)
-                for offer_index, offer in enumerate(source.offers)
-                if updates.get((source_index, offer_index), offer) is not None
-            ),
-        )
-        for source_index, source in enumerate(sources)
+    return _apply_updates(sources, updates)
+
+
+async def _photo_check_offers(
+    query: PartSearchQuery,
+    sources: tuple[SourceResult, ...],
+    emit: ProgressCallback,
+) -> tuple[SourceResult, ...]:
+    """Фото-перевірка якірних пропозицій: модель ловить Б/У, про яке мовчать.
+
+    Продавець з розборки часто не пише «б/у» — текстові відсіви й друга
+    перевірка тоді сліпі, а вживану деталь видає фотографія. Гейт
+    односторонній: фото доводить лише вживаність; чисте фото нічого не
+    гарантує (продавці ставлять стокові), тож "not_used" пропозицію не
+    підвищує. Збій виклику — не вердикт: пропозиція лишається як є, інакше
+    провайдер без зору понижував би чесні дешеві ціни в кожному звіті.
+    """
+    if not get_settings().competitor_photo_check_enabled or not llm_filter.is_enabled():
+        return sources
+
+    indexed, anchor = _indexed_anchor(sources)
+    if anchor is None:
+        return sources
+
+    def suspicious(offer: MarketOffer) -> bool:
+        return offer.price < anchor / _SUSPICIOUS_LOW_FACTOR
+
+    # Найдешевші зі статистики: продавцевому «нове» за нормальної ціни
+    # віримо, як і текстовий прохід, — фото дивимось лише там, де продавець
+    # про стан мовчить.
+    stats_eligible = sorted(
+        (
+            item
+            for item in indexed
+            if item[2].confidence >= _MIN_STATS_CONFIDENCE
+            and item[2].image_url
+            and item[2].condition is None
+        ),
+        key=lambda item: item[2].price,
+    )[:_PHOTO_CHECK_CHEAPEST]
+    # Підозріло дешеві — всі з фото, включно з заявленим «нове»: заява за
+    # <40% медіани — саме там ховається брехня, і фото — єдиний свідок.
+    cheap = [item for item in indexed if suspicious(item[2]) and item[2].image_url]
+
+    picked: dict[tuple[int, int], MarketOffer] = {}
+    for source_index, offer_index, offer in sorted(
+        stats_eligible + cheap, key=lambda item: item[2].price
+    ):
+        picked.setdefault((source_index, offer_index), offer)
+    unique_urls = dict.fromkeys(offer.url for offer in picked.values())
+    capped_urls = set(list(unique_urls)[:_PHOTO_CHECK_MAX])
+    picked = {
+        address: offer
+        for address, offer in picked.items()
+        if offer.url in capped_urls
+    }
+    if not picked:
+        return sources
+
+    emit("filter", f"Дивимось фото: {len(capped_urls)} пропозицій")
+    verdicts = await photo_check.condition_verdicts(
+        [
+            photo_check.PhotoCandidate(
+                url=offer.url, title=offer.title, image_url=offer.image_url or ""
+            )
+            for offer in picked.values()
+        ]
     )
+
+    updates: dict[tuple[int, int], MarketOffer | None] = {}
+    for address, offer in picked.items():
+        match verdicts.get(offer.url):
+            case "used" if suspicious(offer):
+                # Вживана й підозріло дешева — класична розборка, що збиває
+                # рекомендацію: насос за 1400 при медіані нових 6941.
+                updates[address] = None
+            case "used":
+                # Вживана на вигляд, але ціна ринкова: вердикт по фото на
+                # межі дрижить (нова деталь на картоні), тож чесного
+                # конкурента не стираємо — лишаємо видимим зі станом «б/у»
+                # і поза статистикою, рекомендацію він не задасть.
+                updates[address] = replace(
+                    offer,
+                    condition="used",
+                    confidence=min(offer.confidence, _UNVERIFIED_CONFIDENCE),
+                )
+            case "unsure":
+                # Сумнів — не доказ: понижуємо лише підозріло дешеві, як і
+                # в текстовій перевірці.
+                if suspicious(offer):
+                    updates[address] = replace(
+                        offer,
+                        confidence=min(offer.confidence, _UNVERIFIED_CONFIDENCE),
+                    )
+            case _:  # "not_used" або збій виклику — недоторкано
+                continue
+    if not updates:
+        return sources
+
+    dropped = sum(1 for value in updates.values() if value is None)
+    if dropped:
+        emit("filter", f"Відсіяли {dropped} вживаних за фото")
+    log.info(
+        "Фото-перевірка: відкинуто %d, знижено %d із %d",
+        dropped,
+        len(updates) - dropped,
+        len(picked),
+    )
+    return _apply_updates(sources, updates)
 
 
 def _offer_facts(offer: MarketOffer) -> llm_filter.OfferFacts:
@@ -1147,7 +1278,7 @@ class GooglePriceSource:
 
     async def _page_price(
         self, client: httpx.AsyncClient, url: str
-    ) -> tuple[Decimal, str] | None:
+    ) -> tuple[Decimal, str, str | None] | None:
         """Чужий сайт, що не відповів — просто без ціни, а не без джерела."""
         try:
             response = await client.get(url)
@@ -1159,7 +1290,13 @@ class GooglePriceSource:
             return None
 
     def _offer(
-        self, item: dict, domain: str, score: float, price: Decimal, currency: str
+        self,
+        item: dict,
+        domain: str,
+        score: float,
+        price: Decimal,
+        currency: str,
+        image_url: str | None = None,
     ) -> MarketOffer:
         return MarketOffer(
             source=self.source,
@@ -1168,6 +1305,7 @@ class GooglePriceSource:
             currency=_norm_currency(currency),
             url=item.get("link") or "",
             seller=domain,
+            image_url=image_url,
             confidence=score,
             is_analog=score < _OEM_HIT_SCORE,
         )
@@ -1202,15 +1340,21 @@ def _price_from_text(text: str) -> Decimal | None:
     return parse_price(match.group(1)) if match else None
 
 
-def _structured_price(html: str) -> tuple[Decimal, str] | None:
-    """Ціна з розмітки сторінки: JSON-LD, потім microdata, потім OpenGraph."""
+def _structured_price(html: str) -> tuple[Decimal, str, str | None] | None:
+    """Ціна з розмітки сторінки: JSON-LD, потім microdata, потім OpenGraph.
+
+    Третім елементом — фото товару з того ж JSON-LD: воно потрібне
+    фото-перевірці вживаності, а сторінка вже в руках.
+    """
     for block in _LD_JSON_RE.findall(html):
         try:
-            found = _ld_price(json.loads(block.strip()))
+            parsed = json.loads(block.strip())
         except ValueError:
             continue
+        found = _ld_price(parsed)
         if found:
-            return found
+            price, currency = found
+            return price, currency, _ld_image(parsed)
     flat = re.sub(r"\s+", " ", html)
     for pattern in (
         r'<[^>]*itemprop="price"[^>]*>',
@@ -1227,7 +1371,7 @@ def _structured_price(html: str) -> tuple[Decimal, str] | None:
             price = parse_price(raw)
             if price is not None:
                 # Валюти в microdata поруч може й не бути; ринок — гривневий.
-                return price, "UAH"
+                return price, "UAH", None
     return None
 
 
@@ -1245,6 +1389,32 @@ def _ld_price(node: Any) -> tuple[Decimal, str] | None:
             None,
             (
                 _ld_price(value)
+                for value in node.values()
+                if isinstance(value, (dict, list))
+            ),
+        ),
+        None,
+    )
+
+
+def _ld_image(node: Any) -> str | None:
+    """Фото товару з JSON-LD: рядок, перший елемент списку або {"url": ...}."""
+    if isinstance(node, list):
+        return next(filter(None, map(_ld_image, node)), None)
+    if not isinstance(node, dict):
+        return None
+    image = node.get("image")
+    while isinstance(image, list):
+        image = image[0] if image else None
+    if isinstance(image, dict):
+        image = image.get("url")
+    if isinstance(image, str) and image.startswith("http"):
+        return image
+    return next(
+        filter(
+            None,
+            (
+                _ld_image(value)
                 for value in node.values()
                 if isinstance(value, (dict, list))
             ),
@@ -1592,4 +1762,6 @@ def _cache_key(query: PartSearchQuery) -> str:
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
     # v8: відсіви вживаного й перевірка цін другим проходом — інакше шість
     # годин TTL показували б старі звіти з розборкою і фальшивим "new".
-    return f"competitor-prices:v10:{query.listing_id}:{digest}"
+    # v11: фото-перевірка вживаних — інакше TTL показував би звіти
+    # з Б/У-якорем ще шість годин.
+    return f"competitor-prices:v11:{query.listing_id}:{digest}"

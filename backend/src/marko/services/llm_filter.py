@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Sequence
+from typing import Any, Sequence
 
 import openai
 
@@ -62,6 +62,33 @@ _VERIFY_SYSTEM = (
     'Відповідь — лише JSON: {"verdicts": [{"index": 0, "verdict": "ok"}, ...]},'
     " по одному запису на кожного кандидата, без пояснень."
 )
+
+
+# Фото-перевірка: продавці вживаного часто мовчать про стан у тексті,
+# і єдиним свідком лишається фотографія.
+_PHOTO_SYSTEM = (
+    "Ти дивишся на фото товару з оголошення про автозапчастину.\n"
+    "Продавці нових деталей часто ставлять стокові чи каталожні фото, тож\n"
+    "чисте «нове» фото НЕ доводить, що деталь нова. А от вживану деталь\n"
+    "видають сліди ЕКСПЛУАТАЦІЇ НА АВТО. Постав категорію:\n"
+    "  used     — деталь стояла на машині: бруд чи масляний наліт у\n"
+    "             порожнинах, іржа, сліди прокладок або герметика на\n"
+    "             фланцях, обжаті чи зношені кріпильні отвори, написи\n"
+    "             маркером на корпусі (так розборки позначають, з якої\n"
+    "             машини знято);\n"
+    "  not_used — слідів роботи на авто не видно (це НЕ гарантія нової\n"
+    "             деталі — лише відсутність доказів протилежного);\n"
+    "  unsure   — фото не відкрилось, нечітке, або на ньому не деталь.\n"
+    "НЕ докази вживаності: фон (в Україні й нові деталі знімають на\n"
+    "картоні, верстаку чи підлозі складу), виробничі й транспортні сліди\n"
+    "(потертості ребер радіатора, подряпини литва, захисне мастило, пил),\n"
+    "матовий чи сірий метал.\n"
+    "Сумніваєшся між used і not_used — став unsure.\n"
+    "Відповідь — лише JSON: спершу доказ, потім вердикт:\n"
+    '{"evidence": "що саме видно на деталі", "verdict": "used"}.'
+)
+
+_PHOTO_VERDICTS = frozenset({"used", "not_used", "unsure"})
 
 
 @dataclass(frozen=True)
@@ -172,6 +199,29 @@ async def verify_offers(
     return result
 
 
+async def photo_condition(*, title: str, image_url: str) -> str | None:
+    """"used" | "not_used" | "unsure"; None — виклик не вдався.
+
+    None ≠ "unsure": збій vision-виклику (провайдер без зору, бите фото)
+    не має понижувати пропозицію — на відміну від текстової перевірки,
+    де пропущений вердикт стає "unsure".
+    """
+    if not is_enabled():
+        return None
+    try:
+        raw = await _ask_openai(
+            f"Оголошення: {title}",
+            _PHOTO_SYSTEM,
+            image_url=image_url,
+            model=get_settings().competitor_photo_model or None,
+        )
+        verdict = json.loads(raw)["verdict"]
+    except Exception as exc:  # перевірка не критична — краще без неї, ніж без цін
+        log.warning("Фото-перевірка %r не спрацювала: %s", image_url, exc)
+        return None
+    return verdict if verdict in _PHOTO_VERDICTS else None
+
+
 async def _verify_chunk(
     name: str,
     brand: str | None,
@@ -238,7 +288,13 @@ async def _classify_chunk(
     return result or None
 
 
-async def _ask_openai(prompt: str, system: str = _SYSTEM) -> str:
+async def _ask_openai(
+    prompt: str,
+    system: str = _SYSTEM,
+    *,
+    image_url: str | None = None,
+    model: str | None = None,
+) -> str:
     # json_object, а не json_schema: його розуміють усі сумісні провайдери,
     # а форму відповіді все одно перевіряє classify().
     settings = get_settings()
@@ -246,12 +302,18 @@ async def _ask_openai(prompt: str, system: str = _SYSTEM) -> str:
     # самим результатом, minimal 4.0 c — і 10 чужих позицій у видачі.
     # Чужий base_url може не знати цього параметра, тож лише для самого OpenAI.
     extra = {} if settings.openai_base_url else {"reasoning_effort": "low"}
+    content: str | list[dict[str, Any]] = prompt
+    if image_url is not None:
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ]
     response = await _openai().chat.completions.create(
-        model=settings.competitor_filter_model,
+        model=model or settings.competitor_filter_model,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": content},
         ],
         **extra,
     )

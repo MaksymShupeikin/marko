@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # Другий прохід моделі по цінах, що йдуть у статистику: точніше, але
     # повільніше. Вимикається окремо від першого фільтра, який працює добре.
     competitor_verify_enabled: bool = True
+    # Фото-перевірка якірних пропозицій: модель дивиться на фото і ловить
+    # вживані деталі, про які продавець змовчав. Потрібен vision-сумісний
+    # endpoint; збій виклику лише пропускає перевірку, звіт не ламає.
+    competitor_photo_check_enabled: bool = True
+    # Порожньо = та сама модель, що й competitor_filter_model.
+    competitor_photo_model: str = ""
     # Порожньо = джерело Google (Serper.dev) вимкнене.
     serper_api_key: str = ""
     openai_api_key: str = ""

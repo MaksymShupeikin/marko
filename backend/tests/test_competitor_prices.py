@@ -778,7 +778,7 @@ def test_own_prom_seller_id_falls_back_to_store_subdomain():
     )
 
 
-def test_cache_key_is_v10_and_changes_with_workspace_exclusions():
+def test_cache_key_is_v11_and_changes_with_workspace_exclusions():
     base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
     workspace = competitor_prices_module.manual_search_query(
         "0451103316",
@@ -792,7 +792,7 @@ def test_cache_key_is_v10_and_changes_with_workspace_exclusions():
         ],
     )
 
-    assert _cache_key(base).startswith("competitor-prices:v10:")
+    assert _cache_key(base).startswith("competitor-prices:v11:")
     assert _cache_key(base) != _cache_key(workspace)
 
 
@@ -1052,7 +1052,13 @@ async def test_one_broken_page_does_not_kill_the_whole_prom_source(monkeypatch):
     assert "seller-2" not in {offer.seller for offer in result.offers}
 
 
-def _verify_offer(title: str, price: str, confidence: float = 0.9) -> MarketOffer:
+def _verify_offer(
+    title: str,
+    price: str,
+    confidence: float = 0.9,
+    image_url: str | None = None,
+    condition: str | None = None,
+) -> MarketOffer:
     return MarketOffer(
         source="prom",
         title=title,
@@ -1061,6 +1067,8 @@ def _verify_offer(title: str, price: str, confidence: float = 0.9) -> MarketOffe
         url=f"https://prom.ua/{price}",
         seller="shop",
         availability="в наявності",
+        condition=condition,
+        image_url=image_url,
         confidence=confidence,
     )
 
@@ -1072,7 +1080,24 @@ def _enable_verification(monkeypatch, *, enabled: bool = True) -> None:
     monkeypatch.setattr(
         competitor_prices_module,
         "get_settings",
-        lambda: SimpleNamespace(competitor_verify_enabled=True),
+        lambda: SimpleNamespace(
+            competitor_verify_enabled=True,
+            competitor_photo_check_enabled=False,
+        ),
+    )
+
+
+def _enable_photo_check(monkeypatch, *, enabled: bool = True) -> None:
+    monkeypatch.setattr(
+        competitor_prices_module.llm_filter, "is_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            competitor_verify_enabled=False,
+            competitor_photo_check_enabled=enabled,
+        ),
     )
 
 
@@ -1298,6 +1323,314 @@ async def test_verification_is_capped(monkeypatch):
     assert sent[0] == "Фільтр 0"  # найдешевший перший
 
 
+# Фото-перевірка вживаності: модель дивиться на фото якірних пропозицій
+
+
+_IMG = "https://images.prom.ua/pump.jpg"
+
+
+async def test_photo_of_used_part_drops_the_suspicious_anchor_offer(monkeypatch):
+    """Вакуумний насос 06E145100R: розборка за 1400 без «б/у» в тексті.
+
+    Текстові відсіви й машинні прапорці мовчали, і рекомендація 1316 грн
+    рахувалась від вживаної деталі, поки ринок нових починався з 2500.
+    """
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer("Вакуумний насос Audi A6 C7", "1400", image_url=_IMG),
+                _verify_offer("Вакуумний насос 06E145100R", "2500", image_url=_IMG + "2"),
+                _verify_offer("Насос вакуумний Audi Q7", "3487", image_url=_IMG + "3"),
+                _verify_offer("VAG 06E145100R", "6941", image_url=_IMG + "4"),
+                _verify_offer("Pierburg 724807750", "7482", image_url=_IMG + "5"),
+                _verify_offer("ОРИГІНАЛ Насос Touareg", "8420", image_url=_IMG + "6"),
+            ),
+        ),
+    )
+
+    async def fake_verdicts(candidates):
+        return {c.url: "used" if "1400" in c.url else "not_used" for c in candidates}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    checked = await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    prices = [str(offer.price) for offer in checked[0].offers]
+    assert "1400" not in prices  # вживана й підозріло дешева — зникла
+    assert prices == ["2500", "3487", "6941", "7482", "8420"]
+
+
+async def test_used_photo_at_market_price_demotes_but_keeps_the_offer(monkeypatch):
+    """Вердикт по фото на межі дрижить: нова деталь на картоні читається як б/у.
+
+    За ринкової ціни чесного конкурента не стираємо — він лишається видимим
+    зі станом «б/у» і поза статистикою, рекомендацію не задає.
+    """
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer("Радіатор на картоні", "200", image_url=_IMG),
+                _verify_offer("Радіатор A", "210", image_url=_IMG + "a"),
+                _verify_offer("Радіатор B", "220", image_url=_IMG + "b"),
+                _verify_offer("Радіатор C", "230", image_url=_IMG + "c"),
+            ),
+        ),
+    )
+
+    async def fake_verdicts(candidates):
+        return {c.url: "used" if "200" in c.url else "not_used" for c in candidates}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    checked = await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    kept = {str(o.price): o for o in checked[0].offers}
+    assert "200" in kept  # не зникла
+    assert kept["200"].condition == "used"
+    assert kept["200"].confidence == competitor_prices_module._UNVERIFIED_CONFIDENCE
+    assert kept["210"].confidence == 0.9
+
+
+async def test_clean_photo_proves_nothing_and_offer_stays(monkeypatch):
+    """Гейт односторонній: «чисте фото» не міняє пропозицію взагалі."""
+    _enable_photo_check(monkeypatch)
+    offers = tuple(
+        _verify_offer(f"Фільтр {i}", str(200 + i), image_url=f"{_IMG}{i}")
+        for i in range(4)
+    )
+    sources = (SourceResult("prom", "Prom.ua", "ok", offers),)
+
+    async def fake_verdicts(candidates):
+        return {c.url: "not_used" for c in candidates}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    checked = await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+    assert checked == sources
+
+
+async def test_photo_unsure_demotes_only_suspiciously_cheap_offers(monkeypatch):
+    """Сумнів по фото — не вирок: звичайна ціна лишається у статистиці."""
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer("Фільтр дешевий", "40", image_url=_IMG),
+                _verify_offer("Фільтр A", "200", image_url=_IMG + "a"),
+                _verify_offer("Фільтр B", "210", image_url=_IMG + "b"),
+                _verify_offer("Фільтр C", "220", image_url=_IMG + "c"),
+            ),
+        ),
+    )
+
+    async def fake_verdicts(candidates):
+        return {c.url: "unsure" for c in candidates}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    checked = await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+
+    by_price = {str(o.price): o.confidence for o in checked[0].offers}
+    assert by_price["40"] == competitor_prices_module._UNVERIFIED_CONFIDENCE
+    assert by_price["200"] == 0.9  # звичайна ціна недоторкана
+
+
+async def test_vision_call_failure_leaves_offers_completely_untouched(monkeypatch):
+    """Збій ≠ сумнів: провайдер без зору не має понижувати чесні ціни."""
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer("Фільтр дешевий", "40", image_url=_IMG),
+                _verify_offer("Фільтр A", "200", image_url=_IMG + "a"),
+                _verify_offer("Фільтр B", "210", image_url=_IMG + "b"),
+                _verify_offer("Фільтр C", "220", image_url=_IMG + "c"),
+            ),
+        ),
+    )
+
+    async def fake_verdicts(_candidates):
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    checked = await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+    assert checked == sources
+
+
+async def test_offer_without_image_is_never_photo_checked(monkeypatch):
+    """Без фото перевіряти нічого — кандидат не потрапляє до моделі."""
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer("Фільтр без фото", "200"),
+                _verify_offer("Фільтр A", "210", image_url=_IMG + "a"),
+                _verify_offer("Фільтр B", "220", image_url=_IMG + "b"),
+            ),
+        ),
+    )
+    seen: list[str] = []
+
+    async def fake_verdicts(candidates):
+        seen.extend(c.image_url for c in candidates)
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+    assert seen == [_IMG + "a", _IMG + "b"]
+
+
+async def test_seller_claimed_new_is_photo_checked_only_when_suspiciously_cheap(
+    monkeypatch,
+):
+    """«Нове» за нормальної ціни — віримо; «нове» за 40% медіани — дивимось фото."""
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            (
+                _verify_offer(
+                    "Нове за третину ціни", "70", image_url=_IMG, condition="new"
+                ),
+                _verify_offer(
+                    "Нове за ринком", "200", image_url=_IMG + "a", condition="new"
+                ),
+                _verify_offer("Фільтр B", "210", image_url=_IMG + "b"),
+                _verify_offer("Фільтр C", "220", image_url=_IMG + "c"),
+            ),
+        ),
+    )
+    seen: list[str] = []
+
+    async def fake_verdicts(candidates):
+        seen.extend(c.title for c in candidates)
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+    assert "Нове за третину ціни" in seen
+    assert "Нове за ринком" not in seen
+
+
+async def test_photo_check_cap_and_cheapest_first_selection(monkeypatch):
+    """Стеля фото на звіт: беруться найдешевші, бо саме вони задають рекомендацію."""
+    _enable_photo_check(monkeypatch)
+    sources = (
+        SourceResult(
+            "prom",
+            "Prom.ua",
+            "ok",
+            tuple(
+                _verify_offer(f"Фільтр {i}", str(500 + i), image_url=f"{_IMG}{i}")
+                for i in range(10)
+            ),
+        ),
+    )
+    seen: list[str] = []
+
+    async def fake_verdicts(candidates):
+        seen.extend(c.title for c in candidates)
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    await competitor_prices_module._photo_check_offers(
+        part_query(), sources, lambda *_: None
+    )
+    assert len(seen) <= competitor_prices_module._PHOTO_CHECK_MAX
+    assert seen[0] == "Фільтр 0"  # найдешевший перший
+
+
+async def test_photo_check_skipped_without_flag_or_anchor(monkeypatch):
+    """Вимкнений прапорець чи тонкий ринок — жодного виклику моделі."""
+    called: list[bool] = []
+
+    async def fake_verdicts(_candidates):
+        called.append(True)
+        return {}
+
+    monkeypatch.setattr(
+        competitor_prices_module.photo_check, "condition_verdicts", fake_verdicts
+    )
+
+    offers = tuple(
+        _verify_offer(f"Фільтр {i}", str(200 + i), image_url=f"{_IMG}{i}")
+        for i in range(4)
+    )
+    sources = (SourceResult("prom", "Prom.ua", "ok", offers),)
+
+    _enable_photo_check(monkeypatch, enabled=False)
+    assert (
+        await competitor_prices_module._photo_check_offers(
+            part_query(), sources, lambda *_: None
+        )
+        == sources
+    )
+
+    # Тонкий ринок: впевнених цін менше, ніж треба для медіани.
+    _enable_photo_check(monkeypatch)
+    thin = (SourceResult("prom", "Prom.ua", "ok", offers[:2]),)
+    assert (
+        await competitor_prices_module._photo_check_offers(
+            part_query(), thin, lambda *_: None
+        )
+        == thin
+    )
+    assert called == []
+
+
 # Добір каталожного номера зі сторінки товару
 
 
@@ -1469,3 +1802,45 @@ async def test_free_serper_plan_marks_exist_skipped_not_failed():
 
     assert result.status == "skipped"
     assert "тариф" in result.error
+
+
+# Фото з JSON-LD: Google/Exist качають сторінку — картинка вже в руках
+
+
+def test_structured_price_carries_image_from_json_ld():
+    """Фото товару їде третім елементом — для фото-перевірки вживаності."""
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type": "Product", "image": ["https://cdn.shop.ua/pump.jpg"],'
+        ' "offers": {"@type": "Offer", "price": "193", "priceCurrency": "UAH"}}'
+        "</script>"
+    )
+    priced = competitor_prices_module._structured_price(html)
+    assert priced is not None
+    price, currency, image = priced
+    assert str(price) == "193.00"
+    assert currency == "UAH"
+    assert image == "https://cdn.shop.ua/pump.jpg"
+
+
+def test_structured_price_without_json_ld_has_no_image():
+    """Microdata знає ціну, але не фото: третій елемент — None."""
+    html = '<span itemprop="price" content="204">204 грн</span>'
+    priced = competitor_prices_module._structured_price(html)
+    assert priced is not None
+    price, currency, image = priced
+    assert str(price) == "204.00"
+    assert image is None
+
+
+def test_google_offer_carries_image_url():
+    """Пропозиція Google несе фото зі сторінки — кандидат для фото-перевірки."""
+    offer = competitor_prices_module.GooglePriceSource()._offer(
+        {"title": "Фільтр", "link": "https://shop.ua/filtr"},
+        "shop.ua",
+        0.9,
+        Decimal("193"),
+        "UAH",
+        "https://cdn.shop.ua/pump.jpg",
+    )
+    assert offer.image_url == "https://cdn.shop.ua/pump.jpg"
