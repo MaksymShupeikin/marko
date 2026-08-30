@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from statistics import median
@@ -178,9 +178,13 @@ class MarketOffer:
     confidence: float = 1.0
     # Не той самий номер: інший виробник робить те саме — ціна для порівняння.
     is_analog: bool = False
+    # Машинний сигнал джерела. Внутрішній: за вимкненого sandbox-флага він
+    # не змінює ані API payload, ані кеш v11.
+    stock: str | None = field(default=None, repr=False, compare=False)
 
     def as_json(self) -> dict[str, Any]:
         data = asdict(self)
+        data.pop("stock", None)
         data["price"] = str(self.price)
         return data
 
@@ -504,7 +508,7 @@ async def _collect(
         *(_refined_source(source, query, timeout, emit) for source in sources)
     )
     refined = await _to_uah(tuple(results))
-    sane = _drop_implausible(_single_currency(refined))
+    sane = _availability_gate(_drop_implausible(_single_currency(refined)))
     return CompetitorPriceReport(
         query=query,
         sources=await _photo_check_offers(
@@ -890,6 +894,55 @@ def _drop_implausible(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, 
     )
 
 
+def _availability_gate(
+    sources: tuple[SourceResult, ...],
+) -> tuple[SourceResult, ...]:
+    """Лишити недоступні пропозиції видимими, але вивести зі статистики.
+
+    Машинний сигнал джерела має пріоритет над текстом. Канонічний підпис
+    додається лише за увімкненого флага, тому вимкнений sandbox лишає
+    серіалізований звіт біт-в-біт таким, як раніше.
+    """
+    if not get_settings().competitor_availability_gate_enabled:
+        return sources
+
+    demoted = 0
+    changed = False
+    gated: list[SourceResult] = []
+    for source in sources:
+        offers: list[MarketOffer] = []
+        for offer in source.offers:
+            stock = offer.stock or offer_gates.stock_of(offer.availability)
+            if stock != "out_of_stock":
+                offers.append(offer)
+                continue
+
+            confidence = min(offer.confidence, _UNVERIFIED_CONFIDENCE)
+            availability = offer.availability
+            # Машинний OutOfStock перемагає порожній чи суперечливий текст і
+            # дає фронтенду вже наявне поле для зрозумілої позначки.
+            if offer.stock == "out_of_stock" and (
+                offer_gates.stock_of(availability) != "out_of_stock"
+            ):
+                availability = "Немає в наявності"
+            updated = replace(
+                offer,
+                confidence=confidence,
+                availability=availability,
+            )
+            changed = changed or updated != offer or availability != offer.availability
+            demoted += int(confidence < offer.confidence)
+            offers.append(updated)
+        gated.append(replace(source, offers=tuple(offers)))
+
+    if demoted:
+        log.info(
+            "Ціни конкурентів: через відсутність понижено %d пропозицій",
+            demoted,
+        )
+    return tuple(gated) if changed else sources
+
+
 def _single_currency(sources: tuple[SourceResult, ...]) -> tuple[SourceResult, ...]:
     """Drop offers priced in a foreign currency — 50 USD is not below 200 UAH.
 
@@ -1139,6 +1192,9 @@ class PromPriceSource:
                 confidence=score,
                 # Номер не збігся — знайшли за назвою, тобто аналог.
                 is_analog=score < _OEM_HIT_SCORE,
+                # False — надійний машинний сигнал Prom. True не означає
+                # саме склад: «під замовлення» теж можна купити.
+                stock="out_of_stock" if product.is_available is False else None,
             )
 
 
@@ -1278,7 +1334,7 @@ class GooglePriceSource:
 
     async def _page_price(
         self, client: httpx.AsyncClient, url: str
-    ) -> tuple[Decimal, str, str | None] | None:
+    ) -> tuple[Decimal, str, str | None, str | None] | None:
         """Чужий сайт, що не відповів — просто без ціни, а не без джерела."""
         try:
             response = await client.get(url)
@@ -1297,6 +1353,7 @@ class GooglePriceSource:
         price: Decimal,
         currency: str,
         image_url: str | None = None,
+        stock: str | None = None,
     ) -> MarketOffer:
         return MarketOffer(
             source=self.source,
@@ -1308,6 +1365,7 @@ class GooglePriceSource:
             image_url=image_url,
             confidence=score,
             is_analog=score < _OEM_HIT_SCORE,
+            stock=stock,
         )
 
 
@@ -1361,11 +1419,13 @@ def _price_from_text(text: str) -> Decimal | None:
     return None
 
 
-def _structured_price(html: str) -> tuple[Decimal, str, str | None] | None:
+def _structured_price(
+    html: str,
+) -> tuple[Decimal, str, str | None, str | None] | None:
     """Ціна з розмітки сторінки: JSON-LD, потім microdata, потім OpenGraph.
 
-    Третім елементом — фото товару з того ж JSON-LD: воно потрібне
-    фото-перевірці вживаності, а сторінка вже в руках.
+    Третім елементом — фото товару, четвертим — машинний schema.org-статус
+    наявності з того самого Offer, що й ціна.
     """
     for block in _LD_JSON_RE.findall(html):
         try:
@@ -1374,8 +1434,8 @@ def _structured_price(html: str) -> tuple[Decimal, str, str | None] | None:
             continue
         found = _ld_price(parsed)
         if found:
-            price, currency = found
-            return price, currency, _ld_image(parsed)
+            price, currency, stock = found
+            return price, currency, _ld_image(parsed), stock
     flat = re.sub(r"\s+", " ", html)
     for pattern in (
         r'<[^>]*itemprop="price"[^>]*>',
@@ -1392,11 +1452,11 @@ def _structured_price(html: str) -> tuple[Decimal, str, str | None] | None:
             price = parse_price(raw)
             if price is not None:
                 # Валюти в microdata поруч може й не бути; ринок — гривневий.
-                return price, "UAH", None
+                return price, "UAH", None, None
     return None
 
 
-def _ld_price(node: Any) -> tuple[Decimal, str] | None:
+def _ld_price(node: Any) -> tuple[Decimal, str, str | None] | None:
     if isinstance(node, list):
         return next(filter(None, map(_ld_price, node)), None)
     if not isinstance(node, dict):
@@ -1404,7 +1464,11 @@ def _ld_price(node: Any) -> tuple[Decimal, str] | None:
     if node.get("@type") in ("Offer", "AggregateOffer"):
         price = parse_price(node.get("price") or node.get("lowPrice"))
         if price is not None:
-            return price, _norm_currency(str(node.get("priceCurrency") or ""))
+            return (
+                price,
+                _norm_currency(str(node.get("priceCurrency") or "")),
+                _ld_stock(node.get("availability")),
+            )
     return next(
         filter(
             None,
@@ -1416,6 +1480,18 @@ def _ld_price(node: Any) -> tuple[Decimal, str] | None:
         ),
         None,
     )
+
+
+def _ld_stock(value: Any) -> str | None:
+    """Schema.org availability from the same Offer node as the price."""
+    if not isinstance(value, str):
+        return None
+    marker = value.rstrip("/").rsplit("/", 1)[-1].casefold()
+    return {
+        "outofstock": "out_of_stock",
+        "instock": "in_stock",
+        "preorder": "on_order",
+    }.get(marker)
 
 
 def _ld_image(node: Any) -> str | None:

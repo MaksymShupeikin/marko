@@ -84,3 +84,47 @@ def test_empty_text_is_not_junk():
     assert not offer_gates.is_junk(None)
     assert not offer_gates.is_used("")
     assert offer_gates.condition_of(None) is None
+
+
+@pytest.mark.parametrize(
+    ("availability", "expected"),
+    [
+        ("Немає в наявності", "out_of_stock"),
+        ("Нема в наявності", "out_of_stock"),
+        ("Нет в наличии", "out_of_stock"),
+        ("Товар закінчився", "out_of_stock"),
+        ("Немає на складі", "out_of_stock"),
+        ("Відсутній", "out_of_stock"),
+        ("Знято з продажу", "out_of_stock"),
+        ("Продано", "out_of_stock"),
+        ("Out of stock", "out_of_stock"),
+        ("Sold out", "out_of_stock"),
+        ("Під замовлення", "on_order"),
+        ("Под заказ", "on_order"),
+        ("Очікується", "on_order"),
+        ("Ожидается", "on_order"),
+        ("Поставка від 5 днів", "on_order"),
+        ("Доставка з-за кордону", "on_order"),
+        ("В наявності", "in_stock"),
+        ("Є в наявності", "in_stock"),
+        ("В наличии", "in_stock"),
+        ("Готовий до відправки", "in_stock"),
+        ("Available", "in_stock"),
+        ("In stock", "in_stock"),
+    ],
+)
+def test_stock_markers(availability, expected):
+    assert offer_gates.stock_of(availability) == expected
+
+
+@pytest.mark.parametrize(
+    "availability",
+    [
+        "Дзвоніть, уточнюйте наявність",
+        "Уточнюйте у менеджера",
+        "",
+        None,
+    ],
+)
+def test_unknown_stock_markers_stay_unknown(availability):
+    assert offer_gates.stock_of(availability) is None

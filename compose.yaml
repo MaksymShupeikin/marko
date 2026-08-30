@@ -19,6 +19,7 @@ x-backend-environment: &backend-environment
   FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
   COMPETITOR_FILTER_MODEL: ${COMPETITOR_FILTER_MODEL:-gpt-5-nano}
   COMPETITOR_VERIFY_ENABLED: ${COMPETITOR_VERIFY_ENABLED:-true}
+  COMPETITOR_AVAILABILITY_GATE_ENABLED: ${COMPETITOR_AVAILABILITY_GATE_ENABLED:-false}
   SERPER_API_KEY: ${SERPER_API_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
@@ -139,6 +140,8 @@ services:
     environment:
       <<: *backend-environment
       FIREBASE_PROJECT_ID: ""
+    volumes:
+      - ./scripts:/app/scripts:ro
     command: ["pytest", "-q"]
 
   frontend:
