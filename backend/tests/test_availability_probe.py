@@ -82,6 +82,15 @@ async def test_probe_runs_two_queries_with_both_flag_values_offline(
         "google_pages": 0,
         "avtopro_reports": 0,
     }
+    assert payload["acceptance"] == {
+        "positive_cases": 0,
+        "passes": False,
+        "rule": (
+            "At least one real out-of-stock offer must be observed; every "
+            "observed one must stay visible, be demoted and remain outside "
+            "the exact current statistics selection."
+        ),
+    }
     assert probe.cp._cache is original_cache
     assert probe.cp.photo_check._client is original_photo_cache
     assert os.environ.get(probe._FLAG) == original_flag
@@ -93,6 +102,54 @@ async def test_probe_runs_two_queries_with_both_flag_values_offline(
         probe.cp.AvtoproPriceSource.search,
     ) == original_methods
     assert settings.cache_clears == 5
+
+
+def test_probe_acceptance_requires_unavailable_to_stay_out_of_stats():
+    probe = _load_probe()
+
+    def payload(prices):
+        return {
+            "sources": [
+                {
+                    "offers": [
+                        {
+                            "price": str(price),
+                            "confidence": confidence,
+                            "availability": availability,
+                            "url": f"https://shop.ua/{price}",
+                        }
+                        for price, confidence, availability in prices
+                    ]
+                }
+            ]
+        }
+
+    normal = probe._availability_assertions(
+        payload(
+            [
+                (100, 0.5, "Немає в наявності"),
+                (180, 0.9, "В наявності"),
+                (200, 0.9, None),
+                (220, 0.9, "Під замовлення"),
+            ]
+        )
+    )
+    assert normal["passes"] is True
+    assert normal["out_of_stock_in_stats_urls"] == []
+    assert normal["thin_market_fallback_active"] is False
+
+    thin = probe._availability_assertions(
+        payload(
+            [
+                (100, 0.5, "Немає в наявності"),
+                (200, 0.9, "В наявності"),
+                (220, 0.9, None),
+            ]
+        )
+    )
+    assert thin["passes"] is False
+    assert thin["out_of_stock_in_stats_urls"] == ["https://shop.ua/100"]
+    assert thin["thin_market_fallback_active"] is True
 
 
 async def test_probe_fails_before_collection_without_required_keys(monkeypatch):

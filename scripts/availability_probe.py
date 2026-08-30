@@ -93,6 +93,57 @@ def _summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _availability_assertions(payload: dict[str, Any]) -> dict[str, Any]:
+    offers = [
+        offer
+        for source in payload.get("sources") or []
+        for offer in source.get("offers") or []
+    ]
+    strong_indexes = {
+        index
+        for index, offer in enumerate(offers)
+        if float(offer.get("confidence") or 0) >= cp._MIN_STATS_CONFIDENCE
+    }
+    if len(strong_indexes) >= cp._MIN_STATS_SAMPLE:
+        stats_indexes = strong_indexes
+    elif len(offers) < cp._MIN_STATS_SAMPLE and strong_indexes:
+        stats_indexes = strong_indexes
+    else:
+        # Exact current _stats_prices fallback, including the known C2 case.
+        stats_indexes = set(range(len(offers)))
+
+    unavailable_indexes = {
+        index
+        for index, offer in enumerate(offers)
+        if cp.offer_gates.stock_of(offer.get("availability")) == "out_of_stock"
+    }
+    unavailable_in_stats = unavailable_indexes & stats_indexes
+    all_demoted = all(
+        float(offers[index].get("confidence") or 0)
+        <= cp._UNVERIFIED_CONFIDENCE
+        for index in unavailable_indexes
+    )
+    return {
+        "offers_total": len(offers),
+        "strong_offers": len(strong_indexes),
+        "out_of_stock_detected": len(unavailable_indexes),
+        "out_of_stock_urls": [
+            offers[index].get("url") for index in sorted(unavailable_indexes)
+        ],
+        "out_of_stock_in_stats_urls": [
+            offers[index].get("url") for index in sorted(unavailable_in_stats)
+        ],
+        "all_out_of_stock_demoted": all_demoted,
+        "thin_market_fallback_active": (
+            len(offers) >= cp._MIN_STATS_SAMPLE
+            and len(strong_indexes) < cp._MIN_STATS_SAMPLE
+        ),
+        "passes": bool(unavailable_indexes)
+        and all_demoted
+        and not unavailable_in_stats,
+    }
+
+
 async def _report(query: cp.PartSearchQuery, *, enabled: bool) -> dict[str, Any]:
     _set_gate(enabled)
     return await cp.competitor_prices_for_query(query, refresh=True)
@@ -163,11 +214,13 @@ async def main() -> None:
             gate_off = await _report(query, enabled=False)
             consume("full_reports")
             gate_on = await _report(query, enabled=True)
+            assertions = _availability_assertions(gate_on)
             comparisons.append(
                 {
                     "query": query.as_json(),
                     "gate_off": _summary(gate_off),
                     "gate_on": _summary(gate_on),
+                    "gate_on_availability_assertions": assertions,
                     "recommendation_changed": (
                         (gate_off.get("stats") or {}).get("recommended_price")
                         != (gate_on.get("stats") or {}).get("recommended_price")
@@ -202,6 +255,38 @@ async def main() -> None:
                 "budget": _BUDGET,
                 "usage": usage,
                 "comparisons": comparisons,
+                "acceptance": {
+                    "positive_cases": sum(
+                        int(
+                            comparison["gate_on_availability_assertions"][
+                                "out_of_stock_detected"
+                            ]
+                            > 0
+                        )
+                        for comparison in comparisons
+                    ),
+                    "passes": bool(comparisons)
+                    and any(
+                        comparison["gate_on_availability_assertions"][
+                            "out_of_stock_detected"
+                        ]
+                        > 0
+                        for comparison in comparisons
+                    )
+                    and all(
+                        comparison["gate_on_availability_assertions"]["passes"]
+                        for comparison in comparisons
+                        if comparison["gate_on_availability_assertions"][
+                            "out_of_stock_detected"
+                        ]
+                        > 0
+                    ),
+                    "rule": (
+                        "At least one real out-of-stock offer must be observed; every "
+                        "observed one must stay visible, be demoted and remain outside "
+                        "the exact current statistics selection."
+                    ),
+                },
             },
             ensure_ascii=False,
             indent=2,
