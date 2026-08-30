@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -11,36 +12,33 @@ import 'package:marko_client/features/products/products_api.dart';
 import 'package:marko_client/features/products/widgets/stores_strip.dart';
 
 List<Map<String, dynamic>> _mockStoresJson() => [
-      {
-        'id': 'store-1',
-        'name': 'Kemp Auto',
-        'url': 'https://kemp.prom.ua',
-        'logo_url': null,
-        'product_count': 142,
-        'created_at': '2026-08-01T10:00:00Z',
-      },
-      {
-        'id': 'store-2',
-        'name': 'Brembo Parts',
-        'url': 'https://brembo.prom.ua',
-        'logo_url': null,
-        'product_count': 58,
-        'created_at': '2026-08-02T10:00:00Z',
-      },
-      {
-        'id': 'store-3',
-        'name': 'Bosch Service',
-        'url': 'https://bosch.prom.ua',
-        'logo_url': null,
-        'product_count': 94,
-        'created_at': '2026-08-03T10:00:00Z',
-      },
-    ];
+  {
+    'id': 'store-1',
+    'name': 'Kemp Auto',
+    'url': 'https://kemp.prom.ua',
+    'logo_url': null,
+    'product_count': 142,
+    'created_at': '2026-08-01T10:00:00Z',
+  },
+  {
+    'id': 'store-2',
+    'name': 'Brembo Parts',
+    'url': 'https://brembo.prom.ua',
+    'logo_url': null,
+    'product_count': 58,
+    'created_at': '2026-08-02T10:00:00Z',
+  },
+  {
+    'id': 'store-3',
+    'name': 'Bosch Service',
+    'url': 'https://bosch.prom.ua',
+    'logo_url': null,
+    'product_count': 94,
+    'created_at': '2026-08-03T10:00:00Z',
+  },
+];
 
-Widget _app({
-  List<Map<String, dynamic>>? stores,
-  List<String>? requestLog,
-}) {
+Widget _app({List<Map<String, dynamic>>? stores, List<String>? requestLog}) {
   final client = ApiClient(
     client: MockClient((request) async {
       requestLog?.add('${request.method} ${request.url.path}');
@@ -56,12 +54,7 @@ Widget _app({
       }
       if (request.url.path == '/api/v1/products') {
         return http.Response(
-          jsonEncode({
-            'items': [],
-            'total': 0,
-            'limit': 60,
-            'offset': 0,
-          }),
+          jsonEncode({'items': [], 'total': 0, 'limit': 60, 'offset': 0}),
           200,
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
@@ -72,18 +65,20 @@ Widget _app({
   );
 
   return ProviderScope(
-    overrides: [
-      productsApiProvider.overrideWithValue(ProductsApi(client)),
-    ],
+    overrides: [productsApiProvider.overrideWithValue(ProductsApi(client))],
     child: MaterialApp(
       theme: AppTheme.light,
-      home: const Scaffold(
-        body: SingleChildScrollView(
-          child: StoresStrip(),
-        ),
-      ),
+      home: const Scaffold(body: SingleChildScrollView(child: StoresStrip())),
     ),
   );
+}
+
+Future<TestGesture> _hover(WidgetTester tester, Finder target) async {
+  final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+  await gesture.addPointer(location: tester.getCenter(target));
+  await gesture.moveTo(tester.getCenter(target));
+  await tester.pumpAndSettle();
+  return gesture;
 }
 
 void main() {
@@ -188,15 +183,16 @@ void main() {
     expect(find.text('kemp'), findsNWidgets(2));
     expect(find.text('avtobust'), findsOneWidget);
 
-    // Корзинка картки файлу: перша серед trash-іконок (рядок файлів вище).
-    await tester.tap(
-      find.byTooltip('Прибрати товари з файлу'),
-      warnIfMissed: false,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Прибрати файл магазину «kemp»?'), findsOneWidget);
+    final hover = await _hover(tester, find.text('4901 товарів з файлу'));
+    addTearDown(hover.removePointer);
 
-    await tester.tap(find.text('Прибрати файл'));
+    // Кнопка з'являється на hover картки файлу.
+    await tester.tap(find.byTooltip('Прибрати товари з файлу'));
+    await tester.pumpAndSettle();
+    expect(find.text('Прибрати товари з файлу?'), findsOneWidget);
+    expect(find.text('kemp'), findsNWidgets(3));
+
+    await tester.tap(find.text('Прибрати'));
     await tester.pumpAndSettle();
 
     expect(log, contains('DELETE /api/v1/stores/store-1/file-products'));
@@ -217,21 +213,29 @@ void main() {
     await tester.pumpWidget(_app(requestLog: log));
     await tester.pumpAndSettle();
 
-    final trash = find.byTooltip('Видалити магазин');
-    expect(trash, findsNWidgets(3));
+    // Buttons are not rendered until hovered/revealed
+    expect(find.byTooltip('Видалити магазин'), findsNothing);
 
-    await tester.tap(trash.first, warnIfMissed: false);
+    final hover = await _hover(tester, find.text('Kemp Auto'));
+    addTearDown(hover.removePointer);
+
+    final trash = find.byTooltip('Видалити магазин');
+    expect(trash, findsOneWidget);
+    expect(find.byTooltip('Обрати магазин'), findsOneWidget);
+
+    await tester.tap(trash);
     await tester.pumpAndSettle();
-    expect(find.text('Видалити магазин «Kemp Auto»?'), findsOneWidget);
+    expect(find.text('Видалити магазин?'), findsOneWidget);
+    expect(find.text('Kemp Auto'), findsNWidgets(2));
 
     // «Скасувати» нічого не видаляє.
     await tester.tap(find.text('Скасувати'));
     await tester.pumpAndSettle();
     expect(log.where((r) => r.startsWith('DELETE')), isEmpty);
 
-    await tester.tap(trash.first, warnIfMissed: false);
+    await tester.tap(trash);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Видалити магазин').last);
+    await tester.tap(find.text('Видалити').last);
     await tester.pumpAndSettle();
 
     expect(log, contains('DELETE /api/v1/stores/store-1'));

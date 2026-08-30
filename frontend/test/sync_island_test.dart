@@ -15,12 +15,14 @@ import 'package:marko_client/features/products/widgets/source_panel.dart';
 /// A catalog that starts empty and grows once the sync reports progress, plus
 /// a queue that runs one job, then empties.
 class _Backend {
-  _Backend({this.queues});
+  _Backend({this.queues, List<Map<String, dynamic>>? jobStates})
+    : _jobStates = jobStates ?? [run(status: 'completed', current: 4)];
 
   int products = 0;
 
   /// Черги, які віддає /jobs/active по одній на кожен опит.
   final List<List<Map<String, dynamic>>>? queues;
+  final List<Map<String, dynamic>> _jobStates;
 
   static Map<String, dynamic> run({
     String id = 'run-1',
@@ -91,8 +93,11 @@ class _Backend {
           }(),
           // Підсумок запуску, якого вже нема в активних: останні товари доїхали.
           '/api/v1/jobs/run-1' => () {
-            products += 2;
-            return jsonEncode(run(status: 'completed', current: 4));
+            final job = _jobStates.length > 1
+                ? _jobStates.removeAt(0)
+                : _jobStates.first;
+            if (job['status'] == 'completed') products += 2;
+            return jsonEncode(job);
           }(),
           _ => '{}',
         };
@@ -141,10 +146,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Порожній каталог — онбординг, ані капсули, ані скелетонів.
-    expect(
-      find.text('Додайте товари з XLSX-файлу'),
-      findsOneWidget,
-    );
+    expect(find.text('Додайте товари з XLSX-файлу'), findsOneWidget);
     expect(find.byType(ProductCardSkeleton), findsNothing);
 
     await tester.enterText(
@@ -157,10 +159,7 @@ void main() {
 
     // Онбординг поступився каталогу: капсула зверху, привиди в сітці.
     expect(find.text('Синхронізація'), findsOneWidget);
-    expect(
-      find.text('Додайте товари з XLSX-файлу'),
-      findsNothing,
-    );
+    expect(find.text('Додайте товари з XLSX-файлу'), findsNothing);
     expect(find.byType(ProductCardSkeleton), findsWidgets);
     expect(find.text('Товар 0'), findsOneWidget);
 
@@ -184,6 +183,49 @@ void main() {
 
     expect(find.byType(SourcePanel), findsOneWidget);
     expect(find.textContaining('Імпорт каталогу:'), findsNothing);
+  });
+
+  testWidgets('a Prom job stays visible while the active queue catches up', (
+    tester,
+  ) async {
+    final backend = _Backend(
+      queues: [
+        const [],
+        const [],
+        [_Backend.run(current: 1)],
+        const [],
+      ],
+      jobStates: [
+        _Backend.run(status: 'queued', current: 0, total: null),
+        _Backend.run(status: 'completed', current: 4),
+      ],
+    );
+    await tester.pumpWidget(_app(backend.client()));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byType(TextField).first,
+      'https://prom.ua/c1-shop.html',
+    );
+    await tester.tap(find.text('Імпортувати каталог').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // POST already returned the job, while /jobs/active still answers [].
+    expect(find.text('Синхронізація'), findsOneWidget);
+    expect(find.byType(ProductCardSkeleton), findsWidgets);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Синхронізація'), findsOneWidget);
+    expect(find.text('Товар 0'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Каталог оновлено'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('the queue stacks stores and hides the tail behind a toggle', (

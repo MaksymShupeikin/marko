@@ -69,6 +69,18 @@ class ProductsController extends AsyncNotifier<CatalogState> {
     _reload();
   }
 
+  void toggleOnlyAvailable() {
+    // Позначки стосувалися іншої вибірки — не успадковуємо їх.
+    state = AsyncData(
+      _current.copyWith(
+        onlyAvailable: !_current.onlyAvailable,
+        selectedIds: const {},
+        allMatchingSelected: false,
+      ),
+    );
+    _reload();
+  }
+
   /// Вмикає/вимикає магазин у фільтрі; можна тримати кілька одразу.
   void toggleStoreFilter(String storeId) {
     final ids = Set<String>.of(_current.storeIds);
@@ -107,6 +119,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         query: '',
         price: (null, null),
         source: ProductSource.all,
+        onlyAvailable: false,
         storeIds: const {},
         selectedIds: const {},
         allMatchingSelected: false,
@@ -194,6 +207,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
       priceMin: current.priceMin,
       priceMax: current.priceMax,
       source: current.source,
+      onlyAvailable: current.onlyAvailable,
       storeIds: current.storeIds,
     );
     state = AsyncData(
@@ -216,6 +230,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
       priceMin: current.priceMin,
       priceMax: current.priceMax,
       source: current.source,
+      onlyAvailable: current.onlyAvailable,
       storeIds: current.storeIds,
     );
     state = AsyncData(
@@ -334,6 +349,7 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         priceMin: current.priceMin,
         priceMax: current.priceMax,
         source: current.source,
+        onlyAvailable: current.onlyAvailable,
         storeIds: current.storeIds,
         offset: current.page.items.length,
       );
@@ -375,12 +391,15 @@ class ProductsController extends AsyncNotifier<CatalogState> {
         priceMin: current.priceMin,
         priceMax: current.priceMax,
         source: current.source,
+        onlyAvailable: current.onlyAvailable,
         storeIds: current.storeIds,
         limit: _pageSize,
       );
       if (generation != _generation) return;
       final hasImported =
-          current.hasImportedProducts || page.total > 0 || page.items.isNotEmpty;
+          current.hasImportedProducts ||
+          page.total > 0 ||
+          page.items.isNotEmpty;
       state = AsyncData(
         _current.copyWith(
           page: page,
@@ -435,9 +454,8 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     }
     final uri = Uri.tryParse(url);
     final host = uri?.host.toLowerCase() ?? '';
-    final isValidProm = host == 'prom.ua' ||
-        host == 'www.prom.ua' ||
-        host.endsWith('.prom.ua');
+    final isValidProm =
+        host == 'prom.ua' || host == 'www.prom.ua' || host.endsWith('.prom.ua');
     if (uri == null || !isValidProm) {
       state = AsyncData(
         _current.copyWith(
@@ -526,11 +544,21 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
       ),
     );
     try {
-      await request();
+      final sync = await request();
+      final pending = ActiveSyncRun.fromStoreSync(sync);
       state = AsyncData(
-        _current.copyWith(submittingType: ImportSubmittingType.none),
+        _current.copyWith(
+          submittingType: ImportSubmittingType.none,
+          runs: [
+            for (final run in _current.runs)
+              if (run.syncRunId != pending.syncRunId) run,
+            pending,
+          ],
+          clearFinished: true,
+        ),
       );
-      // Місце в черзі визначає сервер — одразу питаємо його, як вона стоїть.
+      // Відповідь POST одразу показує капсулу. Сервер далі уточнить місце в
+      // черзі, назву магазину та прогрес через /jobs/active.
       unawaited(_followQueue(++_pollGeneration));
       return true;
     } catch (error) {
@@ -559,34 +587,55 @@ class CatalogImportController extends AsyncNotifier<CatalogImportState> {
     ActiveSyncRun? head = _current.runs.firstOrNull;
     while (generation == _pollGeneration) {
       try {
-        final runs = await _api.getActiveJobs();
+        var runs = await _api.getActiveJobs();
         if (generation != _pollGeneration) return;
         final current = runs.firstOrNull;
         // Черга спорожніла або голова змінилась — попередній магазин доїхав.
         final done = head != null && current?.syncRunId != head.syncRunId;
         // Активний список тримає лише незавершені, тож чим саме скінчився
         // запуск — успіхом, збоєм чи скасуванням — питаємо окремо.
-        final summary = done && !_cancelled.remove(head.syncRunId)
-            ? await _finalState(head)
-            : null;
+        ActiveSyncRun? summary;
+        if (done && !_cancelled.remove(head.syncRunId)) {
+          final latest = await _finalState(head);
+          if (latest.run.isFinished) {
+            summary = latest;
+          } else {
+            // `/jobs/active` can briefly lag behind POST /stores. Keep the
+            // known queued job visible instead of flashing an empty island.
+            runs = [
+              latest,
+              for (final run in runs)
+                if (run.syncRunId != latest.syncRunId) run,
+            ];
+          }
+        }
         state = AsyncData(
-          _current.copyWith(runs: runs, finished: summary, clearError: true),
+          _current.copyWith(
+            runs: runs,
+            finished: summary,
+            clearFinished: summary == null,
+            clearError: true,
+          ),
         );
-        final progress = runs.fold<int>(0, (sum, r) => sum + r.run.progressCurrent);
+        final progress = runs.fold<int>(
+          0,
+          (sum, r) => sum + r.run.progressCurrent,
+        );
         // Товари, що вже приїхали, вливаються в сітку, не чекаючи кінця імпорту.
         if (progress != seen || done) {
           seen = progress;
           await ref.read(productsControllerProvider.notifier).refresh();
         }
-        head = current;
+        head = runs.firstOrNull;
         if (runs.isEmpty) {
           // Підсумок ще мить висить із галочкою, потім зникає сам.
           await Future<void>.delayed(_lingerAfterFinish);
           if (generation == _pollGeneration) dismissSync();
           return;
         }
-      } catch (error) {
-        state = AsyncData(_current.copyWith(error: error.toString()));
+      } catch (_) {
+        // Тимчасовий збій опитування (бекенд зайнятий імпортом) — не привід
+        // для плашки: капсула тримає останній стан, наступна спроба за 2 с.
       }
       await Future<void>.delayed(const Duration(seconds: 2));
     }

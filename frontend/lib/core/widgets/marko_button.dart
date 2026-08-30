@@ -180,9 +180,7 @@ class _MarkoButtonState extends State<MarkoButton> {
                 // 1. Soft Ambient Glow for optical depth and elevation
                 if (isSolid && _enabled && !_pressed)
                   BoxShadow(
-                    color: solidColor.withValues(
-                      alpha: _hovered ? 0.35 : 0.20,
-                    ),
+                    color: solidColor.withValues(alpha: _hovered ? 0.35 : 0.20),
                     blurRadius: _hovered ? 14 : 8,
                     spreadRadius: _hovered ? 0 : -2,
                     offset: Offset(0, _hovered ? 4 : 2),

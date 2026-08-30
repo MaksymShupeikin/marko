@@ -6,6 +6,7 @@ import 'package:heroicons/heroicons.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_button.dart';
+import '../../../core/widgets/marko_confirmation_dialog.dart';
 import '../../../core/widgets/marko_toast.dart';
 import '../products_controller.dart';
 import '../products_models.dart';
@@ -39,134 +40,15 @@ Future<bool> confirmBulkProductDeletion(
   BuildContext context, {
   required int count,
 }) async {
-  final colors = MarkoTheme.of(context);
-  return await showDialog<bool>(
-        context: context,
-        barrierDismissible: true,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(colors.panelRadius),
-            side: BorderSide(color: colors.border),
-          ),
-          backgroundColor: colors.surface,
-          surfaceTintColor: Colors.transparent,
-          icon: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: colors.negative.withValues(alpha: 0.10),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: HeroIcon(
-              HeroIcons.trash,
-              color: colors.negative,
-              size: 22,
-            ),
-          ),
-          title: Text(
-            'Видалити товарів: $count?',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 18,
-                ),
-          ),
-          content: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.surfaceMuted,
-                    borderRadius: BorderRadius.circular(MarkoRadius.md),
-                    border: Border.all(color: colors.border),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: colors.negativeSoft,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: colors.negative.withValues(alpha: 0.24),
-                          ),
-                        ),
-                        alignment: Alignment.center,
-                        child: HeroIcon(
-                          HeroIcons.archiveBox,
-                          size: 16,
-                          color: colors.negative,
-                        ),
-                      ),
-                      const SizedBox(width: MarkoSpace.md),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Позначені товари',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                            Text(
-                              'Кількість: $count',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: MarkoType.caption.copyWith(
-                                color: colors.faint,
-                                fontSize: 11.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: MarkoSpace.md),
-                Text(
-                  'Позначені товари зникнуть з каталогу. Наступна синхронізація не додасть їх знову.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colors.muted,
-                      ),
-                ),
-              ],
-            ),
-          ),
-          actionsPadding: const EdgeInsets.fromLTRB(
-            MarkoSpace.lg,
-            0,
-            MarkoSpace.lg,
-            MarkoSpace.lg,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Скасувати'),
-            ),
-            MarkoButton.danger(
-              label: 'Видалити',
-              icon: HeroIcons.trash,
-              onPressed: () => Navigator.of(context).pop(true),
-            ),
-          ],
-        ),
-      ) ??
-      false;
+  return confirmMarkoAction(
+    context,
+    title: 'Видалити товари?',
+    subject: 'Позначені товари',
+    subjectDetails: 'Кількість: $count',
+    description:
+        'Позначені товари зникнуть з каталогу. Наступна синхронізація не додасть їх знову.',
+    confirmLabel: 'Видалити',
+  );
 }
 
 class _ProductEditForm extends ConsumerStatefulWidget {
@@ -288,9 +170,7 @@ class _ProductEditFormState extends ConsumerState<_ProductEditForm> {
             textInputAction: TextInputAction.next,
             validator: (value) {
               if (value == null || value.trim().isEmpty) return null;
-              return parsePrice(value) == null
-                  ? 'Вкажіть коректну ціну'
-                  : null;
+              return parsePrice(value) == null ? 'Вкажіть коректну ціну' : null;
             },
           ),
           const SizedBox(height: MarkoSpace.lg),
@@ -496,7 +376,6 @@ class _DeleteProductDialogState extends ConsumerState<_DeleteProductDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = MarkoTheme.of(context);
     final details = [
       if (widget.product.brand != null && widget.product.brand!.isNotEmpty)
         widget.product.brand,
@@ -506,138 +385,19 @@ class _DeleteProductDialogState extends ConsumerState<_DeleteProductDialog> {
     final subtitle = details.isNotEmpty
         ? details
         : (widget.product.price != null
-            ? '${widget.product.price!.toStringAsFixed(0)} ${widget.product.currency}'
-            : 'Товар з каталогу');
+              ? '${widget.product.price!.toStringAsFixed(0)} ${widget.product.currency}'
+              : 'Товар з каталогу');
 
-    return AlertDialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(colors.panelRadius),
-        side: BorderSide(color: colors.border),
-      ),
-      backgroundColor: colors.surface,
-      surfaceTintColor: Colors.transparent,
-      icon: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: colors.negative.withValues(alpha: 0.10),
-          shape: BoxShape.circle,
-        ),
-        alignment: Alignment.center,
-        child: HeroIcon(
-          HeroIcons.trash,
-          color: colors.negative,
-          size: 22,
-        ),
-      ),
-      title: Text(
-        'Видалити товар?',
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-              fontSize: 18,
-            ),
-      ),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 380),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 10,
-              ),
-              decoration: BoxDecoration(
-                color: colors.surfaceMuted,
-                borderRadius: BorderRadius.circular(MarkoRadius.md),
-                border: Border.all(color: colors.border),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: colors.negativeSoft,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: colors.negative.withValues(alpha: 0.24),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: HeroIcon(
-                      HeroIcons.archiveBox,
-                      size: 16,
-                      color: colors.negative,
-                    ),
-                  ),
-                  const SizedBox(width: MarkoSpace.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.product.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.copyWith(
-                                fontWeight: FontWeight.w600,
-                              ),
-                        ),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: MarkoType.caption.copyWith(
-                            color: colors.faint,
-                            fontSize: 11.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: MarkoSpace.md),
-            Text(
-              'Товар зникне з каталогу. Наступна синхронізація не додасть його знову.',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colors.muted,
-                  ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: MarkoSpace.md),
-              MarkoInlineMessage(
-                message: _error!,
-                tone: MarkoMessageTone.error,
-              ),
-            ],
-          ],
-        ),
-      ),
-      actionsPadding: const EdgeInsets.fromLTRB(
-        MarkoSpace.lg,
-        0,
-        MarkoSpace.lg,
-        MarkoSpace.lg,
-      ),
-      actions: [
-        TextButton(
-          onPressed: _deleting ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Скасувати'),
-        ),
-        MarkoButton.danger(
-          label: 'Видалити',
-          icon: HeroIcons.trash,
-          loading: _deleting,
-          onPressed: _deleting ? null : _delete,
-        ),
-      ],
+    return MarkoConfirmationDialog(
+      title: 'Видалити товар?',
+      subject: widget.product.name,
+      subjectDetails: subtitle,
+      description:
+          'Товар зникне з каталогу. Наступна синхронізація не додасть його знову.',
+      confirmLabel: 'Видалити',
+      loading: _deleting,
+      error: _error,
+      onConfirm: _delete,
     );
   }
 

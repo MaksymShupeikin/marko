@@ -14,6 +14,7 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    bool onlyAvailable = false,
     Set<String> storeIds = const {},
     int limit = 60,
     int offset = 0,
@@ -26,6 +27,7 @@ class ProductsApi {
         if (priceMin != null) 'price_min': '$priceMin',
         if (priceMax != null) 'price_max': '$priceMax',
         if (source.value != null) 'source': source.value!,
+        if (onlyAvailable) 'available': 'true',
         if (storeIds.isNotEmpty) 'store_ids': storeIds.join(','),
         'limit': '$limit',
         'offset': '$offset',
@@ -40,12 +42,14 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    bool onlyAvailable = false,
     Set<String> storeIds = const {},
   }) => {
     if (query.trim().isNotEmpty) 'q': query.trim(),
     'price_min': ?priceMin,
     'price_max': ?priceMax,
     'source': ?source.value,
+    if (onlyAvailable) 'available': true,
     if (storeIds.isNotEmpty) 'store_ids': [...storeIds],
   };
 
@@ -55,6 +59,7 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    bool onlyAvailable = false,
     Set<String> storeIds = const {},
   }) async {
     final payload = await _client.postJson(
@@ -64,6 +69,7 @@ class ProductsApi {
         priceMin: priceMin,
         priceMax: priceMax,
         source: source,
+        onlyAvailable: onlyAvailable,
         storeIds: storeIds,
       ),
     );
@@ -76,6 +82,7 @@ class ProductsApi {
     double? priceMin,
     double? priceMax,
     ProductSource source = ProductSource.all,
+    bool onlyAvailable = false,
     Set<String> storeIds = const {},
   }) async {
     final payload = await _client.postJson(
@@ -85,6 +92,7 @@ class ProductsApi {
         priceMin: priceMin,
         priceMax: priceMax,
         source: source,
+        onlyAvailable: onlyAvailable,
         storeIds: storeIds,
       ),
     );

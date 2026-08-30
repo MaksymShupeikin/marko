@@ -247,6 +247,7 @@ class CatalogState {
     this.allMatchingSelected = false,
     this.bulkJob,
     this.source = ProductSource.all,
+    this.onlyAvailable = false,
     this.storeIds = const {},
     this.hasImportedProducts = false,
     this.error,
@@ -272,14 +273,16 @@ class CatalogState {
   final SyncRun? bulkJob;
   final ProductSource source;
 
+  /// Show only products the store marks as in stock.
+  final bool onlyAvailable;
+
   /// Ticked store cards above the catalog; empty — every store.
   final Set<String> storeIds;
   final bool hasImportedProducts;
   final String? error;
 
   /// How many products the buttons would act on right now.
-  int get actionCount =>
-      allMatchingSelected ? page.total : selectedIds.length;
+  int get actionCount => allMatchingSelected ? page.total : selectedIds.length;
 
   bool get hasSelection => allMatchingSelected || selectedIds.isNotEmpty;
 
@@ -289,6 +292,7 @@ class CatalogState {
       priceMin != null ||
       priceMax != null ||
       source != ProductSource.all ||
+      onlyAvailable ||
       storeIds.isNotEmpty;
 
   /// Nothing imported yet, as opposed to a search or a filter that found
@@ -308,6 +312,7 @@ class CatalogState {
     bool? allMatchingSelected,
     SyncRun? bulkJob,
     ProductSource? source,
+    bool? onlyAvailable,
     Set<String>? storeIds,
     bool? hasImportedProducts,
     String? error,
@@ -328,6 +333,7 @@ class CatalogState {
       allMatchingSelected: allMatchingSelected ?? this.allMatchingSelected,
       bulkJob: clearBulkJob ? null : bulkJob ?? this.bulkJob,
       source: source ?? this.source,
+      onlyAvailable: onlyAvailable ?? this.onlyAvailable,
       storeIds: storeIds ?? this.storeIds,
       hasImportedProducts: hasImportedProducts ?? this.hasImportedProducts,
       error: clearError ? null : error ?? this.error,
@@ -444,6 +450,23 @@ class ActiveSyncRun {
     );
   }
 
+  /// The create-store response already identifies the queued job. Keep it in
+  /// the UI until `/jobs/active` returns its richer store metadata.
+  factory ActiveSyncRun.fromStoreSync(StoreSync sync) {
+    return ActiveSyncRun(
+      syncRunId: sync.syncRunId,
+      storeId: sync.storeId,
+      storeName: null,
+      storeLogoUrl: null,
+      run: SyncRun(
+        status: sync.status,
+        progressCurrent: 0,
+        progressTotal: null,
+        error: null,
+      ),
+    );
+  }
+
   final String syncRunId;
   final String? storeId;
   final String? storeName;
@@ -461,9 +484,8 @@ class ActiveSyncRun {
 
   /// Виконується прямо зараз — на відміну від тих, хто чекає черги.
   bool get isRunning => run.status == 'running';
-  String get title => storeName?.trim().isNotEmpty == true
-      ? storeName!.trim()
-      : 'Магазин';
+  String get title =>
+      storeName?.trim().isNotEmpty == true ? storeName!.trim() : 'Магазин';
 }
 
 class MarketPriceOffer {
@@ -655,11 +677,7 @@ class CompetitorPriceReport {
   }
 }
 
-enum ImportSubmittingType {
-  none,
-  file,
-  prom,
-}
+enum ImportSubmittingType { none, file, prom }
 
 class CatalogImportState {
   const CatalogImportState({
@@ -713,4 +731,3 @@ class CatalogImportState {
     );
   }
 }
-

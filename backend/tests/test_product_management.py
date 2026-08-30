@@ -283,6 +283,7 @@ async def test_bulk_refresh_is_queued_with_the_filter(monkeypatch):
         "price_min": None,
         "price_max": None,
         "source": "scrape",
+        "available": None,
         "store_ids": [],
     }
 
@@ -373,6 +374,17 @@ def test_store_filter_turns_grouping_off():
     sql = _compiled(store_ids=[uuid4()])
 
     assert "row_number() OVER" not in sql
+
+
+def test_availability_filter_requires_strict_true():
+    """«В наявності» — суворо True: невідомий статус не видаємо за наявний."""
+    sql = _compiled(available=True)
+
+    assert "is_available" in sql
+    assert "IS true" in sql or "IS 1" in sql
+
+    # Без фільтра колонка у WHERE не бере участі.
+    assert "is_available IS" not in _compiled()
 
 
 def test_catalog_item_reports_the_group_size():

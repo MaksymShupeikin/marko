@@ -360,11 +360,12 @@ void main() {
   testWidgets('the scroll-to-top button appears when scrolled and returns', (
     tester,
   ) async {
-    final view = TestWidgetsFlutterBinding.ensureInitialized()
-        .platformDispatcher
-        .views
-        .first;
-    view.physicalSize = const Size(900, 260);
+    tester.view.physicalSize = const Size(1280, 260);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
     // A long enough catalog to scroll past the button's threshold.
     final client = ApiClient(
@@ -528,7 +529,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Видалити'));
     await tester.pumpAndSettle();
-    expect(find.text('Видалити товарів: 1?'), findsOneWidget);
+    expect(find.text('Видалити товари?'), findsOneWidget);
+    expect(find.text('Кількість: 1'), findsOneWidget);
     await tester.tap(find.widgetWithText(MarkoButton, 'Видалити'));
     await tester.pumpAndSettle();
 
@@ -646,7 +648,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Видалити'));
     await tester.pumpAndSettle();
-    expect(find.text('Видалити товарів: 120?'), findsOneWidget);
+    expect(find.text('Видалити товари?'), findsOneWidget);
+    expect(find.text('Кількість: 120'), findsOneWidget);
     await tester.tap(find.widgetWithText(MarkoButton, 'Видалити'));
     await tester.pumpAndSettle();
 

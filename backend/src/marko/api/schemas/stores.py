@@ -60,6 +60,7 @@ class CatalogFilterRequest(BaseModel):
     price_min: float | None = Field(default=None, ge=0)
     price_max: float | None = Field(default=None, ge=0)
     source: Literal["export", "scrape"] | None = None
+    available: bool | None = None
     store_ids: list[UUID] = Field(default_factory=list, max_length=50)
 
     def to_filter(self) -> CatalogFilter:
@@ -68,6 +69,7 @@ class CatalogFilterRequest(BaseModel):
             price_min=self.price_min,
             price_max=self.price_max,
             source=self.source,
+            available=self.available,
             store_ids=tuple(str(value) for value in self.store_ids),
         )
 

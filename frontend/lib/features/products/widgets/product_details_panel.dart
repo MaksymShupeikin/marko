@@ -802,13 +802,14 @@ class _CompetitorPrices extends ConsumerWidget {
               const SizedBox(width: MarkoSpace.xs),
               IconButton(
                 tooltip: 'Оновити ціни',
-                visualDensity: VisualDensity.compact,
                 onPressed: prices.isLoading
                     ? null
                     : () => ref
                           .read(competitorPricesProvider(product.id).notifier)
                           .refresh(),
-                icon: const HeroIcon(HeroIcons.arrowPath, size: 16),
+                icon: prices.isLoading
+                    ? const MarkoLoader(size: 18)
+                    : const HeroIcon(HeroIcons.arrowPath, size: 19),
               ),
             ],
           ),
@@ -908,10 +909,7 @@ class _CompetitorPricesLoadingState
                       duration: const Duration(milliseconds: 250),
                       layoutBuilder: (currentChild, previousChildren) => Stack(
                         alignment: Alignment.centerLeft,
-                        children: <Widget>[
-                          ...previousChildren,
-                          ?currentChild,
-                        ],
+                        children: <Widget>[...previousChildren, ?currentChild],
                       ),
                       child: SizedBox(
                         key: ValueKey(stage),
@@ -986,7 +984,6 @@ final _siblingsProvider = FutureProvider.autoDispose
       (ref, productId) => ref.watch(productsApiProvider).getSiblings(productId),
     );
 
-
 class CompetitorPricesReport extends StatefulWidget {
   const CompetitorPricesReport({required this.report, this.product, super.key});
 
@@ -1000,12 +997,20 @@ class CompetitorPricesReport extends StatefulWidget {
 class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
   bool _expanded = false;
 
+  /// Симуляція «а якщо знизити ціну на N%»: 0 — показуємо реальну ціну.
+  int _discountPercent = 0;
+
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final stats = widget.report.stats;
     final currency = widget.report.currency;
     final userPrice = widget.product?.price;
+    // Всі порівняння нижче рахуємо від симульованої ціни — банер, шкала
+    // і картки пропозицій миттєво перераховуються рухом повзунка.
+    final simPrice = userPrice == null
+        ? null
+        : userPrice * (1 - _discountPercent / 100);
 
     if (stats.offersTotal == 0) {
       return const MarkoInlineMessage(
@@ -1020,42 +1025,125 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
       ..sort((a, b) => a.price.compareTo(b.price));
     final visibleOffers = _expanded ? allOffers : allOffers.take(4).toList();
 
+    // Своя ціна + межі ринку — без них ні вердикт, ні симуляція не мають сенсу.
+    final hasOwnPrice =
+        simPrice != null && stats.minPrice != null && stats.medianPrice != null;
+    final rowDivider = Divider(
+      height: 36,
+      thickness: 1,
+      color: colors.border,
+    );
+
+    // Один блок замість чотирьох різностильних карток: рядки на спільній
+    // поверхні, розділені лініями. Колір несе сенс лише у вердикті та
+    // рекомендованій ціні — решта в нейтральній типографіці.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (userPrice != null &&
-            stats.minPrice != null &&
-            stats.medianPrice != null)
-          _PriceBenchmarkBanner(
-            userPrice: userPrice,
-            minPrice: stats.minPrice!,
-            medianPrice: stats.medianPrice!,
-            maxPrice: stats.maxPrice ?? stats.medianPrice!,
-            currency: currency,
+        Container(
+          padding: const EdgeInsets.all(MarkoSpace.xl),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(MarkoRadius.md),
+            border: Border.all(color: colors.border),
           ),
-        const SizedBox(height: MarkoSpace.md),
-        _MarketSpectrumGauge(
-          stats: stats,
-          userPrice: userPrice,
-          currency: currency,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (hasOwnPrice) ...[
+                _PriceBenchmarkBanner(
+                  userPrice: simPrice,
+                  minPrice: stats.minPrice!,
+                  medianPrice: stats.medianPrice!,
+                  maxPrice: stats.maxPrice ?? stats.medianPrice!,
+                  currency: currency,
+                ),
+                rowDivider,
+              ],
+              _MarketSpectrumGauge(
+                stats: stats,
+                userPrice: simPrice,
+                currency: currency,
+              ),
+              if (stats.recommendedPrice != null) ...[
+                rowDivider,
+                _RecommendedPriceBanner(
+                  price: stats.recommendedPrice!,
+                  userPrice: userPrice,
+                  currency: currency,
+                  discountPercent: stats.recommendedDiscountPercent,
+                ),
+              ],
+              if (hasOwnPrice) ...[
+                rowDivider,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'А якщо знизити ціну?',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: MarkoSpace.md),
+                    Text(
+                      _discountPercent == 0
+                          ? 'Потягніть для розрахунку'
+                          : '${formatPriceNumber(simPrice)} ${formatCurrency(currency)}',
+                      style: _discountPercent == 0
+                          ? MarkoType.caption.copyWith(color: colors.muted)
+                          : MarkoType.price.copyWith(
+                              color: colors.brand,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: MarkoSpace.md),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 4,
+                    activeTrackColor: colors.brand,
+                    inactiveTrackColor: colors.border,
+                    thumbColor: colors.brand,
+                    overlayColor: colors.brand.withValues(alpha: 0.10),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 7,
+                    ),
+                    valueIndicatorColor: colors.brand,
+                  ),
+                  child: Slider(
+                    value: _discountPercent.toDouble(),
+                    max: 30,
+                    divisions: 30,
+                    label: '−$_discountPercent%',
+                    // Прибирає вбудовані бічні поля Material-слайдера, щоб
+                    // трек тягнувся на всю ширину картки. Симетрично, щоб
+                    // трек лишався по центру хіт-зони.
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    onChanged: (v) =>
+                        setState(() => _discountPercent = v.round()),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-        if (stats.recommendedPrice != null) ...[
-          const SizedBox(height: MarkoSpace.md),
-          _RecommendedPriceBanner(
-            price: stats.recommendedPrice!,
-            userPrice: userPrice,
+        if (stats.recommendedPrice != null &&
+            (widget.product?.groupSize ?? 1) > 1) ...[
+          const SizedBox(height: MarkoSpace.xl),
+          _OwnStoresGuidance(
+            productId: widget.product!.id,
+            recommended: stats.recommendedPrice!,
             currency: currency,
-            discountPercent: stats.recommendedDiscountPercent,
           ),
-          if ((widget.product?.groupSize ?? 1) > 1)
-            _OwnStoresGuidance(
-              productId: widget.product!.id,
-              recommended: stats.recommendedPrice!,
-              currency: currency,
-            ),
         ],
         if (allOffers.isNotEmpty) ...[
-          const SizedBox(height: MarkoSpace.xxl),
+          const SizedBox(height: MarkoSpace.xxxl),
           Text(
             'Пропозиції на ринку',
             style: Theme.of(
@@ -1066,10 +1154,10 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
           for (final offer in visibleOffers) ...[
             _ModernOfferCard(
               offer: offer,
-              userPrice: userPrice,
+              userPrice: simPrice,
               currency: currency,
             ),
-            const SizedBox(height: MarkoSpace.xs),
+            const SizedBox(height: MarkoSpace.sm),
           ],
           if (allOffers.length > 4) ...[
             const SizedBox(height: MarkoSpace.xs),
@@ -1133,57 +1221,49 @@ class _RecommendedPriceBanner extends StatelessWidget {
         ? 'На ${formatPriceNumber(diff.abs())} ${formatCurrency(currency)} нижче за вашу поточну ціну'
         : 'На ${formatPriceNumber(diff)} ${formatCurrency(currency)} вище за вашу поточну ціну';
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: colors.brand.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: colors.brand.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: colors.brand.withValues(alpha: 0.16),
-              shape: BoxShape.circle,
-            ),
-            child: HeroIcon(HeroIcons.lightBulb, size: 16, color: colors.brand),
+    // Рядок на спільній поверхні звіту: бренд-колір лише на іконці та сумі.
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(7),
+          decoration: BoxDecoration(
+            color: colors.brand.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(MarkoRadius.sm),
           ),
-          const SizedBox(width: MarkoSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Рекомендована ціна',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: colors.brand,
-                    fontWeight: FontWeight.w700,
-                  ),
+          child: HeroIcon(HeroIcons.lightBulb, size: 16, color: colors.brand),
+        ),
+        const SizedBox(width: MarkoSpace.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Рекомендована ціна',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: MarkoType.caption.copyWith(
-                    color: colors.ink,
-                    fontSize: 12,
-                  ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: MarkoType.caption.copyWith(
+                  color: colors.muted,
+                  fontSize: 12,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const SizedBox(width: MarkoSpace.sm),
-          Text(
-            '${formatPriceNumber(price)} ${formatCurrency(currency)}',
-            style: MarkoType.price.copyWith(
-              color: colors.brand,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
+        ),
+        const SizedBox(width: MarkoSpace.md),
+        Text(
+          '${formatPriceNumber(price)} ${formatCurrency(currency)}',
+          style: MarkoType.price.copyWith(
+            color: colors.brand,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -1216,11 +1296,16 @@ class _PriceBenchmarkBanner extends StatelessWidget {
     String title;
     String subtitle;
 
+    // Заголовок — факт (вердикт), підзаголовок — на скільки гривень і від
+    // чого саме: від найнижчої ціни або від медіани.
     if (isBest) {
       tone = colors.positive;
       icon = HeroIcons.sparkles;
       title = 'Найкраща ціна на ринку';
-      subtitle = 'Ваша ціна нижча за всі знайдені пропозиції конкурентів';
+      final belowMin = minPrice - userPrice;
+      subtitle = belowMin < 1
+          ? 'Нарівні з найнижчою ціною конкурентів'
+          : 'На ${formatPriceNumber(belowMin)} ${formatCurrency(currency)} нижче за найнижчу ціну конкурентів';
     } else if (isBelowMedian) {
       tone = colors.positive;
       icon = HeroIcons.scale;
@@ -1230,60 +1315,54 @@ class _PriceBenchmarkBanner extends StatelessWidget {
     } else if (pctFromMedian > 15) {
       tone = colors.negative;
       icon = HeroIcons.arrowTrendingUp;
-      title = '+${pctFromMedian.toStringAsFixed(0)}% вище медіани ринку';
+      title = 'Значно дорожче за ринок';
       subtitle =
-          'Медіана: ${formatPriceNumber(medianPrice)} ${formatCurrency(currency)}. Рекомендовано оптимізувати ціну';
+          'На ${formatPriceNumber(diffFromMedian)} ${formatCurrency(currency)} вище медіани ринку';
     } else {
       tone = colors.warning;
       icon = HeroIcons.arrowTrendingUp;
-      title = '+${pctFromMedian.toStringAsFixed(0)}% дорожче медіани';
+      title = 'Дорожче за медіану ринку';
       subtitle =
-          'Медіана ринку: ${formatPriceNumber(medianPrice)} ${formatCurrency(currency)}';
+          'На ${formatPriceNumber(diffFromMedian)} ${formatCurrency(currency)} вище медіани ринку';
     }
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: tone.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: tone.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: tone.withValues(alpha: 0.20),
-              shape: BoxShape.circle,
-            ),
-            child: HeroIcon(icon, size: 16, color: tone),
+    // Рядок без власного фону: живе на спільній поверхні звіту, тон несуть
+    // лише іконка й заголовок.
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(7),
+          decoration: BoxDecoration(
+            color: tone.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(MarkoRadius.sm),
           ),
-          const SizedBox(width: MarkoSpace.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: tone,
-                    fontWeight: FontWeight.w700,
-                  ),
+          child: HeroIcon(icon, size: 16, color: tone),
+        ),
+        const SizedBox(width: MarkoSpace.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: tone,
+                  fontWeight: FontWeight.w700,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: MarkoType.caption.copyWith(
-                    color: colors.ink,
-                    fontSize: 12,
-                  ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: MarkoType.caption.copyWith(
+                  color: colors.muted,
+                  fontSize: 12,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -1320,210 +1399,183 @@ class _MarketSpectrumGauge extends StatelessWidget {
       userFraction = ((userPrice! - min) / (max - min)).clamp(0.0, 1.0);
     }
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colors.surfaceMuted,
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: _MarketStatCard(
-                  label: 'Мінімум',
-                  value: _money(min),
-                  tone: colors.positive,
-                ),
+    // Підпис над треком: мін зліва, медіана по центру, макс справа — без
+    // окремих карток, самою типографікою.
+    Widget stat(String label, double? value, CrossAxisAlignment align) =>
+        Column(
+          crossAxisAlignment: align,
+          children: [
+            Text(
+              label,
+              style: MarkoType.caption.copyWith(
+                color: colors.muted,
+                fontSize: 11,
               ),
-              const SizedBox(width: MarkoSpace.sm),
-              Expanded(
-                child: _MarketStatCard(
-                  label: 'Медіана',
-                  value: _money(median),
-                  tone: colors.ink,
-                ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _money(value),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: MarkoType.price.copyWith(
+                color: colors.ink,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
               ),
-              const SizedBox(width: MarkoSpace.sm),
-              Expanded(
-                child: _MarketStatCard(
-                  label: 'Максимум',
-                  value: _money(max),
-                  tone: colors.negative,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final w = constraints.maxWidth;
-              const pinWidth = 64.0;
-              final userLeft = userFraction == null
-                  ? 0.0
-                  : (userFraction * (w - 14)).clamp(0.0, w - 14);
-              final userPillLeft = (userLeft - pinWidth / 2 + 7).clamp(
-                0.0,
-                w - pinWidth,
-              );
+            ),
+          ],
+        );
 
-              return Column(
-                children: [
-                  if (userPrice != null) ...[
-                    SizedBox(
-                      height: 22,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          Positioned(
-                            left: userPillLeft,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colors.surface,
-                                borderRadius: BorderRadius.circular(
-                                  MarkoRadius.xs,
-                                ),
-                                border: Border.all(color: colors.border),
-                                boxShadow: MarkoShadow.card,
-                              ),
-                              child: Text(
-                                'Ваша ціна',
-                                style: TextStyle(
-                                  color: colors.ink,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.1,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                  ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final w = constraints.maxWidth;
+            const pinWidth = 64.0;
+            final userLeft = userFraction == null
+                ? 0.0
+                : (userFraction * (w - 14)).clamp(0.0, w - 14);
+            final userPillLeft = (userLeft - pinWidth / 2 + 7).clamp(
+              0.0,
+              w - pinWidth,
+            );
+
+            return Column(
+              children: [
+                if (userPrice != null) ...[
                   SizedBox(
-                    height: 14,
+                    height: 22,
                     child: Stack(
-                      alignment: Alignment.centerLeft,
+                      clipBehavior: Clip.none,
                       children: [
-                        Container(
-                          height: 6,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(999),
-                            gradient: LinearGradient(
-                              colors: [
-                                colors.positive,
-                                colors.warning,
-                                colors.negative,
-                              ],
-                              stops: const [0.0, 0.5, 1.0],
-                            ),
-                          ),
-                        ),
                         Positioned(
-                          left: (w - 3) * medianFraction,
+                          left: userPillLeft,
                           child: Container(
-                            width: 3,
-                            height: 14,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
-                              color: colors.ink,
-                              borderRadius: BorderRadius.circular(2),
-                              border: Border.all(
-                                color: colors.surface,
-                                width: 0.5,
+                              color: colors.surface,
+                              borderRadius: BorderRadius.circular(
+                                MarkoRadius.xs,
+                              ),
+                              border: Border.all(color: colors.border),
+                              boxShadow: MarkoShadow.card,
+                            ),
+                            child: Text(
+                              'Ваша ціна',
+                              style: TextStyle(
+                                color: colors.ink,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                height: 1.1,
                               ),
                             ),
                           ),
                         ),
-                        if (userPrice != null)
-                          Positioned(
-                            left: userLeft,
-                            child: Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: colors.surface,
-                                border: Border.all(
-                                  color: colors.ink,
-                                  width: 3.0,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.25),
-                                    blurRadius: 3,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
                       ],
                     ),
                   ),
+                  const SizedBox(height: 6),
                 ],
-              );
-            },
-          ),
-        ],
-      ),
+                SizedBox(
+                  height: 14,
+                  child: Stack(
+                    alignment: Alignment.centerLeft,
+                    children: [
+                      Container(
+                        height: 6,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(999),
+                          gradient: LinearGradient(
+                            colors: [
+                              colors.positive,
+                              colors.warning,
+                              colors.negative,
+                            ],
+                            stops: const [0.0, 0.5, 1.0],
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        left: (w - 3) * medianFraction,
+                        child: Container(
+                          width: 3,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: colors.ink,
+                            borderRadius: BorderRadius.circular(2),
+                            border: Border.all(
+                              color: colors.surface,
+                              width: 0.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (userPrice != null)
+                        Positioned(
+                          left: userLeft,
+                          child: Container(
+                            width: 14,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: colors.surface,
+                              border: Border.all(
+                                color: colors.ink,
+                                width: 3.0,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.25),
+                                  blurRadius: 3,
+                                  offset: const Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: MarkoSpace.md),
+        Row(
+          children: [
+            Expanded(child: stat('Мінімум', min, CrossAxisAlignment.start)),
+            Expanded(child: stat('Медіана', median, CrossAxisAlignment.center)),
+            Expanded(child: stat('Максимум', max, CrossAxisAlignment.end)),
+          ],
+        ),
+      ],
     );
   }
 }
 
-class _MarketStatCard extends StatelessWidget {
-  const _MarketStatCard({
-    required this.label,
-    required this.value,
-    required this.tone,
-  });
+class _OfferCardSurface extends StatelessWidget {
+  const _OfferCardSurface({required this.child});
 
-  final String label;
-  final String value;
-  final Color tone;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MarkoSpace.md,
+        vertical: 11,
+      ),
       decoration: BoxDecoration(
         color: colors.surface,
-        borderRadius: BorderRadius.circular(MarkoRadius.sm),
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
         border: Border.all(color: colors.border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: MarkoType.caption.copyWith(
-              color: colors.muted,
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: MarkoType.price.copyWith(
-              color: tone,
-              fontSize: 13.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
+      child: child,
     );
   }
 }
@@ -1545,13 +1597,7 @@ class _ModernOfferCard extends StatelessWidget {
     final isCheaper = userPrice != null && offer.price < userPrice!;
     final diff = userPrice != null ? (offer.price - userPrice!).abs() : null;
 
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(MarkoRadius.md),
-        border: Border.all(color: colors.border),
-      ),
+    return _OfferCardSurface(
       child: Row(
         children: [
           Expanded(
@@ -1717,7 +1763,6 @@ class _ModernOfferCard extends StatelessWidget {
   }
 }
 
-
 /// Що робити з ціною в кожному власному магазині: заказчик тримає той самий
 /// товар у чотирьох магазинах за різними цінами, і рекомендація рахується
 /// від найдешевшого. Решті потрібна своя, конкретна цифра.
@@ -1734,9 +1779,7 @@ class _OwnStoresGuidance extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = MarkoTheme.of(context);
-    final siblings = ref.watch(_siblingsProvider(productId)).value;
-    if (siblings == null || siblings.length < 2) return const SizedBox.shrink();
+    final siblings = ref.watch(_siblingsProvider(productId));
 
     return Padding(
       padding: const EdgeInsets.only(top: MarkoSpace.md),
@@ -1745,65 +1788,176 @@ class _OwnStoresGuidance extends ConsumerWidget {
         children: [
           Text(
             'Ваші магазини',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: MarkoSpace.sm),
-          for (final sibling in siblings)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      sibling.storeName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                  const SizedBox(width: MarkoSpace.sm),
-                  Text(
-                    sibling.price == null
-                        ? 'ціна не вказана'
-                        : '${formatPriceNumber(sibling.price!)} ${formatCurrency(currency)}',
-                    style: MarkoType.caption.copyWith(color: colors.faint),
-                  ),
-                  const SizedBox(width: MarkoSpace.sm),
-                  Flexible(
-                    child: Text(
-                      _advice(sibling.price),
-                      textAlign: TextAlign.right,
-                      maxLines: 2,
-                      style: MarkoType.caption.copyWith(
-                        color: _adviceColor(colors, sibling.price),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+          siblings.when(
+            loading: () => const _OwnStoresLoadingCard(),
+            error: (_, _) => const MarkoInlineMessage(
+              message: 'Не вдалося завантажити ціни ваших магазинів.',
+              tone: MarkoMessageTone.error,
             ),
+            data: (items) {
+              if (items.length < 2) return const SizedBox.shrink();
+              return Column(
+                children: [
+                  for (var index = 0; index < items.length; index++) ...[
+                    _OwnStoreOfferCard(
+                      sibling: items[index],
+                      recommended: recommended,
+                      currency: currency,
+                    ),
+                    if (index != items.length - 1)
+                      const SizedBox(height: MarkoSpace.sm),
+                  ],
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
   }
+}
 
-  String _advice(double? price) {
-    if (price == null) return 'поставте ціну';
-    final target = '${formatPriceNumber(recommended)} ${formatCurrency(currency)}';
-    // ±1% — це вже влучання, ганяти ціну туди-сюди немає сенсу.
-    if ((price - recommended).abs() <= recommended * 0.01) {
-      return 'відповідає рекомендації';
-    }
-    return price > recommended
-        ? 'вище ринку — можна знизити до $target'
-        : 'можна підняти до $target';
+class _OwnStoresLoadingCard extends StatelessWidget {
+  const _OwnStoresLoadingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return _OfferCardSurface(
+      child: Row(
+        children: [
+          const MarkoLoader(size: 16, strokeWidth: 2),
+          const SizedBox(width: MarkoSpace.sm),
+          Text(
+            'Завантажуємо ціни магазинів',
+            style: MarkoType.caption.copyWith(color: colors.faint),
+          ),
+        ],
+      ),
+    );
   }
+}
 
-  Color _adviceColor(MarkoTheme colors, double? price) {
-    if (price == null) return colors.faint;
-    if ((price - recommended).abs() <= recommended * 0.01) return colors.positive;
-    return price > recommended ? colors.negative : colors.brand;
+class _OwnStoreOfferCard extends StatelessWidget {
+  const _OwnStoreOfferCard({
+    required this.sibling,
+    required this.recommended,
+    required this.currency,
+  });
+
+  final SiblingListing sibling;
+  final double recommended;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final price = sibling.price;
+    final target =
+        '${formatPriceNumber(recommended)} ${formatCurrency(currency)}';
+    final matchesRecommendation =
+        price != null && (price - recommended).abs() <= recommended * 0.01;
+    final advice = switch ((price, matchesRecommendation)) {
+      (null, _) => 'Вкажіть ціну',
+      (_, true) => 'Відповідає рекомендації',
+      (final value?, false) when value > recommended => 'Знизити до $target',
+      _ => 'Підняти до $target',
+    };
+    final adviceColor = switch ((price, matchesRecommendation)) {
+      (null, _) => colors.faint,
+      (_, true) => colors.positive,
+      (final value?, false) when value > recommended => colors.negative,
+      _ => colors.brand,
+    };
+
+    return _OfferCardSurface(
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  sibling.storeName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    HeroIcon(
+                      HeroIcons.buildingStorefront,
+                      size: 12,
+                      color: colors.faint,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      'Ваш магазин',
+                      style: MarkoType.caption.copyWith(
+                        color: colors.faint,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: MarkoSpace.md),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                price == null
+                    ? 'Ціна не вказана'
+                    : '${formatPriceNumber(price)} ${formatCurrency(currency)}',
+                style: MarkoType.price.copyWith(
+                  color: price == null ? colors.faint : colors.ink,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: adviceColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(MarkoRadius.xs),
+                ),
+                child: Text(
+                  advice,
+                  style: TextStyle(
+                    color: adviceColor,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Відкрити товар у магазині',
+            onPressed: sibling.url.isEmpty
+                ? null
+                : () => launchUrl(
+                    Uri.parse(sibling.url),
+                    mode: LaunchMode.externalApplication,
+                  ),
+            icon: const HeroIcon(HeroIcons.arrowTopRightOnSquare, size: 19),
+          ),
+        ],
+      ),
+    );
   }
 }

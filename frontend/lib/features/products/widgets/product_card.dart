@@ -198,6 +198,50 @@ class _ProductCardState extends State<ProductCard> {
               ),
             ),
           ),
+        if (product.groupSize > 1)
+          Positioned(
+            top: widget.horizontal ? 6 : MarkoSpace.sm,
+            right: widget.horizontal ? 6 : MarkoSpace.sm,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 160),
+              opacity: _hovered ? 1 : 0,
+              child: Tooltip(
+                message: 'У ${product.groupSize} магазинах',
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 3.5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.surface.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(MarkoRadius.sm),
+                    border: Border.all(color: colors.border),
+                    boxShadow: MarkoShadow.card,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      HeroIcon(
+                        HeroIcons.buildingStorefront,
+                        size: 13,
+                        color: colors.brand,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${product.groupSize}',
+                        style: MarkoType.caption.copyWith(
+                          color: colors.ink,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 11,
+                          height: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -421,35 +465,11 @@ class _CardDetails extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (_metadata.isNotEmpty) ...[
-          Row(
-            children: [
-              Flexible(
-                child: Text(
-                  _metadata,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: MarkoType.caption.copyWith(color: colors.faint),
-                ),
-              ),
-              if (product.groupSize > 1) ...[
-                const SizedBox(width: MarkoSpace.xs),
-                // Одна картка на товар: показуємо найдешевшу з власних.
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: colors.brandSoft,
-                    borderRadius: BorderRadius.circular(MarkoRadius.sm),
-                  ),
-                  child: Text(
-                    'у ${product.groupSize} магазинах',
-                    style: MarkoType.caption.copyWith(
-                      color: colors.brand,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              ],
-            ],
+          Text(
+            _metadata,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: MarkoType.caption.copyWith(color: colors.faint),
           ),
           const SizedBox(height: MarkoSpace.xs),
         ],

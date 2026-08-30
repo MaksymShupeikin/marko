@@ -132,6 +132,7 @@ def _workspace_listings_query(
     price_max: float | None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    available: bool | None = None,
 ):
     # Фільтр за магазином — це запит «покажи каталог саме цього магазину»,
     # тож там групування вимикаємо: інакше товар зник би з видачі лише через
@@ -183,6 +184,14 @@ def _workspace_listings_query(
         statement = statement.where(~Listing.url.ilike(_EXPORT_URL_PATTERN))
     if store_ids:
         statement = statement.where(Listing.store_id.in_(store_ids))
+    if available is not None:
+        # «Тільки в наявності» — суворо True: товар без відомого статусу
+        # не видаємо за наявний.
+        statement = statement.where(
+            _effective(
+                WorkspaceListingOverride.is_available, Listing.is_available
+            ).is_(available)
+        )
     if price_min is not None:
         statement = statement.where(
             _effective(
@@ -225,6 +234,7 @@ async def count_workspace_listings(
     price_max: float | None = None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    available: bool | None = None,
 ) -> int:
     statement = _workspace_listings_query(
         workspace_id,
@@ -233,6 +243,7 @@ async def count_workspace_listings(
         price_max=price_max,
         source=source,
         store_ids=store_ids,
+        available=available,
     ).with_only_columns(func.count(Listing.id))
     return (await session.execute(statement)).scalar_one()
 
@@ -246,6 +257,7 @@ async def search_workspace_listings(
     price_max: float | None = None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    available: bool | None = None,
     order: str = "name",
     limit: int = 60,
     offset: int = 0,
@@ -266,6 +278,7 @@ async def search_workspace_listings(
             price_max=price_max,
             source=source,
             store_ids=store_ids,
+            available=available,
         )
         .order_by(_listing_order(order), Listing.id)
         .limit(limit)
@@ -442,6 +455,7 @@ async def manageable_workspace_listing_ids(
     price_max: float | None = None,
     source: str | None = None,
     store_ids: list[uuid.UUID] | None = None,
+    available: bool | None = None,
 ) -> list[uuid.UUID]:
     statement = (
         _workspace_listings_query(
@@ -451,6 +465,7 @@ async def manageable_workspace_listing_ids(
             price_max=price_max,
             source=source,
             store_ids=store_ids,
+            available=available,
         )
         .where(WorkspaceStore.kind == StoreKind.owned)
         .with_only_columns(Listing.id)

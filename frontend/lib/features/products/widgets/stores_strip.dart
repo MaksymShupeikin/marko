@@ -7,6 +7,7 @@ import 'package:heroicons/heroicons.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/marko_ui.dart';
 import '../../../core/widgets/marko_cached_image.dart';
+import '../../../core/widgets/marko_confirmation_dialog.dart';
 import '../../../core/widgets/marko_toast.dart';
 import '../products_api.dart';
 import '../products_controller.dart';
@@ -61,7 +62,10 @@ class StoresStrip extends ConsumerWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text('Файли', style: Theme.of(context).textTheme.headlineMedium),
+                Text(
+                  'Файли',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
                 const SizedBox(width: MarkoSpace.sm),
                 MarkoOemChip('${fileStores.length}'),
               ],
@@ -88,7 +92,10 @@ class StoresStrip extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Text('Магазини', style: Theme.of(context).textTheme.headlineMedium),
+              Text(
+                'Магазини',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
               const SizedBox(width: MarkoSpace.sm),
               MarkoOemChip('${stores.length}'),
               const Spacer(),
@@ -133,13 +140,15 @@ class StoresStrip extends ConsumerWidget {
     WidgetRef ref,
     StoreInfo store,
   ) async {
-    final confirmed = await _confirm(
+    final confirmed = await confirmMarkoAction(
       context,
-      title: 'Видалити магазин «${store.name}»?',
-      message:
-          'Каталог магазину (${store.productCountLabel}) буде видалено. '
-          'Сам магазин назавжди лишиться виключеним із цін конкурентів.',
-      action: 'Видалити магазин',
+      title: 'Видалити магазин?',
+      subject: store.name,
+      subjectDetails: store.productCountLabel,
+      description:
+          'Каталог магазину буде видалено. Магазин назавжди лишиться виключеним із цін конкурентів.',
+      confirmLabel: 'Видалити',
+      subjectIcon: HeroIcons.buildingStorefront,
     );
     if (!confirmed || !context.mounted) return;
     try {
@@ -167,14 +176,17 @@ class StoresStrip extends ConsumerWidget {
     WidgetRef ref,
     StoreInfo store,
   ) async {
-    final confirmed = await _confirm(
+    final confirmed = await confirmMarkoAction(
       context,
-      title: 'Прибрати файл магазину «${store.name}»?',
-      message:
-          'Товари з файлу (${store.fileProductCount}) буде прибрано з '
-          'каталогу й пошуку конкурентів — файл перестане бути референсом. '
+      title: 'Прибрати товари з файлу?',
+      subject: store.name,
+      subjectDetails: '${store.fileProductCount} товарів з файлу',
+      description:
+          'Товари з файлу буде прибрано з каталогу й пошуку конкурентів. '
+          'Файл перестане бути референсом. '
           'Товари, імпортовані з Prom, лишаться.',
-      action: 'Прибрати файл',
+      confirmLabel: 'Прибрати',
+      subjectIcon: HeroIcons.documentText,
     );
     if (!confirmed || !context.mounted) return;
     try {
@@ -190,78 +202,13 @@ class StoresStrip extends ConsumerWidget {
       return;
     }
     if (context.mounted) {
-      showMarkoToast(context, message: 'Товари з файлу «${store.name}» прибрано');
+      showMarkoToast(
+        context,
+        message: 'Товари з файлу «${store.name}» прибрано',
+      );
     }
     ref.invalidate(storesProvider);
     await ref.read(productsControllerProvider.notifier).refresh();
-  }
-
-  Future<bool> _confirm(
-    BuildContext context, {
-    required String title,
-    required String message,
-    required String action,
-  }) async {
-    final colors = MarkoTheme.of(context);
-    return await showDialog<bool>(
-          context: context,
-          barrierDismissible: true,
-          builder: (context) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(colors.panelRadius),
-              side: BorderSide(color: colors.border),
-            ),
-            backgroundColor: colors.surface,
-            surfaceTintColor: Colors.transparent,
-            icon: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: colors.negative.withValues(alpha: 0.10),
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: HeroIcon(
-                HeroIcons.trash,
-                color: colors.negative,
-                size: 22,
-              ),
-            ),
-            title: Text(
-              title,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                fontSize: 18,
-              ),
-            ),
-            content: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 380),
-              child: Text(
-                message,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: colors.faint),
-              ),
-            ),
-            actionsAlignment: MainAxisAlignment.center,
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Скасувати'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: colors.negative,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: Text(action),
-              ),
-            ],
-          ),
-        ) ??
-        false;
   }
 }
 
@@ -306,9 +253,8 @@ class _CardsRow extends StatelessWidget {
   }
 }
 
-/// One card of the strip: a store or an uploaded file. The trash icon lives
-/// half-faded in the corner and lights up on hover — on touch screens, where
-/// hover does not exist, the faded icon stays tappable as it is.
+/// One card of the strip: store actions appear on hover or keyboard focus.
+/// On touch, selecting the card reveals the same actions without a custom icon.
 class _StripCard extends StatefulWidget {
   const _StripCard({
     required this.title,
@@ -336,110 +282,140 @@ class _StripCard extends StatefulWidget {
 
 class _StripCardState extends State<_StripCard> {
   bool _hovered = false;
+  bool _focused = false;
+  bool _revealed = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = MarkoTheme.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final selected = widget.selected;
+    final showActions = _hovered || _focused || _revealed;
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: MarkoPanel(
-        padding: const EdgeInsets.symmetric(
-          horizontal: MarkoSpace.md,
-          vertical: MarkoSpace.sm,
-        ),
-        color: selected
-            ? (isDark
-                ? colors.brand.withValues(alpha: 0.15)
-                : colors.brandSoft)
-            : null,
-        borderColor: selected ? colors.brand : null,
-        onTap: widget.onTap,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: colors.surfaceMuted,
-                borderRadius: BorderRadius.circular(MarkoRadius.sm),
-                border: Border.all(
-                  color: selected
-                      ? colors.brand.withValues(alpha: 0.35)
-                      : colors.border,
+    return Focus(
+      onFocusChange: (value) => setState(() => _focused = value),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: MarkoPanel(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MarkoSpace.md,
+            vertical: MarkoSpace.sm,
+          ),
+          color: selected
+              ? (isDark
+                    ? colors.brand.withValues(alpha: 0.15)
+                    : colors.brandSoft)
+              : null,
+          borderColor: selected ? colors.brand : null,
+          onTap: () {
+            if (widget.onTap != null) {
+              widget.onTap!();
+              // Touch screens have no hover. The selected card still reveals
+              // its actions after a tap; desktop keeps them hover-only.
+              if (!_hovered) setState(() => _revealed = true);
+              return;
+            }
+            setState(() => _revealed = !_revealed);
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: colors.surfaceMuted,
+                  borderRadius: BorderRadius.circular(MarkoRadius.sm),
+                  border: Border.all(
+                    color: selected
+                        ? colors.brand.withValues(alpha: 0.35)
+                        : colors.border,
+                  ),
                 ),
-              ),
-              child: widget.logoUrl == null
-                  ? Center(
-                      child: HeroIcon(
-                        widget.icon ?? HeroIcons.buildingStorefront,
-                        size: 18,
-                        color: selected ? colors.brand : colors.faint,
+                child: widget.logoUrl == null
+                    ? Center(
+                        child: HeroIcon(
+                          widget.icon ?? HeroIcons.buildingStorefront,
+                          size: 18,
+                          color: selected ? colors.brand : colors.faint,
+                        ),
+                      )
+                    : MarkoCachedImage(
+                        imageUrl: widget.logoUrl,
+                        fit: BoxFit.contain,
                       ),
-                    )
-                  : MarkoCachedImage(
-                      imageUrl: widget.logoUrl,
-                      fit: BoxFit.contain,
-                    ),
-            ),
-            const SizedBox(width: MarkoSpace.md),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 160),
-                  child: Text(
-                    widget.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: selected ? colors.brand : null,
+              ),
+              const SizedBox(width: MarkoSpace.md),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 160),
+                    child: Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: selected ? colors.brand : null,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  widget.caption,
-                  style: MarkoType.caption.copyWith(
-                    color: selected ? colors.brand : colors.faint,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-            if (selected) ...[
-              const SizedBox(width: MarkoSpace.sm),
-              HeroIcon(HeroIcons.checkCircle, size: 18, color: colors.brand),
-            ],
-            const SizedBox(width: MarkoSpace.sm),
-            AnimatedOpacity(
-              // Без миші (телефон) ховера немає — лишаємо кнопку видимою.
-              opacity: _hovered ? 1.0 : 0.35,
-              duration: const Duration(milliseconds: 120),
-              child: Tooltip(
-                message: widget.deleteTooltip,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: widget.onDelete,
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: HeroIcon(
-                      HeroIcons.trash,
-                      size: 16,
-                      color: _hovered ? colors.negative : colors.faint,
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.caption,
+                    style: MarkoType.caption.copyWith(
+                      color: selected ? colors.brand : colors.faint,
+                      fontSize: 12,
                     ),
                   ),
+                ],
+              ),
+              ClipRect(
+                child: AnimatedSize(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.centerLeft,
+                  child: showActions
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(width: MarkoSpace.sm),
+                            if (widget.onTap != null) ...[
+                              IconButton(
+                                tooltip: selected
+                                    ? 'Зняти вибір'
+                                    : 'Обрати магазин',
+                                icon: HeroIcon(
+                                  selected
+                                      ? HeroIcons.check
+                                      : HeroIcons.checkCircle,
+                                  size: 18,
+                                  color: selected ? colors.brand : null,
+                                ),
+                                onPressed: widget.onTap,
+                              ),
+                              const SizedBox(width: MarkoSpace.xs),
+                            ],
+                            IconButton(
+                              tooltip: widget.deleteTooltip,
+                              icon: HeroIcon(
+                                HeroIcons.trash,
+                                size: 18,
+                                color: colors.negative,
+                              ),
+                              onPressed: widget.onDelete,
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

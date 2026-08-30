@@ -89,7 +89,9 @@ class CatalogFilterBar extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 740;
+        // Ряд «пошук + всі контролі» вміщається лише на широкому екрані;
+        // з чипом наявності його мінімум виріс до ~950px.
+        final compact = constraints.maxWidth < 960;
 
         if (compact) {
           return Column(
@@ -110,10 +112,25 @@ class CatalogFilterBar extends ConsumerWidget {
                 fullWidth: true,
               ),
               const SizedBox(height: MarkoSpace.sm),
-              CatalogSortMenu(
-                sort: sort,
-                onChanged: controller.sortBy,
-                fullWidth: true,
+              // Один ряд на двох — колонка фільтрів і так висока на телефоні.
+              Row(
+                children: [
+                  Expanded(
+                    child: CatalogAvailabilityToggle(
+                      active: state?.onlyAvailable ?? false,
+                      onPressed: controller.toggleOnlyAvailable,
+                      fullWidth: true,
+                    ),
+                  ),
+                  const SizedBox(width: MarkoSpace.sm),
+                  Expanded(
+                    child: CatalogSortMenu(
+                      sort: sort,
+                      onChanged: controller.sortBy,
+                      fullWidth: true,
+                    ),
+                  ),
+                ],
               ),
             ],
           );
@@ -129,6 +146,10 @@ class CatalogFilterBar extends ConsumerWidget {
               onChanged: controller.filterBySource,
             ),
             CatalogPriceRange(onChanged: controller.filterByPrice),
+            CatalogAvailabilityToggle(
+              active: state?.onlyAvailable ?? false,
+              onPressed: controller.toggleOnlyAvailable,
+            ),
             CatalogSortMenu(sort: sort, onChanged: controller.sortBy),
           ],
         );
@@ -381,6 +402,105 @@ class _SourceSegmentState extends State<_SourceSegment> {
   }
 }
 
+/// «Тільки в наявності» — вимикач у стилі решти контролів панелі.
+class CatalogAvailabilityToggle extends StatefulWidget {
+  const CatalogAvailabilityToggle({
+    required this.active,
+    required this.onPressed,
+    this.fullWidth = false,
+    super.key,
+  });
+
+  final bool active;
+  final VoidCallback onPressed;
+  final bool fullWidth;
+
+  @override
+  State<CatalogAvailabilityToggle> createState() =>
+      _CatalogAvailabilityToggleState();
+}
+
+class _CatalogAvailabilityToggleState extends State<CatalogAvailabilityToggle> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textStyle = MarkoLayout.fieldTextStyleOf(context);
+    final active = widget.active;
+
+    final bgColor = active
+        ? (_hovered
+            ? (isDark
+                ? colors.brand.withValues(alpha: 0.22)
+                : colors.brandSoft.withValues(alpha: 0.85))
+            : (isDark
+                ? colors.brand.withValues(alpha: 0.15)
+                : colors.brandSoft))
+        : (_hovered ? colors.surfaceMuted : colors.surface);
+
+    final borderColor = active
+        ? colors.brand
+        : (_hovered ? colors.borderStrong : colors.border);
+
+    final fgColor = active
+        ? colors.brand
+        : (_hovered ? colors.ink : colors.muted);
+
+    final iconColor = active
+        ? colors.brand
+        : (_hovered ? colors.ink : colors.faint);
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onPressed,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeInOut,
+          height: MarkoLayout.fieldHeightOf(context),
+          width: widget.fullWidth ? double.infinity : null,
+          padding: const EdgeInsets.symmetric(horizontal: MarkoSpace.md),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(MarkoRadius.md),
+            border: Border.all(color: borderColor),
+            boxShadow: _hovered ? MarkoShadow.hover : MarkoShadow.card,
+          ),
+          child: Row(
+            mainAxisSize:
+                widget.fullWidth ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              HeroIcon(
+                HeroIcons.check,
+                size: 15,
+                color: iconColor,
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'В наявності',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textStyle.copyWith(
+                    color: fgColor,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class CatalogSortMenu extends StatefulWidget {
   const CatalogSortMenu({
     required this.sort,
@@ -487,23 +607,29 @@ class _CatalogSortMenuState extends State<CatalogSortMenu> {
                     ? MainAxisAlignment.spaceBetween
                     : MainAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      HeroIcon(
-                        HeroIcons.arrowsUpDown,
-                        size: 15,
-                        color: _hovered || isOpen ? colors.ink : colors.faint,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        widget.sort.label,
-                        style: textStyle.copyWith(
-                          color: colors.ink,
-                          fontWeight: FontWeight.w400,
+                  Flexible(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        HeroIcon(
+                          HeroIcons.arrowsUpDown,
+                          size: 15,
+                          color: _hovered || isOpen ? colors.ink : colors.faint,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            widget.sort.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textStyle.copyWith(
+                              color: colors.ink,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(width: 6),
                   AnimatedRotation(

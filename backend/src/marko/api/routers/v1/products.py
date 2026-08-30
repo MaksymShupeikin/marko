@@ -71,6 +71,7 @@ async def search_products(
     price_min: Annotated[float | None, Query(ge=0)] = None,
     price_max: Annotated[float | None, Query(ge=0)] = None,
     source: SourceOption | None = None,
+    available: bool | None = None,
     # UUID магазинів через кому: "id1,id2" — фільтр за кількома одразу.
     store_ids: Annotated[str | None, Query(max_length=2000)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 60,
@@ -85,6 +86,7 @@ async def search_products(
         price_max=price_max,
         source=source,
         store_ids=stores_filter,
+        available=available,
         order=sort,
         limit=limit,
         offset=offset,
@@ -97,6 +99,7 @@ async def search_products(
         price_max=price_max,
         source=source,
         store_ids=stores_filter,
+        available=available,
     )
     return CatalogPageResponse(
         items=[
