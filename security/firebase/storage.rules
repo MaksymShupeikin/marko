@@ -1,0 +1,11 @@
+// Reference-only deny-all baseline. Do not deploy until every application that
+// shares Firebase project marko-4941e has been inventoried.
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

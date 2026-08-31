@@ -1,4 +1,4 @@
-.PHONY: help up down restart ps logs logs-api logs-worker test test-backend test-frontend analyze migrate backup deploy-frontend update clean
+.PHONY: help up down restart ps logs logs-api logs-worker test test-backend test-frontend analyze security-audit migrate backup deploy-frontend update clean
 
 # Default: show available commands
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  make test-backend    - Run backend pytest suite"
 	@echo "  make test-frontend   - Run frontend Flutter tests"
 	@echo "  make analyze         - Run Flutter linter/analyzer"
+	@echo "  make security-audit  - Run read-only checks against the public site and API"
 	@echo "  make deploy-frontend - Build and deploy Flutter Web to Cloudflare Pages"
 	@echo "  make update          - Pull latest code and rebuild containers"
 	@echo "  make clean           - Remove unused Docker caches and stopped containers"
@@ -71,9 +72,15 @@ test-frontend:
 analyze:
 	cd frontend && flutter analyze
 
+security-audit:
+	python3 scripts/security_audit.py
+
 # Deployment & Maintenance
 deploy-frontend:
 	cd frontend && flutter build web --release \
+		--csp \
+		--no-web-resources-cdn \
+		--pwa-strategy=none \
 		--dart-define=API_BASE_URL=https://api.markoprice.com \
 		--dart-define=FIREBASE_API_KEY=AIzaSyB3z6DdrNqhHnMw6fwsrni8vhJ1Z66cgtA \
 		--dart-define=FIREBASE_AUTH_DOMAIN=marko-4941e.firebaseapp.com \
@@ -81,7 +88,8 @@ deploy-frontend:
 		--dart-define=FIREBASE_MESSAGING_SENDER_ID=779526440182 \
 		--dart-define=FIREBASE_WEB_APP_ID=1:779526440182:web:050d87e4d64dccb57cd8d7 \
 		--dart-define=GOOGLE_CLIENT_ID=779526440182-nrkjp7e7pma5lhdandq69hcc5gt0aodu.apps.googleusercontent.com
-	cp frontend/web/_redirects frontend/build/web/_redirects 2>/dev/null || true
+	cd frontend && dart run tool/fingerprint_web.dart build/web
+	cd frontend && dart run tool/verify_web_artifact.dart build/web
 	cd frontend && npx wrangler pages deploy build/web --project-name=marko
 
 build-android:
