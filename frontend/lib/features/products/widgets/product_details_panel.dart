@@ -1028,11 +1028,7 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
     // Своя ціна + межі ринку — без них ні вердикт, ні симуляція не мають сенсу.
     final hasOwnPrice =
         simPrice != null && stats.minPrice != null && stats.medianPrice != null;
-    final rowDivider = Divider(
-      height: 36,
-      thickness: 1,
-      color: colors.border,
-    );
+    final rowDivider = Divider(height: 36, thickness: 1, color: colors.border);
 
     // Один блок замість чотирьох різностильних карток: рядки на спільній
     // поверхні, розділені лініями. Колір несе сенс лише у вердикті та
@@ -1228,9 +1224,9 @@ class _ThinMarketBanner extends StatelessWidget {
             children: [
               Text(
                 'Ринок тонкий',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 4),
               Text(
@@ -1247,7 +1243,6 @@ class _ThinMarketBanner extends StatelessWidget {
     );
   }
 }
-
 
 class _RecommendedPriceBanner extends StatelessWidget {
   const _RecommendedPriceBanner({
@@ -1292,9 +1287,9 @@ class _RecommendedPriceBanner extends StatelessWidget {
             children: [
               Text(
                 'Рекомендована ціна',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 4),
               Text(
@@ -1576,10 +1571,7 @@ class _MarketSpectrumGauge extends StatelessWidget {
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: colors.surface,
-                              border: Border.all(
-                                color: colors.ink,
-                                width: 3.0,
-                              ),
+                              border: Border.all(color: colors.ink, width: 3.0),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.25),
@@ -1758,6 +1750,15 @@ class _ModernOfferCard extends StatelessWidget {
                       ),
                   ],
                 ),
+                if (offer.source == 'avtopro') ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    offer.city != null && offer.city!.isNotEmpty
+                        ? 'Посилання відкриє всіх продавців — ця ціна в рядку міста ${offer.city}'
+                        : 'Посилання відкриє всіх продавців деталі',
+                    style: MarkoType.caption.copyWith(color: colors.muted),
+                  ),
+                ],
               ],
             ),
           ),
