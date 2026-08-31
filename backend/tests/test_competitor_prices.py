@@ -1,10 +1,12 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
 import marko.services.competitor_prices as competitor_prices_module
 from factories import product
+from marko.core.config import Settings
 from marko.services.competitor_prices import (
     CompetitorPriceCache,
     CompetitorPriceReport,
@@ -156,6 +158,11 @@ def test_stats_ignore_weak_matches():
     assert SourceResult("prom", "Prom.ua", "ok", (weak,)).min_price == Decimal("50")
 
 
+def test_availability_gate_defaults_to_disabled():
+    field = Settings.model_fields["competitor_availability_gate_enabled"]
+    assert field.default is False
+
+
 async def test_prom_source_scans_every_configured_page(monkeypatch):
     requested: list[dict] = []
 
@@ -207,6 +214,26 @@ async def test_prom_source_scans_every_configured_page(monkeypatch):
     assert {offer.seller for offer in result.offers} == {
         f"seller-{number}" for number in range(1, pages + 1)
     }
+
+
+def test_prom_machine_unavailable_signal_reaches_the_offer():
+    unavailable = product(
+        id=999,
+        name="Фільтр масляний Bosch 0451103316",
+        sku="0451103316",
+        price="200",
+        urlText="filtr",
+        presence={"isAvailable": False, "presence": ""},
+        company={"id": 999, "name": "Market Seller", "slug": "market-seller"},
+    )
+
+    offers = list(
+        PromPriceSource()._offers_from(part_query(), [unavailable], "0451103316")
+    )
+
+    assert len(offers) == 1
+    assert offers[0].availability == ""
+    assert offers[0].stock == "out_of_stock"
 
 
 async def test_avtopro_counts_interchangeable_analogues_in_the_stats(monkeypatch):
@@ -520,6 +547,200 @@ def test_small_reports_keep_honest_spread():
     )
 
     assert len(sources[0].offers) == 3
+
+
+def test_availability_gate_keeps_unavailable_visible_but_out_of_stats(monkeypatch):
+    _enable_availability_gate(monkeypatch)
+    offers = (
+        MarketOffer(
+            "prom",
+            "Недоступний",
+            Decimal("100"),
+            "UAH",
+            "https://prom.ua/out",
+            availability="Немає в наявності",
+            confidence=0.9,
+        ),
+        MarketOffer(
+            "prom",
+            "Під замовлення",
+            Decimal("180"),
+            "UAH",
+            "https://prom.ua/order",
+            availability="Під замовлення",
+            confidence=0.9,
+        ),
+        MarketOffer(
+            "prom",
+            "A",
+            Decimal("200"),
+            "UAH",
+            "https://prom.ua/a",
+            availability="В наявності",
+            confidence=0.9,
+        ),
+        MarketOffer(
+            "prom", "B", Decimal("220"), "UAH", "https://prom.ua/b", confidence=0.9
+        ),
+        MarketOffer(
+            "prom", "C", Decimal("240"), "UAH", "https://prom.ua/c", confidence=0.9
+        ),
+    )
+    sources = (SourceResult("prom", "Prom.ua", "ok", offers),)
+
+    gated = competitor_prices_module._availability_gate(sources)
+
+    assert len(gated[0].offers) == 5
+    by_url = {offer.url: offer for offer in gated[0].offers}
+    assert by_url["https://prom.ua/out"].confidence == 0.5
+    assert by_url["https://prom.ua/order"].confidence == 0.9
+    assert by_url["https://prom.ua/a"].confidence == 0.9
+    assert gated[0].min_price == Decimal("180")
+    assert gated[0].median_price == Decimal("210.00")
+
+
+def test_machine_out_of_stock_beats_contradictory_text(monkeypatch):
+    _enable_availability_gate(monkeypatch)
+    offer = MarketOffer(
+        "prom",
+        "Фільтр",
+        Decimal("200"),
+        "UAH",
+        "https://prom.ua/filter",
+        availability="В наявності",
+        confidence=0.9,
+        stock="out_of_stock",
+    )
+
+    gated = competitor_prices_module._availability_gate(
+        (SourceResult("prom", "Prom.ua", "ok", (offer,)),)
+    )
+
+    actual = gated[0].offers[0]
+    assert actual.confidence == 0.5
+    assert actual.availability == "Немає в наявності"
+
+
+def test_disabled_availability_gate_is_byte_for_byte_noop(monkeypatch):
+    _enable_availability_gate(monkeypatch, enabled=False)
+    source = SourceResult(
+        "prom",
+        "Prom.ua",
+        "ok",
+        (
+            MarketOffer(
+                "prom",
+                "Фільтр",
+                Decimal("100"),
+                "UAH",
+                "https://prom.ua/filter",
+                confidence=0.9,
+                stock="out_of_stock",
+            ),
+        ),
+    )
+    sources = (source,)
+    before = json.dumps(source.as_json(), ensure_ascii=False, sort_keys=True)
+
+    gated = competitor_prices_module._availability_gate(sources)
+
+    assert gated is sources
+    assert json.dumps(gated[0].as_json(), ensure_ascii=False, sort_keys=True) == before
+    assert "stock" not in gated[0].offers[0].as_json()
+
+
+def test_availability_gate_preserves_current_thin_market_fallback(monkeypatch):
+    """C2 належить аудиту: ця sandbox-гілка навмисно не змінює фолбэк."""
+    _enable_availability_gate(monkeypatch)
+    offers = (
+        MarketOffer(
+            "prom",
+            "Недоступний",
+            Decimal("100"),
+            "UAH",
+            "https://prom.ua/out",
+            availability="Немає в наявності",
+            confidence=0.9,
+        ),
+        MarketOffer(
+            "prom", "A", Decimal("200"), "UAH", "https://prom.ua/a", confidence=0.9
+        ),
+        MarketOffer(
+            "prom", "B", Decimal("220"), "UAH", "https://prom.ua/b", confidence=0.9
+        ),
+    )
+
+    gated = competitor_prices_module._availability_gate(
+        (SourceResult("prom", "Prom.ua", "ok", offers),)
+    )
+
+    assert gated[0].offers[0].confidence == 0.5
+    assert gated[0].prices == [Decimal("100"), Decimal("200"), Decimal("220")]
+    assert competitor_prices_module._recommended_price(gated[0].prices) == Decimal("94")
+
+
+async def test_collect_applies_availability_before_verify_and_photo(monkeypatch):
+    offers = (
+        MarketOffer(
+            "prom",
+            "Недоступний",
+            Decimal("100"),
+            "UAH",
+            "https://prom.ua/out",
+            availability="Немає в наявності",
+            confidence=0.9,
+        ),
+        MarketOffer(
+            "prom", "A", Decimal("180"), "UAH", "https://prom.ua/a", confidence=0.9
+        ),
+        MarketOffer(
+            "prom", "B", Decimal("200"), "UAH", "https://prom.ua/b", confidence=0.9
+        ),
+        MarketOffer(
+            "prom", "C", Decimal("220"), "UAH", "https://prom.ua/c", confidence=0.9
+        ),
+    )
+    prom = SourceResult("prom", "Prom.ua", "ok", offers)
+    seen: list[tuple[str, float]] = []
+
+    async def fake_refined(source, _query, _timeout, _emit):
+        if source.source == "prom":
+            return prom
+        return SourceResult(source.source, source.label, "empty")
+
+    async def identity_uah(sources):
+        return sources
+
+    async def capture_verify(_query, sources, _emit):
+        offer = next(offer for source in sources for offer in source.offers)
+        seen.append(("verify", offer.confidence))
+        return sources
+
+    async def capture_photo(_query, sources, _emit):
+        offer = next(offer for source in sources for offer in source.offers)
+        seen.append(("photo", offer.confidence))
+        return sources
+
+    monkeypatch.setattr(competitor_prices_module, "_refined_source", fake_refined)
+    monkeypatch.setattr(competitor_prices_module, "_to_uah", identity_uah)
+    monkeypatch.setattr(competitor_prices_module, "_verify_offers", capture_verify)
+    monkeypatch.setattr(
+        competitor_prices_module, "_photo_check_offers", capture_photo
+    )
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            competitor_price_source_timeout_seconds=1.0,
+            competitor_availability_gate_enabled=True,
+        ),
+    )
+
+    report = await competitor_prices_module._collect(part_query())
+
+    assert seen == [("verify", 0.5), ("photo", 0.5)]
+    actual = next(offer for source in report.sources for offer in source.offers)
+    assert actual.confidence == 0.5
 
 
 def test_recommended_price_is_never_zero():
@@ -1112,6 +1333,7 @@ def _enable_verification(monkeypatch, *, enabled: bool = True) -> None:
         lambda: SimpleNamespace(
             competitor_verify_enabled=True,
             competitor_photo_check_enabled=False,
+            competitor_availability_gate_enabled=False,
         ),
     )
 
@@ -1126,7 +1348,16 @@ def _enable_photo_check(monkeypatch, *, enabled: bool = True) -> None:
         lambda: SimpleNamespace(
             competitor_verify_enabled=False,
             competitor_photo_check_enabled=enabled,
+            competitor_availability_gate_enabled=False,
         ),
+    )
+
+
+def _enable_availability_gate(monkeypatch, *, enabled: bool = True) -> None:
+    monkeypatch.setattr(
+        competitor_prices_module,
+        "get_settings",
+        lambda: SimpleNamespace(competitor_availability_gate_enabled=enabled),
     )
 
 
@@ -1846,10 +2077,11 @@ def test_structured_price_carries_image_from_json_ld():
     )
     priced = competitor_prices_module._structured_price(html)
     assert priced is not None
-    price, currency, image = priced
+    price, currency, image, stock = priced
     assert str(price) == "193.00"
     assert currency == "UAH"
     assert image == "https://cdn.shop.ua/pump.jpg"
+    assert stock is None
 
 
 def test_structured_price_without_json_ld_has_no_image():
@@ -1857,9 +2089,46 @@ def test_structured_price_without_json_ld_has_no_image():
     html = '<span itemprop="price" content="204">204 грн</span>'
     priced = competitor_prices_module._structured_price(html)
     assert priced is not None
-    price, currency, image = priced
+    price, currency, image, stock = priced
     assert str(price) == "204.00"
     assert image is None
+    assert stock is None
+
+
+def test_google_offer_carries_json_ld_out_of_stock_signal():
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type": "Product", "offers": {"@type": "Offer", '
+        '"price": "193", "priceCurrency": "UAH", '
+        '"availability": "https://schema.org/OutOfStock"}}'
+        "</script>"
+    )
+    priced = competitor_prices_module._structured_price(html)
+    assert priced is not None
+
+    offer = competitor_prices_module.GooglePriceSource()._offer(
+        {"title": "Фільтр", "link": "https://shop.ua/filtr"},
+        "shop.ua",
+        0.9,
+        *priced,
+    )
+
+    assert offer.stock == "out_of_stock"
+
+
+def test_schema_org_stock_markers_cover_all_three_classes():
+    assert (
+        competitor_prices_module._ld_stock("https://schema.org/OutOfStock")
+        == "out_of_stock"
+    )
+    assert (
+        competitor_prices_module._ld_stock("https://schema.org/InStock")
+        == "in_stock"
+    )
+    assert (
+        competitor_prices_module._ld_stock("https://schema.org/PreOrder")
+        == "on_order"
+    )
 
 
 def test_google_offer_carries_image_url():

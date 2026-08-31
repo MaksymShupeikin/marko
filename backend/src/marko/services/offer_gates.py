@@ -67,6 +67,44 @@ _ON_REQUEST_STOCK_RE = re.compile(
 
 _NEW_RE = re.compile(r"\bнов[аеийоыіїя]\w*|\bnew\b", re.I | re.U)
 
+_OUT_OF_STOCK_RE = re.compile(
+    r"""
+    \bнема(?:є)?\s+в\s+наявності\b
+    | \bнет\s+в\s+наличии\b
+    | \bзакінчився\b
+    | \bнемає\s+на\s+складі\b
+    | \bвідсутній\b
+    | \bзнято\s+з\s+продажу\b
+    | \bпродано\b
+    | \bout\s+of\s+stock\b
+    | \bsold\s+out\b
+    """,
+    re.I | re.U | re.X,
+)
+
+_ON_ORDER_RE = re.compile(
+    r"""
+    \bпід\s+замовлення\b
+    | \bпод\s+заказ\b
+    | \bочікується\b
+    | \bожидается\b
+    | \bпоставка\s+від\b
+    | \bдоставка\s+з-за\s+кордону\b
+    """,
+    re.I | re.U | re.X,
+)
+
+_IN_STOCK_RE = re.compile(
+    r"""
+    \b(?:є\s+)?в\s+наявності\b
+    | \bв\s+наличии\b
+    | \bготовий\s+до\s+відправки\b
+    | \bavailable\b
+    | \bin\s+stock\b
+    """,
+    re.I | re.U | re.X,
+)
+
 
 def is_used(text: str | None) -> bool:
     """Вживана, відновлена або з розборки — нам потрібні тільки нові деталі."""
@@ -100,4 +138,19 @@ def condition_of(title: str | None, availability: str | None = None) -> str | No
         return "used"
     if title and _NEW_RE.search(title):
         return "new"
+    return None
+
+
+def stock_of(availability: str | None) -> str | None:
+    """Класифікувати текст як in_stock, on_order, out_of_stock або None."""
+    if not availability:
+        return None
+    # «Немає в наявності» містить позитивний маркер «в наявності», тому
+    # негативний клас завжди перевіряється першим.
+    if _OUT_OF_STOCK_RE.search(availability):
+        return "out_of_stock"
+    if _ON_ORDER_RE.search(availability):
+        return "on_order"
+    if _IN_STOCK_RE.search(availability):
+        return "in_stock"
     return None
