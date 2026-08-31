@@ -153,10 +153,44 @@ def test_reads_the_seller_from_product_urls():
         ("12", None),
         ("---", None),
         (None, None),
+        # Модель авто з пошукової фрази — не номер.
+        ("Audi 100", None),
+        ("PEUGEOT206", None),
     ],
 )
 def test_normalize_oem(raw, expected):
     assert normalize_oem(raw) == expected
+
+
+# Токени зліва — НЕ вигадані: кожен знайдено в oem_numbers живої бази
+# (звіт аудиту B1: «PEUGEOT206» оцінювався 0.9 на сторінках цілих авто,
+# одна з них дала 600 USD у звіті). Токени справа — справжні каталожні
+# номери тієї ж форми «літери+цифри», які фільтр зобов'язаний пропустити.
+@pytest.mark.parametrize(
+    "token",
+    [
+        "AUDI100", "AUDI80", "MERCEDESBENZW210", "BAUREIHE210",
+        "SPRINTERW906", "VITOW638", "VIANOW639", "PEUGEOT206",
+        "RENAULT19", "VWOM601", "VOLKSWAGENOM603",
+    ],
+)
+def test_car_models_are_not_part_numbers(token):
+    from marko.parsers.part_numbers import is_car_model, part_number
+
+    assert is_car_model(token)
+    assert normalize_oem(token) is None
+    assert part_number(token) is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["VKBA6522", "JHQ047", "RS315126", "8E0513033", "056121113D", "W914/2"],
+)
+def test_real_numbers_survive_the_car_model_filter(token):
+    from marko.parsers.part_numbers import is_car_model
+
+    assert not is_car_model(token)
+    assert normalize_oem(token) == token
 
 
 def test_export_url_is_rewritten_to_the_marketplace_link():
