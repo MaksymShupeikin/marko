@@ -103,7 +103,7 @@ template). The important variables:
 | `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_WEB_APP_ID` | Firebase web app config (public client identifiers) |
 | `GOOGLE_CLIENT_ID` | Google OAuth web client ID |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `COMPETITOR_FILTER_MODEL` | LLM relevance filter (default model `gpt-5-nano`; base URL supports OpenAI-compatible proxies) |
-| `COMPETITOR_AVAILABILITY_GATE_ENABLED` | sandbox gate: keep unavailable offers visible but outside market statistics; default `false` |
+| `COMPETITOR_AVAILABILITY_GATE_ENABLED` | keep unavailable offers visible but outside market statistics; default `true` |
 | `SERPER_API_KEY` | optional Serper.dev key; empty disables the Google search source |
 | `CLOUDFLARE_TUNNEL_TOKEN` | production tunnel token |
 

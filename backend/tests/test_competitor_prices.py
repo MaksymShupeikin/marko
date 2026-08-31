@@ -159,9 +159,10 @@ def test_stats_ignore_weak_matches():
     assert SourceResult("prom", "Prom.ua", "ok", (weak,)).min_price is None
 
 
-def test_availability_gate_defaults_to_disabled():
+def test_availability_gate_defaults_to_enabled():
+    """Гейт наявності прийнято 31.08.2026 — вимкнений стан лишився аварійним важелем."""
     field = Settings.model_fields["competitor_availability_gate_enabled"]
-    assert field.default is False
+    assert field.default is True
 
 
 async def test_prom_source_scans_every_configured_page(monkeypatch):
