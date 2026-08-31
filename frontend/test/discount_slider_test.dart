@@ -70,7 +70,7 @@ void main() {
 
     // 1100 проти медіани 1000 — дорожче ринку.
     expect(find.text('Дорожче за медіану ринку'), findsOneWidget);
-    expect(find.textContaining('Рухайте повзунок'), findsOneWidget);
+    expect(find.textContaining('Потягніть для розрахунку'), findsOneWidget);
 
     // Тягнемо повзунок до максимуму: 1100 × 0.70 = 770 < 1000.
     await tester.drag(find.byType(Slider), const Offset(600, 0));

@@ -1065,7 +1065,10 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
                 userPrice: simPrice,
                 currency: currency,
               ),
-              if (stats.recommendedPrice != null) ...[
+              if (stats.thinMarket) ...[
+                rowDivider,
+                const _ThinMarketBanner(),
+              ] else if (stats.recommendedPrice != null) ...[
                 rowDivider,
                 _RecommendedPriceBanner(
                   price: stats.recommendedPrice!,
@@ -1196,6 +1199,56 @@ class _CompetitorPricesReportState extends State<CompetitorPricesReport> {
 }
 
 /// Конкретна сума до виставлення: трохи нижче мінімальної ціни конкурентів.
+class _ThinMarketBanner extends StatelessWidget {
+  /// Менше трьох підтверджених цін: чесніше не давати точну суму, ніж
+  /// рахувати її від випадкових грошей (контракт C2/B8 аудиту).
+  const _ThinMarketBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MarkoTheme.of(context);
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(7),
+          decoration: BoxDecoration(
+            color: colors.warning.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(MarkoRadius.sm),
+          ),
+          child: HeroIcon(
+            HeroIcons.exclamationTriangle,
+            size: 16,
+            color: colors.warning,
+          ),
+        ),
+        const SizedBox(width: MarkoSpace.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Ринок тонкий',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Менше трьох підтверджених цін — точну рекомендацію не даємо',
+                style: MarkoType.caption.copyWith(
+                  color: colors.muted,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+
 class _RecommendedPriceBanner extends StatelessWidget {
   const _RecommendedPriceBanner({
     required this.price,

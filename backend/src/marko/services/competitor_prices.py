@@ -205,7 +205,8 @@ class SourceResult:
 
     @property
     def min_price(self) -> Decimal | None:
-        return min(self.prices) if self.offers else None
+        values = self.prices
+        return min(values) if values else None
 
     @property
     def median_price(self) -> Decimal | None:
@@ -214,7 +215,8 @@ class SourceResult:
 
     @property
     def max_price(self) -> Decimal | None:
-        return max(self.prices) if self.offers else None
+        values = self.prices
+        return max(values) if values else None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -249,6 +251,10 @@ class CompetitorPriceReport:
 
     def as_json(self) -> dict[str, Any]:
         prices = self.prices
+        # Контракт C2/B8: менше трьох підтверджених цін — це не ринок, а
+        # випадкові гроші. Мін/медіану показуємо як контекст, точну
+        # рекомендацію — ні.
+        thin_market = len(prices) < _MIN_STATS_SAMPLE
         return {
             "query": self.query.as_json(),
             "cached": self.cached,
@@ -263,8 +269,9 @@ class CompetitorPriceReport:
                     else None
                 ),
                 "max_price": _decimal_json(max(prices) if prices else None),
+                "thin_market": thin_market,
                 "recommended_price": _decimal_json(
-                    _recommended_price(prices) if prices else None
+                    None if thin_market else _recommended_price(prices)
                 ),
                 # Відсоток їде поруч із сумою: інтерфейс місяць писав «−1%»,
                 # поки формула вже рахувала −6%.
@@ -1805,21 +1812,17 @@ def _recommended_price(prices: list[Decimal]) -> Decimal:
 
 
 def _stats_prices(offers: Iterable[MarketOffer]) -> list[Decimal]:
-    """Ціни впевнених збігів; коли їх замало — усі, що пройшли гейти.
+    """Лише ціни впевнених збігів: слабкі гроші не описують ринок.
 
-    Дві випадкові ціни не описують ринок. Якщо після перевірки впевнених
-    лишилась жменя, а пропозицій було помітно більше, вужча вибірка
-    систематично зміщена вгору: модель сумнівається саме в дешевих аналогах.
-    Ширша вибірка з позначкою краща за впевнено неправильну рекомендацію.
+    Раніше тут був фолбэк «впевнених мало — беремо всі»: він повертав у
+    грошовий розрахунок ціни, які перевірки щойно понизили — 2 сильні +
+    3 понижені давали мінімум 50 і рекомендацію 47 (знахідка C2 аудиту).
+    Тепер тонкий ринок чесно віддає recommended_price = null замість
+    впевнено неправильної суми — контракт C2/B8.
     """
-    offers = list(offers)
-    strong = [
+    return [
         offer.price for offer in offers if offer.confidence >= _MIN_STATS_CONFIDENCE
     ]
-    if len(strong) >= _MIN_STATS_SAMPLE or len(offers) < _MIN_STATS_SAMPLE:
-        return strong or [offer.price for offer in offers]
-    # Пропозицій вистачало, а впевнених лишилась жменя — вибірка зміщена.
-    return [offer.price for offer in offers]
 
 
 def _by_confidence_then_price(offer: MarketOffer) -> tuple[float, Decimal]:
@@ -1861,4 +1864,7 @@ def _cache_key(query: PartSearchQuery) -> str:
     # годин TTL показували б старі звіти з розборкою і фальшивим "new".
     # v11: фото-перевірка вживаних — інакше TTL показував би звіти
     # з Б/У-якорем ще шість годин.
-    return f"competitor-prices:v11:{query.listing_id}:{digest}"
+    # v12: контракт C2/B8 — тонкий ринок віддає recommended_price = null
+    # і thin_market, стара форма зі "впевненою" рекомендацією не має
+    # доживати в кеші.
+    return f"competitor-prices:v12:{query.listing_id}:{digest}"

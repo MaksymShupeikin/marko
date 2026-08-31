@@ -154,8 +154,9 @@ def test_stats_ignore_weak_matches():
     source = SourceResult("prom", "Prom.ua", "ok", (strong, weak))
 
     assert source.min_price == Decimal("300")
-    # Немає жодного впевненого збігу — рахуємо за тим, що є.
-    assert SourceResult("prom", "Prom.ua", "ok", (weak,)).min_price == Decimal("50")
+    # Жодного впевненого збігу — статистики немає: слабкі гроші не ринок
+    # (контракт C2/B8; раніше тут був фолбэк на «те, що є»).
+    assert SourceResult("prom", "Prom.ua", "ok", (weak,)).min_price is None
 
 
 def test_availability_gate_defaults_to_disabled():
@@ -649,8 +650,12 @@ def test_disabled_availability_gate_is_byte_for_byte_noop(monkeypatch):
     assert "stock" not in gated[0].offers[0].as_json()
 
 
-def test_availability_gate_preserves_current_thin_market_fallback(monkeypatch):
-    """C2 належить аудиту: ця sandbox-гілка навмисно не змінює фолбэк."""
+def test_demoted_unavailable_price_never_returns_to_the_stats(monkeypatch):
+    """Антитеза знахідці C2: понижене більше не воскресає у грошах.
+
+    Раніше фолбэк «сильних <3 → беремо всі» повертав щойно понижену
+    недоступну ціну в мінімум, і рекомендація ставала 94 від ціни 100.
+    """
     _enable_availability_gate(monkeypatch)
     offers = (
         MarketOffer(
@@ -675,8 +680,9 @@ def test_availability_gate_preserves_current_thin_market_fallback(monkeypatch):
     )
 
     assert gated[0].offers[0].confidence == 0.5
-    assert gated[0].prices == [Decimal("100"), Decimal("200"), Decimal("220")]
-    assert competitor_prices_module._recommended_price(gated[0].prices) == Decimal("94")
+    # Понижена ціна 100 не в статистиці; двох сильних цін замало для
+    # точної рекомендації — звіт віддасть thin_market.
+    assert gated[0].prices == [Decimal("200"), Decimal("220")]
 
 
 async def test_collect_applies_availability_before_verify_and_photo(monkeypatch):
@@ -770,7 +776,8 @@ def test_report_stats_use_all_sources_and_cache_flag():
                 status="ok",
                 offers=(
                     MarketOffer("prom", "A", Decimal("100"), "UAH", "https://prom.ua/a"),
-                    MarketOffer("prom", "B", Decimal("300"), "UAH", "https://prom.ua/b"),
+                    MarketOffer("prom", "B", Decimal("200"), "UAH", "https://prom.ua/b"),
+                    MarketOffer("prom", "C", Decimal("300"), "UAH", "https://prom.ua/c"),
                 ),
             ),
             SourceResult(source="avtopro", label="Avto.pro", status="empty"),
@@ -780,15 +787,57 @@ def test_report_stats_use_all_sources_and_cache_flag():
 
     payload = report.as_json()
 
-    assert payload["stats"]["offers_total"] == 2
+    assert payload["stats"]["offers_total"] == 3
     assert payload["stats"]["sources_total"] == 2
     assert payload["stats"]["min_price"] == "100"
     assert payload["stats"]["median_price"] == "200.00"
     assert payload["stats"]["max_price"] == "300"
+    assert payload["stats"]["thin_market"] is False
     # Рекомендація — конкретна сума: на 6% нижче мінімуму конкурентів.
     assert payload["stats"]["recommended_price"] == "94"
     # Відсоток їде поруч, щоб підпис у картці не розходився з формулою.
     assert payload["stats"]["recommended_discount_percent"] == 6
+
+
+def test_thin_market_report_withholds_the_recommendation():
+    """Контракт C2/B8: 2 сильні + 3 понижені — рекомендація null, не 47.
+
+    Відтворення аудиту: фолбэк повертав понижені 50/100/120 у мінімум і
+    радив 47 при чесному ринку 500. Тепер мін/медіана йдуть лише від
+    сильних, а точної суми тонкий ринок не отримує.
+    """
+    query = PartSearchQuery(
+        listing_id="p1",
+        oem_numbers=("A1",),
+        brand=None,
+        name="Part",
+        source_url="https://example.test/product",
+    )
+    offers = tuple(
+        MarketOffer(
+            "prom", t, Decimal(p_), "UAH", f"https://prom.ua/{p_}", confidence=c
+        )
+        for t, p_, c in (
+            ("S1", "500", 0.9),
+            ("S2", "520", 0.9),
+            ("W1", "50", 0.5),
+            ("W2", "100", 0.5),
+            ("W3", "120", 0.5),
+        )
+    )
+    report = CompetitorPriceReport(
+        query=query,
+        sources=(SourceResult("prom", "Prom.ua", "ok", offers),),
+        observed_at=datetime.fromtimestamp(0, UTC),
+    )
+
+    stats = report.as_json()["stats"]
+
+    assert stats["thin_market"] is True
+    assert stats["recommended_price"] is None
+    # Контекст ринку — лише від сильних цін, без понижених.
+    assert stats["min_price"] == "500"
+    assert stats["max_price"] == "520"
 
 
 def test_cheapest_by_key_keeps_lowest_offer_per_seller():
@@ -1028,7 +1077,7 @@ def test_own_prom_seller_id_falls_back_to_store_subdomain():
     )
 
 
-def test_cache_key_is_v11_and_changes_with_workspace_exclusions():
+def test_cache_key_is_v12_and_changes_with_workspace_exclusions():
     base = competitor_prices_module.manual_search_query("0451103316", "Bosch")
     workspace = competitor_prices_module.manual_search_query(
         "0451103316",
@@ -1042,7 +1091,7 @@ def test_cache_key_is_v11_and_changes_with_workspace_exclusions():
         ],
     )
 
-    assert _cache_key(base).startswith("competitor-prices:v11:")
+    assert _cache_key(base).startswith("competitor-prices:v12:")
     assert _cache_key(base) != _cache_key(workspace)
 
 

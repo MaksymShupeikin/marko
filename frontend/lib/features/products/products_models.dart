@@ -608,6 +608,7 @@ class CompetitorPriceStats {
     this.maxPrice,
     this.recommendedPrice,
     this.recommendedDiscountPercent = 6,
+    this.thinMarket = false,
   });
 
   factory CompetitorPriceStats.fromJson(Map<String, dynamic> json) {
@@ -625,6 +626,7 @@ class CompetitorPriceStats {
       recommendedPrice: price('recommended_price'),
       recommendedDiscountPercent:
           (json['recommended_discount_percent'] as num?)?.toInt() ?? 6,
+      thinMarket: json['thin_market'] as bool? ?? false,
     );
   }
 
@@ -639,6 +641,9 @@ class CompetitorPriceStats {
 
   /// Наскільки саме нижче — цифру задає бекенд, щоб підпис не брехав.
   final int recommendedDiscountPercent;
+
+  /// Менше трьох підтверджених цін: ринок показуємо, точну суму — ні.
+  final bool thinMarket;
 }
 
 class CompetitorPriceReport {
