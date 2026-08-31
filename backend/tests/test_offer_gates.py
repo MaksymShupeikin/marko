@@ -117,11 +117,50 @@ def test_stock_markers(availability, expected):
     assert offer_gates.stock_of(availability) == expected
 
 
+# Рядки нижче — НЕ вигадані: кожен знайдено в живому кеші звітів
+# (backend/tests/fixtures/audit/redis/) або зафіксовано ревізією пісочниці.
+# Словник, перевірений лише синтетичними фразами, на цих рядках мовчав.
+@pytest.mark.parametrize(
+    ("availability", "expected"),
+    [
+        # Машинні коди Prom: 57×avail і 5×not_avail у кеші звітів.
+        ("avail", "in_stock"),
+        ("not_avail", "out_of_stock"),
+        ("available", "in_stock"),
+        ("not_available", "out_of_stock"),
+        ("waiting_for_supply", "on_order"),
+        # Тултипи avto.pro з кешу звітів: відправка сьогодні/завтра = на складі.
+        ("Отправка товара завтра из г. Киев", "in_stock"),
+        ("Отправка товара сегодня из г. Винница", "in_stock"),
+        ("Товар в наличии и готов к отправке из г. Киев", "in_stock"),
+        # Інверсія з ревізії пісочниці: коротке «не в наявності» падало
+        # в позитивний клас через хвіст «в наявності».
+        ("Не в наявності", "out_of_stock"),
+        ("Не в наличии", "out_of_stock"),
+        # Дірки словника з ревізії пісочниці.
+        ("Недоступний", "out_of_stock"),
+        ("Недоступно", "out_of_stock"),
+        ("Деталь відсутня", "out_of_stock"),
+        ("Отсутствует", "out_of_stock"),
+        ("Розпродано", "out_of_stock"),
+        ("Распродано", "out_of_stock"),
+        ("Нет на складе", "out_of_stock"),
+        ("Товара нет", "out_of_stock"),
+    ],
+)
+def test_live_stock_strings_are_classified(availability, expected):
+    """Словник має впізнавати те, що реально приходить із джерел."""
+    assert offer_gates.stock_of(availability) == expected
+
+
 @pytest.mark.parametrize(
     "availability",
     [
         "Дзвоніть, уточнюйте наявність",
         "Уточнюйте у менеджера",
+        # Живий рядок avto.pro: «через 5 дней» може бути і постачанням
+        # під замовлення — класифікувати нечесно.
+        "Отправка товара через 5 дней из г. Киев",
         "",
         None,
     ],

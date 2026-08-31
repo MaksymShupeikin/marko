@@ -67,17 +67,39 @@ _ON_REQUEST_STOCK_RE = re.compile(
 
 _NEW_RE = re.compile(r"\bнов[аеийоыіїя]\w*|\bnew\b", re.I | re.U)
 
+# Машинні коди наявності: Prom кладе їх у availability замість людського
+# тексту. Знайдені в живому кеші звітів (57×avail, 5×not_avail); решта — з
+# довідника presence Prom. Коди страхують шлях, де текст дійшов, а булеве
+# is_available загубилося; булеве лишається пріоритетним.
+_STOCK_CODES = {
+    "avail": "in_stock",
+    "available": "in_stock",
+    "not_avail": "out_of_stock",
+    "not_available": "out_of_stock",
+    "unavailable": "out_of_stock",
+    "waiting_for_supply": "on_order",
+    "order": "on_order",
+}
+
 _OUT_OF_STOCK_RE = re.compile(
     r"""
-    \bнема(?:є)?\s+в\s+наявності\b
-    | \bнет\s+в\s+наличии\b
+    # «немає / нема / не в наявності» — коротке «не в наявності» раніше
+    # провалювалось у позитивний клас через хвіст «в наявності».
+    \bне(?:ма(?:є)?)?\s+в\s+наявності\b
+    | \bне(?:т)?\s+в\s+наличии\b
     | \bзакінчився\b
-    | \bнемає\s+на\s+складі\b
-    | \bвідсутній\b
+    | \bнема(?:є)?\s+на\s+складі\b
+    | \bнет\s+на\s+складе\b
+    | \bтовара\s+нет\b
+    | \bвідсутн\w*                 # відсутній / відсутня / відсутнє
+    | \bотсутств\w*
+    | \bнедоступн\w*               # недоступний / недоступно / недоступен
+    | \bрозпродан\w* | \bраспродан\w*
     | \bзнято\s+з\s+продажу\b
     | \bпродано\b
     | \bout\s+of\s+stock\b
     | \bsold\s+out\b
+    | \bunavailable\b
     """,
     re.I | re.U | re.X,
 )
@@ -99,6 +121,11 @@ _IN_STOCK_RE = re.compile(
     \b(?:є\s+)?в\s+наявності\b
     | \bв\s+наличии\b
     | \bготовий\s+до\s+відправки\b
+    # Тултипи avto.pro: «Отправка товара завтра из г. Киев». Відправка
+    # сьогодні чи завтра означає, що деталь на складі; «через 5 дней» —
+    # ні (може бути постачання під замовлення), тому лишається None.
+    | \bотправка\s+товара\s+(?:сегодня|завтра)\b
+    | \bвідправка\s+товару\s+(?:сьогодні|завтра)\b
     | \bavailable\b
     | \bin\s+stock\b
     """,
@@ -145,6 +172,9 @@ def stock_of(availability: str | None) -> str | None:
     """Класифікувати текст як in_stock, on_order, out_of_stock або None."""
     if not availability:
         return None
+    code = _STOCK_CODES.get(availability.strip().casefold())
+    if code is not None:
+        return code
     # «Немає в наявності» містить позитивний маркер «в наявності», тому
     # негативний клас завжди перевіряється першим.
     if _OUT_OF_STOCK_RE.search(availability):
