@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /reset-password
+
+Sitemap: https://markoprice.com/sitemap.xml

@@ -1,5 +1,5 @@
 name: marko_client
-description: "A new Flutter project."
+description: "B2B-аналітика конкурентних цін для продавців автозапчастин."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -98,6 +98,25 @@ flutter:
     - assets/logos/
     # Demo photo on the auth page: Wikimedia Commons "Bosch Oil Filter.JPG", CC BY-SA 4.0.
     - assets/demo/
+
+  # Bundle the UI fonts so a strict CSP never depends on Google Fonts at runtime.
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+    - family: Roboto Mono
+      fonts:
+        - asset: assets/fonts/RobotoMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/RobotoMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/RobotoMono-Bold.ttf
+          weight: 700
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

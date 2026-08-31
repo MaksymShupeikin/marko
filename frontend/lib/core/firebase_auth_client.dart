@@ -1,8 +1,5 @@
-import 'dart:convert';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
@@ -92,12 +89,6 @@ class FirebaseAuthClient implements AuthClient {
       }
       return _requireSession(user);
     } on FirebaseAuthException catch (error) {
-      if (await _isGoogleOnlyAccount(email, error)) {
-        throw const AuthClientException(
-          'Цей акаунт створено через Google. '
-          'Скористайтеся кнопкою «Продовжити з Google».',
-        );
-      }
       throw AuthClientException(_firebaseMessage(error));
     }
   }
@@ -113,51 +104,7 @@ class FirebaseAuthClient implements AuthClient {
       await user.sendEmailVerification(_brandedLink);
       await _auth.signOut();
     } on FirebaseAuthException catch (error) {
-      if (await _isGoogleOnlyAccount(email, error)) {
-        throw const AuthClientException(
-          'Цей акаунт уже створено через Google. '
-          'Скористайтеся кнопкою «Продовжити з Google».',
-        );
-      }
       throw AuthClientException(_firebaseMessage(error));
-    }
-  }
-
-  /// firebase_auth 6 removed fetchSignInMethodsForEmail, so we ask the same
-  /// Identity Toolkit endpoint directly. Needs email enumeration protection
-  /// disabled in Firebase, otherwise signinMethods always comes back empty.
-  Future<bool> _isGoogleOnlyAccount(
-    String email,
-    FirebaseAuthException error,
-  ) async {
-    const relevant = {
-      'invalid-credential',
-      'wrong-password',
-      'user-not-found',
-      'email-already-in-use',
-    };
-    if (!relevant.contains(error.code)) return false;
-    try {
-      final response = await http.post(
-        Uri.parse(
-          'https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri'
-          '?key=${_auth.app.options.apiKey}',
-        ),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'identifier': email,
-          'continueUri': 'http://localhost',
-        }),
-      );
-      if (response.statusCode != 200) return false;
-      final methods =
-          ((jsonDecode(response.body) as Map<String, dynamic>)['signinMethods']
-                  as List?)
-              ?.cast<String>() ??
-          const [];
-      return methods.contains('google.com') && !methods.contains('password');
-    } on Exception {
-      return false;
     }
   }
 
@@ -323,7 +270,8 @@ class FirebaseAuthClient implements AuthClient {
       'invalid-credential' ||
       'user-not-found' ||
       'wrong-password' => 'Невірна пошта або пароль.',
-      'email-already-in-use' => 'Акаунт із цією поштою вже існує.',
+      'email-already-in-use' =>
+        'Не вдалося створити акаунт. Спробуйте увійти або відновити пароль.',
       'weak-password' => 'Пароль занадто простий.',
       'user-disabled' => 'Цей акаунт вимкнено.',
       'operation-not-allowed' =>
@@ -335,7 +283,7 @@ class FirebaseAuthClient implements AuthClient {
       'expired-action-code' => 'Посилання застаріло. Запросіть новий лист.',
       'invalid-action-code' => 'Посилання недійсне або вже використане.',
       'account-exists-with-different-credential' =>
-        'Акаунт із цією поштою вже використовує інший спосіб входу.',
+        'Не вдалося виконати вхід. Спробуйте інший спосіб або відновіть пароль.',
       _ => error.message ?? 'Помилка Firebase Authentication.',
     };
   }

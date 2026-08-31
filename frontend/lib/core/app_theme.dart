@@ -39,9 +39,9 @@ abstract final class MarkoLayout {
 
   /// That text as a ready style, on top of the theme's body font.
   static TextStyle fieldTextStyleOf(BuildContext context) =>
-      Theme.of(context).textTheme.bodyMedium?.copyWith(
-        fontSize: fieldFontSizeOf(context),
-      ) ??
+      Theme.of(
+        context,
+      ).textTheme.bodyMedium?.copyWith(fontSize: fieldFontSizeOf(context)) ??
       TextStyle(fontSize: fieldFontSizeOf(context));
 
   /// Дашборд і плаваючі панелі каталогу згортаються нижче цієї ширини.
@@ -88,14 +88,8 @@ abstract final class MarkoShadow {
 
 /// Technical layer: OEM codes, prices and hotkeys are always monospaced.
 abstract final class MarkoType {
-  static const _mono = 'Geist Mono';
-  static const _monoFallback = [
-    'JetBrains Mono',
-    'SF Mono',
-    'Menlo',
-    'Consolas',
-    'monospace',
-  ];
+  static const _mono = 'Roboto Mono';
+  static const _monoFallback = ['SF Mono', 'Menlo', 'Consolas', 'monospace'];
 
   static const oem = TextStyle(
     fontFamily: _mono,
@@ -478,12 +472,11 @@ abstract final class AppTheme {
       useMaterial3: true,
       brightness: brightness,
       colorScheme: colorScheme,
-      fontFamily: 'Geist',
+      fontFamily: 'Roboto',
       fontFamilyFallback: const [
         'Inter',
         'SF Pro Text',
         'Segoe UI',
-        'Roboto',
         'system-ui',
       ],
       scaffoldBackgroundColor: colors.canvas,
@@ -503,13 +496,16 @@ abstract final class AppTheme {
         titleTextStyle: textTheme.titleLarge,
         systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
-          statusBarIconBrightness:
-              brightness == Brightness.dark ? Brightness.light : Brightness.dark,
-          statusBarBrightness:
-              brightness == Brightness.dark ? Brightness.dark : Brightness.light,
+          statusBarIconBrightness: brightness == Brightness.dark
+              ? Brightness.light
+              : Brightness.dark,
+          statusBarBrightness: brightness == Brightness.dark
+              ? Brightness.dark
+              : Brightness.light,
           systemNavigationBarColor: Colors.transparent,
-          systemNavigationBarIconBrightness:
-              brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+          systemNavigationBarIconBrightness: brightness == Brightness.dark
+              ? Brightness.light
+              : Brightness.dark,
           systemNavigationBarDividerColor: Colors.transparent,
         ),
       ),

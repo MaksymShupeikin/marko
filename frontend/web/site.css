@@ -1,0 +1,23 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #070b12; color: #f6f8fb; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 75% 10%, #0d3470 0, #070b12 38%); }
+a { color: inherit; }
+.shell { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 24px 0; }
+.brand { display: inline-flex; gap: 12px; align-items: center; text-decoration: none; font-weight: 760; letter-spacing: .02em; }
+.brand img { width: 36px; height: 36px; border-radius: 10px; }
+.button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 20px; border-radius: 12px; background: #087cff; color: #fff; text-decoration: none; font-weight: 700; }
+.hero { padding: 96px 0 72px; max-width: 850px; }
+.eyebrow { color: #72adff; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; }
+h1 { margin: 18px 0 24px; font-size: clamp(42px, 7vw, 76px); line-height: 1.02; letter-spacing: -.045em; }
+.lead { max-width: 720px; color: #b7c0cf; font-size: clamp(19px, 2.5vw, 25px); line-height: 1.55; }
+.actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
+.secondary { background: #151d2a; border: 1px solid #2c3748; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; padding: 24px 0 88px; }
+.card { padding: 28px; border-radius: 20px; background: rgba(17, 25, 38, .82); border: 1px solid #253247; }
+.card h2 { margin: 0 0 12px; font-size: 21px; }
+.card p { margin: 0; color: #aeb9c9; line-height: 1.6; }
+.footer { padding: 28px 0 42px; border-top: 1px solid #202b3b; color: #8995a6; font-size: 14px; }
+.not-found { display: grid; min-height: 100vh; place-items: center; text-align: center; padding: 24px; }
+.not-found h1 { font-size: clamp(70px, 14vw, 140px); margin-bottom: 8px; }
+@media (max-width: 760px) { .hero { padding-top: 64px; } .grid { grid-template-columns: 1fr; } }

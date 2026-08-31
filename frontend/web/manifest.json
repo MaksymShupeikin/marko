@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#000000",
     "theme_color": "#0070F3",
-    "description": "A new Flutter project.",
+    "description": "B2B-аналітика конкурентних цін для продавців автозапчастин.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
