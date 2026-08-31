@@ -1,0 +1,63 @@
+{
+  "captured_at": "2026-08-30T22:00:51.867Z",
+  "redis_database": 2,
+  "pattern": "photo-used:v1:*",
+  "entries": [
+    {
+      "key": "photo-used:v1:077e789f82f2f0aaf87b9b655647443fccc15ba1",
+      "verdict": "used",
+      "ttl_seconds": 600843
+    },
+    {
+      "key": "photo-used:v1:2757d072459c093f2aeeb7491f84a6ad69521e60",
+      "verdict": "not_used",
+      "ttl_seconds": 600843
+    },
+    {
+      "key": "photo-used:v1:2841f7e5e47c8ca4d782c944b1c1ee8a59dcbef0",
+      "verdict": "used",
+      "ttl_seconds": 593287
+    },
+    {
+      "key": "photo-used:v1:3735c9f8fd6513ac2ab459eb88d13d7722592a45",
+      "verdict": "not_used",
+      "ttl_seconds": 602096
+    },
+    {
+      "key": "photo-used:v1:410c1c88cbbfe237e3214fd46f42dd71b6c173fd",
+      "verdict": "not_used",
+      "ttl_seconds": 593287
+    },
+    {
+      "key": "photo-used:v1:419e291b440059850176c9a5d1b9ee6f65300337",
+      "verdict": "used",
+      "ttl_seconds": 593287
+    },
+    {
+      "key": "photo-used:v1:6000f8d98bbc162525b2995e9a51ae79fad4473d",
+      "verdict": "used",
+      "ttl_seconds": 593286
+    },
+    {
+      "key": "photo-used:v1:68f876462f86458c003c08ad92385e5ef51581bb",
+      "verdict": "used",
+      "ttl_seconds": 592935
+    },
+    {
+      "key": "photo-used:v1:8933e43e6de1cafdd196fec137af97195af57447",
+      "verdict": "not_used",
+      "ttl_seconds": 600842
+    },
+    {
+      "key": "photo-used:v1:d693dd55ff200495a9e8e078b56e1b6d10deddff",
+      "verdict": "not_used",
+      "ttl_seconds": 602096
+    },
+    {
+      "key": "photo-used:v1:ffed992ff57fcc91224f931dadef5d89c7454b2f",
+      "verdict": "not_used",
+      "ttl_seconds": 600842
+    }
+  ]
+}
+

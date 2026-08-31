@@ -1,0 +1,755 @@
+{
+  "photo_cache": {
+    "captured_at": "2026-08-30T22:00:51.867Z",
+    "correlated": [
+      {
+        "cached_verdict": "not_used",
+        "condition_in_report": null,
+        "confidence": 0.75,
+        "fixture": "backend/tests/fixtures/audit/redis/report-32bca82c.json",
+        "image_url_present": true,
+        "price": "1315.67",
+        "source": "prom",
+        "title": "Амортизатор передній лівий Raiso (Швеція) Peugeot 307, Пежо 307 00-11",
+        "ttl_seconds_at_capture": 600842,
+        "url": "https://prom.ua/ua/p2315131506-amortizator-perednij-levyj.html"
+      },
+      {
+        "cached_verdict": "not_used",
+        "condition_in_report": null,
+        "confidence": 0.75,
+        "fixture": "backend/tests/fixtures/audit/redis/report-32bca82c.json",
+        "image_url_present": true,
+        "price": "1316.00",
+        "source": "prom",
+        "title": "Амортизатор передній лів. C4,Peugeot 307 04- газ.",
+        "ttl_seconds_at_capture": 600843,
+        "url": "https://prom.ua/ua/p2481331515-amortizator-perednij-lev.html"
+      },
+      {
+        "cached_verdict": "not_used",
+        "condition_in_report": null,
+        "confidence": 0.95,
+        "fixture": "backend/tests/fixtures/audit/redis/report-32bca82c.json",
+        "image_url_present": true,
+        "price": "1440.00",
+        "source": "prom",
+        "title": "Амортизатор передній Sachs (Оригінал) Peugeot 307, Пежо 307 (2000-2011) #290959 UAOXRGD2",
+        "ttl_seconds_at_capture": 600842,
+        "url": "https://prom.ua/ua/p1937945324-amortizator-perednij-sachs.html"
+      },
+      {
+        "cached_verdict": "not_used",
+        "condition_in_report": null,
+        "confidence": 0.95,
+        "fixture": "backend/tests/fixtures/audit/redis/report-407a92e8.json",
+        "image_url_present": true,
+        "price": "1490.00",
+        "source": "prom",
+        "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAMDWDE19",
+        "ttl_seconds_at_capture": 602096,
+        "url": "https://prom.ua/ua/p2686405510-amortizator-perednij-raiso.html"
+      },
+      {
+        "cached_verdict": "not_used",
+        "condition_in_report": null,
+        "confidence": 0.95,
+        "fixture": "backend/tests/fixtures/audit/redis/report-407a92e8.json",
+        "image_url_present": true,
+        "price": "1564.00",
+        "source": "prom",
+        "title": "Стійка амортизатора Tashiko передня Ford Mondeo III 2000-2007 339758 312937",
+        "ttl_seconds_at_capture": 602096,
+        "url": "https://prom.ua/ua/p1574297190-stojka-amortizatora-tashiko.html"
+      },
+      {
+        "cached_verdict": "used",
+        "condition_in_report": "used",
+        "confidence": 0.5,
+        "fixture": "backend/tests/fixtures/audit/redis/report-manual-06E145100R.json",
+        "image_url_present": true,
+        "price": "2500.00",
+        "source": "prom",
+        "title": "Вакуумний насос 06E145100R AUDI A6 C-7 AUDI",
+        "ttl_seconds_at_capture": 593286,
+        "url": "https://prom.ua/ua/p1687806667-vakuumnij-nasos-06e145100r.html"
+      },
+      {
+        "cached_verdict": "not_used",
+        "condition_in_report": null,
+        "confidence": 0.5,
+        "fixture": "backend/tests/fixtures/audit/redis/report-manual-06E145100R.json",
+        "image_url_present": true,
+        "price": "800.00",
+        "source": "google",
+        "title": "Ремкомплект вакуумного насоса Audi 3.0 T / 3.2 L ...",
+        "ttl_seconds_at_capture": 593287,
+        "url": "https://repairkit.com.ua/ua/p1158162228-remkomplekt-vakuumnogo-nasosa.html?srsltid=AfmBOoqoIbKlymUxkIBFn6OXwuliy2OEtihbpFf3YnD-JqKxuILNRPXa"
+      }
+    ],
+    "entries": 11,
+    "snapshot": "backend/tests/fixtures/audit/redis/photo-cache.json",
+    "unmatched_keys": [
+      "photo-used:v1:077e789f82f2f0aaf87b9b655647443fccc15ba1",
+      "photo-used:v1:2841f7e5e47c8ca4d782c944b1c1ee8a59dcbef0",
+      "photo-used:v1:419e291b440059850176c9a5d1b9ee6f65300337",
+      "photo-used:v1:68f876462f86458c003c08ad92385e5ef51581bb"
+    ],
+    "verdict_counts": {
+      "not_used": 6,
+      "used": 5
+    },
+    "warning": "A cached verdict is not ground truth; only labelled false positives/negatives validate photo accuracy."
+  },
+  "reports": [
+    {
+      "fixture": "backend/tests/fixtures/audit/redis/report-32bca82c.json",
+      "observed_at": "2026-08-30T20:54:46.691329+00:00",
+      "query": {
+        "brand": "KEMP",
+        "listing_id": "32bca82c-41ae-47f0-b3dd-49de4de55b1c",
+        "name": "Амортизатор передній Citroen C-4 Peugeot 307 02-  газ L",
+        "oem_numbers": [
+          "5202CY",
+          "5202.CY",
+          "77648479",
+          "290959"
+        ],
+        "source_url": "https://kemp-cs2847093.prom.ua/p1153741470-amortizator-perednij-citroen.html"
+      },
+      "recomputed": {
+        "median": "1995.00",
+        "min": "1315.67",
+        "min_drivers": [
+          {
+            "availability": "avail",
+            "condition": null,
+            "confidence": 0.75,
+            "image_url_present": true,
+            "is_analog": true,
+            "price": "1315.67",
+            "source": "prom",
+            "title": "Амортизатор передній лівий Raiso (Швеція) Peugeot 307, Пежо 307 00-11",
+            "url": "https://prom.ua/ua/p2315131506-amortizator-perednij-levyj.html"
+          }
+        ],
+        "offers": 34,
+        "stats_fallback_active": false,
+        "strong": 33,
+        "thin_market": false,
+        "weak": 1
+      },
+      "reported_stats": {
+        "max_price": "4987.50",
+        "median_price": "1995.00",
+        "min_price": "1315.67",
+        "offers_total": 34,
+        "recommended_discount_percent": 6,
+        "recommended_price": "1237",
+        "sources_total": 4
+      },
+      "signals": {
+        "avtopro_photo_blind": 15,
+        "category_or_search_google_urls": [],
+        "exact_cross_source_duplicates": [],
+        "exist_offer_urls": [],
+        "google_image_coverage": {
+          "with_image": 0,
+          "without_image": 3
+        },
+        "low_analog_candidates": [
+          {
+            "confidence": 0.5,
+            "price": "365.00",
+            "source": "google",
+            "title": "Амортизаторы Solgy 211217 Citroen C4; Peugeot 307 ...",
+            "url": "https://auto.rozetka.com.ua/428784635/p428784635/"
+          }
+        ],
+        "missed_used_marker_titles": [],
+        "out_of_stock_min_driver": false,
+        "out_of_stock_offers": [],
+        "set_or_pair_titles": [],
+        "strong_oem_only_matches": [
+          {
+            "price": "1519.98",
+            "source": "avtopro",
+            "title": "Raiso RS290959 Raiso",
+            "token_similarity": 0.0
+          },
+          {
+            "price": "2902.60",
+            "source": "avtopro",
+            "title": "Sachs 290959 Амортизатор",
+            "token_similarity": 0.222
+          },
+          {
+            "price": "1440.00",
+            "source": "prom",
+            "title": "Амортизатор передній Sachs (Оригінал) Peugeot 307, Пежо 307 (2000-2011) #290959 UAOXRGD2",
+            "token_similarity": 0.44
+          },
+          {
+            "price": "1440.00",
+            "source": "prom",
+            "title": "Амортизатор передній Sachs (Оригінал) Peugeot 307, Пежо 307 (2000-2011) #290959 UAKXRGI19",
+            "token_similarity": 0.44
+          },
+          {
+            "price": "1995.00",
+            "source": "prom",
+            "title": "Посилена Стійка Citroen C4 I (2004-) Сітроен С4 1. Передня. Ліва. 290959 , 333758 KOREA Аксусс!",
+            "token_similarity": 0.098
+          },
+          {
+            "price": "3054.60",
+            "source": "prom",
+            "title": "Амортизатор підвіски Sachs 290 959 для PEUGEOT 307, PEUGEOT 307 SW",
+            "token_similarity": 0.339
+          },
+          {
+            "price": "3065.00",
+            "source": "prom",
+            "title": "Амортизатор підвіски PEUGEOT 307 SACHS 290 959",
+            "token_similarity": 0.351
+          },
+          {
+            "price": "3581.00",
+            "source": "prom",
+            "title": "Амортизатор газомасляний PEUGEOT 307 (3A/C) 01-07 FL SH 290 959",
+            "token_similarity": 0.314
+          },
+          {
+            "price": "1699.00",
+            "source": "google",
+            "title": "Citroën/Peugeot(Groupe PSA) 5202CY - Амортизатор",
+            "token_similarity": 0.258
+          },
+          {
+            "price": "2606.00",
+            "source": "google",
+            "title": "Передний амортизатор (стойка) Meyle 5202CY",
+            "token_similarity": 0.145
+          }
+        ]
+      },
+      "sources": [
+        {
+          "error": null,
+          "offers": 15,
+          "source": "avtopro",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "1519.98",
+          "status": "ok",
+          "strong": 15
+        },
+        {
+          "error": null,
+          "offers": 16,
+          "source": "prom",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "1315.67",
+          "status": "ok",
+          "strong": 16
+        },
+        {
+          "error": "Serper: оператор site: доступний лише на платному тарифі",
+          "offers": 0,
+          "source": "exist",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": null,
+          "status": "skipped",
+          "strong": 0
+        },
+        {
+          "error": null,
+          "offers": 3,
+          "source": "google",
+          "stats_fallback_active": true,
+          "stats_min_recomputed": "365.00",
+          "status": "ok",
+          "strong": 2
+        }
+      ]
+    },
+    {
+      "fixture": "backend/tests/fixtures/audit/redis/report-407a92e8.json",
+      "observed_at": "2026-08-30T21:15:40.345558+00:00",
+      "query": {
+        "brand": "KEMP",
+        "listing_id": "407a92e8-efb3-4cfd-8b1c-056e70a008f8",
+        "name": "Амортизатор передній Ford Mondeo 2000 --",
+        "oem_numbers": [
+          "77641041",
+          "312937"
+        ],
+        "source_url": "https://kemp-cs2847093.prom.ua/p1153726615-amortizator-perednij-ford.html"
+      },
+      "recomputed": {
+        "median": "2550.00",
+        "min": "1162.66",
+        "min_drivers": [
+          {
+            "availability": "avail",
+            "condition": null,
+            "confidence": 0.95,
+            "image_url_present": true,
+            "is_analog": false,
+            "price": "1162.66",
+            "source": "prom",
+            "title": "Стійка/Амортизатор ФОРД МОНДЕО 3 Турнір Ford MONDEO III Turnier B4Y/B5Y/BWY 2000 -2007 Raiso RS312937",
+            "url": "https://prom.ua/ua/p2526223544-stojkaamortizator-perednij-ford.html"
+          }
+        ],
+        "offers": 51,
+        "stats_fallback_active": false,
+        "strong": 51,
+        "thin_market": false,
+        "weak": 0
+      },
+      "reported_stats": {
+        "max_price": "4606.00",
+        "median_price": "2550.00",
+        "min_price": "1162.66",
+        "offers_total": 51,
+        "recommended_discount_percent": 6,
+        "recommended_price": "1093",
+        "sources_total": 4
+      },
+      "signals": {
+        "avtopro_photo_blind": 3,
+        "category_or_search_google_urls": [],
+        "exact_cross_source_duplicates": [],
+        "exist_offer_urls": [],
+        "google_image_coverage": {
+          "with_image": 2,
+          "without_image": 4
+        },
+        "low_analog_candidates": [],
+        "missed_used_marker_titles": [],
+        "out_of_stock_min_driver": false,
+        "out_of_stock_offers": [],
+        "set_or_pair_titles": [],
+        "strong_oem_only_matches": [
+          {
+            "price": "1799.94",
+            "source": "avtopro",
+            "title": "Raiso RS312937 Амортизатор передній лівий\\правий (газ)",
+            "token_similarity": 0.3
+          },
+          {
+            "price": "2761.15",
+            "source": "avtopro",
+            "title": "Sachs 312937 Амортизатор передній",
+            "token_similarity": 0.393
+          },
+          {
+            "price": "1162.66",
+            "source": "prom",
+            "title": "Стійка/Амортизатор ФОРД МОНДЕО 3 Турнір Ford MONDEO III Turnier B4Y/B5Y/BWY 2000 -2007 Raiso RS312937",
+            "token_similarity": 0.518
+          },
+          {
+            "price": "1490.00",
+            "source": "prom",
+            "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAMDWDE19",
+            "token_similarity": 0.582
+          },
+          {
+            "price": "1564.00",
+            "source": "prom",
+            "title": "Стійка амортизатора Tashiko передня Ford Mondeo III 2000-2007 339758 312937",
+            "token_similarity": 0.415
+          },
+          {
+            "price": "1577.00",
+            "source": "prom",
+            "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UATOVSJ1",
+            "token_similarity": 0.582
+          },
+          {
+            "price": "1590.00",
+            "source": "prom",
+            "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAPNOLT4",
+            "token_similarity": 0.582
+          },
+          {
+            "price": "1659.12",
+            "source": "prom",
+            "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAURMGM24",
+            "token_similarity": 0.582
+          },
+          {
+            "price": "1680.00",
+            "source": "prom",
+            "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UATCNIH22",
+            "token_similarity": 0.582
+          },
+          {
+            "price": "1767.00",
+            "source": "prom",
+            "title": "Амортизатор передній Mondeo III 00- (газ.), виробник: RAISO, код: RS312937",
+            "token_similarity": 0.425
+          },
+          {
+            "price": "1835.00",
+            "source": "prom",
+            "title": "Амортизатор передній Mondeo III 00-, RAISO (RS312937)",
+            "token_similarity": 0.467
+          },
+          {
+            "price": "1835.00",
+            "source": "prom",
+            "title": "Амортизатор передній Mondeo III 00-, RAISO (RS312937)",
+            "token_similarity": 0.467
+          },
+          {
+            "price": "1856.00",
+            "source": "prom",
+            "title": "Амортизатор підвіски FORD передній газовий (виробництво SACHS) (арт. 312937)",
+            "token_similarity": 0.436
+          },
+          {
+            "price": "1966.00",
+            "source": "prom",
+            "title": "Стійка амортизатора Tashiko передня Ford Mondeo III 2000-2007 339758 312937 Tashiko G39-758",
+            "token_similarity": 0.4
+          },
+          {
+            "price": "2201.00",
+            "source": "prom",
+            "title": "ACSUSS! Посилена Передня Стійка Амортизатор Ford Mondeo III Форд Мондео 3 (2000-). 312937 , 339758 Корея!",
+            "token_similarity": 0.533
+          },
+          {
+            "price": "2201.00",
+            "source": "prom",
+            "title": "Посилена Стійка Ford Mondeo III Форд Мондео 3 (2000). Передня. 312937 , 339758 KOREA Аксусс!",
+            "token_similarity": 0.4
+          },
+          {
+            "price": "2201.00",
+            "source": "prom",
+            "title": "ACSUSS Корея! Посилений Амортизатор Ford Mondeo III Форд Мондео 3 (2000). Передній. 312937 , 339758",
+            "token_similarity": 0.692
+          },
+          {
+            "price": "2268.00",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA22",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2550.00",
+            "source": "prom",
+            "title": "Sachs 312937 Амортизатор передній газомасляний Ford Mondeo 1.8-3.0",
+            "token_similarity": 0.65
+          },
+          {
+            "price": "2624.00",
+            "source": "prom",
+            "title": "Амортизатор SACHS 312937 на FORD MONDEO Mk III седан (B4Y)",
+            "token_similarity": 0.436
+          },
+          {
+            "price": "2662.00",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA22",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2664.00",
+            "source": "prom",
+            "title": "Амортизатор підвіски SACHS 312 937",
+            "token_similarity": 0.156
+          },
+          {
+            "price": "2676.00",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA31",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2687.40",
+            "source": "prom",
+            "title": "Амортизатор газомасляний FORD MONDEO III (B_Y) 00-07 FRONT 312 937",
+            "token_similarity": 0.415
+          },
+          {
+            "price": "2700.00",
+            "source": "prom",
+            "title": "Амортизатор пидв. FORD передн. газов. (вир-во SACHS) 312 937 UA58",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2768.69",
+            "source": "prom",
+            "title": "Амортизатор газомасляний FORD MONDEO III (B Y) 00-07 FRONT 312 937 (opt-om)",
+            "token_similarity": 0.407
+          },
+          {
+            "price": "2793.00",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA51",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2821.73",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA46",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2832.00",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937",
+            "token_similarity": 0.277
+          },
+          {
+            "price": "2860.00",
+            "source": "prom",
+            "title": "Амортизатор, 312937 (вір-во SACHS)",
+            "token_similarity": 0.156
+          },
+          {
+            "price": "2880.00",
+            "source": "prom",
+            "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA1",
+            "token_similarity": 0.271
+          },
+          {
+            "price": "2884.68",
+            "source": "prom",
+            "title": "Амортизатор підвіски Sachs 312 937 для FORD MONDEO",
+            "token_similarity": 0.467
+          },
+          {
+            "price": "2995.00",
+            "source": "prom",
+            "title": "Амортизатор FORD MONDEO, SACHS (312937)",
+            "token_similarity": 0.514
+          },
+          {
+            "price": "3177.00",
+            "source": "prom",
+            "title": "Амортизатор Super Touring передній газовий SACHS 312937",
+            "token_similarity": 0.3
+          },
+          {
+            "price": "3207.00",
+            "source": "prom",
+            "title": "Амортизатор SACHS 312937",
+            "token_similarity": 0.238
+          },
+          {
+            "price": "3213.00",
+            "source": "prom",
+            "title": "Амортизатор передній Ford Mondeo, Форд Мондео (пр-во SACHS 312937)",
+            "token_similarity": 0.582
+          },
+          {
+            "price": "3403.63",
+            "source": "prom",
+            "title": "Амортизатор масляний SACHS 312937 FORD MONDEO III (B5Y), FORD MONDEO III (B5Y), FORD MONDEO III (B5Y), FORD",
+            "token_similarity": 0.45
+          },
+          {
+            "price": "1719.52",
+            "source": "google",
+            "title": "Kemp 77641041 ⚙️ - Автопростор",
+            "token_similarity": 0.0
+          },
+          {
+            "price": "2599.00",
+            "source": "google",
+            "title": "312937 SACHS Амортизатор на передний мост",
+            "token_similarity": 0.156
+          },
+          {
+            "price": "2753.00",
+            "source": "google",
+            "title": "312937 312 937 SACHS - Амортизатор (Twin-Tube: Gas)",
+            "token_similarity": 0.142
+          },
+          {
+            "price": "2870.00",
+            "source": "google",
+            "title": "Амортизатор Super Touring газовый передний 312 937 ...",
+            "token_similarity": 0.145
+          }
+        ]
+      },
+      "sources": [
+        {
+          "error": null,
+          "offers": 3,
+          "source": "avtopro",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "1522.83",
+          "status": "ok",
+          "strong": 3
+        },
+        {
+          "error": null,
+          "offers": 42,
+          "source": "prom",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "1162.66",
+          "status": "ok",
+          "strong": 42
+        },
+        {
+          "error": "Serper: оператор site: доступний лише на платному тарифі",
+          "offers": 0,
+          "source": "exist",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": null,
+          "status": "skipped",
+          "strong": 0
+        },
+        {
+          "error": null,
+          "offers": 6,
+          "source": "google",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "1719.52",
+          "status": "ok",
+          "strong": 6
+        }
+      ]
+    },
+    {
+      "fixture": "backend/tests/fixtures/audit/redis/report-manual-06E145100R.json",
+      "observed_at": "2026-08-30T18:48:50.615251+00:00",
+      "query": {
+        "brand": "KEMP",
+        "listing_id": "manual:06E145100R",
+        "name": "06E145100R",
+        "oem_numbers": [
+          "06E145100R"
+        ],
+        "source_url": ""
+      },
+      "recomputed": {
+        "median": "3926.515",
+        "min": "2729.38",
+        "min_drivers": [
+          {
+            "availability": "Отправка товара завтра из г. Киев",
+            "condition": "new",
+            "confidence": 0.75,
+            "image_url_present": false,
+            "is_analog": true,
+            "price": "2729.38",
+            "source": "avtopro",
+            "title": "Sakes 6940100301 Вакуумний насос",
+            "url": "https://avto.pro/part-6940100301-SAKES-591/"
+          }
+        ],
+        "offers": 13,
+        "stats_fallback_active": false,
+        "strong": 10,
+        "thin_market": false,
+        "weak": 3
+      },
+      "reported_stats": {
+        "max_price": "8420.00",
+        "median_price": "3926.52",
+        "min_price": "2729.38",
+        "offers_total": 13,
+        "recommended_discount_percent": 6,
+        "recommended_price": "2566",
+        "sources_total": 4
+      },
+      "signals": {
+        "avtopro_photo_blind": 9,
+        "category_or_search_google_urls": [],
+        "exact_cross_source_duplicates": [],
+        "exist_offer_urls": [],
+        "google_image_coverage": {
+          "with_image": 1,
+          "without_image": 1
+        },
+        "low_analog_candidates": [],
+        "missed_used_marker_titles": [],
+        "out_of_stock_min_driver": false,
+        "out_of_stock_offers": [],
+        "set_or_pair_titles": [],
+        "strong_oem_only_matches": [
+          {
+            "price": "6764.00",
+            "source": "avtopro",
+            "title": "VAG 06E145100R Вакуумный насос, тормозная система",
+            "token_similarity": 0.583
+          },
+          {
+            "price": "8420.00",
+            "source": "prom",
+            "title": "ОРИГІНАЛ Насос вакуумний Фольксваген Тоурег Ауді А4 А6 Q5 Шкода VW Audi Skoda VAG 06E 145 100 R",
+            "token_similarity": 0.0
+          }
+        ]
+      },
+      "sources": [
+        {
+          "error": null,
+          "offers": 9,
+          "source": "avtopro",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "2729.38",
+          "status": "ok",
+          "strong": 9
+        },
+        {
+          "error": null,
+          "offers": 2,
+          "source": "prom",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "8420.00",
+          "status": "ok",
+          "strong": 1
+        },
+        {
+          "error": "Serper: оператор site: доступний лише на платному тарифі",
+          "offers": 0,
+          "source": "exist",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": null,
+          "status": "skipped",
+          "strong": 0
+        },
+        {
+          "error": null,
+          "offers": 2,
+          "source": "google",
+          "stats_fallback_active": false,
+          "stats_min_recomputed": "800.00",
+          "status": "ok",
+          "strong": 0
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "category_or_search_google_urls": 0,
+    "exact_cross_source_duplicate_groups": 0,
+    "exist_offer_urls": 0,
+    "exist_skipped": 3,
+    "low_analog_candidates": 1,
+    "offers": 98,
+    "out_of_stock_min_drivers": 0,
+    "report_stats_fallbacks": 0,
+    "reports": 3,
+    "source_stats_fallbacks": 1,
+    "source_statuses": {
+      "avtopro:ok": 3,
+      "exist:skipped": 3,
+      "google:ok": 3,
+      "prom:ok": 3
+    },
+    "strong_offers": 94,
+    "thin_reports": 0,
+    "warning": "These are lower bounds from post-gate cached payloads, not prevalence estimates.",
+    "weak_offers": 4
+  }
+}

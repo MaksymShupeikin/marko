@@ -1,0 +1,45 @@
+{
+  "scope": "Frozen live candidates accepted at score 0.9 for the PEUGEOT206 gasket listing",
+  "warning": "Only the reono.ua candidate was fetched and confirmed to expose a structured price.",
+  "query": {
+    "listing_id": "734a12c2-67c5-4419-94a2-f1a63887b550",
+    "oem_numbers": [
+      "PEUGEOT206",
+      "PEUGEOT207",
+      "PEUGEOT307",
+      "1509352",
+      "77648927"
+    ],
+    "brand": "PARTNER",
+    "name": "Прокладка впускного колектора peugeot/citroen 206,207,307,partner,tepee 1,6hdi 0",
+    "source_url": "https://kemp-cs2847093.prom.ua/p1522313819-prokladka-vpusknogo-kolektora.html"
+  },
+  "sources": [
+    {
+      "source": "google",
+      "offers": [
+        {
+          "title": "Peugeot 206 (Пежо 206) - цена, отзывы, характеристики ...",
+          "price": null,
+          "confidence": 0.9,
+          "is_analog": false,
+          "url": "https://peugeot-206.infocar.ua/"
+        },
+        {
+          "title": "Купити Peugeot 206 з США в Україні",
+          "price": null,
+          "confidence": 0.9,
+          "is_analog": false,
+          "url": "https://bossautoukraine.com.ua/cars/f/peugeot_206/"
+        },
+        {
+          "title": "Купити Peugeot 206 в Україні: ціни, продаж, фото",
+          "price": "600.00 USD",
+          "confidence": 0.9,
+          "is_analog": false,
+          "url": "https://reono.ua/peugeot/206"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,201 @@
+{
+  "all_mechanisms_confirmed": true,
+  "probes": [
+    {
+      "check": "A1",
+      "evidence": {
+        "parse_price": {
+          "-15%": "-15.00",
+          "1 234,56": "1234.56",
+          "1,234.56": "1.23",
+          "1.234": "1.23"
+        }
+      },
+      "mechanism_confirmed": true,
+      "note": "US thousands+decimal notation is truncated to 1.23; frequency is not proven."
+    },
+    {
+      "check": "A2",
+      "evidence": {
+        "json_ld_without_currency": [
+          "50.00",
+          "UAH",
+          null
+        ],
+        "microdata_with_usd_currency": [
+          "50.00",
+          "UAH",
+          null
+        ]
+      },
+      "mechanism_confirmed": true,
+      "note": "Missing/adjacent structured currency becomes UAH; live frequency is unknown."
+    },
+    {
+      "check": "A3",
+      "evidence": {
+        "structured_price": [
+          "70.00",
+          "UAH",
+          "https://cdn.shop.ua/right.jpg"
+        ]
+      },
+      "mechanism_confirmed": true,
+      "note": "The first recursive Offer wins and may be paired with another node's image."
+    },
+    {
+      "check": "A4",
+      "evidence": {
+        "accepted_urls": [
+          "https://shop.com.ua/catalog/search?q=5202CY"
+        ]
+      },
+      "mechanism_confirmed": true,
+      "note": "No product-URL gate rejects search/catalog pages; frequency is cache/live dependent."
+    },
+    {
+      "check": "A5",
+      "evidence": {
+        "price_from_text": {
+          "covered_installment": null,
+          "delivery_price": "70.00",
+          "from_price": "999.00",
+          "multiplier_before_price": "365.00",
+          "old_then_sale": "999.00"
+        }
+      },
+      "mechanism_confirmed": true,
+      "note": "Several syntactic classes still produce a non-product or wrong anchor price."
+    },
+    {
+      "check": "A6",
+      "evidence": {
+        "norm_currency_grn": "UAH",
+        "norm_currency_uah_dot": "UAH.",
+        "offers_after_single_currency_without_prom_normalization": [
+          "UAH"
+        ]
+      },
+      "mechanism_confirmed": true,
+      "note": "Prom offers bypass _norm_currency; uncommon raw labels can be discarded."
+    },
+    {
+      "check": "A7/A8",
+      "evidence": {
+        "measure_unit_used_by_market_offer": false,
+        "out_of_stock_is_junk": false
+      },
+      "mechanism_confirmed": true,
+      "note": "Unit semantics are not carried into MarketOffer; out-of-stock is deliberately retained."
+    },
+    {
+      "check": "B1",
+      "evidence": {
+        "actual_peugeot206_style_in_accessory": 0.9,
+        "generic_part_word": 0.9,
+        "model_word_in_accessory": 0.9
+      },
+      "mechanism_confirmed": true,
+      "note": "Word/model-like values can create an unconditional 0.9 substring hit."
+    },
+    {
+      "check": "B2",
+      "evidence": {
+        "ean_in_title": 0.9,
+        "phone_in_title": 0.9
+      },
+      "mechanism_confirmed": true,
+      "note": "All-digit identifiers >=8 bypass topic overlap, including phones/EANs."
+    },
+    {
+      "check": "B3",
+      "evidence": {
+        "deterministic_junk_gate": false,
+        "match_score": 0.7
+      },
+      "mechanism_confirmed": true,
+      "note": "A set can enter statistics before the nondeterministic first LLM pass."
+    },
+    {
+      "check": "B4",
+      "evidence": {
+        "inner_outer_conflict": false,
+        "korobka_peredach_false_conflict": true
+      },
+      "mechanism_confirmed": true,
+      "note": "Prefix matching treats 'передач' as front; inner/outer is not modelled."
+    },
+    {
+      "check": "B5",
+      "evidence": {
+        "cover": 0.0,
+        "hub": 0.0
+      },
+      "mechanism_confirmed": true,
+      "note": "Exact token matching has no Ukrainian/Russian synonym or stemming bridge."
+    },
+    {
+      "check": "B7",
+      "evidence": {
+        "real_price_call_to_action_is_junk": true,
+        "used_markers": {
+          "Двигун зі шроту": false,
+          "Деталь з пробігом": false,
+          "Деталь с пробегом": false
+        }
+      },
+      "mechanism_confirmed": true,
+      "note": "Three used-part phrases are missed; a call-to-action with a real price is dropped."
+    },
+    {
+      "check": "B8/C2",
+      "evidence": {
+        "recommended_price": "47",
+        "stats_prices": [
+          "500",
+          "520",
+          "50",
+          "100",
+          "120"
+        ],
+        "verification_photo_anchor": null
+      },
+      "mechanism_confirmed": true,
+      "note": "Two strong + three demoted offers re-enable the weak minimum; two strong alone disable verification/photo."
+    },
+    {
+      "check": "C3/C4",
+      "evidence": {
+        "cross_source_duplicate_count": 2,
+        "exist_covered_elsewhere": true,
+        "exist_terms": [
+          "site:exist.ua 5202CY",
+          "site:exist.ua амортизатор передній ford focus"
+        ]
+      },
+      "mechanism_confirmed": true,
+      "note": "General Google excludes Exist; no report-level cross-source deduplication exists."
+    },
+    {
+      "check": "C5",
+      "evidence": {
+        "selected_before_llm": [
+          "Кріплення"
+        ]
+      },
+      "mechanism_confirmed": true,
+      "note": "Seller dedup can discard the correct higher-priced item before the LLM sees it."
+    },
+    {
+      "check": "C7",
+      "evidence": {
+        "returned_offers": 0,
+        "returned_status": "error",
+        "source_had_partial_internal_state": 1
+      },
+      "mechanism_confirmed": true,
+      "note": "The whole-source timeout returns an empty error result even after internal collection began."
+    }
+  ],
+  "scope": "offline current-behaviour probes; no external calls"
+}

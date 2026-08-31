@@ -1,0 +1,81 @@
+{
+  "captured_at": "2026-08-30T22:07:58.174014+00:00",
+  "budget": {
+    "max_queries_for_this_run": 1,
+    "actual_queries": 1,
+    "llm_calls": 0,
+    "marketplace_fetches": 0
+  },
+  "results": [
+    {
+      "query": "PEUGEOT206",
+      "request": {
+        "gl": "ua",
+        "hl": "uk",
+        "num": 20
+      },
+      "status_code": 200,
+      "response": {
+        "searchParameters": {
+          "q": "PEUGEOT206",
+          "gl": "ua",
+          "hl": "uk",
+          "type": "search",
+          "num": 20,
+          "engine": "google"
+        },
+        "organic": [
+          {
+            "title": "Peugeot 206",
+            "link": "https://uk.wikipedia.org/wiki/Peugeot_206",
+            "snippet": "це компактні автомобілі В-класу, що виробляються компанією Peugeot з 1998 року і прийшли на заміну моделі Peugeot 205.",
+            "date": "Peugeot 206",
+            "position": 1
+          },
+          {
+            "title": "Продаж Пежо 206 бу: купити Peugeot 206 в Україні",
+            "link": "https://auto.ria.com/uk/car/peugeot/206/",
+            "snippet": "Більш ніж 356 оголошень про продаж вживаних Пежо 206 на автобазарі в Україні. На AUTO.RIA легко знайти, зрівняти та купити бу Peugeot 206 з пробігом ...",
+            "rating": 4.1,
+            "ratingCount": 326,
+            "position": 2
+          },
+          {
+            "title": "PEUGEOT 206 купити – Ціна ПЕЖО 206, продаж бу авто ...",
+            "link": "https://m.rst.ua/ukr/oldcars/peugeot/206/",
+            "snippet": "△ 69 оголошень Від - до:$1'500 - $6'890 Медіана:$3'100 Ринкова:від $2'500 до $3'700 Ринкова - це діапазон цін±30% від медіани.",
+            "position": 3
+          },
+          {
+            "title": "Peugeot 206 (Пежо 206) - цена, отзывы, характеристики ...",
+            "link": "https://peugeot-206.infocar.ua/",
+            "snippet": "Машина только для города, экономная, легкая в парковке, в пробках, красивый дизайн, снаружи, внутри, много чего можно починить самому и быстро. Кузов оцинкован ...",
+            "position": 4
+          },
+          {
+            "title": "Купити Peugeot 206 з США в Україні",
+            "link": "https://bossautoukraine.com.ua/cars/f/peugeot_206/?srsltid=AfmBOooJoRb4RKtUZBO1jbr0-Xj4Ag5GPhIaZoOxTwazIe_gEjPC2VFY",
+            "snippet": "Peugeot 206 ; 206 2006 · 171,000 км · Стрий · 3,300 $ ; 206 2001 · 171,000 км · Коломия · 5,000 $ ; 206 2008 · 235,000 км · Закарпаття · 3,100 $.",
+            "rating": 4.5,
+            "ratingCount": 256,
+            "position": 5
+          },
+          {
+            "title": "Купити Peugeot 206 в Україні: ціни, продаж, фото",
+            "link": "https://reono.ua/peugeot/206",
+            "snippet": "Peugeot 206 в Україні. ✓ Актуальні ціни на всі моделі авто ⏩ Продаж на ⭐Reono: ціни, продаж, фото.",
+            "position": 6
+          },
+          {
+            "title": "Характеристики Peugeot 206 1.4 HDi",
+            "link": "https://auto.ria.com/uk/car/peugeot/206/1159578/tth/",
+            "snippet": "Це седани. Двигун бензин 1.4, з так званими \"мокрими циліндрами\", блок циліндрів алюмінієвий. На 80 тис. пробило прокладку. На сервісі Пежо сказали, що іранці ...",
+            "position": 7
+          }
+        ],
+        "credits": 1
+      }
+    }
+  ]
+}
+

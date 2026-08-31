@@ -1,0 +1,727 @@
+{
+  "scope": "one frozen recommendation-driving source batch; not a prevalence estimate",
+  "fixture": "backend/tests/fixtures/audit/redis/report-407a92e8.json",
+  "source": "prom",
+  "query": {
+    "listing_id": "407a92e8-efb3-4cfd-8b1c-056e70a008f8",
+    "oem_numbers": [
+      "77641041",
+      "312937"
+    ],
+    "brand": "KEMP",
+    "name": "Амортизатор передній Ford Mondeo 2000 --",
+    "source_url": "https://kemp-cs2847093.prom.ua/p1153726615-amortizator-perednij-ford.html"
+  },
+  "model": "gpt-5-nano",
+  "provider": "openai",
+  "titles": 25,
+  "repeats": 3,
+  "chunk_size": 25,
+  "budget": {
+    "max_calls": 3,
+    "expected_calls": 3,
+    "actual_calls": 3,
+    "serper_calls": 0,
+    "marketplace_fetches": 0
+  },
+  "elapsed_seconds": 33.287,
+  "run_verdict_counts": [
+    {
+      "same": 24,
+      "analog": 1
+    },
+    {
+      "same": 24,
+      "analog": 1
+    },
+    {
+      "same": 21,
+      "no": 4
+    }
+  ],
+  "items_with_drift": 4,
+  "item_drift_rate": 0.16,
+  "pairwise": [
+    {
+      "runs": [
+        1,
+        2
+      ],
+      "disagreements": 0,
+      "rate": 0.0
+    },
+    {
+      "runs": [
+        1,
+        3
+      ],
+      "disagreements": 4,
+      "rate": 0.16
+    },
+    {
+      "runs": [
+        2,
+        3
+      ],
+      "disagreements": 4,
+      "rate": 0.16
+    }
+  ],
+  "items": [
+    {
+      "index": 0,
+      "title": "Стійка/Амортизатор ФОРД МОНДЕО 3 Турнір Ford MONDEO III Turnier B4Y/B5Y/BWY 2000 -2007 Raiso RS312937",
+      "price": "1162.66",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 1,
+      "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAMDWDE19",
+      "price": "1490.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 2,
+      "title": "Стійка амортизатора Tashiko передня Ford Mondeo III 2000-2007 339758 312937",
+      "price": "1564.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 3,
+      "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UATOVSJ1",
+      "price": "1577.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 4,
+      "title": "Амортизатор передній для FORD MONDEO 3 (B5Y) 2000-2007 #RS312937 Raiso",
+      "price": "1581.47",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 5,
+      "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAPNOLT4",
+      "price": "1590.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 6,
+      "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UAURMGM24",
+      "price": "1659.12",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 7,
+      "title": "Амортизатор передній Raiso (Швеція) Форд Мондео 3 Ford Mondeo 3 #RS312937 UATCNIH22",
+      "price": "1680.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 8,
+      "title": "Амортизатор передній Mondeo III 00- (газ.), виробник: RAISO, код: RS312937",
+      "price": "1767.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 9,
+      "title": "Амортизатор передній Mondeo III 00-, RAISO (RS312937)",
+      "price": "1835.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 10,
+      "title": "Амортизатор передній Mondeo III 00-, RAISO (RS312937)",
+      "price": "1835.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 11,
+      "title": "Амортизатор підвіски FORD передній газовий (виробництво SACHS) (арт. 312937)",
+      "price": "1856.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 12,
+      "title": "Стійка амортизатора Tashiko передня Ford Mondeo III 2000-2007 339758 312937 Tashiko G39-758",
+      "price": "1966.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 13,
+      "title": "Амортизатор передній для Ford Mondeo III (B4Y/B5Y/BWY) (2000-2007) для двигунів 1.8-3.0L",
+      "price": "1966.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 14,
+      "title": "Амортизатор Ford Mondeo 2000-2007 передній sensen 4214-0126",
+      "price": "1978.00",
+      "production_confidence": 0.75,
+      "production_is_analog": true,
+      "verdicts": [
+        "analog",
+        "analog",
+        "no"
+      ],
+      "drift": true
+    },
+    {
+      "index": 15,
+      "title": "Амортизатор FORD MONDEO 00> передній газовий. SACHS",
+      "price": "1996.00",
+      "production_confidence": 0.75,
+      "production_is_analog": true,
+      "verdicts": [
+        "same",
+        "same",
+        "no"
+      ],
+      "drift": true
+    },
+    {
+      "index": 16,
+      "title": "Амортизатор передній FORD MONDEO 3 2000-2007 (1.8-3.0)",
+      "price": "2041.00",
+      "production_confidence": 0.75,
+      "production_is_analog": true,
+      "verdicts": [
+        "same",
+        "same",
+        "no"
+      ],
+      "drift": true
+    },
+    {
+      "index": 17,
+      "title": "ACSUSS! Посилена Передня Стійка Амортизатор Ford Mondeo III Форд Мондео 3 (2000-). 312937 , 339758 Корея!",
+      "price": "2201.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 18,
+      "title": "Посилена Стійка Ford Mondeo III Форд Мондео 3 (2000). Передня. 312937 , 339758 KOREA Аксусс!",
+      "price": "2201.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 19,
+      "title": "ACSUSS Корея! Посилений Амортизатор Ford Mondeo III Форд Мондео 3 (2000). Передній. 312937 , 339758",
+      "price": "2201.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 20,
+      "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA22",
+      "price": "2268.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 21,
+      "title": "Sachs 312937 Амортизатор передній газомасляний Ford Mondeo 1.8-3.0",
+      "price": "2550.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 22,
+      "title": "Амортизатор SACHS 312937 на FORD MONDEO Mk III седан (B4Y)",
+      "price": "2624.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    },
+    {
+      "index": 23,
+      "title": "Амортизатор підв. FORD передн. газов. (вир-во SACHS) 312 937 UA22",
+      "price": "2662.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "no"
+      ],
+      "drift": true
+    },
+    {
+      "index": 24,
+      "title": "Амортизатор підвіски SACHS 312 937",
+      "price": "2664.00",
+      "production_confidence": 0.95,
+      "production_is_analog": false,
+      "verdicts": [
+        "same",
+        "same",
+        "same"
+      ],
+      "drift": false
+    }
+  ],
+  "raw_call_log": [
+    {
+      "repeat": 1,
+      "prompt_sha256": "ea02d141c5b0f271694258197ac2f56645a38c741af0adaeffa9c28a437c88e6",
+      "elapsed_seconds": 12.628,
+      "response": {
+        "verdicts": [
+          {
+            "index": 0,
+            "verdict": "same"
+          },
+          {
+            "index": 1,
+            "verdict": "same"
+          },
+          {
+            "index": 2,
+            "verdict": "same"
+          },
+          {
+            "index": 3,
+            "verdict": "same"
+          },
+          {
+            "index": 4,
+            "verdict": "same"
+          },
+          {
+            "index": 5,
+            "verdict": "same"
+          },
+          {
+            "index": 6,
+            "verdict": "same"
+          },
+          {
+            "index": 7,
+            "verdict": "same"
+          },
+          {
+            "index": 8,
+            "verdict": "same"
+          },
+          {
+            "index": 9,
+            "verdict": "same"
+          },
+          {
+            "index": 10,
+            "verdict": "same"
+          },
+          {
+            "index": 11,
+            "verdict": "same"
+          },
+          {
+            "index": 12,
+            "verdict": "same"
+          },
+          {
+            "index": 13,
+            "verdict": "same"
+          },
+          {
+            "index": 14,
+            "verdict": "analog"
+          },
+          {
+            "index": 15,
+            "verdict": "same"
+          },
+          {
+            "index": 16,
+            "verdict": "same"
+          },
+          {
+            "index": 17,
+            "verdict": "same"
+          },
+          {
+            "index": 18,
+            "verdict": "same"
+          },
+          {
+            "index": 19,
+            "verdict": "same"
+          },
+          {
+            "index": 20,
+            "verdict": "same"
+          },
+          {
+            "index": 21,
+            "verdict": "same"
+          },
+          {
+            "index": 22,
+            "verdict": "same"
+          },
+          {
+            "index": 23,
+            "verdict": "same"
+          },
+          {
+            "index": 24,
+            "verdict": "same"
+          }
+        ]
+      }
+    },
+    {
+      "repeat": 2,
+      "prompt_sha256": "ea02d141c5b0f271694258197ac2f56645a38c741af0adaeffa9c28a437c88e6",
+      "elapsed_seconds": 10.163,
+      "response": {
+        "verdicts": [
+          {
+            "index": 0,
+            "verdict": "same"
+          },
+          {
+            "index": 1,
+            "verdict": "same"
+          },
+          {
+            "index": 2,
+            "verdict": "same"
+          },
+          {
+            "index": 3,
+            "verdict": "same"
+          },
+          {
+            "index": 4,
+            "verdict": "same"
+          },
+          {
+            "index": 5,
+            "verdict": "same"
+          },
+          {
+            "index": 6,
+            "verdict": "same"
+          },
+          {
+            "index": 7,
+            "verdict": "same"
+          },
+          {
+            "index": 8,
+            "verdict": "same"
+          },
+          {
+            "index": 9,
+            "verdict": "same"
+          },
+          {
+            "index": 10,
+            "verdict": "same"
+          },
+          {
+            "index": 11,
+            "verdict": "same"
+          },
+          {
+            "index": 12,
+            "verdict": "same"
+          },
+          {
+            "index": 13,
+            "verdict": "same"
+          },
+          {
+            "index": 14,
+            "verdict": "analog"
+          },
+          {
+            "index": 15,
+            "verdict": "same"
+          },
+          {
+            "index": 16,
+            "verdict": "same"
+          },
+          {
+            "index": 17,
+            "verdict": "same"
+          },
+          {
+            "index": 18,
+            "verdict": "same"
+          },
+          {
+            "index": 19,
+            "verdict": "same"
+          },
+          {
+            "index": 20,
+            "verdict": "same"
+          },
+          {
+            "index": 21,
+            "verdict": "same"
+          },
+          {
+            "index": 22,
+            "verdict": "same"
+          },
+          {
+            "index": 23,
+            "verdict": "same"
+          },
+          {
+            "index": 24,
+            "verdict": "same"
+          }
+        ]
+      }
+    },
+    {
+      "repeat": 3,
+      "prompt_sha256": "ea02d141c5b0f271694258197ac2f56645a38c741af0adaeffa9c28a437c88e6",
+      "elapsed_seconds": 10.495,
+      "response": {
+        "verdicts": [
+          {
+            "index": 0,
+            "verdict": "same"
+          },
+          {
+            "index": 1,
+            "verdict": "same"
+          },
+          {
+            "index": 2,
+            "verdict": "same"
+          },
+          {
+            "index": 3,
+            "verdict": "same"
+          },
+          {
+            "index": 4,
+            "verdict": "same"
+          },
+          {
+            "index": 5,
+            "verdict": "same"
+          },
+          {
+            "index": 6,
+            "verdict": "same"
+          },
+          {
+            "index": 7,
+            "verdict": "same"
+          },
+          {
+            "index": 8,
+            "verdict": "same"
+          },
+          {
+            "index": 9,
+            "verdict": "same"
+          },
+          {
+            "index": 10,
+            "verdict": "same"
+          },
+          {
+            "index": 11,
+            "verdict": "same"
+          },
+          {
+            "index": 12,
+            "verdict": "same"
+          },
+          {
+            "index": 13,
+            "verdict": "same"
+          },
+          {
+            "index": 14,
+            "verdict": "no"
+          },
+          {
+            "index": 15,
+            "verdict": "no"
+          },
+          {
+            "index": 16,
+            "verdict": "no"
+          },
+          {
+            "index": 17,
+            "verdict": "same"
+          },
+          {
+            "index": 18,
+            "verdict": "same"
+          },
+          {
+            "index": 19,
+            "verdict": "same"
+          },
+          {
+            "index": 20,
+            "verdict": "same"
+          },
+          {
+            "index": 21,
+            "verdict": "same"
+          },
+          {
+            "index": 22,
+            "verdict": "same"
+          },
+          {
+            "index": 23,
+            "verdict": "no"
+          },
+          {
+            "index": 24,
+            "verdict": "same"
+          }
+        ]
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,88 @@
+{
+  "captured_at": "2026-08-30T22:03:54.050060+00:00",
+  "budget": {
+    "max_queries_for_this_run": 1,
+    "actual_queries": 1,
+    "llm_calls": 0,
+    "marketplace_fetches": 0
+  },
+  "results": [
+    {
+      "query": "211217 Rozetka амортизатор",
+      "request": {
+        "gl": "ua",
+        "hl": "uk",
+        "num": 20
+      },
+      "status_code": 200,
+      "response": {
+        "searchParameters": {
+          "q": "211217 Rozetka амортизатор",
+          "gl": "ua",
+          "hl": "uk",
+          "type": "search",
+          "num": 20,
+          "engine": "google"
+        },
+        "organic": [
+          {
+            "title": "Амортизаторы Solgy 211217 Citroen C4; Peugeot 307 ...",
+            "link": "https://auto.rozetka.com.ua/428784635/p428784635/",
+            "snippet": "Амортизаторы Solgy 211217 Citroen C4; Peugeot 307 5202CY, 5202EA, 5202LQ ; Артикул: 211217 ; Продавец: AATLANT ; Rozetka. от 365 ₴ x 6 ; от 365 ₴ ; Оплата. Оплата ...",
+            "position": 1
+          },
+          {
+            "title": "Стойка амортизатора передняя Solgy Citroen C4 04 ...",
+            "link": "https://auto.rozetka.com.ua/solgy-slg-211217/p544065220/",
+            "snippet": "Стойка амортизатора передняя Solgy Citroen C4 04-/Peugeot 307 00- (L/R) (211217) ; Код · 544065220 ; Бренд: Solgy ; Артикул: SLG 211217 ; Страна регистрации бренда.",
+            "position": 2
+          },
+          {
+            "title": "Задний левый/правый амортизатор Magnum Technology ...",
+            "link": "https://auto.rozetka.com.ua/magnum-technology-ag4034mt/p454442744/",
+            "snippet": "Амортизатор эффективно гасит вибрации и удары при движении по неровным дорогам, улучшая управляемость и сцепление колес с дорогой. Изготовлен из износостойких ...",
+            "position": 3
+          },
+          {
+            "title": "Амортизатор 2170, 2171, 2172 задний AT",
+            "link": "https://auto.rozetka.com.ua/616058366/p616058366/",
+            "snippet": "ROZETKA ⚡️ Купить Амортизатор 2170, 2171, 2172 задний AT от продавца: PowerDepot | Низкие цены, гарантия, скидки, кредит или оплата частями.",
+            "position": 4
+          },
+          {
+            "title": "Передний левый амортизатор Magnum Technology ...",
+            "link": "https://auto.rozetka.com.ua/magnum-technology-ag2145mt/p454439225/",
+            "snippet": "Амортизатор эффективно гасит вибрации и удары при движении по неровным дорогам, улучшая управляемость и сцепление колес с дорогой. Изготовлен из износостойких ...",
+            "position": 5
+          },
+          {
+            "title": "Передний правый амортизатор Magnum Technology ...",
+            "link": "https://rozetka.com.ua/magnum-technology-ag8033mt/p454436654/?srsltid=AfmBOooN-FahtlT8GVHaAMB1i2etF7nyVGUG24So5aYlup9V9uqFTUh3",
+            "snippet": "Амортизатор эффективно гасит вибрации и удары при движении по неровным дорогам, улучшая управляемость и сцепление колес с дорогой. Изготовлен из износостойких ...",
+            "position": 6
+          },
+          {
+            "title": "Усиленные амортизаторы",
+            "link": "https://rozetka.com.ua/section/usilennye-amortizatory/?srsltid=AfmBOortrZVeRc_fQJMqqc8fUibAPy-ZJgHb_VZ6CdFUd2QlfbDdYc5H",
+            "snippet": "Усиленные амортизаторы ; Тип · Масляный; Газомасляный ; Конструкция · Амортизатор; Стойка амортизатора ; Исполнение · Двухтрубный ; Доставка · Доставка в магазины ...",
+            "position": 7
+          },
+          {
+            "title": "Задний левый/правый амортизатор Magnum Technology ...",
+            "link": "https://auto.rozetka.com.ua/magnum-technology-ag0533mt/p454442651/",
+            "snippet": "Амортизатор эффективно гасит вибрации и удары при движении по неровным дорогам, улучшая управляемость и сцепление колес с дорогой. Изготовлен из износостойких ...",
+            "position": 8
+          },
+          {
+            "title": "Амортизатор передній посилений - купити недорого ...",
+            "link": "https://prom.ua/ua/Amortizator-perednij-usilennyj.html",
+            "snippet": "Амортизатор передній посилений купити в Україні на маркетплейсі Prom.ua. Широкий асортимент від найкращих продавців: у наявності 3882 товарів.",
+            "position": 9
+          }
+        ],
+        "credits": 1
+      }
+    }
+  ]
+}
+

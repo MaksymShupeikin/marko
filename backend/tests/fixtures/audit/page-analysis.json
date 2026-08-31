@@ -1,0 +1,43 @@
+{
+  "scope": "raw archived pages replayed through current parser",
+  "fixtures": [
+    {
+      "fixture": "backend/tests/fixtures/audit/page-bossauto-peugeot206-403-2026-08-31.json",
+      "requested_url": "https://bossautoukraine.com.ua/cars/f/peugeot_206/",
+      "final_url": "https://bossautoukraine.com.ua/cars/f/peugeot_206/",
+      "status_code": 403,
+      "content_type": "text/html; charset=UTF-8",
+      "body_bytes": 5576,
+      "body_sha256_matches": true,
+      "html_title": "Just a moment...",
+      "json_ld_blocks": 0,
+      "structured_price": null,
+      "classification": "anti-bot/non-200; not parser evidence"
+    },
+    {
+      "fixture": "backend/tests/fixtures/audit/page-reono-peugeot206-200-2026-08-31.json",
+      "requested_url": "https://reono.ua/peugeot/206",
+      "final_url": "https://reono.ua/peugeot/206",
+      "status_code": 200,
+      "content_type": "text/html; charset=utf-8",
+      "body_bytes": 527064,
+      "body_sha256_matches": true,
+      "html_title": "Купити Peugeot 206 в Україні: ціни, продаж, фото",
+      "json_ld_blocks": 2,
+      "structured_price": {
+        "price": "600.00",
+        "currency": "USD",
+        "image": "https://stx.reono.ua/360/258/uzA-954pzLUfSJa97QtRIR0fWr4PA7xTQbnDKXlp_5jgAOHCdR1BGrlJ-9ppwqZr61komrdEh-VBGkUnRc-EhBJ6MjZRkZCisyp5CTj3dbq9W0xb8VPA06ULW1YfKseTaL2i1SwfQ3YrqfyYf2wphQ.jpg"
+      },
+      "classification": "live page parser evidence",
+      "single_offer_thin_market_simulation": {
+        "survives_positive_and_outlier_gate": true,
+        "stats_prices_before_fx": [
+          "600.00"
+        ],
+        "recommended_before_fx": "564",
+        "warning": "Production normally converts USD via NBU before this gate."
+      }
+    }
+  ]
+}

@@ -1,0 +1,179 @@
+{
+  "scope": "one frozen recommendation-driving source batch; not a prevalence estimate",
+  "fixture": "backend/tests/fixtures/audit/b1-live-candidate-batch.json",
+  "source": "google",
+  "query": {
+    "listing_id": "734a12c2-67c5-4419-94a2-f1a63887b550",
+    "oem_numbers": [
+      "PEUGEOT206",
+      "PEUGEOT207",
+      "PEUGEOT307",
+      "1509352",
+      "77648927"
+    ],
+    "brand": "PARTNER",
+    "name": "Прокладка впускного колектора peugeot/citroen 206,207,307,partner,tepee 1,6hdi 0",
+    "source_url": "https://kemp-cs2847093.prom.ua/p1522313819-prokladka-vpusknogo-kolektora.html"
+  },
+  "model": "gpt-5-nano",
+  "provider": "openai",
+  "titles": 3,
+  "repeats": 3,
+  "chunk_size": 25,
+  "budget": {
+    "max_calls": 3,
+    "expected_calls": 3,
+    "actual_calls": 3,
+    "serper_calls": 0,
+    "marketplace_fetches": 0
+  },
+  "elapsed_seconds": 12.099,
+  "run_verdict_counts": [
+    {
+      "analog": 1,
+      "no": 2
+    },
+    {
+      "same": 1,
+      "no": 2
+    },
+    {
+      "no": 3
+    }
+  ],
+  "items_with_drift": 1,
+  "item_drift_rate": 0.3333,
+  "pairwise": [
+    {
+      "runs": [
+        1,
+        2
+      ],
+      "disagreements": 1,
+      "rate": 0.3333
+    },
+    {
+      "runs": [
+        1,
+        3
+      ],
+      "disagreements": 1,
+      "rate": 0.3333
+    },
+    {
+      "runs": [
+        2,
+        3
+      ],
+      "disagreements": 1,
+      "rate": 0.3333
+    }
+  ],
+  "items": [
+    {
+      "index": 0,
+      "title": "Peugeot 206 (Пежо 206) - цена, отзывы, характеристики ...",
+      "price": null,
+      "production_confidence": 0.9,
+      "production_is_analog": false,
+      "verdicts": [
+        "analog",
+        "same",
+        "no"
+      ],
+      "drift": true
+    },
+    {
+      "index": 1,
+      "title": "Купити Peugeot 206 з США в Україні",
+      "price": null,
+      "production_confidence": 0.9,
+      "production_is_analog": false,
+      "verdicts": [
+        "no",
+        "no",
+        "no"
+      ],
+      "drift": false
+    },
+    {
+      "index": 2,
+      "title": "Купити Peugeot 206 в Україні: ціни, продаж, фото",
+      "price": "600.00 USD",
+      "production_confidence": 0.9,
+      "production_is_analog": false,
+      "verdicts": [
+        "no",
+        "no",
+        "no"
+      ],
+      "drift": false
+    }
+  ],
+  "raw_call_log": [
+    {
+      "repeat": 1,
+      "prompt_sha256": "5ae559aec9d0e337e0cbda7e4c65fe65b4859025250f038c47cbb44a52299e4c",
+      "elapsed_seconds": 4.739,
+      "response": {
+        "verdicts": [
+          {
+            "index": 0,
+            "verdict": "analog"
+          },
+          {
+            "index": 1,
+            "verdict": "no"
+          },
+          {
+            "index": 2,
+            "verdict": "no"
+          }
+        ]
+      }
+    },
+    {
+      "repeat": 2,
+      "prompt_sha256": "5ae559aec9d0e337e0cbda7e4c65fe65b4859025250f038c47cbb44a52299e4c",
+      "elapsed_seconds": 3.161,
+      "response": {
+        "verdicts": [
+          {
+            "index": 0,
+            "verdict": "same"
+          },
+          {
+            "index": 1,
+            "verdict": "no"
+          },
+          {
+            "index": 2,
+            "verdict": "no"
+          }
+        ]
+      }
+    },
+    {
+      "repeat": 3,
+      "prompt_sha256": "5ae559aec9d0e337e0cbda7e4c65fe65b4859025250f038c47cbb44a52299e4c",
+      "elapsed_seconds": 4.199,
+      "response": {
+        "verdicts": [
+          {
+            "index": 0,
+            "verdict": "no"
+          },
+          {
+            "index": 1,
+            "verdict": "no"
+          },
+          {
+            "index": 2,
+            "verdict": "no"
+          }
+        ]
+      }
+    }
+  ]
+}
+

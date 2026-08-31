@@ -1,0 +1,254 @@
+{
+  "query": {
+    "listing_id": "manual:06E145100R",
+    "oem_numbers": [
+      "06E145100R"
+    ],
+    "brand": "KEMP",
+    "name": "06E145100R",
+    "source_url": ""
+  },
+  "cached": false,
+  "observed_at": "2026-08-30T18:48:50.615251+00:00",
+  "stats": {
+    "offers_total": 13,
+    "sources_total": 4,
+    "min_price": "2729.38",
+    "median_price": "3926.52",
+    "max_price": "8420.00",
+    "recommended_price": "2566",
+    "recommended_discount_percent": 6
+  },
+  "sources": [
+    {
+      "source": "avtopro",
+      "label": "Avto.pro",
+      "status": "ok",
+      "error": null,
+      "offers_total": 9,
+      "min_price": "2729.38",
+      "median_price": "3841.88",
+      "max_price": "7437.61",
+      "offers": [
+        {
+          "source": "avtopro",
+          "title": "Sakes 6940100301 Вакуумний насос",
+          "price": "2729.38",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-6940100301-SAKES-591/",
+          "seller": null,
+          "city": "Киев",
+          "availability": "Отправка товара завтра из г. Киев",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "Kemp 77648621 Вакуумний насос audi a4/a5/a6/a7/a8/q5/q7 2.8/3.2fsi 3.0t 05 vw touareg 3.0tfsi",
+          "price": "3487.20",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-77648621-KEMP-499/",
+          "seller": null,
+          "city": "Киев",
+          "availability": "Товар в наличии и готов к отправке из г. Киев",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "Hans Pries (Topran) 116186 Помпа вакуумна",
+          "price": "3671.89",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-116186-HANS_PRIES-752/",
+          "seller": null,
+          "city": "Киев",
+          "availability": "Отправка товара завтра из г. Киев",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "Borsehung B18773 Насос вакумний (oe)",
+          "price": "3803.00",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-B18773-BORSEHUNG-540/",
+          "seller": null,
+          "city": "Львов",
+          "availability": "Отправка товара завтра из г. Львов",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "Vika 11451712701 Насос вакуумний audi a4 (13-), a6 (15-), a6 (15-), a8 (10-), q7 (16-) (11451712701) vika",
+          "price": "3841.88",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-11451712701-VIKA-599/",
+          "seller": null,
+          "city": "Винница",
+          "availability": "Отправка товара завтра из г. Винница",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "SKV 18SKV056",
+          "price": "4011.15",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-18SKV056-SKV-379/",
+          "seller": null,
+          "city": "Киев",
+          "availability": "Отправка товара завтра из г. Киев",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "JP Group 1117104300 Помпа вакуумна",
+          "price": "4442.86",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-1117104300-JP_GROUP-716/",
+          "seller": null,
+          "city": "Луцк",
+          "availability": "Отправка товара завтра из г. Луцк",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        },
+        {
+          "source": "avtopro",
+          "title": "VAG 06E145100R Вакуумный насос, тормозная система",
+          "price": "6764.00",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-06E145100R-VAG-207/",
+          "seller": null,
+          "city": "Киев",
+          "availability": "Отправка товара через 5 дней из г. Киев",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.98,
+          "is_analog": false
+        },
+        {
+          "source": "avtopro",
+          "title": "Pierburg 724807750 Вакуумний насос механічний",
+          "price": "7437.61",
+          "currency": "UAH",
+          "url": "https://avto.pro/part-724807750-PIERBURG-518/",
+          "seller": null,
+          "city": "Винница",
+          "availability": "Отправка товара завтра из г. Винница",
+          "condition": "new",
+          "image_url": null,
+          "confidence": 0.75,
+          "is_analog": true
+        }
+      ]
+    },
+    {
+      "source": "prom",
+      "label": "Prom.ua",
+      "status": "ok",
+      "error": null,
+      "offers_total": 2,
+      "min_price": "8420.00",
+      "median_price": "8420.00",
+      "max_price": "8420.00",
+      "offers": [
+        {
+          "source": "prom",
+          "title": "Вакуумний насос 06E145100R AUDI A6 C-7 AUDI",
+          "price": "2500.00",
+          "currency": "UAH",
+          "url": "https://prom.ua/ua/p1687806667-vakuumnij-nasos-06e145100r.html",
+          "seller": "VLAN - auto",
+          "city": null,
+          "availability": "avail",
+          "condition": "used",
+          "image_url": "https://images.prom.ua/4012842994_w640_h640_vakuumnij-nasos-06e145100r.jpg",
+          "confidence": 0.5,
+          "is_analog": false
+        },
+        {
+          "source": "prom",
+          "title": "ОРИГІНАЛ Насос вакуумний Фольксваген Тоурег Ауді А4 А6 Q5 Шкода VW Audi Skoda VAG 06E 145 100 R",
+          "price": "8420.00",
+          "currency": "UAH",
+          "url": "https://prom.ua/ua/p3026369552-original-nasos-vakuumnyj.html",
+          "seller": "Pilot-avto Автозапчасти",
+          "city": null,
+          "availability": "avail",
+          "condition": null,
+          "image_url": "https://images.prom.ua/7328940181_w640_h640_original-nasos-vakuumnyj.jpg",
+          "confidence": 0.95,
+          "is_analog": false
+        }
+      ]
+    },
+    {
+      "source": "exist",
+      "label": "Exist.ua",
+      "status": "skipped",
+      "error": "Serper: оператор site: доступний лише на платному тарифі",
+      "offers_total": 0,
+      "min_price": null,
+      "median_price": null,
+      "max_price": null,
+      "offers": []
+    },
+    {
+      "source": "google",
+      "label": "Google",
+      "status": "ok",
+      "error": null,
+      "offers_total": 2,
+      "min_price": "800.00",
+      "median_price": "1108.50",
+      "max_price": "1417.00",
+      "offers": [
+        {
+          "source": "google",
+          "title": "Ремкомплект вакуумного насоса Audi 3.0 T / 3.2 L ...",
+          "price": "800.00",
+          "currency": "UAH",
+          "url": "https://repairkit.com.ua/ua/p1158162228-remkomplekt-vakuumnogo-nasosa.html?srsltid=AfmBOoqoIbKlymUxkIBFn6OXwuliy2OEtihbpFf3YnD-JqKxuILNRPXa",
+          "seller": "repairkit.com.ua",
+          "city": null,
+          "availability": null,
+          "condition": null,
+          "image_url": "https://images.prom.ua/2914976413_w500_h500_remkomplekt-vakuumnogo-nasosa.jpg",
+          "confidence": 0.5,
+          "is_analog": false
+        },
+        {
+          "source": "google",
+          "title": "Ремкомплект вакуумного насоса Audi 3.0T / 3.2L ...",
+          "price": "1417.00",
+          "currency": "UAH",
+          "url": "https://carsun.com.ua/products/klifex-kl06e145100r?srsltid=AfmBOorEfphDzgPAP4Dh7UeBVcz4l91bkSwVYt_xS8UnCxAR049VIstX",
+          "seller": "carsun.com.ua",
+          "city": null,
+          "availability": null,
+          "condition": null,
+          "image_url": null,
+          "confidence": 0.5,
+          "is_analog": false
+        }
+      ]
+    }
+  ]
+}
+

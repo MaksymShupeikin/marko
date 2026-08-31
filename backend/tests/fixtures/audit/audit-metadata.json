@@ -1,0 +1,35 @@
+{
+  "audit_date_local": "2026-08-31",
+  "timezone": "Europe/Warsaw",
+  "baseline": {
+    "branch": "marko-core",
+    "head": "da948a9d68d3967e74522ceeec1f8ca69058cc3d",
+    "origin_marko_core": "b9c301e",
+    "initial_worktree_clean": true,
+    "product_code_modified": false
+  },
+  "runtime_provenance": {
+    "api_container_created_utc": "2026-08-30T20:58:42.647469379Z",
+    "shared_data_warning": "Redis/PostgreSQL containers were originally created from a neighbouring checkout under the shared Docker project marko."
+  },
+  "paid_and_live_budget": {
+    "serper": {"cap": 30, "used": 3},
+    "llm": {"cap": 60, "used": 6, "model": "gpt-5-nano"},
+    "prom_avtopro_fetches": {"cap": 100, "used": 0},
+    "independent_page_fetches": {"used": 2},
+    "full_live_reports": 0
+  },
+  "mutations": {
+    "redis_writes": 0,
+    "database_writes": 0,
+    "refresh_true_calls": 0,
+    "product_fixes": 0,
+    "deployments": 0
+  },
+  "sample": {
+    "database_listings": 4901,
+    "redis_v11_reports": 3,
+    "cached_post_gate_offers": 98,
+    "photo_cache_verdicts": 11
+  }
+}
