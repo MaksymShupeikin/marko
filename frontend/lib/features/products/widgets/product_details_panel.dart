@@ -1729,7 +1729,28 @@ class _ModernOfferCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                    if (offer.condition != null)
+                    // Б/в видно, але воно не ринок: бейдж мусить сам
+                    // пояснити, чому дешева картка не збиває рекомендацію.
+                    if (offer.condition == 'used')
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colors.negative.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(MarkoRadius.xs),
+                        ),
+                        child: Text(
+                          'б/в — не в ціні',
+                          style: MarkoType.caption.copyWith(
+                            color: colors.negative,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )
+                    else if (offer.condition != null)
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 4,
@@ -1740,7 +1761,7 @@ class _ModernOfferCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(MarkoRadius.xs),
                         ),
                         child: Text(
-                          offer.condition == 'used' ? 'б/в' : 'нове',
+                          'нове',
                           style: MarkoType.caption.copyWith(
                             color: colors.ink,
                             fontSize: 10,
@@ -1769,12 +1790,13 @@ class _ModernOfferCard extends StatelessWidget {
               Text(
                 '${formatPriceNumber(offer.price)} ${formatCurrency(currency)}',
                 style: MarkoType.price.copyWith(
-                  color: colors.ink,
+                  // Сіра цифра = довідкова: б/в не бере участі в розрахунку.
+                  color: offer.condition == 'used' ? colors.muted : colors.ink,
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              if (diff != null && diff > 0) ...[
+              if (diff != null && diff > 0 && offer.condition != 'used') ...[
                 const SizedBox(height: 2),
                 Container(
                   padding: const EdgeInsets.symmetric(
