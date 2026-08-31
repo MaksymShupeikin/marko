@@ -165,14 +165,14 @@ async def test_groups_owned_copies_by_sku_and_returns_cheapest_with_sibling(
 
     assert page.total == 1
     assert [item.id for item in page.items] == [cheap.id]
-    assert page.items[0].current_price == Decimal("1000")
+    assert page.items[0].current_price == Decimal(1000)
     assert page.items[0].group_size == 2
     assert len(page.items[0].siblings) == 1
     sibling = page.items[0].siblings[0]
     assert sibling.listing_id == expensive.id
     assert sibling.store_id == expensive_store.id
     assert sibling.store_name == "Avtobust"
-    assert sibling.current_price == Decimal("1200")
+    assert sibling.current_price == Decimal(1200)
 
 
 async def test_normalizes_sku_case_and_whitespace(catalog_db):
@@ -227,13 +227,13 @@ async def test_lower_override_price_changes_group_representative(catalog_db):
     second_store = _store(session, workspace_id, "Second")
     original_cheap = _listing(session, first_store, sku="SAME", price="1000")
     overridden = _listing(session, second_store, sku="SAME", price="1200")
-    _override(session, workspace_id, overridden, current_price=Decimal("900"))
+    _override(session, workspace_id, overridden, current_price=Decimal(900))
 
     page = await _search(async_session, workspace_id)
 
     assert page.total == 1
     assert page.items[0].id == overridden.id
-    assert page.items[0].current_price == Decimal("900")
+    assert page.items[0].current_price == Decimal(900)
     assert page.items[0].siblings[0].listing_id == original_cheap.id
 
 
@@ -245,9 +245,7 @@ async def test_representative_prefers_available_positive_price_then_cheapest(
     second_store = _store(session, workspace_id, "Second")
     third_store = _store(session, workspace_id, "Third")
     _listing(session, first_store, sku="SAME", price="0")
-    _listing(
-        session, second_store, sku="SAME", price="800", is_available=False
-    )
+    _listing(session, second_store, sku="SAME", price="800", is_available=False)
     available = _listing(
         session, third_store, sku="SAME", price="1000", is_available=True
     )
@@ -256,7 +254,7 @@ async def test_representative_prefers_available_positive_price_then_cheapest(
 
     assert page.total == 1
     assert page.items[0].id == available.id
-    assert page.items[0].current_price == Decimal("1000")
+    assert page.items[0].current_price == Decimal(1000)
 
 
 async def test_deleted_copy_is_absent_from_group_and_siblings(catalog_db):
@@ -356,3 +354,28 @@ async def test_search_matching_only_hidden_copy_does_not_replace_representative(
 
     assert page.total == 0
     assert page.items == []
+
+
+async def test_catalog_and_foreign_store_filter_are_isolated_by_workspace(catalog_db):
+    session, async_session, first_workspace_id = catalog_db
+    second_workspace = Workspace(name="Other", slug=f"other-{uuid4()}")
+    session.add(second_workspace)
+    session.flush()
+
+    first_store = _store(session, first_workspace_id, "First tenant")
+    second_store = _store(session, second_workspace.id, "Second tenant")
+    first_listing = _listing(session, first_store, sku="PRIVATE-A", price="100")
+    second_listing = _listing(session, second_store, sku="PRIVATE-B", price="200")
+
+    first_page = await _search(async_session, first_workspace_id)
+    second_page = await _search(async_session, second_workspace.id)
+    injected_filter = await _search(
+        async_session,
+        first_workspace_id,
+        store_ids=str(second_store.id),
+    )
+
+    assert [item.id for item in first_page.items] == [first_listing.id]
+    assert [item.id for item in second_page.items] == [second_listing.id]
+    assert injected_filter.items == []
+    assert injected_filter.total == 0

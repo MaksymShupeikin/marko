@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +20,7 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
 async def get_user_by_firebase_uid(
     session: AsyncSession, firebase_uid: str
 ) -> User | None:
-    return await session.scalar(
-        select(User).where(User.firebase_uid == firebase_uid)
-    )
+    return await session.scalar(select(User).where(User.firebase_uid == firebase_uid))
 
 
 async def create_user(
@@ -44,15 +43,18 @@ async def create_user(
     return user
 
 
-async def get_first_workspace_id_by_user_id(
+async def get_first_workspace_membership_by_user_id(
     session: AsyncSession, user_id: uuid.UUID
-) -> uuid.UUID | None:
-    return await session.scalar(
-        select(WorkspaceMember.workspace_id)
-        .where(WorkspaceMember.user_id == user_id)
-        .order_by(WorkspaceMember.created_at)
-        .limit(1)
-    )
+) -> tuple[uuid.UUID, WorkspaceRole] | None:
+    row = (
+        await session.execute(
+            select(WorkspaceMember.workspace_id, WorkspaceMember.role)
+            .where(WorkspaceMember.user_id == user_id)
+            .order_by(WorkspaceMember.created_at)
+            .limit(1)
+        )
+    ).one_or_none()
+    return None if row is None else (row.workspace_id, row.role)
 
 
 async def create_workspace(

@@ -1,4 +1,5 @@
 """Account information backed by a verified Firebase session."""
+
 from fastapi import APIRouter
 
 from marko.api.dependencies import CurrentUser
@@ -15,4 +16,5 @@ async def me(current: CurrentUser) -> AuthUserResponse:
         display_name=current.user.display_name,
         avatar_url=current.user.avatar_url,
         workspace_id=current.workspace_id,
+        role=current.role,
     )

@@ -5,6 +5,7 @@ filter itself, never as a list of ids sent by the client. Deleting is a single
 statement; re-reading every product page is a crawl, so it runs as a background
 job with progress instead of blocking a request.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -105,7 +106,11 @@ async def delete_matching(
     for chunk in _chunks(ids, 5000):
         statement = pg_insert(WorkspaceListingOverride).values(
             [
-                {"workspace_id": workspace_id, "listing_id": listing_id, "is_deleted": True}
+                {
+                    "workspace_id": workspace_id,
+                    "listing_id": listing_id,
+                    "is_deleted": True,
+                }
                 for listing_id in chunk
             ]
         )
@@ -190,11 +195,9 @@ async def refresh_matching(sync_run_id: UUID, catalog_filter: CatalogFilter) -> 
             async def fetch(listing: Listing) -> tuple[Listing, Product | None]:
                 async with slots:
                     try:
-                        html = await client.get_html(
-                            canonical_product_url(listing.url)
-                        )
+                        html = await client.get_html(canonical_product_url(listing.url))
                         return listing, parse_product_page(html).product
-                    except (RequestFailed, ParseError) as exc:
+                    except (RequestFailed, ParseError, ValueError) as exc:
                         log.info("Товар %s не оновлено: %s", listing.id, exc)
                         return listing, None
 
@@ -255,9 +258,7 @@ def ensure_override(
     return override
 
 
-def apply_scraped_product(
-    override: WorkspaceListingOverride, product: Product
-) -> None:
+def apply_scraped_product(override: WorkspaceListingOverride, product: Product) -> None:
     """Mirror the product page: every field the page carries wins, blanks included.
 
     Зникла ціна чи бренд — це теж дані: товар має виглядати так, як зараз

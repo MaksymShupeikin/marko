@@ -16,6 +16,13 @@ x-backend-environment: &backend-environment
   CELERY_RESULT_BACKEND: redis://broker:6379/1
   COMPETITOR_PRICE_CACHE_URL: redis://broker:6379/2
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-8080}}
+  TRUSTED_HOSTS: ${TRUSTED_HOSTS:-api.markoprice.com,localhost,127.0.0.1,api,testserver}
+  API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+  HSTS_MAX_AGE_SECONDS: ${HSTS_MAX_AGE_SECONDS:-31536000}
+  RATE_LIMITS_ENABLED: ${RATE_LIMITS_ENABLED:-true}
+  UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-26214400}
+  UPLOAD_MAX_UNCOMPRESSED_BYTES: ${UPLOAD_MAX_UNCOMPRESSED_BYTES:-209715200}
+  UPLOAD_MAX_ROWS: ${UPLOAD_MAX_ROWS:-100000}
   FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
   COMPETITOR_FILTER_MODEL: ${COMPETITOR_FILTER_MODEL:-gpt-5-nano}
   SERPER_API_KEY: ${SERPER_API_KEY:-}
@@ -30,10 +37,18 @@ x-backend: &backend
   environment: *backend-environment
   logging: *default-logging
   restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - data
 
 services:
   db:
-    image: postgres:17-alpine
+    image: marko-postgres:17-security
+    build:
+      context: ./infra/postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-marko}
       POSTGRES_USER: ${POSTGRES_USER:-marko}
@@ -51,9 +66,21 @@ services:
       retries: 10
     logging: *default-logging
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/run/postgresql:size=16m,mode=0775,uid=70,gid=70
+    networks:
+      - data
 
   broker:
-    image: redis:8-alpine
+    image: marko-redis:8-security
+    build:
+      context: ./infra/redis
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
@@ -66,6 +93,15 @@ services:
       retries: 10
     logging: *default-logging
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - data
 
   migrate:
     <<: *backend
@@ -74,12 +110,28 @@ services:
       db:
         condition: service_healthy
     restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
 
   api:
     <<: *backend
-    command: ["uvicorn", "marko.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      [
+        "uvicorn",
+        "marko.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--no-server-header",
+        "--limit-concurrency",
+        "100",
+        "--timeout-keep-alive",
+        "10",
+      ]
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -96,6 +148,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - data
+      - edge
 
   worker:
     <<: *backend
@@ -113,6 +171,9 @@ services:
         condition: service_completed_successfully
       broker:
         condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
 
   scheduler:
     <<: *backend
@@ -123,12 +184,16 @@ services:
         "marko.worker.celery_app:celery_app",
         "beat",
         "--loglevel=INFO",
+        "--schedule=/tmp/celerybeat-schedule",
       ]
     depends_on:
       migrate:
         condition: service_completed_successfully
       broker:
         condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
 
   backend-test:
     profiles: ["test"]
@@ -148,29 +213,59 @@ services:
         # Baked into the web bundle at build time — MUST be the public API
         # URL when building for the VPS.
         API_BASE_URL: ${API_BASE_URL:-http://localhost:${API_PORT:-8000}}
-        FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
-        FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
-        FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
-        FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
-        FIREBASE_WEB_APP_ID: ${FIREBASE_WEB_APP_ID:-}
-        GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        PUBLIC_FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+        PUBLIC_FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
+        PUBLIC_FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+        PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
+        PUBLIC_FIREBASE_WEB_APP_ID: ${FIREBASE_WEB_APP_ID:-}
+        PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
     depends_on:
       api:
         condition: service_healthy
     logging: *default-logging
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - edge
 
   tunnel:
-    image: cloudflare/cloudflared:latest
+    image: marko-cloudflared:2026.8.3-scratch
+    build:
+      context: ./infra/cloudflared
     restart: unless-stopped
-    command: tunnel --no-autoupdate --protocol http2 run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command: tunnel --protocol http2 run --token-file /run/secrets/cloudflare_tunnel_token
+    secrets:
+      - cloudflare_tunnel_token
     depends_on:
       api:
         condition: service_healthy
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - edge
 
 volumes:
   postgres_data:
   redis_data:
+
+secrets:
+  cloudflare_tunnel_token:
+    environment: CLOUDFLARE_TUNNEL_TOKEN
+
+networks:
+  data:
+  edge:

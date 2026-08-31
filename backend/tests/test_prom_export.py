@@ -1,4 +1,5 @@
 """Parsing checks for the Prom XLSX catalog export."""
+
 from io import BytesIO
 
 import openpyxl
@@ -6,28 +7,52 @@ import pytest
 
 from marko.parsers.prom_export import (
     ExportFormatError,
+    canonical_product_url,
     normalize_oem,
     parse_export,
     seller_from_export_url,
     seller_of,
+    validate_export_archive,
 )
 
 _HEADERS = [
-    "Код_товару", "Назва_позиції", "Назва_позиції_укр", "Ціна", "Валюта",
-    "Одиниця_виміру", "Посилання_зображення", "Наявність", "Кількість",
-    "Унікальний_ідентифікатор", "Виробник", "Продукт_на_сайті",
+    "Код_товару",
+    "Назва_позиції",
+    "Назва_позиції_укр",
+    "Ціна",
+    "Валюта",
+    "Одиниця_виміру",
+    "Посилання_зображення",
+    "Наявність",
+    "Кількість",
+    "Унікальний_ідентифікатор",
+    "Виробник",
+    "Продукт_на_сайті",
     "Номер_пристрою_(MPN)",
-    "Назва_Характеристики", "Значення_Характеристики",
-    "Назва_Характеристики", "Значення_Характеристики",
+    "Назва_Характеристики",
+    "Значення_Характеристики",
+    "Назва_Характеристики",
+    "Значення_Характеристики",
 ]
 
 _ROW = [
-    "93818439", "Радиатор Iveco", "Радіатор Iveco (Івеко)", "3297", "UAH",
-    "шт.", "https://images.prom.ua/1.jpg", "!", 5,
-    1153724202, "KEMP", "https://kemp-cs2847093.prom.ua/p1153724202-radiator.html",
     "93818439",
-    "Код запчастини", "93818439, 77643",
-    "Кросс-номери", "115 070, 12",
+    "Радиатор Iveco",
+    "Радіатор Iveco (Івеко)",
+    "3297",
+    "UAH",
+    "шт.",
+    "https://images.prom.ua/1.jpg",
+    "!",
+    5,
+    1153724202,
+    "KEMP",
+    "https://kemp-cs2847093.prom.ua/p1153724202-radiator.html",
+    "93818439",
+    "Код запчастини",
+    "93818439, 77643",
+    "Кросс-номери",
+    "115 070, 12",
 ]
 
 
@@ -129,3 +154,40 @@ def test_export_url_is_rewritten_to_the_marketplace_link():
     assert not is_export_url(marketplace_url)
     assert canonical_product_url(marketplace_url) == marketplace_url
     assert canonical_product_url(None) == ""
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8000/private",
+        "http://169.254.169.254/latest/meta-data",
+        "https://example.com/p123-product.html",
+        "file:///etc/passwd",
+    ],
+)
+def test_product_refresh_url_rejects_ssrf_targets(url):
+    with pytest.raises(ValueError):
+        canonical_product_url(url)
+
+
+def test_rejects_mixed_seller_catalog():
+    other = list(_ROW)
+    other[_HEADERS.index("Продукт_на_сайті")] = (
+        "https://other-cs4015921.prom.ua/p1153724203-radiator.html"
+    )
+    products = list(parse_export(_workbook([_ROW, other])))
+
+    with pytest.raises(ExportFormatError, match="різних магазинів"):
+        seller_of(products)
+
+
+def test_rejects_excessive_rows():
+    with pytest.raises(ExportFormatError, match="більше 1 рядків"):
+        list(parse_export(_workbook([_ROW, _ROW]), max_rows=1))
+
+
+def test_rejects_xlsx_decompression_bomb_by_uncompressed_size():
+    content = _workbook([_ROW]).getvalue()
+
+    with pytest.raises(ExportFormatError, match="безпечний ліміт"):
+        validate_export_archive(content, max_uncompressed_bytes=1024)

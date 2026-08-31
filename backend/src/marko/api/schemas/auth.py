@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr
 
+from marko.infrastructure.db.models import WorkspaceRole
+
 
 class AuthUserResponse(BaseModel):
     id: UUID
@@ -12,3 +14,4 @@ class AuthUserResponse(BaseModel):
     display_name: str | None
     avatar_url: str | None
     workspace_id: UUID
+    role: WorkspaceRole

@@ -1,10 +1,13 @@
 """Reusable FastAPI dependencies."""
+
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from marko.infrastructure.db.models import WorkspaceRole
+from marko.infrastructure.db.session import get_session
 from marko.services.auth import (
     AuthConfigurationError,
     AuthConflictError,
@@ -13,8 +16,6 @@ from marko.services.auth import (
     get_or_create_auth_context,
     verify_firebase_id_token,
 )
-
-from marko.infrastructure.db.session import get_session
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -55,4 +56,22 @@ async def get_current_user(
 
 CurrentUser = Annotated[AuthContext, Depends(get_current_user)]
 
-__all__ = ["CurrentUser", "get_current_user", "get_session"]
+
+async def get_workspace_manager(current: CurrentUser) -> AuthContext:
+    if current.role not in {WorkspaceRole.owner, WorkspaceRole.admin}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Workspace manager access required",
+        )
+    return current
+
+
+WorkspaceManager = Annotated[AuthContext, Depends(get_workspace_manager)]
+
+__all__ = [
+    "CurrentUser",
+    "WorkspaceManager",
+    "get_current_user",
+    "get_session",
+    "get_workspace_manager",
+]

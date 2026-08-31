@@ -1,4 +1,5 @@
 """Firebase ID-token verification and local account provisioning."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,9 +14,9 @@ import jwt
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import marko.repositories.users as users_repo
 from marko.core.config import Settings, get_settings
 from marko.infrastructure.db.models import User, WorkspaceRole
-import marko.repositories.users as users_repo
 
 
 class AuthError(RuntimeError):
@@ -38,6 +39,7 @@ class AuthConflictError(AuthError):
 class AuthContext:
     user: User
     workspace_id: UUID
+    role: WorkspaceRole
 
 
 @dataclass(frozen=True)
@@ -153,13 +155,18 @@ async def get_or_create_auth_context(
         user.avatar_url = identity.avatar_url
         needs_commit = True
 
-    workspace_id = await users_repo.get_first_workspace_id_by_user_id(session, user.id)
-    if workspace_id is None:
+    membership = await users_repo.get_first_workspace_membership_by_user_id(
+        session, user.id
+    )
+    if membership is None:
         workspace_id = await _create_workspace(session, user)
+        role = WorkspaceRole.owner
         needs_commit = True
+    else:
+        workspace_id, role = membership
 
     if not needs_commit:
-        return AuthContext(user=user, workspace_id=workspace_id)
+        return AuthContext(user=user, workspace_id=workspace_id, role=role)
 
     try:
         await session.commit()
@@ -169,8 +176,10 @@ async def get_or_create_auth_context(
         concurrent = await _concurrent_auth_context(session, identity.subject)
         if concurrent is not None:
             return concurrent
-        raise AuthConflictError("Marko account could not be linked to Firebase") from exc
-    return AuthContext(user=user, workspace_id=workspace_id)
+        raise AuthConflictError(
+            "Marko account could not be linked to Firebase"
+        ) from exc
+    return AuthContext(user=user, workspace_id=workspace_id, role=role)
 
 
 async def _concurrent_auth_context(
@@ -179,10 +188,13 @@ async def _concurrent_auth_context(
     user = await users_repo.get_user_by_firebase_uid(session, subject)
     if user is None or not user.is_active:
         return None
-    workspace_id = await users_repo.get_first_workspace_id_by_user_id(session, user.id)
-    if workspace_id is None:
+    membership = await users_repo.get_first_workspace_membership_by_user_id(
+        session, user.id
+    )
+    if membership is None:
         return None
-    return AuthContext(user=user, workspace_id=workspace_id)
+    workspace_id, role = membership
+    return AuthContext(user=user, workspace_id=workspace_id, role=role)
 
 
 async def _create_workspace(session: AsyncSession, user: User) -> UUID:

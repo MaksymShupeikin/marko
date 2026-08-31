@@ -1,4 +1,5 @@
 """Store registration, synchronization, and catalog endpoints."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -16,7 +17,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser, get_session
+from marko.api.dependencies import CurrentUser, WorkspaceManager, get_session
 from marko.api.schemas.stores import (
     ProductPageResponse,
     ProductResponse,
@@ -25,8 +26,10 @@ from marko.api.schemas.stores import (
     StoreResponse,
     StoreSyncResponse,
 )
+from marko.core.config import get_settings
 from marko.parsers.prom_export import ExportFormatError
 from marko.services.catalog_import import import_export_file
+from marko.services.rate_limit import enforce_workspace_limit
 from marko.services.stores import (
     StoreNotFoundError,
     TaskDispatchError,
@@ -46,8 +49,14 @@ router = APIRouter()
 async def create_store(
     payload: StoreCreateRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> StoreSyncResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="store-create",
+        limit=6,
+        window_seconds=600,
+    )
     try:
         store_id, sync_run = await register_store(
             session,
@@ -67,21 +76,45 @@ async def create_store(
     )
 
 
-_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
+    content = bytearray()
+    try:
+        while True:
+            remaining = max_bytes - len(content)
+            chunk = await file.read(min(_UPLOAD_CHUNK_BYTES, remaining + 1))
+            if not chunk:
+                return bytes(content)
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail=f"Файл більший за {max_bytes // (1024 * 1024)} МБ",
+                )
+    finally:
+        await file.close()
 
 
 @router.post("/import-file", response_model=StoreFileImportResponse)
 async def import_catalog_file(
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
     file: Annotated[UploadFile, File()],
 ) -> StoreFileImportResponse:
-    content = await file.read()
-    if len(content) > _MAX_UPLOAD_BYTES:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="catalog-upload",
+        limit=3,
+        window_seconds=600,
+    )
+    if not (file.filename or "").casefold().endswith(".xlsx"):
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Файл більший за 25 МБ",
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Підтримуються лише файли .xlsx",
         )
+    content = await _read_upload_limited(file, get_settings().upload_max_bytes)
     try:
         result = await import_export_file(
             session,
@@ -90,7 +123,7 @@ async def import_catalog_file(
         )
     except (ExportFormatError, ValueError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     return StoreFileImportResponse(
@@ -123,7 +156,9 @@ async def get_store_details(
             workspace_id=current.workspace_id,
         )
     except StoreNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
     return StoreResponse(**store.__dict__)
 
 
@@ -131,8 +166,14 @@ async def get_store_details(
 async def remove_store(
     store_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> Response:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="store-mutation",
+        limit=20,
+        window_seconds=600,
+    )
     try:
         await delete_store(
             session,
@@ -155,8 +196,14 @@ async def remove_store(
 async def sync_store(
     store_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> StoreSyncResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="store-sync",
+        limit=12,
+        window_seconds=600,
+    )
     try:
         sync_run = await queue_store_sync(
             session,
@@ -165,7 +212,9 @@ async def sync_store(
             celery_app=celery_app,
         )
     except StoreNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
     except TaskDispatchError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -195,7 +244,9 @@ async def get_products(
             offset=offset,
         )
     except StoreNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
+        ) from exc
     return ProductPageResponse(
         items=[ProductResponse.model_validate(item) for item in page.items],
         total=page.total,

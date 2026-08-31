@@ -321,7 +321,12 @@ async def test_xlsx_import_remembers_seller_in_the_import_transaction(monkeypatc
     session.commit.side_effect = lambda: events.append("commit")
 
     monkeypatch.setattr(
-        catalog_import, "parse_export", lambda _content: iter([imported_product])
+        catalog_import,
+        "parse_export",
+        lambda _content, **_kwargs: iter([imported_product]),
+    )
+    monkeypatch.setattr(
+        catalog_import, "validate_export_archive", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(catalog_import, "seller_of", lambda _products: seller)
     monkeypatch.setattr(

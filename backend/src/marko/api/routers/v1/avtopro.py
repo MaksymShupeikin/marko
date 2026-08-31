@@ -4,6 +4,7 @@
 Prom.ua разом з Avto.pro, відсіювання моделлю, ті самі поля у відповіді.
 Різниця лише в тому, звідки взявся запит — з форми, а не з каталогу.
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -20,6 +21,7 @@ from marko.services.competitor_prices import (
     competitor_prices_for_query,
     manual_search_query,
 )
+from marko.services.rate_limit import enforce_workspace_limit
 from marko.services.seller_exclusions import load_prom_seller_exclusions
 
 router = APIRouter()
@@ -39,6 +41,12 @@ async def search_competitors(
     name: NameQuery = None,
     refresh: bool = False,
 ) -> CompetitorPriceReportResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="competitor-search",
+        limit=12,
+        window_seconds=60,
+    )
     await consume_check(session, current.workspace_id)
     exclusions = await load_prom_seller_exclusions(session, current.workspace_id)
     payload = await competitor_prices_for_query(
@@ -63,6 +71,12 @@ async def search_competitors_stream(
     refresh: bool = False,
 ) -> StreamingResponse:
     """Те саме, але з підписами стадій, поки джерела ще збираються."""
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="competitor-search",
+        limit=12,
+        window_seconds=60,
+    )
     # Пейвол — до старту потоку: у генераторі сесії вже немає (див. sse.py).
     await consume_check(session, current.workspace_id)
     exclusions = await load_prom_seller_exclusions(session, current.workspace_id)

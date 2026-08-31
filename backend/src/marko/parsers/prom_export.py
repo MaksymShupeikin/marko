@@ -5,13 +5,17 @@ Prom exports one row per offer with Ukrainian headers and a tail of repeating
 numbers live in several of those places, so every candidate is collected: the
 avto.pro price check tries them in order.
 """
+
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, Iterator
-from urllib.parse import urlsplit
+from typing import BinaryIO
+from urllib.parse import urlsplit, urlunsplit
+from zipfile import BadZipFile, ZipFile
 
 import openpyxl
 
@@ -26,8 +30,11 @@ _CHARACTERISTIC_NAME = "Назва_Характеристики"
 _CHARACTERISTIC_VALUE = "Значення_Характеристики"
 
 _MIN_OEM_LENGTH = 4  # shorter tokens are truncation noise, not part numbers
-_SELLER_HOST_RE = re.compile(r"^(?P<slug>[\w-]+?)-cs(?P<company_id>\d+)\.prom\.ua$", re.I)
-_PRODUCT_PATH_RE = re.compile(r"^/(?:[a-z]{2}/)?(?P<slug>p\d+-[^/]+)$", re.I)
+_SELLER_HOST_RE = re.compile(
+    r"^(?P<slug>[\w-]+?)-cs(?P<company_id>\d+)\.prom\.ua$", re.IGNORECASE
+)
+_PRODUCT_PATH_RE = re.compile(r"^/(?:[a-z]{2}/)?(?P<slug>p\d+-[^/]+)$", re.IGNORECASE)
+_MARKETPLACE_PRODUCT_HOSTS = frozenset({"prom.ua", "www.prom.ua"})
 
 
 class ExportFormatError(ValueError):
@@ -58,10 +65,29 @@ def canonical_product_url(url: str | None) -> str:
     the parser cannot read it; the same product on prom.ua parses fine.
     """
     text = (url or "").strip()
-    if not is_export_url(text):
-        return text
-    match = _PRODUCT_PATH_RE.match(urlsplit(text).path)
-    return f"https://prom.ua/ua/{match.group('slug')}" if match else text
+    if not text:
+        return ""
+    parsed = urlsplit(text)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Некоректний порт у посиланні товару Prom") from exc
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+    ):
+        raise ValueError("Дозволені лише звичайні HTTP(S)-посилання товарів Prom")
+
+    match = _PRODUCT_PATH_RE.fullmatch(parsed.path)
+    if match is None:
+        raise ValueError("Некоректний шлях товару Prom")
+    if is_export_url(text):
+        return f"https://prom.ua/ua/{match.group('slug')}"
+    if (parsed.hostname or "").casefold() not in _MARKETPLACE_PRODUCT_HOSTS:
+        raise ValueError("Оновлення дозволене лише з prom.ua")
+    return urlunsplit(("https", "prom.ua", parsed.path, "", ""))
 
 
 _PRICE_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -126,7 +152,9 @@ class _RowReader:
         return found
 
 
-def _oem_numbers(reader: _RowReader, row: tuple, characteristics: dict) -> tuple[str, ...]:
+def _oem_numbers(
+    reader: _RowReader, row: tuple, characteristics: dict
+) -> tuple[str, ...]:
     raw: list[object] = [reader.value(row, header) for header in _OEM_HEADERS]
     for name in _OEM_CHARACTERISTICS:
         raw.extend(_split_oem_list(characteristics.get(name)))
@@ -181,7 +209,39 @@ def _text(value: object) -> str | None:
     return text or None
 
 
-def parse_export(source: str | Path | BinaryIO) -> Iterator[Product]:
+def validate_export_archive(
+    content: bytes,
+    *,
+    max_uncompressed_bytes: int,
+    max_entries: int = 5_000,
+) -> None:
+    """Reject malformed, encrypted, or decompression-bomb XLSX containers."""
+    try:
+        with ZipFile(BytesIO(content)) as archive:
+            entries = archive.infolist()
+            if len(entries) > max_entries:
+                raise ExportFormatError("У файлі .xlsx забагато внутрішніх частин")
+            total = 0
+            for entry in entries:
+                if entry.flag_bits & 0x1:
+                    raise ExportFormatError("Зашифровані .xlsx файли не підтримуються")
+                total += entry.file_size
+                if total > max_uncompressed_bytes:
+                    raise ExportFormatError(
+                        "Розпакований .xlsx перевищує безпечний ліміт"
+                    )
+            names = {entry.filename for entry in entries}
+            if "[Content_Types].xml" not in names or "xl/workbook.xml" not in names:
+                raise ExportFormatError("Файл не є коректною книгою .xlsx")
+    except BadZipFile as exc:
+        raise ExportFormatError("Файл не є коректним архівом .xlsx") from exc
+
+
+def parse_export(
+    source: str | Path | BinaryIO,
+    *,
+    max_rows: int | None = None,
+) -> Iterator[Product]:
     """Yield products from a Prom XLSX export, skipping unusable rows."""
     try:
         workbook = openpyxl.load_workbook(source, read_only=True, data_only=True)
@@ -189,7 +249,8 @@ def parse_export(source: str | Path | BinaryIO) -> Iterator[Product]:
         raise ExportFormatError(f"Не вдалось прочитати файл .xlsx: {exc}") from exc
     try:
         sheet_name = (
-            PRODUCTS_SHEET if PRODUCTS_SHEET in workbook.sheetnames
+            PRODUCTS_SHEET
+            if PRODUCTS_SHEET in workbook.sheetnames
             else workbook.sheetnames[0]
         )
         rows = workbook[sheet_name].iter_rows(values_only=True)
@@ -197,7 +258,11 @@ def parse_export(source: str | Path | BinaryIO) -> Iterator[Product]:
             reader = _RowReader(list(next(rows)))
         except StopIteration:
             raise ExportFormatError("Порожній файл експорту") from None
-        for row in rows:
+        for row_number, row in enumerate(rows, start=2):
+            if max_rows is not None and row_number - 1 > max_rows:
+                raise ExportFormatError(
+                    f"Файл містить більше {max_rows} рядків товарів"
+                )
             if all(cell is None for cell in row):
                 continue
             product = _product(reader, row)
@@ -209,11 +274,17 @@ def parse_export(source: str | Path | BinaryIO) -> Iterator[Product]:
 
 def seller_of(products: list[Product]) -> Seller | None:
     """Seller the export belongs to, taken from the first parseable URL."""
+    found: Seller | None = None
     for product in products:
         seller = seller_from_export_url(product.url)
-        if seller is not None:
-            return seller
-    return None
+        if seller is None:
+            raise ExportFormatError(
+                "Експорт містить посилання не з магазину продавця Prom"
+            )
+        if found is not None and seller.company_id != found.company_id:
+            raise ExportFormatError("Експорт змішує товари різних магазинів Prom")
+        found = seller
+    return found
 
 
 __all__ = [
@@ -223,4 +294,5 @@ __all__ = [
     "parse_price",
     "seller_from_export_url",
     "seller_of",
+    "validate_export_archive",
 ]

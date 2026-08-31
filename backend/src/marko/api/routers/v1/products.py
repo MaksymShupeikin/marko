@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
-
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser, get_session
+import marko.repositories.listings as listings_repo
+from marko.api.dependencies import CurrentUser, WorkspaceManager, get_session
 from marko.api.schemas.competitor_prices import CompetitorPriceReportResponse
-from marko.api.sse import competitor_price_stream
 from marko.api.schemas.stores import (
     BulkDeleteResponse,
     CatalogFilterRequest,
@@ -22,6 +21,7 @@ from marko.api.schemas.stores import (
     ProductUpdateRequest,
     StoreSyncResponse,
 )
+from marko.api.sse import competitor_price_stream
 from marko.infrastructure.db.models import (
     StoreKind,
     WorkspaceListingOverride,
@@ -31,6 +31,7 @@ from marko.parsers.prom.config import ScrapeConfig
 from marko.parsers.prom.exceptions import ParseError, RequestFailed
 from marko.parsers.prom.parser import parse_product_page
 from marko.parsers.prom_export import canonical_product_url, is_export_url
+from marko.services.billing import consume_check
 from marko.services.bulk_products import (
     BulkDispatchError,
     apply_scraped_product,
@@ -38,14 +39,12 @@ from marko.services.bulk_products import (
     ensure_override,
     queue_refresh,
 )
-from marko.services.billing import consume_check
 from marko.services.competitor_prices import (
     competitor_prices_for_listing,
     listing_search_query,
 )
+from marko.services.rate_limit import enforce_workspace_limit
 from marko.worker.celery_app import celery_app
-
-import marko.repositories.listings as listings_repo
 
 router = APIRouter()
 
@@ -60,7 +59,7 @@ def _parse_store_ids(raw: str | None) -> list[UUID]:
         ]
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="store_ids має бути списком UUID через кому",
         ) from exc
 
@@ -162,9 +161,15 @@ async def search_products(
 async def bulk_delete_products(
     payload: CatalogFilterRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> BulkDeleteResponse:
     """Hide every product the filter matches — the whole catalog, if unfiltered."""
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="bulk-mutation",
+        limit=10,
+        window_seconds=300,
+    )
     deleted = await delete_matching(session, current.workspace_id, payload.to_filter())
     return BulkDeleteResponse(deleted=deleted)
 
@@ -173,9 +178,15 @@ async def bulk_delete_products(
 async def bulk_refresh_products(
     payload: CatalogFilterRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> StoreSyncResponse:
     """Queue a re-read of every matching product; progress lands in /jobs."""
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="bulk-mutation",
+        limit=10,
+        window_seconds=300,
+    )
     try:
         sync_run = await queue_refresh(
             session,
@@ -200,8 +211,14 @@ async def update_product(
     listing_id: UUID,
     payload: ProductUpdateRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> CatalogProductResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="product-mutation",
+        limit=30,
+        window_seconds=300,
+    )
     row = await listings_repo.get_manageable_workspace_listing(
         session,
         current.workspace_id,
@@ -228,8 +245,14 @@ async def update_product(
 async def refresh_product(
     listing_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> CatalogProductResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="product-refresh",
+        limit=20,
+        window_seconds=300,
+    )
     row = await listings_repo.get_manageable_workspace_listing(
         session,
         current.workspace_id,
@@ -250,7 +273,14 @@ async def refresh_product(
 
     client = AsyncHttpClient(ScrapeConfig(page_concurrency=1))
     try:
-        html = await client.get_html(canonical_product_url(target_url))
+        try:
+            safe_url = canonical_product_url(target_url)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        html = await client.get_html(safe_url)
         prod = parse_product_page(html).product
     except (RequestFailed, ParseError) as exc:
         raise HTTPException(
@@ -271,8 +301,14 @@ async def refresh_product(
 async def delete_product(
     listing_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> Response:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="product-mutation",
+        limit=30,
+        window_seconds=300,
+    )
     row = await listings_repo.get_manageable_workspace_listing(
         session,
         current.workspace_id,
@@ -300,6 +336,12 @@ async def competitor_prices(
     current: CurrentUser,
     refresh: bool = False,
 ) -> CompetitorPriceReportResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="competitor-search",
+        limit=12,
+        window_seconds=60,
+    )
     await consume_check(session, current.workspace_id)
     try:
         payload = await competitor_prices_for_listing(
@@ -324,6 +366,12 @@ async def competitor_prices_stream(
     refresh: bool = False,
 ) -> StreamingResponse:
     """Той самий звіт, але з підписами стадій, поки джерела ще збираються."""
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="competitor-search",
+        limit=12,
+        window_seconds=60,
+    )
     try:
         query = await listing_search_query(session, current.workspace_id, listing_id)
     except LookupError as exc:

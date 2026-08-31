@@ -1,4 +1,5 @@
 """Service for importing a Prom seller catalog."""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +11,9 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import marko.repositories.listings as listings_repo
+import marko.repositories.stores as stores_repo
+from marko.core.config import get_settings
 from marko.infrastructure.db.models import (
     Listing,
     MarketplaceStore,
@@ -25,13 +29,11 @@ from marko.parsers.prom_export import (
     parse_export,
     parse_price,
     seller_of,
+    validate_export_archive,
 )
 from marko.services.parser_models import Product
 from marko.services.price_validation import positive_price_or_none
 from marko.services.seller_exclusions import remember_prom_seller
-
-import marko.repositories.stores as stores_repo
-import marko.repositories.listings as listings_repo
 
 _BATCH_SIZE = 500
 
@@ -43,6 +45,7 @@ class CatalogImportError(RuntimeError):
 @dataclass(frozen=True)
 class ExportImportResult:
     """Outcome of importing one uploaded catalog file."""
+
     store_id: UUID
     store_name: str
     imported: int
@@ -128,8 +131,22 @@ async def import_export_file(
     content: bytes,
 ) -> ExportImportResult:
     """Import a Prom XLSX export into the seller's store, creating it if needed."""
-    # openpyxl is CPU-bound: keep it off the event loop.
-    products = await asyncio.to_thread(lambda: list(parse_export(BytesIO(content))))
+    settings = get_settings()
+
+    def parse_safely() -> list[Product]:
+        validate_export_archive(
+            content,
+            max_uncompressed_bytes=settings.upload_max_uncompressed_bytes,
+        )
+        return list(
+            parse_export(
+                BytesIO(content),
+                max_rows=settings.upload_max_rows,
+            )
+        )
+
+    # ZIP/XML parsing and openpyxl are CPU-bound: keep them off the event loop.
+    products = await asyncio.to_thread(parse_safely)
     seller = seller_of(products)
     if seller is None:
         raise ExportFormatError(

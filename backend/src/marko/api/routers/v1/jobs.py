@@ -1,4 +1,5 @@
 """Background job status endpoints."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -7,8 +8,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from marko.api.dependencies import CurrentUser, get_session
+from marko.api.dependencies import CurrentUser, WorkspaceManager, get_session
 from marko.api.schemas.stores import SyncRunResponse
+from marko.services.rate_limit import enforce_workspace_limit
 from marko.services.stores import (
     SyncRunNotFoundError,
     cancel_sync_run,
@@ -34,8 +36,14 @@ async def active_jobs(
 async def cancel_job(
     sync_run_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
-    current: CurrentUser,
+    current: WorkspaceManager,
 ) -> SyncRunResponse:
+    await enforce_workspace_limit(
+        current.workspace_id,
+        policy="job-cancel",
+        limit=20,
+        window_seconds=300,
+    )
     try:
         sync_run = await cancel_sync_run(
             session,
@@ -44,7 +52,9 @@ async def cancel_job(
             celery_app=celery_app,
         )
     except SyncRunNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
+        ) from exc
     return SyncRunResponse.model_validate(sync_run)
 
 
@@ -61,5 +71,7 @@ async def get_job(
             workspace_id=current.workspace_id,
         )
     except SyncRunNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
+        ) from exc
     return SyncRunResponse.model_validate(sync_run)

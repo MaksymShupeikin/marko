@@ -33,7 +33,7 @@ def _listing() -> Listing:
         store_id=uuid4(),
         external_id="prom-1",
         name="Стара назва",
-        url="https://prom.ua/p1.html",
+        url="https://prom.ua/p1-product.html",
         sku="OLD",
         brand="Old",
         currency="UAH",
@@ -71,7 +71,7 @@ def _scraped(**changes):
         opinions_rating=0.0,
         image="https://example.com/new.jpg",
         url_text="product",
-        url="https://prom.ua/p1.html",
+        url="https://prom.ua/p1-product.html",
         oem_numbers=("OEM-NEW",),
     )
     fields.update(changes)

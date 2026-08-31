@@ -1,7 +1,9 @@
 """Environment-based application configuration."""
+
 from __future__ import annotations
 
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +36,15 @@ class Settings(BaseSettings):
     # Пейвол: безкоштовні перевірки цін на воркспейс, далі — запит доступу.
     free_check_limit: int = 30
     openai_base_url: str = ""  # напр. https://api.deepseek.com для DeepSeek або проксі
+    # Production hardening. API docs remain available in development, but are
+    # fail-closed in production even if this flag is accidentally left true.
+    api_docs_enabled: bool = True
+    trusted_hosts: str = "api.markoprice.com,localhost,127.0.0.1,api,testserver"
+    hsts_max_age_seconds: int = 31_536_000
+    rate_limits_enabled: bool = True
+    upload_max_bytes: int = 25 * 1024 * 1024
+    upload_max_uncompressed_bytes: int = 200 * 1024 * 1024
+    upload_max_rows: int = 100_000
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -44,7 +55,17 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
+
+    @property
+    def trusted_host_list(self) -> list[str]:
+        return [host.strip() for host in self.trusted_hosts.split(",") if host.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().casefold() == "production"
 
     @property
     def firebase_auth_issuer(self) -> str:
@@ -61,3 +82,30 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def validate_production_settings(settings: Settings) -> None:
+    if not settings.is_production:
+        return
+    errors: list[str] = []
+    if settings.debug:
+        errors.append("DEBUG must be false")
+    if not settings.firebase_project_id.strip():
+        errors.append("FIREBASE_PROJECT_ID must be configured")
+    if not settings.rate_limits_enabled:
+        errors.append("RATE_LIMITS_ENABLED must be true")
+    if settings.hsts_max_age_seconds < 31_536_000:
+        errors.append("HSTS_MAX_AGE_SECONDS must be at least 31536000")
+    if not settings.cors_origin_list or any(
+        not origin.startswith("https://") or "*" in origin
+        for origin in settings.cors_origin_list
+    ):
+        errors.append("CORS_ORIGINS must contain explicit HTTPS origins")
+    if not settings.trusted_host_list or any(
+        "*" in host for host in settings.trusted_host_list
+    ):
+        errors.append("TRUSTED_HOSTS must not contain wildcards")
+    if "://marko:marko@" in settings.database_url:
+        errors.append("the default database password is forbidden")
+    if errors:
+        raise RuntimeError("Unsafe production configuration: " + "; ".join(errors))
