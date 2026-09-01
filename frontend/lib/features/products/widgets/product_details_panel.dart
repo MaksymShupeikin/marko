@@ -800,16 +800,18 @@ class _CompetitorPrices extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: MarkoSpace.xs),
-              IconButton(
-                tooltip: 'Оновити ціни',
-                onPressed: prices.isLoading
-                    ? null
-                    : () => ref
-                          .read(competitorPricesProvider(product.id).notifier)
-                          .refresh(),
-                icon: prices.isLoading
-                    ? const MarkoLoader(size: 18)
-                    : const HeroIcon(HeroIcons.arrowPath, size: 19),
+              Visibility(
+                visible: !prices.isLoading,
+                maintainSize: true,
+                maintainAnimation: true,
+                maintainState: true,
+                child: IconButton(
+                  tooltip: 'Оновити ціни',
+                  onPressed: () => ref
+                      .read(competitorPricesProvider(product.id).notifier)
+                      .refresh(),
+                  icon: const HeroIcon(HeroIcons.arrowPath, size: 19),
+                ),
               ),
             ],
           ),
