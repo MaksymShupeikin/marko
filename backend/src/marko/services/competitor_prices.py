@@ -925,13 +925,11 @@ def _availability_gate(
                 continue
 
             confidence = min(offer.confidence, _UNVERIFIED_CONFIDENCE)
-            availability = offer.availability
-            # Машинний OutOfStock перемагає порожній чи суперечливий текст і
-            # дає фронтенду вже наявне поле для зрозумілої позначки.
-            if offer.stock == "out_of_stock" and (
-                offer_gates.stock_of(availability) != "out_of_stock"
-            ):
-                availability = "Немає в наявності"
+            # Канонічний рядок — контракт із фронтендом: бейдж «немає в
+            # наявності — не в ціні» вішається саме на нього. Тому і машинний
+            # OutOfStock, і текстові варіанти («Товар закінчився», «Продано»)
+            # зводяться до одного підпису.
+            availability = "Немає в наявності"
             updated = replace(
                 offer,
                 confidence=confidence,

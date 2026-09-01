@@ -537,6 +537,11 @@ class MarketPriceOffer {
   /// Не той самий номер: аналог іншого виробника або схожа позиція.
   final bool isAnalog;
 
+  /// Канонічний підпис гейта наявності. Бекенд зводить усі варіанти
+  /// «немає» саме до цього рядка; він означає: пропозицію видно, але в
+  /// статистику й рекомендацію вона не входить.
+  bool get isOutOfStock => availability?.trim() == 'Немає в наявності';
+
   String get priceLabel => '${price.toStringAsFixed(0)} $currency';
 
   String get subtitle => [

@@ -1771,6 +1771,27 @@ class _ModernOfferCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                    // Немає в наявності — та сама логіка, що й у б/в: картку
+                    // видно, але ринок вона не задає, і бейдж каже чому.
+                    if (offer.isOutOfStock)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colors.warning.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(MarkoRadius.xs),
+                        ),
+                        child: Text(
+                          'немає в наявності — не в ціні',
+                          style: MarkoType.caption.copyWith(
+                            color: colors.warning,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
                 if (offer.source == 'avtopro') ...[
@@ -1792,13 +1813,19 @@ class _ModernOfferCard extends StatelessWidget {
               Text(
                 '${formatPriceNumber(offer.price)} ${formatCurrency(currency)}',
                 style: MarkoType.price.copyWith(
-                  // Сіра цифра = довідкова: б/в не бере участі в розрахунку.
-                  color: offer.condition == 'used' ? colors.muted : colors.ink,
+                  // Сіра цифра = довідкова: б/в і недоступне не беруть
+                  // участі в розрахунку.
+                  color: offer.condition == 'used' || offer.isOutOfStock
+                      ? colors.muted
+                      : colors.ink,
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              if (diff != null && diff > 0 && offer.condition != 'used') ...[
+              if (diff != null &&
+                  diff > 0 &&
+                  offer.condition != 'used' &&
+                  !offer.isOutOfStock) ...[
                 const SizedBox(height: 2),
                 Container(
                   padding: const EdgeInsets.symmetric(

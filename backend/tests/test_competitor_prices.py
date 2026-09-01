@@ -623,6 +623,32 @@ def test_machine_out_of_stock_beats_contradictory_text(monkeypatch):
     assert actual.availability == "Немає в наявності"
 
 
+def test_text_detected_out_of_stock_gets_canonical_signature(monkeypatch):
+    """Бейдж «не в ціні» на фронтенді шукає рівно один рядок.
+
+    Тому текстові варіанти недоступності («Товар закінчився», «Продано»)
+    зводяться до канонічного підпису, як і машинний OutOfStock.
+    """
+    _enable_availability_gate(monkeypatch)
+    offer = MarketOffer(
+        "prom",
+        "Фільтр",
+        Decimal("200"),
+        "UAH",
+        "https://prom.ua/filter",
+        availability="Товар закінчився",
+        confidence=0.9,
+    )
+
+    gated = competitor_prices_module._availability_gate(
+        (SourceResult("prom", "Prom.ua", "ok", (offer,)),)
+    )
+
+    actual = gated[0].offers[0]
+    assert actual.confidence == 0.5
+    assert actual.availability == "Немає в наявності"
+
+
 def test_disabled_availability_gate_is_byte_for_byte_noop(monkeypatch):
     _enable_availability_gate(monkeypatch, enabled=False)
     source = SourceResult(
