@@ -18,7 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Marko — B2B pricing analytics">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -32,8 +32,109 @@
 
   <title>Marko — B2B Pricing Analytics</title>
   <link rel="manifest" href="manifest.json">
+
+  <meta name="theme-color" content="#F8FAFC" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141416" media="(prefers-color-scheme: dark)">
+
+  <!--
+    Boot splash: the same wordmark and spinner the Flutter side shows while the
+    account loads, so the handoff at first frame is invisible. Colours mirror
+    MarkoTheme.light / MarkoTheme.dark.
+  -->
+  <style>
+    :root {
+      color-scheme: light dark;
+      --canvas: #F8FAFC;
+      --ink: #0C0C0E;
+      --mark: #0C0C0E;
+      --mark-border: rgba(0, 0, 0, 0.09);
+      --brand: #0070F3;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --canvas: #141416;
+        --ink: #F3F3F6;
+        --mark: #1E1E22;
+        --mark-border: rgba(255, 255, 255, 0.18);
+        --brand: #60A5FA;
+      }
+    }
+    html, body { margin: 0; height: 100%; background: var(--canvas); }
+
+    #boot {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      background: var(--canvas);
+      font-family: Geist, Inter, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+      /* Held back a beat: a warm cache reaches first frame before this ever
+         paints, and a splash that flashes reads worse than no splash. */
+      opacity: 0;
+      animation: boot-in 240ms ease-out 140ms forwards;
+      transition: opacity 200ms ease-out;
+    }
+    #boot.boot-done { opacity: 0; pointer-events: none; }
+    @keyframes boot-in { to { opacity: 1; } }
+
+    #boot .wordmark { display: flex; align-items: center; gap: 8px; }
+    #boot .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8.5px;
+      background: var(--mark);
+      border: 1px solid var(--mark-border);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #boot .name {
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--ink);
+    }
+    #boot .spinner { animation: boot-spin 1100ms linear infinite; }
+    #boot .spinner .arc {
+      transform-origin: center;
+      animation: boot-sweep 1100ms ease-in-out infinite;
+    }
+    @keyframes boot-spin { to { transform: rotate(360deg); } }
+    /* Matches MarkoLoader: the arc grows and shrinks as it turns. */
+    @keyframes boot-sweep {
+      0%   { stroke-dasharray: 6.3 62.8; stroke-dashoffset: 0; }
+      50%  { stroke-dasharray: 45 62.8; stroke-dashoffset: -15; }
+      100% { stroke-dasharray: 6.3 62.8; stroke-dashoffset: -62.8; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #boot { animation-delay: 0ms; }
+      #boot .spinner, #boot .spinner .arc { animation-duration: 3s; }
+    }
+  </style>
 </head>
 <body>
+  <div id="boot">
+    <div class="wordmark">
+      <div class="mark">
+        <svg width="16.5" height="14" viewBox="0 0 16.5 14" fill="none" aria-hidden="true">
+          <polyline points="1.32,11.76 4.62,5.6 7.26,9.52 9.9,3.92 12.38,10.36 14.85,0.84"
+                    stroke="#FFFFFF" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="14.85" cy="0.84" r="1.06" fill="#FFFFFF"/>
+        </svg>
+      </div>
+      <span class="name">Marko</span>
+    </div>
+    <svg class="spinner" width="22" height="22" viewBox="0 0 22 22" role="status" aria-label="Завантаження">
+      <circle cx="11" cy="11" r="10" fill="none" stroke="currentColor" stroke-width="2"
+              style="color: var(--brand); opacity: 0.16"/>
+      <circle class="arc" cx="11" cy="11" r="10" fill="none" stroke="var(--brand)" stroke-width="2"
+              stroke-linecap="round"/>
+    </svg>
+  </div>
   <script>
     // Automatically purge stale service workers and asset cache
     if ('serviceWorker' in navigator) {
@@ -48,6 +149,14 @@
         for (const name of names) caches.delete(name);
       });
     }
+
+    window.addEventListener('flutter-first-frame', function() {
+      const boot = document.getElementById('boot');
+      if (!boot) return;
+      boot.classList.add('boot-done');
+      boot.addEventListener('transitionend', () => boot.remove(), { once: true });
+      setTimeout(() => boot.remove(), 400);
+    });
   </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
