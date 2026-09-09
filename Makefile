@@ -1,4 +1,4 @@
-.PHONY: help up down restart ps logs logs-api logs-worker test test-backend test-frontend analyze migrate backup deploy-frontend update clean
+.PHONY: help up down restart ps logs logs-api logs-worker usage test test-backend test-frontend analyze migrate backup deploy-frontend update clean
 
 # Default: show available commands
 help:
@@ -50,6 +50,10 @@ migrate:
 # Whitelist: permanent free access for an account, e.g. `make grant-access EMAIL=x@y.com`
 grant-access:
 	docker compose exec -T db psql -U marko -d marko -c "UPDATE workspaces SET has_free_access = true WHERE id IN (SELECT wm.workspace_id FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE u.email = '$(EMAIL)');"
+
+# Usage per account: checks spent, free-access flag, last activity
+usage:
+	docker compose exec -T db psql -U marko -d marko -c "SELECT u.email, w.checks_used, w.has_free_access, w.access_requested_at, w.updated_at AS last_activity FROM users u JOIN workspace_members wm ON wm.user_id = u.id JOIN workspaces w ON w.id = wm.workspace_id ORDER BY w.checks_used DESC;"
 
 revoke-access:
 	docker compose exec -T db psql -U marko -d marko -c "UPDATE workspaces SET has_free_access = false WHERE id IN (SELECT wm.workspace_id FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE u.email = '$(EMAIL)');"
