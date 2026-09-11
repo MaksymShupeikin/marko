@@ -51,6 +51,9 @@ dependencies:
   heroicons: ^0.11.0
   shared_preferences: ^2.5.5
   toastification: ^3.2.0
+  # Direct dependency for the .xlsx download: the export is fetched with a
+  # bearer token, so a plain link cannot do it — only a blob can.
+  web: ^1.1.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

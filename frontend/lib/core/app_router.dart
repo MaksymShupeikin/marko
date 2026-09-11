@@ -5,6 +5,7 @@ import '../features/auth/auth_controller.dart';
 import '../features/auth/auth_page.dart';
 import '../features/auth/reset_password_page.dart';
 import '../features/dashboard/dashboard_page.dart';
+import '../features/repricing/repricing_page.dart';
 
 /// Firebase email links carry mode/oobCode as query params before the URL
 /// fragment, so go_router never sees them. Consumed by the first router build
@@ -33,6 +34,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: '/', builder: (_, _) => const DashboardPage()),
       GoRoute(path: '/login', builder: (_, _) => const AuthPage()),
+      GoRoute(path: '/reprice', builder: (_, _) => const RepricingPage()),
       GoRoute(
         path: '/reset-password',
         builder: (_, state) => ResetPasswordPage(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:heroicons/heroicons.dart';
 
 import '../../core/app_theme.dart';
@@ -119,9 +120,7 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                   ),
                 ),
                 if (!onboarding) ...[
-                  const SliverToBoxAdapter(
-                    child: StoresStrip(),
-                  ),
+                  const SliverToBoxAdapter(child: StoresStrip()),
                   SliverToBoxAdapter(
                     child: MarkoContentFrame(
                       child: Column(
@@ -419,6 +418,26 @@ class _CatalogToolbar extends StatelessWidget {
               const SizedBox(width: MarkoSpace.md),
               const MarkoLoader(size: 14),
             ],
+            const Spacer(),
+            // Переоцінка живе окремим вікном: усередині історія прогонів,
+            // сотні карток і вивантаження — у тулбарі це не поміщається.
+            // На телефоні підпис не влазить у рядок — лишається іконка.
+            if (MarkoLayout.compactOf(context))
+              IconButton(
+                tooltip: 'Переоцінка',
+                onPressed: () => context.go('/reprice'),
+                icon: HeroIcon(
+                  HeroIcons.calculator,
+                  size: 18,
+                  color: MarkoTheme.of(context).ink,
+                ),
+              )
+            else
+              MarkoButton.secondary(
+                label: 'Переоцінка',
+                icon: HeroIcons.calculator,
+                onPressed: () => context.go('/reprice'),
+              ),
           ],
         ),
         const SizedBox(height: MarkoSpace.md),

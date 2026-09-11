@@ -66,6 +66,37 @@ class ApiClient {
     return _request('DELETE', path, authenticated: authenticated);
   }
 
+  /// Raw bytes for a file download. JSON decoding would destroy the payload,
+  /// so this stays outside [_request]; a catalog-sized sheet also needs more
+  /// than the default JSON timeout.
+  Future<List<int>> getBytes(
+    String path, {
+    bool authenticated = true,
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    var response = await _send(
+      'GET',
+      path,
+      authenticated: authenticated,
+      timeout: timeout,
+    );
+    if (response.statusCode == 401 && authenticated && await _refreshOnce()) {
+      response = await _send(
+        'GET',
+        path,
+        authenticated: true,
+        timeout: timeout,
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        'Не вдалося завантажити файл.',
+        statusCode: response.statusCode,
+      );
+    }
+    return response.bodyBytes;
+  }
+
   /// Uploads one file as multipart/form-data. Catalog files are large and the
   /// server parses them inline, so this uses a longer timeout than JSON calls.
   Future<dynamic> postFile(
@@ -152,6 +183,7 @@ class ApiClient {
     Map<String, String>? queryParameters,
     Map<String, dynamic>? body,
     required bool authenticated,
+    Duration timeout = const Duration(seconds: 15),
   }) async {
     final uri = Uri.parse(
       '$baseUrl$path',
@@ -168,7 +200,7 @@ class ApiClient {
       'DELETE' => client.delete(uri, headers: headers),
       _ => client.get(uri, headers: headers),
     };
-    return request.timeout(const Duration(seconds: 15));
+    return request.timeout(timeout);
   }
 
   Future<bool> _refreshOnce() async {
