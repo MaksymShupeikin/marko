@@ -293,18 +293,25 @@ class _CountSlider extends ConsumerWidget {
             ),
           ],
         ),
-        Slider(
-          value: value,
-          min: 1,
-          max: maxCount.toDouble(),
-          // Понад тисячу поділок повзунок не відрізнить — і не треба.
-          divisions: maxCount > 1
-              ? (maxCount > 1000 ? 1000 : maxCount - 1)
-              : null,
-          label: '${value.round()}',
-          onChanged: maxCount > 1
-              ? (next) => controller.chooseCount(next.round())
-              : null,
+        // Без підпису й формату озвучення програма читання екрана скаже
+        // саме число — без натяку, що це кількість товарів.
+        Semantics(
+          label: 'Скільки товарів переоцінити',
+          child: Slider(
+            value: value,
+            min: 1,
+            max: maxCount.toDouble(),
+            // Понад тисячу поділок повзунок не відрізнить — і не треба.
+            divisions: maxCount > 1
+                ? (maxCount > 1000 ? 1000 : maxCount - 1)
+                : null,
+            label: '${value.round()}',
+            semanticFormatterCallback: (next) =>
+                '${next.round()} з $maxCount товарів',
+            onChanged: maxCount > 1
+                ? (next) => controller.chooseCount(next.round())
+                : null,
+          ),
         ),
       ],
     );
@@ -500,12 +507,16 @@ class _OutcomeFilter extends ConsumerWidget {
       runSpacing: MarkoSpace.sm,
       children: [
         for (final entry in counts.entries)
-          ChoiceChip(
+          Semantics(
+            inMutuallyExclusiveGroup: true,
             selected: state.filter == entry.key,
-            onSelected: (_) => controller.filterBy(entry.key),
-            label: Text(
-              '${entry.key?.label ?? 'Усі'} · ${entry.value}',
-              style: const TextStyle(fontSize: 12.5),
+            child: ChoiceChip(
+              selected: state.filter == entry.key,
+              onSelected: (_) => controller.filterBy(entry.key),
+              label: Text(
+                '${entry.key?.label ?? 'Усі'} · ${entry.value}',
+                style: const TextStyle(fontSize: 12.5),
+              ),
             ),
           ),
       ],
@@ -711,12 +722,20 @@ class _Segmented<T> extends StatelessWidget {
           runSpacing: MarkoSpace.sm,
           children: [
             for (final value in values)
-              ChoiceChip(
-                selected: value == selected,
-                onSelected: (_) => onChanged(value),
-                label: Text(
-                  labelOf(value),
-                  style: const TextStyle(fontSize: 12.5),
+              // ChoiceChip сам по собі озвучується як прапорець, тобто
+              // «можна відмітити кілька». Тут вибір рівно один.
+              MergeSemantics(
+                child: Semantics(
+                  inMutuallyExclusiveGroup: true,
+                  selected: value == selected,
+                  child: ChoiceChip(
+                  selected: value == selected,
+                    onSelected: (_) => onChanged(value),
+                    label: Text(
+                      labelOf(value),
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                  ),
                 ),
               ),
           ],
