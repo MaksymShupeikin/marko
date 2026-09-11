@@ -319,3 +319,23 @@ async def get_sync_run_by_id(
             SyncRun.workspace_id == workspace_id,
         )
     )
+
+
+async def owned_store_ids(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Магазини воркспейсу, які він веде сам, — не конкуренти."""
+    return list(
+        (
+            await session.execute(
+                select(WorkspaceStore.store_id)
+                .where(
+                    WorkspaceStore.workspace_id == workspace_id,
+                    WorkspaceStore.kind == StoreKind.owned,
+                )
+                .order_by(WorkspaceStore.store_id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )

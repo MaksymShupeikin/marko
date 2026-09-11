@@ -26,11 +26,15 @@ def has_access(checks_used: int, has_free_access: bool, limit: int) -> bool:
     return has_free_access or checks_used <= limit
 
 
-async def consume_check(session: AsyncSession, workspace_id: UUID) -> None:
-    """Списує одну перевірку цін; кидає 402, коли ліміт вичерпано.
+async def try_consume_check(session: AsyncSession, workspace_id: UUID) -> bool:
+    """Списує одну перевірку і каже, чи вона була дозволена.
 
     Інкремент атомарний на рівні SQL, тож паралельні запити не гублять
     лічильник. Лічильник росте й у повній версії — це просто статистика.
+
+    Окремо від ``consume_check``, бо фоновий прогін переоцінки не має права
+    кидати HTTP-виняток: він мусить дорахувати те, що вже почав, і чесно
+    написати в рядку, що ліміт вичерпано.
     """
     settings = get_settings()
     result = await session.execute(
@@ -41,7 +45,23 @@ async def consume_check(session: AsyncSession, workspace_id: UUID) -> None:
     )
     row = result.one()
     await session.commit()
-    if not has_access(row.checks_used, row.has_free_access, settings.free_check_limit):
+    return has_access(row.checks_used, row.has_free_access, settings.free_check_limit)
+
+
+async def checks_remaining(session: AsyncSession, workspace_id: UUID) -> int | None:
+    """Скільки перевірок лишилось; ``None`` — необмежено (повний доступ)."""
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        return 0
+    if workspace.has_free_access:
+        return None
+    left = get_settings().free_check_limit - workspace.checks_used
+    return max(left, 0)
+
+
+async def consume_check(session: AsyncSession, workspace_id: UUID) -> None:
+    """Списує одну перевірку цін; кидає 402, коли ліміт вичерпано."""
+    if not await try_consume_check(session, workspace_id):
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail=PAYWALL_DETAIL,

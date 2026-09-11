@@ -274,3 +274,132 @@ class SyncRun(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RepriceScope(str, enum.Enum):
+    full = "full"
+    partial = "partial"
+
+
+class RepriceMode(str, enum.Enum):
+    fresh = "fresh"
+    resume = "resume"
+
+
+class RepricePolicy(str, enum.Enum):
+    aggressive = "aggressive"
+    balanced = "balanced"
+    hold_margin = "hold_margin"
+
+
+class RepriceOutcome(str, enum.Enum):
+    changed = "changed"
+    unchanged = "unchanged"
+    no_recommendation = "no_recommendation"
+
+
+class RepriceItemStatus(str, enum.Enum):
+    pending = "pending"
+    done = "done"
+    failed = "failed"
+
+
+class RepriceRun(TimestampMixin, Base):
+    """One repricing pass over a slice of the workspace catalog.
+
+    Прогрес і скасування живуть у ``SyncRun`` — той самий механізм, що й в
+    імпорту з оновленням каталогу. Тут лише те, чого в ньому немає: з чим
+    саме звіряли, скільки товарів просили і що вийшло.
+    """
+
+    __tablename__ = "reprice_runs"
+    __table_args__ = (
+        Index("ix_reprice_run_workspace_created", "workspace_id", "created_at"),
+        Index("ix_reprice_run_catalog_signature", "catalog_scope_signature"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    # Прогрес і скасування — через /jobs, тож запуск має власний SyncRun.
+    sync_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sync_runs.id", ondelete="SET NULL"), index=True
+    )
+
+    scope: Mapped[RepriceScope] = mapped_column(
+        Enum(RepriceScope, name="reprice_scope"), default=RepriceScope.partial
+    )
+    mode: Mapped[RepriceMode] = mapped_column(
+        Enum(RepriceMode, name="reprice_mode"), default=RepriceMode.fresh
+    )
+    policy: Mapped[RepricePolicy] = mapped_column(
+        Enum(RepricePolicy, name="reprice_policy"), default=RepricePolicy.balanced
+    )
+    # Чим сортували план: поки одна стратегія, але запуск має пам'ятати свою.
+    order_strategy: Mapped[str] = mapped_column(
+        String(32), default="value_at_risk", server_default="value_at_risk"
+    )
+    requested_count: Mapped[int | None] = mapped_column(Integer)
+    engine: Mapped[str] = mapped_column(String(64), default="legacy_min_minus")
+
+    # Підпис складу каталогу, а не його цін: див. reprice_catalog_signature.
+    catalog_scope_signature: Mapped[str] = mapped_column(String(40))
+    catalog_item_count: Mapped[int] = mapped_column(Integer, default=0)
+    store_ids: Mapped[list[str] | None] = mapped_column(JSON)
+    filter_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+    changed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    unchanged_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class RepriceRunItem(TimestampMixin, Base):
+    """One product inside a repricing run, with the evidence behind its price."""
+
+    __tablename__ = "reprice_run_items"
+    __table_args__ = (
+        Index("ix_reprice_item_run_position", "run_id", "position"),
+        Index("ix_reprice_item_listing", "listing_id"),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reprice_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), primary_key=True
+    )
+    # Порядок плану: за ним «продовжити» знає, де зупинилися.
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    # Нормалізований артикул: запасний шлях звірки, коли listing_id змінився.
+    group_key: Mapped[str | None] = mapped_column(String(255))
+
+    status: Mapped[RepriceItemStatus] = mapped_column(
+        Enum(RepriceItemStatus, name="reprice_item_status"),
+        default=RepriceItemStatus.pending,
+    )
+    outcome: Mapped[RepriceOutcome | None] = mapped_column(
+        Enum(RepriceOutcome, name="reprice_outcome")
+    )
+    # Чому не порахували: «тонкий ринок», «спрацювало обмеження» тощо.
+    reason: Mapped[str | None] = mapped_column(String(255))
+
+    old_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    new_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    delta_abs: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    delta_pct: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    # Ціна товару на момент розрахунку: застарівання відстежуємо по товару,
+    # а не по каталогу цілком.
+    price_at_compute: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+
+    zone: Mapped[str | None] = mapped_column(String(32))
+    tier: Mapped[str | None] = mapped_column(String(32))
+    method: Mapped[str | None] = mapped_column(String(64))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    offers_total: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+    computed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Приховано зі звіту користувачем: товар у каталозі не чіпаємо.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

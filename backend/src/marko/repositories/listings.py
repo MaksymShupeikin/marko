@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 import uuid
 from sqlalchemy import (
     Text,
@@ -471,6 +472,62 @@ async def manageable_workspace_listing_ids(
         .with_only_columns(Listing.id)
     )
     return list((await session.execute(statement)).scalars().all())
+
+
+# Скільки днів «застарілості» ще додають ваги товару: після півроку різниці
+# між «не дивились рік» і «не дивились два» для черги вже немає.
+_STALENESS_CAP_DAYS = 180
+_STALENESS_HALF_LIFE_DAYS = 30
+
+
+async def reprice_plan_rows(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    query: str | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    source: str | None = None,
+    store_ids: list[uuid.UUID] | None = None,
+    available: bool | None = None,
+) -> list[tuple[uuid.UUID, str, Decimal | None]]:
+    """Own products in repricing order: where the most money is at stake.
+
+    Пріоритет — добуток, а не послідовність ключів: сортування «спершу ціна,
+    потім давність» насправді означало б просто «найдорожчі», бо однакових
+    цін майже не буває. Тому вага = ціна × множник застарілості.
+
+    Третього множника — невизначеності оцінки — тут поки немає: він
+    з'явиться разом зі статистичним рушієм, який уміє рахувати дисперсію
+    по комірці каталогу.
+    """
+    price = _effective(WorkspaceListingOverride.current_price, Listing.current_price)
+    seen_at = func.coalesce(
+        WorkspaceListingOverride.synced_at, Listing.last_seen_at
+    )
+    age_days = func.extract("epoch", func.now() - seen_at) / 86400.0
+    staleness = 1 + func.least(age_days, _STALENESS_CAP_DAYS) / _STALENESS_HALF_LIFE_DAYS
+    weight = func.coalesce(price, 0) * staleness
+
+    statement = (
+        _workspace_listings_query(
+            workspace_id,
+            query=query,
+            price_min=price_min,
+            price_max=price_max,
+            source=source,
+            store_ids=store_ids,
+            available=available,
+        )
+        .where(WorkspaceStore.kind == StoreKind.owned)
+        .with_only_columns(Listing.id, _group_key(), price)
+        # listing_id останнім ключем: без нього однакова вага давала б різний
+        # порядок між прогонами, і «продовжити» продовжувало б не там.
+        .order_by(weight.desc(), Listing.id.asc())
+    )
+    return [
+        (row[0], row[1], row[2]) for row in (await session.execute(statement)).all()
+    ]
 
 
 def _effective(override_column, listing_column):

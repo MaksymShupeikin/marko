@@ -14,6 +14,7 @@ celery_app = Celery(
     include=[
         "marko.worker.tasks.import_store",
         "marko.worker.tasks.refresh_catalog",
+        "marko.worker.tasks.reprice_catalog",
         "marko.worker.tasks.system",
     ],
 )

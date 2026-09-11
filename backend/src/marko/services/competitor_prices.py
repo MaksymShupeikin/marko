@@ -497,6 +497,16 @@ async def competitor_prices_for_listing(
     return await competitor_prices_for_query(query, refresh=refresh)
 
 
+async def cached_report_for_query(query: PartSearchQuery) -> dict[str, Any] | None:
+    """Звіт, який уже лежить у кеші, або ``None``. Жодної мережі.
+
+    Масовій переоцінці треба знати ціну питання **до** запиту: кешований звіт
+    безкоштовний, живий — списує перевірку з ліміту воркспейсу. Без цього
+    розділення прогін по каталогу витрачав би ліміт наосліп.
+    """
+    return await _cache.get(_cache_key(query))
+
+
 async def _collect(
     query: PartSearchQuery, on_event: ProgressCallback | None = None
 ) -> CompetitorPriceReport:
