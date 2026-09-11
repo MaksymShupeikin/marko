@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import marko.repositories.repricing as repricing_repo
@@ -34,6 +35,7 @@ from marko.services.repricing import (
     preview,
     queue_reprice,
 )
+from marko.services.repricing_export import export_filename, export_run
 from marko.worker.celery_app import celery_app
 
 router = APIRouter()
@@ -158,6 +160,29 @@ async def list_reprice_items(
         ),
         limit=limit,
         offset=offset,
+    )
+
+
+XLSX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+
+@router.get("/runs/{run_id}/export.xlsx")
+async def export_reprice_run(
+    run_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+) -> StreamingResponse:
+    """Прогін одним аркушем: у шапці — коли і по якому каталогу рахували."""
+    run = await _run_or_404(session, run_id, current.workspace_id)
+    buffer = await export_run(session, run, current.workspace_id)
+    return StreamingResponse(
+        buffer,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{export_filename(run)}"'
+        },
     )
 
 
