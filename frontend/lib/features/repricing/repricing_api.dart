@@ -20,6 +20,17 @@ class RepricingApi {
     return RepricePreview.fromJson(payload as Map<String, dynamic>);
   }
 
+  /// Що з пораховного вціліло після зміни складу каталогу.
+  Future<Reconciliation> reconciliation() async {
+    final payload = await _client.getJson('/api/v1/reprice/reconciliation');
+    return Reconciliation.fromJson(payload as Map<String, dynamic>);
+  }
+
+  /// Зараховує вцілілі товари під новий каталог, щоб не рахувати їх знову.
+  Future<void> carryOver() async {
+    await _client.postJson('/api/v1/reprice/carry-over');
+  }
+
   Future<RepriceRun> start({
     required RepriceScope scope,
     required RepriceMode mode,

@@ -37,6 +37,9 @@ class _Backend {
   /// Скільки разів клієнт спробував запустити прогін.
   int startAttempts = 0;
 
+  /// Скільки разів просили перенести покриття.
+  int carryOvers = 0;
+
   Map<String, dynamic> get _preview => {
     'catalog': {
       'signature': 'abcdef1234567890',
@@ -119,7 +122,18 @@ class _Backend {
       client: MockClient((request) async {
         final path = request.url.path;
         String body;
-        if (path == '/api/v1/reprice/preview') {
+        if (path == '/api/v1/reprice/reconciliation') {
+          body = jsonEncode({
+            'signature_changed': signatureChanged,
+            'previous_signature': 'old12345',
+            'kept': 46012,
+            'gone': 87,
+            'fresh': 340,
+          });
+        } else if (path == '/api/v1/reprice/carry-over') {
+          carryOvers += 1;
+          body = jsonEncode(_run('run-carry'));
+        } else if (path == '/api/v1/reprice/preview') {
           final payload = jsonDecode(request.body) as Map<String, dynamic>;
           lastPreviewMode = payload['mode'] as String? ?? 'fresh';
           body = jsonEncode(_preview);
@@ -272,15 +286,37 @@ void main() {
     expect(backend.startAttempts, 0);
   });
 
-  testWidgets('a changed catalog is announced, not silently absorbed', (
+  testWidgets('a changed catalog is announced with what it costs', (
     tester,
   ) async {
-    await tester.pumpWidget(_app(_Backend(signatureChanged: true).client()));
+    final backend = _Backend(signatureChanged: true);
+    await tester.pumpWidget(_app(backend.client()));
     await tester.pumpAndSettle();
 
     expect(
-      find.textContaining('Склад каталогу змінився з часу останнього прогону'),
+      find.text('Склад каталогу змінився з часу останнього прогону'),
       findsOneWidget,
+    );
+    expect(
+      find.textContaining('46012 порахованих товарів на місці'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('87 зникли'), findsOneWidget);
+    expect(find.textContaining('340 ще не рахували'), findsOneWidget);
+
+    // Перенесення покриття — щоб «продовжити» не починало з початку.
+    await tester.tap(find.text('Перенести покриття'));
+    await tester.pumpAndSettle();
+    expect(backend.carryOvers, 1);
+  });
+
+  testWidgets('an unchanged catalog says nothing at all', (tester) async {
+    await tester.pumpWidget(_app(_Backend().client()));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Склад каталогу змінився з часу останнього прогону'),
+      findsNothing,
     );
   });
 

@@ -37,6 +37,16 @@ class RepricePreviewResponse(BaseModel):
     signature_changed: bool = False
 
 
+class ReconciliationResponse(BaseModel):
+    """Як новий склад каталогу лягає на те, що вже пораховано."""
+
+    signature_changed: bool
+    previous_signature: str | None = None
+    kept: int
+    gone: int
+    fresh: int
+
+
 class RepriceRunRequest(CatalogFilterRequest):
     scope: Literal["full", "partial"] = "partial"
     mode: Literal["fresh", "resume"] = "fresh"

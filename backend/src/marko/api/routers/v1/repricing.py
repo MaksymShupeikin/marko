@@ -12,6 +12,7 @@ import marko.repositories.repricing as repricing_repo
 from marko.api.dependencies import CurrentUser, get_session
 from marko.api.schemas.repricing import (
     CatalogSignatureResponse,
+    ReconciliationResponse,
     RepriceItemDismissResponse,
     RepriceItemPageResponse,
     RepriceItemResponse,
@@ -31,9 +32,11 @@ from marko.infrastructure.db.models import (
 )
 from marko.services.repricing import (
     RepriceDispatchError,
+    carry_over_coverage,
     catalog_signature,
     preview,
     queue_reprice,
+    reconciliation,
 )
 from marko.services.repricing_export import export_filename, export_run
 from marko.worker.celery_app import celery_app
@@ -67,6 +70,34 @@ async def reprice_preview(
         last_run_signature=result.last_run_signature,
         signature_changed=result.signature_changed,
     )
+
+
+@router.get("/reconciliation", response_model=ReconciliationResponse)
+async def reprice_reconciliation(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+) -> ReconciliationResponse:
+    """Що з пораховного вціліло після зміни складу каталогу."""
+    result = await reconciliation(session, current.workspace_id)
+    return ReconciliationResponse(
+        signature_changed=result.signature_changed,
+        previous_signature=result.previous_signature,
+        kept=result.kept,
+        gone=result.gone,
+        fresh=result.fresh,
+    )
+
+
+@router.post("/carry-over", response_model=RepriceRunResponse | None)
+async def carry_over(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current: CurrentUser,
+) -> RepriceRunResponse | None:
+    """Зараховує вцілілі товари під новий каталог, щоб не рахувати їх знову."""
+    run = await carry_over_coverage(session, current.workspace_id)
+    if run is None:
+        return None
+    return _run_response(run, None, current_signature=run.catalog_scope_signature)
 
 
 @router.post("/runs", response_model=RepriceRunResponse, status_code=status.HTTP_201_CREATED)
@@ -239,7 +270,9 @@ def _run_response(
             store_ids=list(run.store_ids or []),
         ),
         catalog_is_current=run.catalog_scope_signature == current_signature,
-        status=sync_run.status.value if sync_run is not None else "queued",
+        # Перенесення покриття не має фонової задачі — воно завершене
+        # у той самий момент, коли створене.
+        status=sync_run.status.value if sync_run is not None else "completed",
         progress_current=sync_run.progress_current if sync_run is not None else 0,
         progress_total=sync_run.progress_total if sync_run is not None else None,
         error=sync_run.error if sync_run is not None else None,

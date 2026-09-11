@@ -517,3 +517,105 @@ async def test_one_broken_product_never_stalls_the_whole_run(monkeypatch):
     assert item.status is RepriceItemStatus.failed
     assert "джерело впало" in item.reason
     assert sync_run.status is SyncStatus.completed
+
+
+def _done_item(listing_id, *, outcome=RepriceOutcome.changed, price="100"):
+    return RepriceRunItem(
+        run_id=uuid4(),
+        listing_id=listing_id,
+        position=0,
+        status=RepriceItemStatus.done,
+        outcome=outcome,
+        old_price=Decimal(price),
+        new_price=Decimal(price),
+        price_at_compute=Decimal(price),
+    )
+
+
+async def test_reconciliation_counts_what_survived_the_new_catalog(monkeypatch):
+    """Після зміни складу каталогу людина має бачити, що доведеться рахувати."""
+    kept = [uuid4(), uuid4()]
+    gone = [uuid4()]
+    fresh = [uuid4(), uuid4(), uuid4()]
+    session = FakeSession()
+
+    _stub_catalog(monkeypatch, kept + fresh)
+    monkeypatch.setattr(
+        repricing.repricing_repo,
+        "list_runs",
+        AsyncMock(
+            return_value=[(SimpleNamespace(catalog_scope_signature="old"), None)]
+        ),
+    )
+    monkeypatch.setattr(
+        repricing.repricing_repo,
+        "covered_listing_ids",
+        AsyncMock(return_value=set(kept + gone)),
+    )
+
+    result = await repricing.reconciliation(session, uuid4())
+
+    assert result.signature_changed is True
+    assert (result.kept, result.gone, result.fresh) == (2, 1, 3)
+
+
+async def test_carry_over_moves_surviving_results_under_the_new_signature(
+    monkeypatch,
+):
+    kept = [uuid4(), uuid4()]
+    gone = uuid4()
+    session = FakeSession()
+
+    _stub_catalog(monkeypatch, kept)
+    monkeypatch.setattr(
+        repricing.repricing_repo,
+        "list_runs",
+        AsyncMock(
+            return_value=[(SimpleNamespace(catalog_scope_signature="old"), None)]
+        ),
+    )
+    monkeypatch.setattr(
+        repricing.repricing_repo,
+        "latest_done_items",
+        AsyncMock(
+            return_value=[
+                _done_item(kept[0]),
+                _done_item(kept[1], outcome=RepriceOutcome.unchanged),
+                _done_item(gone),
+            ]
+        ),
+    )
+    captured: list[list[dict]] = []
+
+    async def capture(_session, rows):
+        captured.append(list(rows))
+
+    monkeypatch.setattr(repricing.repricing_repo, "insert_items", capture)
+
+    run = await repricing.carry_over_coverage(session, uuid4())
+
+    assert run is not None
+    assert run.mode is RepriceMode.carry_over
+    # Товар, якого в каталозі вже немає, не переноситься.
+    assert {row["listing_id"] for row in captured[0]} == set(kept)
+    assert all(row["status"] is RepriceItemStatus.done for row in captured[0])
+    assert (run.changed_count, run.unchanged_count) == (1, 1)
+
+
+async def test_carry_over_does_nothing_when_the_catalog_is_the_same(monkeypatch):
+    ids = [uuid4()]
+    session = FakeSession()
+    _stub_catalog(monkeypatch, ids)
+    signature = await repricing.catalog_signature(session, uuid4())
+
+    _stub_catalog(monkeypatch, ids)
+    monkeypatch.setattr(
+        repricing.repricing_repo,
+        "list_runs",
+        AsyncMock(
+            return_value=[
+                (SimpleNamespace(catalog_scope_signature=signature.value), None)
+            ]
+        ),
+    )
+    assert await repricing.carry_over_coverage(session, uuid4()) is None

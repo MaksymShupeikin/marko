@@ -284,6 +284,9 @@ class RepriceScope(str, enum.Enum):
 class RepriceMode(str, enum.Enum):
     fresh = "fresh"
     resume = "resume"
+    # Перенесення покриття після зміни складу каталогу: рахунків не робить,
+    # лише зараховує вже пораховані товари, які вижили.
+    carry_over = "carry_over"
 
 
 class RepricePolicy(str, enum.Enum):

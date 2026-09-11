@@ -114,14 +114,8 @@ class _StartPanel extends ConsumerWidget {
         children: [
           const MarkoSectionLabel('Новий прогін'),
           const SizedBox(height: MarkoSpace.lg),
-          if (state.preview?.signatureChanged ?? false) ...[
-            const MarkoInlineMessage(
-              message:
-                  'Склад каталогу змінився з часу останнього прогону. '
-                  'Пораховані раніше товари, яких уже немає, у покриття '
-                  'не рахуються.',
-              tone: MarkoMessageTone.warning,
-            ),
+          if (state.reconciliation?.signatureChanged ?? false) ...[
+            _CatalogChangedBanner(state: state),
             const SizedBox(height: MarkoSpace.lg),
           ],
           _ScopeChoice(state: state),
@@ -156,6 +150,63 @@ class _StartPanel extends ConsumerWidget {
               'Ліміту перевірок не вистачить на ${state.plannedCount} товарів. '
               'Зменште кількість або відкрийте повний доступ.',
               style: MarkoType.caption.copyWith(color: colors.negative),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Каталог змінився — кажемо, що це означає для вже порахованого.
+class _CatalogChangedBanner extends ConsumerWidget {
+  const _CatalogChangedBanner({required this.state});
+
+  final RepricingState state;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MarkoTheme.of(context);
+    final controller = ref.read(repricingControllerProvider.notifier);
+    final diff = state.reconciliation!;
+    return Container(
+      padding: const EdgeInsets.all(MarkoSpace.lg),
+      decoration: BoxDecoration(
+        color: colors.warningSoft,
+        borderRadius: BorderRadius.circular(MarkoRadius.md),
+        border: Border.all(color: colors.warning.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Склад каталогу змінився з часу останнього прогону',
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: MarkoSpace.xs),
+          Text(
+            '${diff.kept} порахованих товарів на місці · '
+            '${diff.gone} зникли · ${diff.fresh} ще не рахували',
+            style: MarkoType.caption.copyWith(color: colors.ink),
+          ),
+          if (diff.worthCarryingOver) ...[
+            const SizedBox(height: MarkoSpace.md),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: MarkoButton.secondary(
+                label: 'Перенести покриття',
+                icon: HeroIcons.arrowPathRoundedSquare,
+                loading: state.busy,
+                onPressed: state.busy ? null : controller.carryOver,
+              ),
+            ),
+            const SizedBox(height: MarkoSpace.xs),
+            Text(
+              'Вцілілі товари зарахуються як пораховані — щоб «продовжити» '
+              'не починало з початку.',
+              style: MarkoType.caption.copyWith(color: colors.muted),
             ),
           ],
         ],

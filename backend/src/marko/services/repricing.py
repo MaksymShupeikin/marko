@@ -151,6 +151,142 @@ async def preview(
     )
 
 
+@dataclass(frozen=True)
+class Reconciliation:
+    """How a changed catalog lines up with what was already priced."""
+
+    signature_changed: bool
+    previous_signature: str | None
+    # Пораховані товари, які вижили в новому каталозі.
+    kept: int
+    # Пораховані товари, яких у каталозі більше немає.
+    gone: int
+    # Товари каталогу, яких ще не рахували.
+    fresh: int
+
+
+async def reconciliation(
+    session: AsyncSession, workspace_id: UUID
+) -> Reconciliation:
+    """Compare the catalog as it is now with what past runs already priced.
+
+    Порівнюємо не два склади каталогу, а покриття з нинішнім складом: повний
+    список id минулого каталогу довелося б зберігати цілком (47 тисяч UUID на
+    кожен прогін), а відповідь від цього не стала б кориснішою — людину
+    цікавить саме те, що доведеться рахувати заново.
+    """
+    signature = await catalog_signature(session, workspace_id)
+    runs = await repricing_repo.list_runs(session, workspace_id, limit=1)
+    if not runs:
+        return Reconciliation(
+            signature_changed=False,
+            previous_signature=None,
+            kept=0,
+            gone=0,
+            fresh=signature.item_count,
+        )
+
+    previous = runs[0][0].catalog_scope_signature
+    current_ids = set(
+        await listings_repo.manageable_workspace_listing_ids(session, workspace_id)
+    )
+    covered = await repricing_repo.covered_listing_ids(
+        session, workspace_id, previous
+    )
+    return Reconciliation(
+        signature_changed=previous != signature.value,
+        previous_signature=previous,
+        kept=len(covered & current_ids),
+        gone=len(covered - current_ids),
+        fresh=len(current_ids - covered),
+    )
+
+
+async def carry_over_coverage(
+    session: AsyncSession, workspace_id: UUID
+) -> RepriceRun | None:
+    """Count surviving products as already priced under the new catalog.
+
+    Це і є відповідь на «щоб не повторюватися і не робити з самого початку»:
+    після зміни складу каталогу підпис інший, і покриття формально порожнє,
+    хоча більшість товарів ті самі. Перенесення нічого не рахує — воно
+    переписує вже отримані результати під новий підпис, а рядки, чия ціна
+    відтоді поїхала, позначає як такі, що потребують перерахунку.
+    """
+    signature = await catalog_signature(session, workspace_id)
+    runs = await repricing_repo.list_runs(session, workspace_id, limit=1)
+    if not runs:
+        return None
+    previous = runs[0][0].catalog_scope_signature
+    if previous == signature.value:
+        return None
+
+    current_ids = set(
+        await listings_repo.manageable_workspace_listing_ids(session, workspace_id)
+    )
+    items = [
+        item
+        for item in await repricing_repo.latest_done_items(
+            session, workspace_id, previous
+        )
+        if item.listing_id in current_ids
+    ]
+    if not items:
+        return None
+
+    run = RepriceRun(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        scope=RepriceScope.full,
+        mode=RepriceMode.carry_over,
+        policy=RepricePolicy.balanced,
+        engine="carry_over",
+        catalog_scope_signature=signature.value,
+        catalog_item_count=signature.item_count,
+        store_ids=list(signature.store_ids),
+        changed_count=sum(
+            1 for item in items if item.outcome is RepriceOutcome.changed
+        ),
+        unchanged_count=sum(
+            1 for item in items if item.outcome is RepriceOutcome.unchanged
+        ),
+        skipped_count=sum(
+            1 for item in items if item.outcome is RepriceOutcome.no_recommendation
+        ),
+    )
+    await repricing_repo.create_run(session, run)
+    await session.flush()
+    await repricing_repo.insert_items(
+        session,
+        [
+            {
+                "run_id": run.id,
+                "listing_id": item.listing_id,
+                "position": position,
+                "group_key": item.group_key,
+                "status": RepriceItemStatus.done,
+                "outcome": item.outcome,
+                "reason": item.reason,
+                "old_price": item.old_price,
+                "new_price": item.new_price,
+                "delta_abs": item.delta_abs,
+                "delta_pct": item.delta_pct,
+                "price_at_compute": item.price_at_compute,
+                "zone": item.zone,
+                "tier": item.tier,
+                "method": item.method,
+                "confidence": item.confidence,
+                "offers_total": item.offers_total,
+                "evidence": item.evidence,
+                "computed_at": item.computed_at,
+            }
+            for position, item in enumerate(items)
+        ],
+    )
+    await session.commit()
+    return run
+
+
 async def queue_reprice(
     session: AsyncSession,
     workspace_id: UUID,

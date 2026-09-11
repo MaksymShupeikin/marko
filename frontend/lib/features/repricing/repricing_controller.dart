@@ -9,6 +9,7 @@ import 'repricing_models.dart';
 class RepricingState {
   const RepricingState({
     this.preview,
+    this.reconciliation,
     this.run,
     this.items = RepriceItemPage.empty,
     this.history = const [],
@@ -23,6 +24,9 @@ class RepricingState {
   });
 
   final RepricePreview? preview;
+
+  /// Що вціліло з пораховного після зміни складу каталогу.
+  final Reconciliation? reconciliation;
 
   /// Прогін, який зараз відкритий: свіжий, поточний або вибраний з історії.
   final RepriceRun? run;
@@ -67,6 +71,7 @@ class RepricingState {
 
   RepricingState copyWith({
     RepricePreview? preview,
+    Reconciliation? reconciliation,
     RepriceRun? run,
     RepriceItemPage? items,
     List<RepriceRun>? history,
@@ -83,6 +88,7 @@ class RepricingState {
   }) {
     return RepricingState(
       preview: preview ?? this.preview,
+      reconciliation: reconciliation ?? this.reconciliation,
       run: run ?? this.run,
       items: items ?? this.items,
       history: history ?? this.history,
@@ -113,6 +119,7 @@ class RepricingController extends AsyncNotifier<RepricingState> {
     final api = ref.watch(repricingApiProvider);
     final preview = await api.preview();
     final history = await api.history(limit: 20);
+    final reconciliation = await api.reconciliation();
     final latest = history.isEmpty ? null : history.first;
     // Завершений прогін одразу показує свої рядки: інакше людина заходить
     // у вікно й бачить порожньо, хоча результат уже є.
@@ -124,6 +131,7 @@ class RepricingController extends AsyncNotifier<RepricingState> {
     }
     return RepricingState(
       preview: preview,
+      reconciliation: reconciliation,
       history: history,
       run: latest,
       items: items,
@@ -176,6 +184,24 @@ class RepricingController extends AsyncNotifier<RepricingState> {
       );
     } catch (error) {
       state = AsyncData(_current.copyWith(error: '$error'));
+    }
+  }
+
+  /// Зараховує вцілілі товари під новий каталог замість рахувати їх знову.
+  Future<void> carryOver() async {
+    state = AsyncData(_current.copyWith(busy: true, clearError: true));
+    try {
+      await _api.carryOver();
+      state = AsyncData(
+        _current.copyWith(
+          busy: false,
+          reconciliation: await _api.reconciliation(),
+        ),
+      );
+      await refreshPreview();
+      await _loadHistory();
+    } catch (error) {
+      state = AsyncData(_current.copyWith(busy: false, error: '$error'));
     }
   }
 

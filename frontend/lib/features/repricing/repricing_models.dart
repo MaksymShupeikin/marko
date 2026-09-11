@@ -81,6 +81,38 @@ class CatalogSignature {
       signature.length <= 8 ? signature : signature.substring(0, 8);
 }
 
+/// Як новий склад каталогу лягає на те, що вже пораховано.
+class Reconciliation {
+  const Reconciliation({
+    required this.signatureChanged,
+    required this.kept,
+    required this.gone,
+    required this.fresh,
+  });
+
+  factory Reconciliation.fromJson(Map<String, dynamic> json) {
+    return Reconciliation(
+      signatureChanged: json['signature_changed'] as bool? ?? false,
+      kept: (json['kept'] as num?)?.toInt() ?? 0,
+      gone: (json['gone'] as num?)?.toInt() ?? 0,
+      fresh: (json['fresh'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final bool signatureChanged;
+
+  /// Пораховані товари, які вижили в новому каталозі.
+  final int kept;
+
+  /// Пораховані товари, яких у каталозі більше немає.
+  final int gone;
+
+  /// Товари каталогу, яких ще не рахували.
+  final int fresh;
+
+  bool get worthCarryingOver => signatureChanged && kept > 0;
+}
+
 class RepricePreview {
   const RepricePreview({
     required this.catalog,

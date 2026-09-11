@@ -17,7 +17,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _SCOPE = sa.Enum("full", "partial", name="reprice_scope")
-_MODE = sa.Enum("fresh", "resume", name="reprice_mode")
+_MODE = sa.Enum("fresh", "resume", "carry_over", name="reprice_mode")
 _POLICY = sa.Enum("aggressive", "balanced", "hold_margin", name="reprice_policy")
 _OUTCOME = sa.Enum(
     "changed", "unchanged", "no_recommendation", name="reprice_outcome"

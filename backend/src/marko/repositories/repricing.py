@@ -223,3 +223,28 @@ async def items_for_export(
         _items_query(run_id, workspace_id), outcome=None, include_dismissed=False
     ).order_by(RepriceRunItem.position.asc())
     return (await session.execute(statement)).tuples().all()
+
+
+async def latest_done_items(
+    session: AsyncSession, workspace_id: uuid.UUID, signature: str
+) -> list[RepriceRunItem]:
+    """Порахований стан кожного товару під заданим складом каталогу.
+
+    Один товар міг траплятися в кількох прогонах — лишаємо найсвіжіший
+    розрахунок. Фільтр за списком id тут свідомо не робимо: 47 тисяч
+    параметрів у ``IN`` дорожчі, ніж відсіяти зайве на боці Python.
+    """
+    statement = (
+        select(RepriceRunItem)
+        .join(RepriceRun, RepriceRun.id == RepriceRunItem.run_id)
+        .where(
+            RepriceRun.workspace_id == workspace_id,
+            RepriceRun.catalog_scope_signature == signature,
+            RepriceRunItem.status == RepriceItemStatus.done,
+        )
+        .order_by(RepriceRunItem.computed_at.asc().nulls_first())
+    )
+    freshest: dict[uuid.UUID, RepriceRunItem] = {}
+    for item in (await session.execute(statement)).scalars():
+        freshest[item.listing_id] = item
+    return list(freshest.values())
