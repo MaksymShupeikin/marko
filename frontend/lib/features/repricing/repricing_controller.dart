@@ -257,11 +257,8 @@ class RepricingController extends AsyncNotifier<RepricingState> {
     }
   }
 
-  Future<List<int>> exportBytes() {
-    final run = _current.run;
-    if (run == null) throw StateError('Немає прогону для вивантаження');
-    return _api.exportBytes(run.id);
-  }
+  /// Байти вивантаження будь-якого прогону — не лише відкритого зараз.
+  Future<List<int>> exportBytes(String runId) => _api.exportBytes(runId);
 
   /// Опитуємо прогін, поки він не завершиться, і тоді показуємо рядки.
   Future<void> _follow(String runId) async {

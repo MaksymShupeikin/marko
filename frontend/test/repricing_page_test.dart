@@ -10,6 +10,7 @@ import 'package:marko_client/core/app_theme.dart';
 import 'package:marko_client/features/repricing/repricing_api.dart';
 import 'package:marko_client/features/repricing/repricing_page.dart';
 import 'package:marko_client/features/repricing/widgets/reprice_card.dart';
+import 'package:toastification/toastification.dart';
 
 /// A repricing backend with one finished run and three rows — one of each
 /// outcome, because the whole point is that they never look alike.
@@ -39,6 +40,9 @@ class _Backend {
 
   /// Скільки разів просили перенести покриття.
   int carryOvers = 0;
+
+  /// Які саме прогони вивантажували.
+  final List<String> exported = [];
 
   Map<String, dynamic> get _preview => {
     'catalog': {
@@ -152,6 +156,9 @@ class _Backend {
             'limit': 20,
             'offset': 0,
           });
+        } else if (path.endsWith('/export.xlsx')) {
+          exported.add(path.split('/')[5]);
+          return http.Response.bytes([80, 75, 3, 4], 200);
         } else if (path.endsWith('/items')) {
           body = jsonEncode({
             'items': [
@@ -196,6 +203,14 @@ class _Backend {
       baseUrl: 'http://api.test',
     );
   }
+}
+
+/// Тости живуть у кореневому оверлеї й переживають дію, що їх підняла:
+/// поза вебом вивантаження показує попередження, і його таймер треба зняти.
+Future<void> _clearToasts(WidgetTester tester) async {
+  toastification.dismissAll(delayForAnimation: false);
+  await tester.pump(const Duration(milliseconds: 700));
+  await tester.pumpAndSettle();
 }
 
 Widget _app(ApiClient client) => ProviderScope(
@@ -320,8 +335,11 @@ void main() {
     );
   });
 
-  testWidgets('history lists past runs with what they found', (tester) async {
-    await tester.pumpWidget(_app(_Backend(runs: 2).client()));
+  testWidgets('history lists past runs and hands over their sheets', (
+    tester,
+  ) async {
+    final backend = _Backend(runs: 2);
+    await tester.pumpWidget(_app(backend.client()));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Історія'));
@@ -332,5 +350,11 @@ void main() {
       find.textContaining('змінено 1 · без змін 1 · не пораховано 1'),
       findsNWidgets(2),
     );
+
+    // Вивантажити минулий прогін можна прямо з рядка, не відкриваючи його.
+    await tester.tap(find.byTooltip('Вивантажити в Excel').first);
+    await tester.pumpAndSettle();
+    expect(backend.exported, ['run-0']);
+    await _clearToasts(tester);
   });
 }

@@ -545,9 +545,12 @@ class _Cards extends ConsumerWidget {
 }
 
 class _ExportButton extends ConsumerStatefulWidget {
-  const _ExportButton({required this.run});
+  const _ExportButton({required this.run, this.compact = false});
 
   final RepriceRun run;
+
+  /// У рядку історії підпис не потрібен — там і так видно, про що мова.
+  final bool compact;
 
   @override
   ConsumerState<_ExportButton> createState() => _ExportButtonState();
@@ -558,11 +561,25 @@ class _ExportButtonState extends ConsumerState<_ExportButton> {
 
   @override
   Widget build(BuildContext context) {
+    final disabled = widget.run.isRunning || _busy;
+    if (widget.compact) {
+      return IconButton(
+        tooltip: 'Вивантажити в Excel',
+        onPressed: disabled ? null : _download,
+        icon: _busy
+            ? const MarkoLoader(size: 15)
+            : HeroIcon(
+                HeroIcons.arrowDownTray,
+                size: 16,
+                color: MarkoTheme.of(context).muted,
+              ),
+      );
+    }
     return MarkoButton.secondary(
       label: 'Вивантажити в Excel',
       icon: HeroIcons.arrowDownTray,
       loading: _busy,
-      onPressed: widget.run.isRunning || _busy ? null : _download,
+      onPressed: disabled ? null : _download,
     );
   }
 
@@ -571,7 +588,7 @@ class _ExportButtonState extends ConsumerState<_ExportButton> {
     try {
       final bytes = await ref
           .read(repricingControllerProvider.notifier)
-          .exportBytes();
+          .exportBytes(widget.run.id);
       final name =
           'marko-reprice-'
           '${widget.run.createdAt.toIso8601String().substring(0, 10)}.xlsx';
@@ -656,6 +673,7 @@ class _History extends ConsumerWidget {
                       ? colors.positive
                       : colors.muted,
                 ),
+                _ExportButton(run: run, compact: true),
               ],
             ),
           ),
