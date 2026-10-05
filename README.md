@@ -6,6 +6,11 @@ product across public marketplaces and reports market prices for comparison.
 
 **Production:** [markoprice.com](https://markoprice.com) · API at `api.markoprice.com`
 
+## Co-founders
+
+- [Maksym Shupeikin](https://github.com/MaksymShupeikin) — Co-founder.
+- [Oleksandr Pofatnyi](https://github.com/plenipotentiaryy) — Co-founder.
+
 ## Architecture
 
 Docker-first modular monolith:
